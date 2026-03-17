@@ -1,0 +1,13 @@
+{
+  "name": "@figma-agent-bridge/server",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "dependencies": {
+    "@figma-agent-bridge/shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.13.1",
+    "ws": "^8.16.0",
+    "zod": "^3.22.4"
+  }
+}
