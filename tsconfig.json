@@ -14,5 +14,9 @@
     "outDir": "dist",
     "types": ["bun-types"]
   },
-  "exclude": ["node_modules", "dist", "packages/figma-plugin"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "packages/figma-plugin"
+  ]
 }
