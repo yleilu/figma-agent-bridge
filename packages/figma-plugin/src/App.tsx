@@ -1,21 +1,44 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRelay } from './hooks/useRelay'
+import { useDiscovery } from './hooks/useDiscovery'
 
 export const App = () => {
   const [port, setPort] = useState(3000)
   const { status, channel, error, connect, disconnect } =
     useRelay()
+  const { state: discovery, discoveredPort, scan } =
+    useDiscovery()
 
   const isConnected = status === 'connected'
+  const isScanning = discovery === 'scanning'
+
+  // Auto-connect when port discovered
+  useEffect(() => {
+    if (
+      discovery === 'found' &&
+      discoveredPort &&
+      status === 'disconnected'
+    ) {
+      setPort(discoveredPort)
+      connect(discoveredPort)
+    }
+  }, [discovery, discoveredPort, status, connect])
 
   const statusClass = (() => {
     if (status === 'connected') {
       return 'bg-figma-bg-success text-figma-text-success'
     }
-    if (status === 'connecting') {
+    if (status === 'connecting' || isScanning) {
       return 'bg-figma-bg-warning text-figma-text-warning'
     }
     return 'bg-figma-bg-danger text-figma-text-danger'
+  })()
+
+  const statusText = (() => {
+    if (isScanning) return 'Scanning for relay...'
+    if (status === 'connecting') return 'Connecting...'
+    if (isConnected) return 'Connected'
+    return 'Disconnected'
   })()
 
   return (
@@ -27,11 +50,7 @@ export const App = () => {
       <div
         className={`px-3 py-2 rounded-md mb-3 text-xs font-medium ${statusClass}`}
       >
-        {status === 'connecting'
-          ? 'Connecting...'
-          : isConnected
-            ? 'Connected'
-            : 'Disconnected'}
+        {statusText}
       </div>
 
       {error && (
@@ -40,38 +59,52 @@ export const App = () => {
         </div>
       )}
 
-      <div className="mb-3">
-        <label className="block text-xs text-figma-text-secondary mb-1">
-          Port
-        </label>
-        <input
-          type="number"
-          value={port}
-          onChange={e => {
-            const val = parseInt(e.target.value, 10)
-            if (!Number.isNaN(val) && val > 0) {
-              setPort(val)
-            }
-          }}
-          min={1}
-          max={65535}
-          disabled={isConnected}
-          className="w-full px-3 py-2 rounded-md border border-figma-border text-sm bg-figma-bg text-figma-text disabled:opacity-50 focus:border-figma-border-selected outline-none"
-        />
-      </div>
+      {!isConnected && !isScanning && (
+        <>
+          <div className="mb-3">
+            <label className="block text-xs text-figma-text-secondary mb-1">
+              Port
+            </label>
+            <input
+              type="number"
+              value={port}
+              onChange={e => {
+                const val = parseInt(e.target.value, 10)
+                if (!Number.isNaN(val) && val > 0) {
+                  setPort(val)
+                }
+              }}
+              min={1}
+              max={65535}
+              className="w-full px-3 py-2 rounded-md border border-figma-border text-sm bg-figma-bg text-figma-text focus:border-figma-border-selected outline-none"
+            />
+          </div>
 
-      <button
-        onClick={() =>
-          isConnected ? disconnect() : connect(port)
-        }
-        className={`w-full px-3 py-2 rounded-md text-sm font-medium ${
-          isConnected
-            ? 'bg-figma-bg-danger text-figma-text-onbrand hover:opacity-90'
-            : 'bg-figma-bg-brand text-figma-text-onbrand hover:bg-figma-bg-brand-hover active:bg-figma-bg-brand-pressed'
-        }`}
-      >
-        {isConnected ? 'Disconnect' : 'Connect'}
-      </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => connect(port)}
+              className="flex-1 px-3 py-2 rounded-md text-sm font-medium bg-figma-bg-brand text-figma-text-onbrand hover:bg-figma-bg-brand-hover active:bg-figma-bg-brand-pressed"
+            >
+              Connect
+            </button>
+            <button
+              onClick={scan}
+              className="px-3 py-2 rounded-md text-sm font-medium bg-figma-bg-secondary text-figma-text hover:opacity-90"
+            >
+              Retry
+            </button>
+          </div>
+        </>
+      )}
+
+      {isConnected && (
+        <button
+          onClick={disconnect}
+          className="w-full px-3 py-2 rounded-md text-sm font-medium bg-figma-bg-danger text-figma-text-onbrand hover:opacity-90"
+        >
+          Disconnect
+        </button>
+      )}
 
       {channel && (
         <div className="mt-3 px-3 py-2 bg-figma-bg-secondary rounded-md">

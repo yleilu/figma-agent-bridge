@@ -24,8 +24,24 @@ export type SystemMessage = {
   }
 }
 
-export type RelayIncoming = JoinMessage | ChannelMessage
-export type RelayOutgoing = BroadcastMessage | SystemMessage
+export type PingMessage = {
+  type: 'ping'
+}
+
+export type PongMessage = {
+  type: 'pong'
+  name: string
+  version: string
+}
+
+export type RelayIncoming =
+  | JoinMessage
+  | ChannelMessage
+  | PingMessage
+export type RelayOutgoing =
+  | BroadcastMessage
+  | SystemMessage
+  | PongMessage
 
 // --- Command types ---
 

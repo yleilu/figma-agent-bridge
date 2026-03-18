@@ -2,8 +2,15 @@ import type { Server, ServerWebSocket } from 'bun'
 import type {
   BroadcastMessage,
   ChannelMessage,
+  PongMessage,
   RelayIncoming,
   SystemMessage,
+} from '@figma-agent-bridge/shared'
+import {
+  APP_NAME,
+  APP_VERSION,
+  PORT_MAX,
+  PORT_MIN,
 } from '@figma-agent-bridge/shared'
 import { randomUUID } from 'crypto'
 
@@ -115,7 +122,14 @@ export const startRelay = (
           return
         }
 
-        if (parsed.type === 'join') {
+        if (parsed.type === 'ping') {
+          const pong: PongMessage = {
+            type: 'pong',
+            name: APP_NAME,
+            version: APP_VERSION,
+          }
+          ws.send(JSON.stringify(pong))
+        } else if (parsed.type === 'join') {
           handleJoin(ws, parsed.channel)
         } else if (parsed.type === 'message') {
           handleMessage(parsed.channel, parsed)
@@ -132,4 +146,25 @@ export const stopRelay = (server: Server<WsData>): void => {
   channels.clear()
   clientChannels.clear()
   server.stop(true)
+}
+
+export const findAvailablePort = async (
+  start = PORT_MIN,
+  end = PORT_MAX,
+): Promise<number> => {
+  for (let port = start; port <= end; port++) {
+    try {
+      const server = Bun.serve({
+        port,
+        fetch: () => new Response(''),
+      })
+      server.stop(true)
+      return port
+    } catch {
+      continue
+    }
+  }
+  throw new Error(
+    `No available port in range ${start}-${end}`,
+  )
 }
