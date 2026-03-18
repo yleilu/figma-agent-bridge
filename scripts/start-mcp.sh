@@ -3,7 +3,7 @@
 # Starts relay (if not running) then MCP server.
 # Server auto-discovers the relay port via ping/pong probe.
 
-RELAY_PORT="${PORT:-3000}"
+RELAY_PORT="${PORT:-18080}"
 
 # Start relay if not already listening
 if ! lsof -i :"$RELAY_PORT" -sTCP:LISTEN > /dev/null 2>&1; then

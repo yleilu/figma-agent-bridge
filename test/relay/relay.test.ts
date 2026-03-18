@@ -12,14 +12,10 @@ import type {
   SystemMessage,
 } from '../../packages/shared/src/types'
 import {
-  findAvailablePort,
   startRelay,
   stopRelay,
 } from '../../packages/relay/src/relay'
-import {
-  APP_VERSION,
-  validatePort,
-} from '../../packages/shared/src/constants'
+import { APP_VERSION } from '../../packages/shared/src/constants'
 
 const TEST_PORT = 3099
 const WS_URL = `ws://localhost:${TEST_PORT}`
@@ -166,49 +162,5 @@ describe('relay', () => {
     })
 
     await closeWs(ws)
-  })
-})
-
-describe('validatePort', () => {
-  it('throws for port below 3000', () => {
-    expect(() => validatePort(2999)).toThrow('3000-3999')
-  })
-
-  it('throws for port above 3999', () => {
-    expect(() => validatePort(4000)).toThrow('3000-3999')
-  })
-
-  it('accepts valid range', () => {
-    expect(() => validatePort(3000)).not.toThrow()
-    expect(() => validatePort(3999)).not.toThrow()
-  })
-})
-
-describe('findAvailablePort', () => {
-  it('returns port in valid range', async () => {
-    const port = await findAvailablePort()
-    expect(port).toBeGreaterThanOrEqual(3000)
-    expect(port).toBeLessThanOrEqual(3999)
-  })
-
-  it('skips occupied ports', async () => {
-    const blocker = Bun.serve({
-      port: 3050,
-      fetch: () => new Response(''),
-    })
-    const port = await findAvailablePort(3050, 3060)
-    expect(port).toBeGreaterThan(3050)
-    blocker.stop(true)
-  })
-
-  it('throws when all ports exhausted', async () => {
-    const blocker = Bun.serve({
-      port: 3997,
-      fetch: () => new Response(''),
-    })
-    await expect(
-      findAvailablePort(3997, 3997),
-    ).rejects.toThrow('No available port')
-    blocker.stop(true)
   })
 })

@@ -2,40 +2,35 @@ import { useState, useEffect } from 'react'
 import { useRelay } from './hooks/useRelay'
 import { useDiscovery } from './hooks/useDiscovery'
 
+const DEFAULT_PORT = 18080
+
 export const App = () => {
-  const [port, setPort] = useState(3000)
+  const [port, setPort] = useState(DEFAULT_PORT)
   const { status, channel, error, connect, disconnect } =
     useRelay()
-  const { state: discovery, discoveredPort, scan } =
-    useDiscovery()
+  const { port: discoveredPort, retry } = useDiscovery()
 
   const isConnected = status === 'connected'
-  const isScanning = discovery === 'scanning'
 
-  // Auto-connect when port discovered
+  // Auto-connect when port resolved
   useEffect(() => {
-    if (
-      discovery === 'found' &&
-      discoveredPort &&
-      status === 'disconnected'
-    ) {
+    if (discoveredPort && status === 'disconnected') {
       setPort(discoveredPort)
       connect(discoveredPort)
     }
-  }, [discovery, discoveredPort, status, connect])
+  }, [discoveredPort, status, connect])
 
   const statusClass = (() => {
     if (status === 'connected') {
       return 'bg-figma-bg-success text-figma-text-success'
     }
-    if (status === 'connecting' || isScanning) {
+    if (status === 'connecting') {
       return 'bg-figma-bg-warning text-figma-text-warning'
     }
     return 'bg-figma-bg-danger text-figma-text-danger'
   })()
 
   const statusText = (() => {
-    if (isScanning) return 'Scanning for relay...'
     if (status === 'connecting') return 'Connecting...'
     if (isConnected) return 'Connected'
     return 'Disconnected'
@@ -59,7 +54,7 @@ export const App = () => {
         </div>
       )}
 
-      {!isConnected && !isScanning && (
+      {!isConnected && (
         <>
           <div className="mb-3">
             <label className="block text-xs text-figma-text-secondary mb-1">
@@ -88,7 +83,7 @@ export const App = () => {
               Connect
             </button>
             <button
-              onClick={scan}
+              onClick={retry}
               className="px-3 py-2 rounded-md text-sm font-medium bg-figma-bg-secondary text-figma-text hover:opacity-90"
             >
               Retry

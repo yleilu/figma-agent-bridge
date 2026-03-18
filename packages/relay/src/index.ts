@@ -1,16 +1,10 @@
-import { validatePort } from '@figma-agent-bridge/shared'
-import { findAvailablePort, startRelay } from './relay'
+import { DEFAULT_PORT } from '@figma-agent-bridge/shared'
+import { startRelay } from './relay'
 
-const envPort = process.env.PORT
-
-let port: number
-
-if (envPort !== undefined) {
-  port = Number(envPort)
-  validatePort(port)
-} else {
-  port = await findAvailablePort()
-}
+const port =
+  process.env.PORT !== undefined
+    ? Number(process.env.PORT)
+    : DEFAULT_PORT
 
 startRelay(port)
 console.log(`Relay listening on port ${port}`)

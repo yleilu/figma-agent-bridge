@@ -4,10 +4,9 @@ import { z } from 'zod'
 import {
   APP_NAME,
   APP_VERSION,
-  validatePort,
+  DEFAULT_PORT,
 } from '@figma-agent-bridge/shared'
 import { createFigmaClient } from './figma-client'
-import { findRelayPort } from './find-relay'
 import {
   handleConnect,
   handleStatus,
@@ -18,22 +17,13 @@ const server = new McpServer({
   version: APP_VERSION,
 })
 
-let relayUrl = process.env.RELAY_URL
+const port =
+  process.env.PORT !== undefined
+    ? Number(process.env.PORT)
+    : DEFAULT_PORT
 
-if (!relayUrl) {
-  const envPort = process.env.PORT
-  let port: number
-
-  if (envPort !== undefined) {
-    port = Number(envPort)
-    validatePort(port)
-  } else {
-    port = await findRelayPort()
-  }
-
-  relayUrl = `ws://localhost:${port}`
-}
-
+const relayUrl =
+  process.env.RELAY_URL ?? `ws://localhost:${port}`
 const client = createFigmaClient(relayUrl)
 
 server.tool(

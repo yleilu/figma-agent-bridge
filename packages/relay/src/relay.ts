@@ -9,8 +9,6 @@ import type {
 import {
   APP_NAME,
   APP_VERSION,
-  PORT_MIN,
-  PORT_SCAN_MAX,
 } from '@figma-agent-bridge/shared'
 import { randomUUID } from 'crypto'
 
@@ -146,25 +144,4 @@ export const stopRelay = (server: Server<WsData>): void => {
   channels.clear()
   clientChannels.clear()
   server.stop(true)
-}
-
-export const findAvailablePort = async (
-  start = PORT_MIN,
-  end = PORT_SCAN_MAX,
-): Promise<number> => {
-  for (let port = start; port <= end; port++) {
-    try {
-      const server = Bun.serve({
-        port,
-        fetch: () => new Response(''),
-      })
-      server.stop(true)
-      return port
-    } catch {
-      continue
-    }
-  }
-  throw new Error(
-    `No available port in range ${start}-${end}`,
-  )
 }
