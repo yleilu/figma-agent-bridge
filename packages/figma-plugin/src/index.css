@@ -1,0 +1,33 @@
+@import 'tailwindcss';
+
+@theme inline {
+  --color-figma-bg: var(--figma-color-bg);
+  --color-figma-bg-secondary: var(--figma-color-bg-secondary);
+  --color-figma-bg-brand: var(--figma-color-bg-brand);
+  --color-figma-bg-brand-hover: var(--figma-color-bg-brand-hover);
+  --color-figma-bg-brand-pressed: var(--figma-color-bg-brand-pressed);
+  --color-figma-bg-danger: var(--figma-color-bg-danger);
+  --color-figma-bg-success: var(--figma-color-bg-success);
+  --color-figma-bg-warning: var(--figma-color-bg-warning);
+
+  --color-figma-text: var(--figma-color-text);
+  --color-figma-text-secondary: var(--figma-color-text-secondary);
+  --color-figma-text-tertiary: var(--figma-color-text-tertiary);
+  --color-figma-text-disabled: var(--figma-color-text-disabled);
+  --color-figma-text-brand: var(--figma-color-text-brand);
+  --color-figma-text-danger: var(--figma-color-text-danger);
+  --color-figma-text-success: var(--figma-color-text-success);
+  --color-figma-text-warning: var(--figma-color-text-warning);
+  --color-figma-text-onbrand: var(--figma-color-text-onbrand);
+
+  --color-figma-icon: var(--figma-color-icon);
+  --color-figma-icon-secondary: var(--figma-color-icon-secondary);
+  --color-figma-icon-brand: var(--figma-color-icon-brand);
+  --color-figma-icon-danger: var(--figma-color-icon-danger);
+  --color-figma-icon-success: var(--figma-color-icon-success);
+
+  --color-figma-border: var(--figma-color-border);
+  --color-figma-border-strong: var(--figma-color-border-strong);
+  --color-figma-border-selected: var(--figma-color-border-selected);
+  --color-figma-border-danger-strong: var(--figma-color-border-danger-strong);
+}

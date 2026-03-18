@@ -1,0 +1,8 @@
+{
+  "name": "Agent Bridge",
+  "id": "figma-agent-bridge",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "dist/ui.html",
+  "editorType": ["figma"]
+}
