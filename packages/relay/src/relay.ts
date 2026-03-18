@@ -9,8 +9,8 @@ import type {
 import {
   APP_NAME,
   APP_VERSION,
-  PORT_MAX,
   PORT_MIN,
+  PORT_SCAN_MAX,
 } from '@figma-agent-bridge/shared'
 import { randomUUID } from 'crypto'
 
@@ -150,7 +150,7 @@ export const stopRelay = (server: Server<WsData>): void => {
 
 export const findAvailablePort = async (
   start = PORT_MIN,
-  end = PORT_MAX,
+  end = PORT_SCAN_MAX,
 ): Promise<number> => {
   for (let port = start; port <= end; port++) {
     try {
