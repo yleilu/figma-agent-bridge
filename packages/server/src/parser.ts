@@ -3,6 +3,7 @@ import type {
   ParsedNode,
   InspectSummary,
   PageFrameInfo,
+  SearchResult,
 } from '@figma-agent-bridge/shared'
 
 // --- Type aliases ---
@@ -625,6 +626,27 @@ export const toStylesYaml = (raw: {
     .join('\n')
 
   return header + body
+}
+
+// --- toSearchYaml ---
+
+export const toSearchYaml = (
+  results: SearchResult[],
+  truncated: boolean,
+): string => {
+  const summary = `# ${results.length} results${truncated ? ' (truncated)' : ''}`
+  const data = {
+    results: results.map(r => ({
+      id: r.id,
+      name: r.name,
+      type: r.type,
+      page: r.page,
+      parent: r.parent,
+      size: r.size,
+    })),
+  }
+
+  return `${summary}\n\n${YAML.stringify(data)}`
 }
 
 // --- toComponentsYaml ---
