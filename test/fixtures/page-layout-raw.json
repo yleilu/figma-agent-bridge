@@ -1,0 +1,8 @@
+{
+  "pageName": "Homepage",
+  "frames": [
+    { "id": "2:1", "name": "Header", "type": "FRAME", "x": 0, "y": 0, "width": 1440, "height": 80, "childCount": 8 },
+    { "id": "2:15", "name": "Hero", "type": "FRAME", "x": 0, "y": 80, "width": 1440, "height": 600, "childCount": 15 },
+    { "id": "2:42", "name": "Features", "type": "FRAME", "x": 0, "y": 680, "width": 1440, "height": 400, "childCount": 24 }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "local": [
+    {
+      "id": "C:abc123", "name": "Button", "page": "Components",
+      "variants": { "Size": ["Small", "Medium", "Large"], "Style": ["Primary", "Secondary", "Ghost"] },
+      "properties": [
+        { "name": "label", "type": "TEXT", "default": "Button" },
+        { "name": "showIcon", "type": "BOOLEAN", "default": true }
+      ]
+    },
+    { "id": "C:def456", "name": "Avatar", "page": "Components", "variants": null, "properties": [] }
+  ],
+  "remote": [
+    { "key": "xyz789", "name": "Input", "library": "Design System v2", "instancesCount": 12 }
+  ]
+}

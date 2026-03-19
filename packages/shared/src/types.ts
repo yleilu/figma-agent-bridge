@@ -67,3 +67,90 @@ export type ChannelInfo = {
   fileName: string | null
   connectedAt: number
 }
+
+// --- M2 parsed output types ---
+
+export type ParsedNode = {
+  id: string
+  name: string
+  type: string
+  size: [number, number]
+  position?: [number, number]
+  layout?: {
+    mode: 'H' | 'V'
+    spacing: number
+    padding: [number, number, number, number]
+    align: [string, string]
+    wrap?: boolean
+  }
+  sizing?: [string, string]
+  fills?: string[]
+  strokes?: string[]
+  radius?: number | [number, number, number, number]
+  opacity?: number
+  effects?: string[]
+  text?: {
+    content: string
+    font: string
+    align?: string
+    color?: string
+  }
+  component?: {
+    name: string
+    id: string
+    variant?: Record<string, string>
+    overrides?: string[]
+  }
+  children?: ParsedNode[]
+}
+
+export type InspectSummary = {
+  name: string
+  id: string
+  totalLayers: number
+  maxDepth: number
+  typeBreakdown: Record<string, number>
+  componentNames: string[]
+  layoutMode: 'H' | 'V' | null
+  size: [number, number]
+  rootFill: string | null
+}
+
+export type PageFrameInfo = {
+  id: string
+  name: string
+  size: [number, number]
+  position: [number, number]
+  childrenCount: number
+}
+
+export type StyleInfo = {
+  id: string
+  name: string
+  type: 'paint' | 'text' | 'effect' | 'grid'
+  color?: string
+  font?: string
+  lineHeight?: number
+  effects?: string[]
+}
+
+export type ComponentInfo = {
+  id: string
+  name: string
+  page?: string
+  variants?: Record<string, string[]>
+  properties?: Array<{
+    name: string
+    type: string
+    default?: string | boolean
+  }>
+}
+
+export type SearchResult = {
+  id: string
+  name: string
+  type: string
+  page: string
+  parent: string
+  size: [number, number]
+}

@@ -1,0 +1,14 @@
+{
+  "paint": [
+    { "id": "S:abc123", "name": "Colors/Primary/500", "paints": [{ "type": "SOLID", "color": { "r": 0.231, "g": 0.51, "b": 0.965, "a": 1 } }] },
+    { "id": "S:abc124", "name": "Colors/Surface/Default", "paints": [{ "type": "SOLID", "color": { "r": 1, "g": 1, "b": 1, "a": 1 } }] }
+  ],
+  "text": [
+    { "id": "S:def456", "name": "Heading/H1", "fontFamily": "Inter", "fontStyle": "Bold", "fontSize": 32, "lineHeight": 40 },
+    { "id": "S:def457", "name": "Body/Regular", "fontFamily": "Inter", "fontStyle": "Regular", "fontSize": 16, "lineHeight": 24 }
+  ],
+  "effect": [
+    { "id": "S:ghi789", "name": "Elevation/Medium", "effects": [{ "type": "DROP_SHADOW", "color": { "r": 0, "g": 0, "b": 0, "a": 0.1 }, "offset": { "x": 0, "y": 4 }, "radius": 12, "spread": 0 }] }
+  ],
+  "grid": []
+}
