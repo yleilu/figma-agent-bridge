@@ -58,22 +58,16 @@ export const searchParamsSchema = z.object({
   pageId: z
     .string()
     .optional()
-    .describe(
-      'Restrict search to a specific page by ID.',
-    ),
+    .describe('Restrict search to a specific page by ID.'),
   limit: z
     .number()
     .optional()
     .default(50)
-    .describe(
-      'Max results to return (default 50).',
-    ),
+    .describe('Max results to return (default 50).'),
 })
 
 export const getNodeInfoParamsSchema = z.object({
-  nodeId: z
-    .string()
-    .describe('The node ID to retrieve.'),
+  nodeId: z.string().describe('The node ID to retrieve.'),
   depth: z
     .number()
     .optional()
@@ -97,9 +91,7 @@ export const getNodesInfoParamsSchema = z.object({
 export const listPagesParamsSchema = z.object({})
 
 export const exportParamsSchema = z.object({
-  nodeId: z
-    .string()
-    .describe('The node ID to export.'),
+  nodeId: z.string().describe('The node ID to export.'),
   format: z
     .enum(['PNG', 'SVG', 'PDF', 'JPG'])
     .optional()

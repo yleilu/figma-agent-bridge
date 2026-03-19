@@ -412,7 +412,7 @@ const FILTERED_KEYS = new Set([
   'absoluteRenderBounds',
 ])
 
-const filterNode = (
+export const filterNode = (
   raw: Record<string, unknown>,
   maxDepth: number,
   currentDepth: number,

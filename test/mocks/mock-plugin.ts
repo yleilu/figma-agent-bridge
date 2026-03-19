@@ -54,7 +54,9 @@ export const createMockPlugin = (
         break
 
       case 'get_selection':
-        result = [{ id: '1:42', name: 'Card', type: 'FRAME' }]
+        result = [
+          { id: '1:42', name: 'Card', type: 'FRAME' },
+        ]
         break
 
       case 'get_node':
@@ -70,7 +72,14 @@ export const createMockPlugin = (
         break
 
       case 'get_pages':
-        result = [{ id: 'page:1', name: pageName, isCurrent: true, childCount: 3 }]
+        result = [
+          {
+            id: 'page:1',
+            name: pageName,
+            isCurrent: true,
+            childCount: 3,
+          },
+        ]
         break
 
       case 'get_styles':
@@ -99,7 +108,11 @@ export const createMockPlugin = (
         break
 
       case 'export_node':
-        result = { format: 'PNG', scale: 1, data: 'bW9ja2Jhc2U2NA==' }
+        result = {
+          format: 'PNG',
+          scale: 1,
+          data: 'bW9ja2Jhc2U2NA==',
+        }
         break
 
       default:

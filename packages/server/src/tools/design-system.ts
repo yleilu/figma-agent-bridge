@@ -97,10 +97,10 @@ export const handleInspectComponents = async (
   }
 
   if (query !== undefined) {
-    const regex = new RegExp(
-      query.replace(/\*/g, '.*'),
-      'i',
-    )
+    const escaped = query
+      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+      .replace(/\*/g, '.*')
+    const regex = new RegExp(escaped, 'i')
     const filtered = {
       local: raw.local.filter(c =>
         regex.test(c.name as string),

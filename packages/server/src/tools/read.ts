@@ -5,6 +5,7 @@ import {
   toInspectYaml,
   toPageLayoutYaml,
   toFullJson,
+  filterNode,
 } from '../parser'
 
 type ToolResult = {
@@ -167,11 +168,11 @@ export const handleGetNodesInfo = async (
     }
   }
 
-  const json = JSON.stringify(
-    raw.map(node => JSON.parse(toFullJson(node, depth))),
-    null,
-    2,
+  const effectiveDepth = depth ?? 3
+  const filtered = raw.map(node =>
+    filterNode(node, effectiveDepth, 0),
   )
+  const json = JSON.stringify(filtered, null, 2)
 
   return { content: [{ type: 'text', text: json }] }
 }
