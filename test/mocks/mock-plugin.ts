@@ -6,6 +6,10 @@ import type {
   RegisterMessage,
   SystemMessage,
 } from '../../packages/shared/src/types'
+import cardFixture from '../fixtures/card-node-raw.json'
+import pageLayoutFixture from '../fixtures/page-layout-raw.json'
+import stylesFixture from '../fixtures/styles-raw.json'
+import componentsFixture from '../fixtures/components-raw.json'
 
 type MockPluginOptions = {
   relayUrl: string
@@ -35,24 +39,78 @@ export const createMockPlugin = (
     socket: WebSocket,
     cmd: CommandMessage,
   ): void => {
-    const resolved: CommandMessage =
-      cmd.command === 'get_document_info'
-        ? {
-            id: cmd.id,
-            command: cmd.command,
-            result: {
-              name: documentName,
-              currentPage: {
-                id: 'page:1',
-                name: pageName,
-              },
+    let result: unknown = undefined
+    let error: string | undefined = undefined
+
+    switch (cmd.command) {
+      case 'get_document_info':
+        result = {
+          name: documentName,
+          currentPage: {
+            id: 'page:1',
+            name: pageName,
+          },
+        }
+        break
+
+      case 'get_selection':
+        result = [{ id: '1:42', name: 'Card', type: 'FRAME' }]
+        break
+
+      case 'get_node':
+        result = cardFixture
+        break
+
+      case 'get_nodes':
+        result = [cardFixture]
+        break
+
+      case 'get_page_layout':
+        result = pageLayoutFixture
+        break
+
+      case 'get_pages':
+        result = [{ id: 'page:1', name: pageName, isCurrent: true, childCount: 3 }]
+        break
+
+      case 'get_styles':
+        result = stylesFixture
+        break
+
+      case 'get_local_components':
+        result = componentsFixture
+        break
+
+      case 'search_nodes':
+        result = {
+          results: [
+            {
+              id: '1:42',
+              name: 'Card',
+              type: 'FRAME',
+              page: pageName,
+              parent: 'Root [0:1]',
+              width: 320,
+              height: 200,
             },
-          }
-        : {
-            id: cmd.id,
-            command: cmd.command,
-            error: 'Unknown command',
-          }
+          ],
+          truncated: false,
+        }
+        break
+
+      case 'export_node':
+        result = { format: 'PNG', scale: 1, data: 'bW9ja2Jhc2U2NA==' }
+        break
+
+      default:
+        error = 'Unknown command'
+        break
+    }
+
+    const resolved: CommandMessage =
+      error !== undefined
+        ? { id: cmd.id, command: cmd.command, error }
+        : { id: cmd.id, command: cmd.command, result }
 
     const reply: ChannelMessage = {
       type: 'message',
