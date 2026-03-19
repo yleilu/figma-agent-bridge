@@ -1,5 +1,7 @@
 figma.showUI(__html__, { width: 340, height: 280, title: 'Agent Bridge', themeColors: true });
 
+figma.ui.postMessage({ type: 'file-name', fileName: figma.root.name });
+
 function handleCommand(command, params) {
   if (command === 'get_document_info') {
     return {

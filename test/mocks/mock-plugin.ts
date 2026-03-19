@@ -3,6 +3,7 @@ import type {
   ChannelMessage,
   CommandMessage,
   JoinMessage,
+  RegisterMessage,
   SystemMessage,
 } from '../../packages/shared/src/types'
 
@@ -87,6 +88,14 @@ export const createMockPlugin = (
 
           if (raw.type === 'system' && !joined) {
             joined = true
+
+            const registerMsg: RegisterMessage = {
+              type: 'register',
+              channel,
+              fileName: documentName ?? null,
+            }
+            socket.send(JSON.stringify(registerMsg))
+
             resolve()
 
             return

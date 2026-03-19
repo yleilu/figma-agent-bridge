@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto'
 import type {
   BroadcastMessage,
+  ChannelInfo,
   ChannelMessage,
   CommandMessage,
   JoinMessage,
@@ -23,6 +24,20 @@ type PendingRequest = {
   resolve: (value: unknown) => void
   reject: (reason: Error) => void
   timer: ReturnType<typeof setTimeout>
+}
+
+export const discoverChannels = async (
+  relayHttpUrl: string,
+): Promise<ChannelInfo[]> => {
+  try {
+    const res = await fetch(`${relayHttpUrl}/channels`)
+    if (!res.ok) {
+      return []
+    }
+    return (await res.json()) as ChannelInfo[]
+  } catch {
+    return []
+  }
 }
 
 export const createFigmaClient = (

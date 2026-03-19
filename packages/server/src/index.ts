@@ -24,12 +24,16 @@ const port =
 
 const relayUrl =
   process.env.RELAY_URL ?? `ws://localhost:${port}`
+const relayHttpUrl = relayUrl
+  .replace('wss://', 'https://')
+  .replace('ws://', 'http://')
 const client = createFigmaClient(relayUrl)
 
 server.tool(
   'connect',
-  { channel: z.string().min(1) },
-  async ({ channel }) => handleConnect({ channel }, client),
+  { channel: z.string().min(1).optional() },
+  async ({ channel }) =>
+    handleConnect({ channel }, client, relayHttpUrl),
 )
 
 server.tool('status', {}, async () => handleStatus(client))

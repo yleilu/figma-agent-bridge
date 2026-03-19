@@ -12,11 +12,36 @@ export const App = () => {
 
   const isConnected = status === 'connected'
 
-  // Auto-connect when port resolved
+  // Auto-connect when port resolved, restoring saved channel if available
   useEffect(() => {
     if (discoveredPort && status === 'disconnected') {
       setPort(discoveredPort)
-      connect(discoveredPort)
+
+      // Request saved channel ID from clientStorage
+      const handler = (event: MessageEvent) => {
+        const msg = event.data?.pluginMessage
+        if (
+          msg?.type === 'storage-result' &&
+          msg.key === 'channel-id'
+        ) {
+          window.removeEventListener('message', handler)
+          connect(
+            discoveredPort,
+            msg.value ?? undefined,
+          )
+        }
+      }
+
+      window.addEventListener('message', handler)
+      parent.postMessage(
+        {
+          pluginMessage: {
+            type: 'storage-get',
+            key: 'channel-id',
+          },
+        },
+        '*',
+      )
     }
   }, [discoveredPort, status, connect])
 

@@ -20,6 +20,7 @@ import { createMockPlugin } from '../mocks/mock-plugin'
 
 const TEST_PORT = 3097
 const RELAY_URL = `ws://localhost:${TEST_PORT}`
+const RELAY_HTTP_URL = `http://localhost:${TEST_PORT}`
 const TEST_CHANNEL = 'e2e-test-channel'
 
 describe('e2e roundtrip', () => {
@@ -88,5 +89,48 @@ describe('e2e roundtrip', () => {
     }
 
     expect(doc.name).toBe('Test Doc')
+  })
+
+  it('registered plugin appears in /channels', async () => {
+    plugin = createMockPlugin({
+      relayUrl: RELAY_URL,
+      channel: TEST_CHANNEL,
+      documentName: 'Design File',
+    })
+
+    await plugin.start()
+
+    // Give register message time to process
+    await Bun.sleep(50)
+
+    const res = await fetch(`${RELAY_HTTP_URL}/channels`)
+    const data = (await res.json()) as Array<{
+      channel: string
+      fileName: string | null
+    }>
+
+    expect(data).toHaveLength(1)
+    expect(data[0].channel).toBe(TEST_CHANNEL)
+    expect(data[0].fileName).toBe('Design File')
+  })
+
+  it('connect tool auto-discovers channel', async () => {
+    plugin = createMockPlugin({
+      relayUrl: RELAY_URL,
+      channel: TEST_CHANNEL,
+      documentName: 'Auto Doc',
+    })
+
+    await plugin.start()
+    await Bun.sleep(50)
+
+    const result = await handleConnect(
+      {},
+      client,
+      RELAY_HTTP_URL,
+    )
+
+    expect(result.content[0].text).toContain(TEST_CHANNEL)
+    expect(client.isConnected()).toBe(true)
   })
 })

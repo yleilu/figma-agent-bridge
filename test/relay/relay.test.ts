@@ -8,6 +8,7 @@ import {
 import type { Server } from 'bun'
 import type {
   BroadcastMessage,
+  ChannelInfo,
   PongMessage,
   SystemMessage,
 } from '../../packages/shared/src/types'
@@ -19,6 +20,7 @@ import { APP_VERSION } from '../../packages/shared/src/constants'
 
 const TEST_PORT = 3099
 const WS_URL = `ws://localhost:${TEST_PORT}`
+const HTTP_URL = `http://localhost:${TEST_PORT}`
 
 const connect = (): Promise<WebSocket> => {
   return new Promise((resolve, reject) => {
@@ -162,5 +164,122 @@ describe('relay', () => {
     })
 
     await closeWs(ws)
+  })
+
+  describe('channel registry', () => {
+    it('GET /channels returns empty array when no channels', async () => {
+      const res = await fetch(`${HTTP_URL}/channels`)
+      const data = await res.json()
+      expect(data).toEqual([])
+    })
+
+    it('GET /channels returns channel after join', async () => {
+      const ws = await connect()
+      const nextMessage = createMessageQueue(ws)
+
+      ws.send(
+        JSON.stringify({
+          type: 'join',
+          channel: 'registry-ch',
+        }),
+      )
+      await nextMessage()
+
+      const res = await fetch(`${HTTP_URL}/channels`)
+      const data = (await res.json()) as ChannelInfo[]
+      expect(data).toHaveLength(1)
+      expect(data[0].channel).toBe('registry-ch')
+      expect(data[0].fileName).toBeNull()
+      expect(typeof data[0].connectedAt).toBe('number')
+
+      await closeWs(ws)
+    })
+
+    it('register updates fileName on channel', async () => {
+      const ws = await connect()
+      const nextMessage = createMessageQueue(ws)
+
+      ws.send(
+        JSON.stringify({
+          type: 'join',
+          channel: 'register-ch',
+        }),
+      )
+      await nextMessage()
+
+      ws.send(
+        JSON.stringify({
+          type: 'register',
+          channel: 'register-ch',
+          fileName: 'My Design.fig',
+        }),
+      )
+
+      // Give relay a moment to process
+      await Bun.sleep(50)
+
+      const res = await fetch(`${HTTP_URL}/channels`)
+      const data = (await res.json()) as ChannelInfo[]
+      expect(data).toHaveLength(1)
+      expect(data[0].channel).toBe('register-ch')
+      expect(data[0].fileName).toBe('My Design.fig')
+
+      await closeWs(ws)
+    })
+
+    it('channel removed from registry on disconnect', async () => {
+      const ws = await connect()
+      const nextMessage = createMessageQueue(ws)
+
+      ws.send(
+        JSON.stringify({
+          type: 'join',
+          channel: 'remove-ch',
+        }),
+      )
+      await nextMessage()
+
+      await closeWs(ws)
+
+      // Give relay a moment to process close
+      await Bun.sleep(50)
+
+      const res = await fetch(`${HTTP_URL}/channels`)
+      const data = await res.json()
+      expect(data).toEqual([])
+    })
+
+    it('multiple channels listed independently', async () => {
+      const ws1 = await connect()
+      const ws2 = await connect()
+      const next1 = createMessageQueue(ws1)
+      const next2 = createMessageQueue(ws2)
+
+      ws1.send(
+        JSON.stringify({
+          type: 'join',
+          channel: 'multi-ch-1',
+        }),
+      )
+      await next1()
+
+      ws2.send(
+        JSON.stringify({
+          type: 'join',
+          channel: 'multi-ch-2',
+        }),
+      )
+      await next2()
+
+      const res = await fetch(`${HTTP_URL}/channels`)
+      const data = (await res.json()) as ChannelInfo[]
+      expect(data).toHaveLength(2)
+
+      const channels = data.map(c => c.channel).sort()
+      expect(channels).toEqual(['multi-ch-1', 'multi-ch-2'])
+
+      await closeWs(ws1)
+      await closeWs(ws2)
+    })
   })
 })

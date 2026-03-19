@@ -16,10 +16,14 @@ import {
   startRelay,
   stopRelay,
 } from '../../packages/relay/src/relay'
-import { createFigmaClient } from '../../packages/server/src/figma-client'
+import {
+  createFigmaClient,
+  discoverChannels,
+} from '../../packages/server/src/figma-client'
 
 const TEST_PORT = 3098
 const WS_URL = `ws://localhost:${TEST_PORT}`
+const HTTP_URL = `http://localhost:${TEST_PORT}`
 
 const connectRaw = (): Promise<WebSocket> =>
   new Promise((resolve, reject) => {
@@ -155,5 +159,48 @@ describe('figma-client', () => {
     expect((caught as Error).message).toContain('timed out')
 
     client.disconnect()
+  })
+})
+
+describe('discoverChannels', () => {
+  let server: Server<{ id: string }>
+
+  beforeEach(() => {
+    server = startRelay(TEST_PORT)
+  })
+
+  afterEach(() => {
+    stopRelay(server)
+  })
+
+  it('returns channel list from relay', async () => {
+    const ws = await connectRaw()
+    const next = createMessageQueue(ws)
+
+    ws.send(
+      JSON.stringify({
+        type: 'join',
+        channel: 'discover-ch',
+      }),
+    )
+    await next()
+
+    const result = await discoverChannels(HTTP_URL)
+    expect(result).toHaveLength(1)
+    expect(result[0].channel).toBe('discover-ch')
+
+    await closeWs(ws)
+  })
+
+  it('returns empty when relay unreachable', async () => {
+    stopRelay(server)
+
+    const result = await discoverChannels(
+      'http://localhost:19999',
+    )
+    expect(result).toEqual([])
+
+    // Restart for afterEach cleanup
+    server = startRelay(TEST_PORT)
   })
 })

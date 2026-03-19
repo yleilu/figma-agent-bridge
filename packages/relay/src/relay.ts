@@ -1,6 +1,7 @@
 import type { Server, ServerWebSocket } from 'bun'
 import type {
   BroadcastMessage,
+  ChannelInfo,
   ChannelMessage,
   PongMessage,
   RelayIncoming,
@@ -12,6 +13,8 @@ import {
 } from '@figma-agent-bridge/shared'
 import { randomUUID } from 'crypto'
 
+const HEARTBEAT_INTERVAL = 30_000
+
 type WsData = { id: string }
 
 const channels = new Map<
@@ -20,6 +23,13 @@ const channels = new Map<
 >()
 
 const clientChannels = new Map<string, Set<string>>()
+const channelRegistry = new Map<string, ChannelInfo>()
+const alive = new WeakMap<
+  ServerWebSocket<WsData>,
+  boolean
+>()
+let heartbeatTimer: ReturnType<typeof setInterval> | null =
+  null
 
 const removeClient = (ws: ServerWebSocket<WsData>) => {
   const { id } = ws.data
@@ -32,6 +42,7 @@ const removeClient = (ws: ServerWebSocket<WsData>) => {
         members.delete(ws)
         if (members.size === 0) {
           channels.delete(channel)
+          channelRegistry.delete(channel)
         }
       }
     })
@@ -51,6 +62,15 @@ const handleJoin = (
     channels.set(channel, members)
   }
   members.add(ws)
+  alive.set(ws, true)
+
+  if (!channelRegistry.has(channel)) {
+    channelRegistry.set(channel, {
+      channel,
+      fileName: null,
+      connectedAt: Date.now(),
+    })
+  }
 
   let joined = clientChannels.get(id)
   if (joined === undefined) {
@@ -68,6 +88,16 @@ const handleJoin = (
   }
 
   ws.send(JSON.stringify(reply))
+}
+
+const handleRegister = (
+  channel: string,
+  fileName: string | null,
+) => {
+  const entry = channelRegistry.get(channel)
+  if (entry !== undefined) {
+    entry.fileName = fileName
+  }
 }
 
 const handleMessage = (
@@ -93,15 +123,29 @@ const handleMessage = (
 export const startRelay = (
   port: number = 3000,
 ): Server<WsData> => {
-  return Bun.serve<WsData>({
+  const server = Bun.serve<WsData>({
     port,
     fetch: (req, srv) => {
-      const upgraded = srv.upgrade(req, {
-        data: { id: randomUUID() },
-      })
+      if (
+        req.headers.get('upgrade')?.toLowerCase() ===
+        'websocket'
+      ) {
+        const upgraded = srv.upgrade(req, {
+          data: { id: randomUUID() },
+        })
+        if (upgraded) {
+          return undefined
+        }
+      }
 
-      if (upgraded) {
-        return undefined
+      const url = new URL(req.url)
+      if (
+        req.method === 'GET' &&
+        url.pathname === '/channels'
+      ) {
+        return Response.json(
+          Array.from(channelRegistry.values()),
+        )
       }
 
       return new Response('WebSocket only', {
@@ -129,19 +173,44 @@ export const startRelay = (
           ws.send(JSON.stringify(pong))
         } else if (parsed.type === 'join') {
           handleJoin(ws, parsed.channel)
+        } else if (parsed.type === 'register') {
+          handleRegister(parsed.channel, parsed.fileName)
         } else if (parsed.type === 'message') {
           handleMessage(parsed.channel, parsed)
         }
+      },
+      pong: ws => {
+        alive.set(ws, true)
       },
       close: ws => {
         removeClient(ws)
       },
     },
   })
+
+  heartbeatTimer = setInterval(() => {
+    for (const [, members] of channels) {
+      for (const ws of members) {
+        if (alive.get(ws) === false) {
+          ws.close()
+          continue
+        }
+        alive.set(ws, false)
+        ws.ping()
+      }
+    }
+  }, HEARTBEAT_INTERVAL)
+
+  return server
 }
 
 export const stopRelay = (server: Server<WsData>): void => {
+  if (heartbeatTimer !== null) {
+    clearInterval(heartbeatTimer)
+    heartbeatTimer = null
+  }
   channels.clear()
   clientChannels.clear()
+  channelRegistry.clear()
   server.stop(true)
 }

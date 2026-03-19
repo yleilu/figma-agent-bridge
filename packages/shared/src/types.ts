@@ -28,6 +28,12 @@ export type PingMessage = {
   type: 'ping'
 }
 
+export type RegisterMessage = {
+  type: 'register'
+  channel: string
+  fileName: string | null
+}
+
 export type PongMessage = {
   type: 'pong'
   name: string
@@ -38,6 +44,7 @@ export type RelayIncoming =
   | JoinMessage
   | ChannelMessage
   | PingMessage
+  | RegisterMessage
 export type RelayOutgoing =
   | BroadcastMessage
   | SystemMessage

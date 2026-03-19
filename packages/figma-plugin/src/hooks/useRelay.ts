@@ -23,12 +23,20 @@ export const useRelay = () => {
   const wsRef = useRef<WebSocket | null>(null)
   const channelRef = useRef<string | null>(null)
   const errorRef = useRef<string | null>(null)
+  const fileNameRef = useRef<string | null>(null)
 
-  // Listen for command results from plugin code
+  // Listen for command results and file name from plugin code
   useEffect(() => {
     const handler = (event: MessageEvent) => {
       const msg = event.data && event.data.pluginMessage
-      if (!msg || msg.type !== 'command-result') {
+      if (!msg) return
+
+      if (msg.type === 'file-name') {
+        fileNameRef.current = msg.fileName ?? null
+        return
+      }
+
+      if (msg.type !== 'command-result') {
         return
       }
 
@@ -55,80 +63,116 @@ export const useRelay = () => {
     }
   }, [])
 
-  const connect = useCallback((port: number) => {
-    const channel = generateChannel()
-    channelRef.current = channel
+  const connect = useCallback(
+    (port: number, channelOverride?: string) => {
+      const channel = channelOverride ?? generateChannel()
+      channelRef.current = channel
 
-    setState({
-      status: 'connecting',
-      channel: null,
-      error: null,
-    })
+      setState({
+        status: 'connecting',
+        channel: null,
+        error: null,
+      })
 
-    const ws = new WebSocket(`ws://localhost:${port}`)
-    wsRef.current = ws
+      const ws = new WebSocket(`ws://localhost:${port}`)
+      wsRef.current = ws
 
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'join', channel }))
-    }
-
-    ws.onmessage = (event: MessageEvent) => {
-      let data: Record<string, unknown>
-
-      try {
-        data = JSON.parse(event.data as string)
-      } catch {
-        return
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ type: 'join', channel }))
       }
 
-      if (data.type === 'system') {
-        setState({
-          status: 'connected',
-          channel,
-          error: null,
-        })
-        return
+      ws.onmessage = (event: MessageEvent) => {
+        let data: Record<string, unknown>
+
+        try {
+          data = JSON.parse(event.data as string)
+        } catch {
+          return
+        }
+
+        if (data.type === 'system') {
+          // Send register with file name
+          ws.send(
+            JSON.stringify({
+              type: 'register',
+              channel,
+              fileName: fileNameRef.current,
+            }),
+          )
+
+          // Persist channel ID
+          parent.postMessage(
+            {
+              pluginMessage: {
+                type: 'storage-set',
+                key: 'channel-id',
+                value: channel,
+              },
+            },
+            '*',
+          )
+
+          setState({
+            status: 'connected',
+            channel,
+            error: null,
+          })
+          return
+        }
+
+        if (
+          data.type === 'broadcast' &&
+          data.message &&
+          data.message.command
+        ) {
+          parent.postMessage(
+            {
+              pluginMessage: {
+                type: 'execute-command',
+                id: data.message.id,
+                command: data.message.command,
+                params: data.message.params ?? {},
+              },
+            },
+            '*',
+          )
+        }
       }
 
-      if (
-        data.type === 'broadcast' &&
-        data.message &&
-        data.message.command
-      ) {
+      ws.onerror = () => {
+        errorRef.current = 'Connection failed'
+        setState(prev => ({
+          ...prev,
+          status: 'disconnected',
+          error: 'Connection failed',
+        }))
+      }
+
+      ws.onclose = () => {
+        wsRef.current = null
+        channelRef.current = null
+
+        // Delete persisted channel
         parent.postMessage(
           {
             pluginMessage: {
-              type: 'execute-command',
-              id: data.message.id,
-              command: data.message.command,
-              params: data.message.params ?? {},
+              type: 'storage-delete',
+              key: 'channel-id',
             },
           },
           '*',
         )
+
+        setState({
+          status: 'disconnected',
+          channel: null,
+          error: errorRef.current,
+        })
+        errorRef.current = null
       }
-    }
-
-    ws.onerror = () => {
-      errorRef.current = 'Connection failed'
-      setState(prev => ({
-        ...prev,
-        status: 'disconnected',
-        error: 'Connection failed',
-      }))
-    }
-
-    ws.onclose = () => {
-      wsRef.current = null
-      channelRef.current = null
-      setState({
-        status: 'disconnected',
-        channel: null,
-        error: errorRef.current,
-      })
-      errorRef.current = null
-    }
-  }, [])
+    },
+    [],
+  )
 
   const disconnect = useCallback(() => {
     const ws = wsRef.current
