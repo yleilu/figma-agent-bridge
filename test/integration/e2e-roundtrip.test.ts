@@ -16,6 +16,16 @@ import {
   handleConnect,
   handleStatus,
 } from '../../packages/server/src/tools/session'
+import {
+  handleInspect,
+  handleGetNodeInfo,
+  handleListPages,
+} from '../../packages/server/src/tools/read'
+import {
+  handleInspectStyles,
+  handleInspectComponents,
+} from '../../packages/server/src/tools/design-system'
+import { handleSearch } from '../../packages/server/src/tools/search'
 import { createMockPlugin } from '../mocks/mock-plugin'
 
 const TEST_PORT = 3097
@@ -132,5 +142,123 @@ describe('e2e roundtrip', () => {
 
     expect(result.content[0].text).toContain(TEST_CHANNEL)
     expect(client.isConnected()).toBe(true)
+  })
+})
+
+const M2_TEST_PORT = 3098
+const M2_RELAY_URL = `ws://localhost:${M2_TEST_PORT}`
+const M2_TEST_CHANNEL = 'e2e-m2-test-channel'
+
+describe('M2 read tools e2e', () => {
+  let server: Server<{ id: string }>
+  let client: FigmaClient
+  let plugin: ReturnType<typeof createMockPlugin> | null =
+    null
+
+  beforeEach(async () => {
+    server = startRelay(M2_TEST_PORT)
+    client = createFigmaClient(M2_RELAY_URL)
+
+    plugin = createMockPlugin({
+      relayUrl: M2_RELAY_URL,
+      channel: M2_TEST_CHANNEL,
+      documentName: 'Mock Document',
+      pageName: 'Homepage',
+    })
+
+    await plugin.start()
+    await handleConnect(
+      { channel: M2_TEST_CHANNEL },
+      client,
+    )
+  })
+
+  afterEach(() => {
+    if (plugin !== null) {
+      plugin.stop()
+      plugin = null
+    }
+    client.disconnect()
+    stopRelay(server)
+  })
+
+  it('inspect returns YAML for mock document', async () => {
+    const result = await handleInspect(
+      { nodeId: '1:42' },
+      client,
+    )
+
+    expect(result.content).toHaveLength(1)
+    expect(result.content[0].type).toBe('text')
+    expect(result.content[0].text).toContain('# Card')
+    expect(result.content[0].text).toContain(
+      'auto-layout: V',
+    )
+  })
+
+  it('get_node_info returns JSON with depth control', async () => {
+    const result = await handleGetNodeInfo(
+      { nodeId: '1:42', depth: 0 },
+      client,
+    )
+
+    expect(result.content).toHaveLength(1)
+    expect(result.content[0].type).toBe('text')
+    const parsed = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(parsed.id).toBe('1:42')
+    expect(parsed.name).toBe('Card')
+    // depth 0 means children shown as stubs
+    if (parsed.children !== undefined) {
+      const children = parsed.children as Array<{
+        id?: string
+        name?: string
+        type?: string
+        _stub?: boolean
+      }>
+      for (const child of children) {
+        expect(
+          child._stub === true ||
+            (child.id !== undefined &&
+              child.name !== undefined),
+        ).toBe(true)
+      }
+    }
+  })
+
+  it('inspect_styles returns design system YAML', async () => {
+    const result = await handleInspectStyles({}, client)
+
+    expect(result.content).toHaveLength(1)
+    expect(result.content[0].type).toBe('text')
+    expect(result.content[0].text).toContain('styles')
+  })
+
+  it('inspect_components returns component catalog', async () => {
+    const result = await handleInspectComponents({}, client)
+
+    expect(result.content).toHaveLength(1)
+    expect(result.content[0].type).toBe('text')
+    expect(result.content[0].text).toContain('local')
+  })
+
+  it('search finds nodes by name pattern', async () => {
+    const result = await handleSearch(
+      { name: 'Card' },
+      client,
+    )
+
+    expect(result.content).toHaveLength(1)
+    expect(result.content[0].type).toBe('text')
+    expect(result.content[0].text).toContain('Card')
+  })
+
+  it('list_pages returns all pages in YAML', async () => {
+    const result = await handleListPages(client)
+
+    expect(result.content).toHaveLength(1)
+    expect(result.content[0].type).toBe('text')
+    expect(result.content[0].text).toContain('Homepage')
   })
 })

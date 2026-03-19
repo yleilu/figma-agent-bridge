@@ -5,12 +5,34 @@ import {
   APP_NAME,
   APP_VERSION,
   DEFAULT_PORT,
+  inspectParamsSchema,
+  inspectPageLayoutParamsSchema,
+  inspectStylesParamsSchema,
+  inspectComponentsParamsSchema,
+  searchParamsSchema,
+  getNodeInfoParamsSchema,
+  getNodesInfoParamsSchema,
+  listPagesParamsSchema,
+  exportParamsSchema,
 } from '@figma-agent-bridge/shared'
 import { createFigmaClient } from './figma-client'
 import {
   handleConnect,
   handleStatus,
 } from './tools/session'
+import {
+  handleInspect,
+  handleInspectPageLayout,
+  handleGetNodeInfo,
+  handleGetNodesInfo,
+  handleListPages,
+} from './tools/read'
+import {
+  handleInspectStyles,
+  handleInspectComponents,
+} from './tools/design-system'
+import { handleSearch } from './tools/search'
+import { handleExport } from './tools/export'
 
 const server = new McpServer({
   name: APP_NAME,
@@ -37,6 +59,63 @@ server.tool(
 )
 
 server.tool('status', {}, async () => handleStatus(client))
+
+server.tool(
+  'inspect',
+  inspectParamsSchema.shape,
+  async ({ nodeId }) => handleInspect({ nodeId }, client),
+)
+
+server.tool(
+  'inspect_page_layout',
+  inspectPageLayoutParamsSchema.shape,
+  async () => handleInspectPageLayout(client),
+)
+
+server.tool(
+  'inspect_styles',
+  inspectStylesParamsSchema.shape,
+  async ({ type }) => handleInspectStyles({ type }, client),
+)
+
+server.tool(
+  'inspect_components',
+  inspectComponentsParamsSchema.shape,
+  async ({ query }) =>
+    handleInspectComponents({ query }, client),
+)
+
+server.tool(
+  'search',
+  searchParamsSchema.shape,
+  async params => handleSearch(params, client),
+)
+
+server.tool(
+  'get_node_info',
+  getNodeInfoParamsSchema.shape,
+  async ({ nodeId, depth }) =>
+    handleGetNodeInfo({ nodeId, depth }, client),
+)
+
+server.tool(
+  'get_nodes_info',
+  getNodesInfoParamsSchema.shape,
+  async ({ nodeIds, depth }) =>
+    handleGetNodesInfo({ nodeIds, depth }, client),
+)
+
+server.tool(
+  'list_pages',
+  listPagesParamsSchema.shape,
+  async () => handleListPages(client),
+)
+
+server.tool(
+  'export',
+  exportParamsSchema.shape,
+  async params => handleExport(params, client),
+)
 
 const transport = new StdioServerTransport()
 
