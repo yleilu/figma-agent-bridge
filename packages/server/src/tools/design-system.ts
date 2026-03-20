@@ -2,7 +2,7 @@ import type { FigmaClient } from '../figma-client'
 import { toStylesYaml, toComponentsYaml } from '../parser'
 
 type ToolResult = {
-  content: Array<{ type: 'text'; text: string }>
+  content: { type: 'text'; text: string }[]
 }
 
 export const handleInspectStyles = async (
@@ -24,10 +24,10 @@ export const handleInspectStyles = async (
     'get_styles',
     {},
   )) as {
-    paint: Array<Record<string, unknown>>
-    text: Array<Record<string, unknown>>
-    effect: Array<Record<string, unknown>>
-    grid: Array<Record<string, unknown>>
+    paint: Record<string, unknown>[]
+    text: Record<string, unknown>[]
+    effect: Record<string, unknown>[]
+    grid: Record<string, unknown>[]
   } | null
 
   if (raw === null) {
@@ -81,8 +81,8 @@ export const handleInspectComponents = async (
     'get_local_components',
     {},
   )) as {
-    local: Array<Record<string, unknown>>
-    remote: Array<Record<string, unknown>>
+    local: Record<string, unknown>[]
+    remote: Record<string, unknown>[]
   } | null
 
   if (raw === null) {

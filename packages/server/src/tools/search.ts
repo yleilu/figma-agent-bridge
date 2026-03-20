@@ -2,7 +2,7 @@ import type { FigmaClient } from '../figma-client'
 import { toSearchYaml } from '../parser'
 
 type ToolResult = {
-  content: Array<{ type: 'text'; text: string }>
+  content: { type: 'text'; text: string }[]
 }
 
 export const handleSearch = async (
@@ -41,7 +41,7 @@ export const handleSearch = async (
     'search_nodes',
     pluginParams,
   )) as {
-    results: Array<{
+    results: {
       id: string
       name: string
       type: string
@@ -49,7 +49,7 @@ export const handleSearch = async (
       parent: string
       width: number
       height: number
-    }>
+    }[]
     truncated: boolean
   } | null
 

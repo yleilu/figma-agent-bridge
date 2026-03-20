@@ -18,15 +18,14 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
     "@jsdevtools/version-bump-prompt": "^6.1.0",
     "bun-types": "^1.3.10",
     "eslint": "^10",
+    "eslint-config-airbnb-extended": "^3.0.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.5",
     "prettier": "^3.8.1",
     "prettier-plugin-packagejson": "^3.0.2",
-    "typescript": "^5.9.3",
-    "typescript-eslint": "^8.57.1"
+    "typescript": "^5.9.3"
   }
 }

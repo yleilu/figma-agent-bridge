@@ -245,9 +245,9 @@ export const parseNode = (
 
   const children =
     raw.children !== null && raw.children !== undefined
-      ? (
-          raw.children as Array<Record<string, unknown>>
-        ).map(c => parseNode(c))
+      ? (raw.children as Record<string, unknown>[]).map(c =>
+          parseNode(c),
+        )
       : undefined
 
   const textContent = raw.characters as string | undefined
@@ -491,7 +491,7 @@ export const filterNode = (
  */
 export const toFullJson = (
   raw: Record<string, unknown>,
-  depth: number = 3,
+  depth = 3,
 ): string => {
   const filtered = filterNode(raw, depth, 0)
 
@@ -502,7 +502,7 @@ export const toFullJson = (
 
 export const toPageLayoutYaml = (raw: {
   pageName: string
-  frames: Array<Record<string, unknown>>
+  frames: Record<string, unknown>[]
 }): string => {
   const { pageName, frames } = raw
   const mapped: PageFrameInfo[] = frames.map(f => ({
@@ -554,10 +554,10 @@ export const toPageLayoutYaml = (raw: {
 // --- toStylesYaml ---
 
 export const toStylesYaml = (raw: {
-  paint: Array<Record<string, unknown>>
-  text: Array<Record<string, unknown>>
-  effect: Array<Record<string, unknown>>
-  grid: Array<Record<string, unknown>>
+  paint: Record<string, unknown>[]
+  text: Record<string, unknown>[]
+  effect: Record<string, unknown>[]
+  grid: Record<string, unknown>[]
 }): string => {
   const counts: string[] = []
   const sections: Record<string, unknown>[] = []
@@ -652,8 +652,8 @@ export const toSearchYaml = (
 // --- toComponentsYaml ---
 
 export const toComponentsYaml = (raw: {
-  local: Array<Record<string, unknown>>
-  remote: Array<Record<string, unknown>>
+  local: Record<string, unknown>[]
+  remote: Record<string, unknown>[]
 }): string => {
   const header = `# ${raw.local.length} local components, ${raw.remote.length} remote in use\n\n`
 

@@ -1,9 +1,12 @@
-import eslint from '@eslint/js'
-import tseslint from 'typescript-eslint'
+import {
+  configs,
+  extensions,
+  plugins,
+} from 'eslint-config-airbnb-extended'
 import prettierConfig from 'eslint-config-prettier'
 import prettierPlugin from 'eslint-plugin-prettier'
 
-export default tseslint.config(
+export default [
   {
     ignores: [
       'node_modules/',
@@ -11,8 +14,14 @@ export default tseslint.config(
       'packages/figma-plugin/**',
     ],
   },
-  eslint.configs.recommended,
-  ...tseslint.configs.strict,
+  plugins.stylistic,
+  plugins.importX,
+  plugins.typescriptEslint,
+  plugins.node,
+  ...configs.base.typescript,
+  ...configs.node.recommended,
+  ...extensions.base.typescript,
+  ...extensions.node.recommended,
   prettierConfig,
   {
     plugins: {
@@ -32,6 +41,9 @@ export default tseslint.config(
       curly: ['error', 'all'],
       eqeqeq: ['error', 'always'],
       'no-var': 'error',
+      '@typescript-eslint/consistent-type-definitions':
+        'off',
+      'n/no-unsupported-features/node-builtins': 'off',
     },
   },
-)
+]

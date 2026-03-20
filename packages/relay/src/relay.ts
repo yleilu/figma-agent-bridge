@@ -11,7 +11,7 @@ import {
   APP_NAME,
   APP_VERSION,
 } from '@figma-agent-bridge/shared'
-import { randomUUID } from 'crypto'
+import { randomUUID } from 'node:crypto'
 
 const HEARTBEAT_INTERVAL = 30_000
 
@@ -120,9 +120,7 @@ const handleMessage = (
   })
 }
 
-export const startRelay = (
-  port: number = 3000,
-): Server<WsData> => {
+export const startRelay = (port = 3000): Server<WsData> => {
   const server = Bun.serve<WsData>({
     port,
     fetch: (req, srv) => {

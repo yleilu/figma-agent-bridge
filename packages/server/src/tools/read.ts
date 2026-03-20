@@ -9,7 +9,7 @@ import {
 } from '../parser'
 
 type ToolResult = {
-  content: Array<{ type: 'text'; text: string }>
+  content: { type: 'text'; text: string }[]
 }
 
 export const handleInspect = async (
@@ -33,11 +33,13 @@ export const handleInspect = async (
     const selection = (await client.sendCommand(
       'get_selection',
       {},
-    )) as Array<{
-      id: string
-      name: string
-      type: string
-    }> | null
+    )) as
+      | {
+          id: string
+          name: string
+          type: string
+        }[]
+      | null
     if (selection === null || selection.length === 0) {
       return {
         content: [
@@ -90,7 +92,7 @@ export const handleInspectPageLayout = async (
     {},
   )) as {
     pageName: string
-    frames: Array<Record<string, unknown>>
+    frames: Record<string, unknown>[]
   } | null
   if (raw === null) {
     return {
@@ -156,7 +158,7 @@ export const handleGetNodesInfo = async (
 
   const raw = (await client.sendCommand('get_nodes', {
     nodeIds,
-  })) as Array<Record<string, unknown>> | null
+  })) as Record<string, unknown>[] | null
   if (raw === null) {
     return {
       content: [
@@ -194,12 +196,14 @@ export const handleListPages = async (
   const raw = (await client.sendCommand(
     'get_pages',
     {},
-  )) as Array<{
-    id: string
-    name: string
-    isCurrent: boolean
-    childCount: number
-  }> | null
+  )) as
+    | {
+        id: string
+        name: string
+        isCurrent: boolean
+        childCount: number
+      }[]
+    | null
   if (raw === null) {
     return {
       content: [

@@ -139,11 +139,11 @@ export type ComponentInfo = {
   name: string
   page?: string
   variants?: Record<string, string[]>
-  properties?: Array<{
+  properties?: {
     name: string
     type: string
     default?: string | boolean
-  }>
+  }[]
 }
 
 export type SearchResult = {

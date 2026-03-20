@@ -115,10 +115,10 @@ describe('e2e roundtrip', () => {
     await Bun.sleep(50)
 
     const res = await fetch(`${RELAY_HTTP_URL}/channels`)
-    const data = (await res.json()) as Array<{
+    const data = (await res.json()) as {
       channel: string
       fileName: string | null
-    }>
+    }[]
 
     expect(data).toHaveLength(1)
     expect(data[0].channel).toBe(TEST_CHANNEL)
@@ -212,12 +212,12 @@ describe('M2 read tools e2e', () => {
     expect(parsed.name).toBe('Card')
     // depth 0 means children shown as stubs
     if (parsed.children !== undefined) {
-      const children = parsed.children as Array<{
+      const children = parsed.children as {
         id?: string
         name?: string
         type?: string
         _stub?: boolean
-      }>
+      }[]
       for (const child of children) {
         expect(
           child._stub === true ||

@@ -2,7 +2,7 @@ import type { FigmaClient } from '../figma-client'
 import { discoverChannels } from '../figma-client'
 
 type ToolResult = {
-  content: Array<{ type: 'text'; text: string }>
+  content: { type: 'text'; text: string }[]
 }
 
 export const handleConnect = async (
@@ -10,7 +10,7 @@ export const handleConnect = async (
   client: FigmaClient,
   relayHttpUrl?: string,
 ): Promise<ToolResult> => {
-  let channel = params.channel
+  let { channel } = params
 
   if (channel === undefined && relayHttpUrl !== undefined) {
     const found = await discoverChannels(relayHttpUrl)

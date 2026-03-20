@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto'
+import { randomUUID } from 'node:crypto'
 import type {
   BroadcastMessage,
   ChannelInfo,
@@ -148,7 +148,7 @@ export const createFigmaClient = (
   const sendCommand = (
     command: string,
     params?: Record<string, unknown>,
-    timeoutMs: number = 3e4,
+    timeoutMs = 3e4,
   ): Promise<unknown> => {
     if (ws === null || ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error('Not connected'))
