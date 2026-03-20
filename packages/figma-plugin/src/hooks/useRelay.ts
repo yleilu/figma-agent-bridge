@@ -120,22 +120,21 @@ export const useRelay = () => {
           return
         }
 
-        if (
-          data.type === 'broadcast' &&
-          data.message &&
-          data.message.command
-        ) {
-          parent.postMessage(
-            {
-              pluginMessage: {
-                type: 'execute-command',
-                id: data.message.id,
-                command: data.message.command,
-                params: data.message.params ?? {},
+        if (data.type === 'broadcast' && data.message) {
+          const msg = data.message as Record<string, unknown>
+          if (msg.command) {
+            parent.postMessage(
+              {
+                pluginMessage: {
+                  type: 'execute-command',
+                  id: msg.id,
+                  command: msg.command,
+                  params: (msg.params as Record<string, unknown>) ?? {},
+                },
               },
-            },
-            '*',
-          )
+              '*',
+            )
+          }
         }
       }
 

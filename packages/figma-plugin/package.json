@@ -4,14 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
-    "watch": "vite build --watch"
+    "build": "rm -rf dist && vite build --config vite.config.ui.ts && vite build --config vite.config.code.ts",
+    "watch": "concurrently 'vite build --watch --config vite.config.ui.ts' 'vite build --watch --config vite.config.code.ts'",
+    "typecheck": "tsc --noEmit --project tsconfig.ui.json && tsc --noEmit --project tsconfig.code.json"
   },
   "dependencies": {
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@figma/plugin-typings": "*",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^4.4.1",
