@@ -7,14 +7,13 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -n plugin,relay -c blue,green 'bun run plugin:watch' 'bun run relay'",
-    "plugin:watch": "bun run --filter @figma-agent-bridge/figma-plugin watch",
+    "dev": "concurrently -n ui,code,relay -c blue,cyan,green 'cd packages/figma-plugin && bunx vite build --watch -c vite.config.ui.ts' 'cd packages/figma-plugin && bunx vite build --watch -c vite.config.code.ts' 'bun run packages/relay/src/index.ts'",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "relay": "bun run packages/relay/src/index.ts",
-    "server": "bun run packages/server/src/index.ts",
+    "relay": "bun --silent run --filter @figma-agent-bridge/relay start",
+    "server": "bun --silent run --filter @figma-agent-bridge/server start",
     "test": "bun --filter '@figma-agent-bridge/*' test",
     "typecheck": "bun --filter '@figma-agent-bridge/*' typecheck"
   },
