@@ -8,10 +8,7 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
-    "outDir": "dist",
+
     "types": ["bun-types"],
     "paths": {
       "@figma-agent-bridge/shared/*": ["./packages/shared/src/*"],

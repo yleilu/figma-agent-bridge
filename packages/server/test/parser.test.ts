@@ -9,10 +9,10 @@ import {
   toStylesYaml,
   toComponentsYaml,
 } from '@figma-agent-bridge/server/parser'
-import cardFixture from '../fixtures/card-node-raw.json'
-import pageLayoutFixture from '../fixtures/page-layout-raw.json'
-import stylesFixture from '../fixtures/styles-raw.json'
-import componentsFixture from '../fixtures/components-raw.json'
+import cardFixture from './fixtures/card-node-raw.json'
+import pageLayoutFixture from './fixtures/page-layout-raw.json'
+import stylesFixture from './fixtures/styles-raw.json'
+import componentsFixture from './fixtures/components-raw.json'
 
 // --- Task 2: parseNode, computeSummary, toInspectYaml ---
 

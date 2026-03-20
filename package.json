@@ -14,8 +14,8 @@
     "lint:fix": "eslint . --fix",
     "relay": "bun run packages/relay/src/index.ts",
     "server": "bun run packages/server/src/index.ts",
-    "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "test": "bun --filter '@figma-agent-bridge/*' test",
+    "typecheck": "bun --filter '@figma-agent-bridge/*' typecheck"
   },
   "devDependencies": {
     "@jsdevtools/version-bump-prompt": "^6.1.0",

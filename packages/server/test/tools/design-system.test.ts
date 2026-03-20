@@ -4,8 +4,8 @@ import {
   handleInspectStyles,
   handleInspectComponents,
 } from '@figma-agent-bridge/server/tools/design-system'
-import stylesFixture from '../../fixtures/styles-raw.json'
-import componentsFixture from '../../fixtures/components-raw.json'
+import stylesFixture from '../fixtures/styles-raw.json'
+import componentsFixture from '../fixtures/components-raw.json'
 
 describe('handleInspectStyles', () => {
   it('sends get_styles and returns YAML via toStylesYaml', async () => {

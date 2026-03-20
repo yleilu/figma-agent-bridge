@@ -11,6 +11,10 @@
     "./schemas": "./src/schemas.ts"
   },
   "types": "src/index.ts",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "zod": "^3.22.4"
   }

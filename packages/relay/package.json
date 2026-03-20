@@ -8,6 +8,11 @@
     ".": "./src/index.ts",
     "./relay": "./src/relay.ts"
   },
+  "types": "src/index.ts",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "@figma-agent-bridge/shared": "workspace:*"
   }

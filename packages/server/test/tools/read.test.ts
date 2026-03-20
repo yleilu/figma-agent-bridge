@@ -7,8 +7,8 @@ import {
   handleGetNodesInfo,
   handleListPages,
 } from '@figma-agent-bridge/server/tools/read'
-import cardFixture from '../../fixtures/card-node-raw.json'
-import pageLayoutFixture from '../../fixtures/page-layout-raw.json'
+import cardFixture from '../fixtures/card-node-raw.json'
+import pageLayoutFixture from '../fixtures/page-layout-raw.json'
 
 describe('handleInspect', () => {
   it('returns YAML for a specific node', async () => {
