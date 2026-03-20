@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
-import type { FigmaClient } from '../../../packages/server/src/figma-client'
-import { handleSearch } from '../../../packages/server/src/tools/search'
+import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import { handleSearch } from '@figma-agent-bridge/server/tools/search'
 
 describe('handleSearch', () => {
   it('sends search_nodes with name/type/pageId params', async () => {

@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'bun:test'
-import type { FigmaClient } from '../../../packages/server/src/figma-client'
+import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
 import {
   handleInspect,
   handleInspectPageLayout,
   handleGetNodeInfo,
   handleGetNodesInfo,
   handleListPages,
-} from '../../../packages/server/src/tools/read'
+} from '@figma-agent-bridge/server/tools/read'
 import cardFixture from '../../fixtures/card-node-raw.json'
 import pageLayoutFixture from '../../fixtures/page-layout-raw.json'
 

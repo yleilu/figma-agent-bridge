@@ -5,7 +5,7 @@ import type {
   JoinMessage,
   RegisterMessage,
   SystemMessage,
-} from '../../packages/shared/src/types'
+} from '@figma-agent-bridge/shared/types'
 import cardFixture from '../fixtures/card-node-raw.json'
 import pageLayoutFixture from '../fixtures/page-layout-raw.json'
 import stylesFixture from '../fixtures/styles-raw.json'

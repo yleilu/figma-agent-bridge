@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import type { ParsedNode } from '../../packages/shared/src/types'
+import type { ParsedNode } from '@figma-agent-bridge/shared/types'
 import {
   parseNode,
   computeSummary,
@@ -8,7 +8,7 @@ import {
   toPageLayoutYaml,
   toStylesYaml,
   toComponentsYaml,
-} from '../../packages/server/src/parser'
+} from '@figma-agent-bridge/server/parser'
 import cardFixture from '../fixtures/card-node-raw.json'
 import pageLayoutFixture from '../fixtures/page-layout-raw.json'
 import stylesFixture from '../fixtures/styles-raw.json'

@@ -9,24 +9,24 @@ import type { Server } from 'bun'
 import {
   startRelay,
   stopRelay,
-} from '../../packages/relay/src/relay'
-import { createFigmaClient } from '../../packages/server/src/figma-client'
-import type { FigmaClient } from '../../packages/server/src/figma-client'
+} from '@figma-agent-bridge/relay/relay'
+import { createFigmaClient } from '@figma-agent-bridge/server/figma-client'
+import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
 import {
   handleConnect,
   handleStatus,
-} from '../../packages/server/src/tools/session'
+} from '@figma-agent-bridge/server/tools/session'
 import {
   handleInspect,
   handleGetNodeInfo,
   handleListPages,
-} from '../../packages/server/src/tools/read'
+} from '@figma-agent-bridge/server/tools/read'
 import {
   handleInspectStyles,
   handleInspectComponents,
-} from '../../packages/server/src/tools/design-system'
-import { handleSearch } from '../../packages/server/src/tools/search'
-import { handleExport } from '../../packages/server/src/tools/export'
+} from '@figma-agent-bridge/server/tools/design-system'
+import { handleSearch } from '@figma-agent-bridge/server/tools/search'
+import { handleExport } from '@figma-agent-bridge/server/tools/export'
 import { createMockPlugin } from '../mocks/mock-plugin'
 
 const TEST_PORT = 3097

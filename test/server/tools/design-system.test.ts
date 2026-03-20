@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'bun:test'
-import type { FigmaClient } from '../../../packages/server/src/figma-client'
+import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
 import {
   handleInspectStyles,
   handleInspectComponents,
-} from '../../../packages/server/src/tools/design-system'
+} from '@figma-agent-bridge/server/tools/design-system'
 import stylesFixture from '../../fixtures/styles-raw.json'
 import componentsFixture from '../../fixtures/components-raw.json'
 

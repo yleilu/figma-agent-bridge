@@ -11,12 +11,12 @@ import type {
   ChannelInfo,
   PongMessage,
   SystemMessage,
-} from '../../packages/shared/src/types'
+} from '@figma-agent-bridge/shared/types'
 import {
   startRelay,
   stopRelay,
-} from '../../packages/relay/src/relay'
-import { APP_VERSION } from '../../packages/shared/src/constants'
+} from '@figma-agent-bridge/relay/relay'
+import { APP_VERSION } from '@figma-agent-bridge/shared/constants'
 
 const TEST_PORT = 3099
 const WS_URL = `ws://localhost:${TEST_PORT}`

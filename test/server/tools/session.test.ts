@@ -6,15 +6,15 @@ import {
   it,
 } from 'bun:test'
 import type { Server } from 'bun'
-import type { FigmaClient } from '../../../packages/server/src/figma-client'
+import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
 import {
   startRelay,
   stopRelay,
-} from '../../../packages/relay/src/relay'
+} from '@figma-agent-bridge/relay/relay'
 import {
   handleConnect,
   handleStatus,
-} from '../../../packages/server/src/tools/session'
+} from '@figma-agent-bridge/server/tools/session'
 
 const TEST_PORT = 3096
 const HTTP_URL = `http://localhost:${TEST_PORT}`

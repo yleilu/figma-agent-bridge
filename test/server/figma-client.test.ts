@@ -6,20 +6,18 @@ import {
   it,
 } from 'bun:test'
 import type { Server } from 'bun'
-// Relative path used because tsc does not resolve workspace
-// aliases from outside the packages/ tree
 import type {
   BroadcastMessage,
   ChannelMessage,
-} from '../../packages/shared/src/types'
+} from '@figma-agent-bridge/shared/types'
 import {
   startRelay,
   stopRelay,
-} from '../../packages/relay/src/relay'
+} from '@figma-agent-bridge/relay/relay'
 import {
   createFigmaClient,
   discoverChannels,
-} from '../../packages/server/src/figma-client'
+} from '@figma-agent-bridge/server/figma-client'
 
 const TEST_PORT = 3098
 const WS_URL = `ws://localhost:${TEST_PORT}`

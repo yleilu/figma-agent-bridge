@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
-import type { FigmaClient } from '../../../packages/server/src/figma-client'
-import { handleExport } from '../../../packages/server/src/tools/export'
+import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import { handleExport } from '@figma-agent-bridge/server/tools/export'
 
 describe('handleExport', () => {
   it('sends export_node and returns MCP image content for PNG', async () => {

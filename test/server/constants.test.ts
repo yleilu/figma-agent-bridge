@@ -3,7 +3,7 @@ import {
   APP_NAME,
   APP_VERSION,
   DEFAULT_PORT,
-} from '../../packages/shared/src/constants'
+} from '@figma-agent-bridge/shared/constants'
 
 describe('shared constants', () => {
   it('exports correct app identity', () => {
