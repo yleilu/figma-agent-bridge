@@ -1,5 +1,6 @@
 import type { FigmaClient } from '../figma-client'
 import { discoverChannels } from '../figma-client'
+import { ensureRelay } from '../ensure-relay'
 
 type ToolResult = {
   content: { type: 'text'; text: string }[]
@@ -9,10 +10,26 @@ export const handleConnect = async (
   params: { channel?: string },
   client: FigmaClient,
   relayHttpUrl?: string,
+  port?: number,
 ): Promise<ToolResult> => {
   let { channel } = params
 
   if (channel === undefined && relayHttpUrl !== undefined) {
+    if (port !== undefined) {
+      const relay = await ensureRelay(relayHttpUrl, port)
+
+      if (relay.error !== undefined) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Relay error: ${relay.error}`,
+            },
+          ],
+        }
+      }
+    }
+
     const found = await discoverChannels(relayHttpUrl)
 
     if (found.length === 0) {

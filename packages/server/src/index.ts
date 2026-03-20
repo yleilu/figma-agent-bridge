@@ -55,7 +55,7 @@ server.tool(
   'connect',
   { channel: z.string().min(1).optional() },
   async ({ channel }) =>
-    handleConnect({ channel }, client, relayHttpUrl),
+    handleConnect({ channel }, client, relayHttpUrl, port),
 )
 
 server.tool('status', {}, async () => handleStatus(client))

@@ -100,6 +100,7 @@ describe('handleConnect auto-discovery', () => {
       {},
       mockClient,
       HTTP_URL,
+      TEST_PORT,
     )
 
     expect(result.content[0].text).toContain('auto-ch')
@@ -139,6 +140,7 @@ describe('handleConnect auto-discovery', () => {
       {},
       mockClient,
       HTTP_URL,
+      TEST_PORT,
     )
 
     expect(result.content[0].text).toContain('Multiple')
@@ -162,6 +164,7 @@ describe('handleConnect auto-discovery', () => {
       {},
       mockClient,
       HTTP_URL,
+      TEST_PORT,
     )
 
     expect(result.content[0].text).toContain(
@@ -186,6 +189,7 @@ describe('handleConnect auto-discovery', () => {
       { channel: 'explicit-ch' },
       mockClient,
       HTTP_URL,
+      TEST_PORT,
     )
 
     expect(result.content[0].text).toContain('explicit-ch')
