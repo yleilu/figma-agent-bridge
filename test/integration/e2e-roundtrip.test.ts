@@ -26,6 +26,7 @@ import {
   handleInspectComponents,
 } from '../../packages/server/src/tools/design-system'
 import { handleSearch } from '../../packages/server/src/tools/search'
+import { handleExport } from '../../packages/server/src/tools/export'
 import { createMockPlugin } from '../mocks/mock-plugin'
 
 const TEST_PORT = 3097
@@ -260,5 +261,40 @@ describe('M2 read tools e2e', () => {
     expect(result.content).toHaveLength(1)
     expect(result.content[0].type).toBe('text')
     expect(result.content[0].text).toContain('Homepage')
+  })
+
+  it('export PNG returns image with valid base64', async () => {
+    const result = await handleExport(
+      { nodeId: '1:42', format: 'PNG' },
+      client,
+    )
+
+    expect(result.content).toHaveLength(1)
+    const item = result.content[0] as {
+      type: string
+      data?: string
+      mimeType?: string
+    }
+    expect(item.type).toBe('image')
+    expect(item.mimeType).toBe('image/png')
+    expect(item.data).toBeDefined()
+    // Verify data is valid base64
+    const decoded = Buffer.from(item.data ?? '', 'base64')
+    expect(decoded.length).toBeGreaterThan(0)
+  })
+
+  it('export SVG returns text starting with <svg', async () => {
+    const result = await handleExport(
+      { nodeId: '1:42', format: 'SVG' },
+      client,
+    )
+
+    expect(result.content).toHaveLength(1)
+    const item = result.content[0] as {
+      type: string
+      text?: string
+    }
+    expect(item.type).toBe('text')
+    expect(item.text).toMatch(/^<svg/)
   })
 })

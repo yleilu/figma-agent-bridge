@@ -2,6 +2,61 @@ figma.showUI(__html__, { width: 340, height: 280, title: 'Agent Bridge', themeCo
 
 figma.ui.postMessage({ type: 'file-name', fileName: figma.root.name });
 
+function summarizeChildren(node) {
+  return node.children ? node.children.map(function(child) {
+    return { id: child.id, name: child.name, type: child.type };
+  }) : [];
+}
+
+async function exportNodeDocument(node) {
+  if (node.type === 'DOCUMENT' || node.type === 'PAGE') {
+    return {
+      id: node.id,
+      name: node.name,
+      type: node.type,
+      children: summarizeChildren(node),
+    };
+  }
+  var exported = await node.exportAsync({ format: 'JSON_REST_V1' });
+  if (typeof exported === 'object' && exported !== null && exported.document) {
+    return exported.document;
+  }
+  throw new Error('exportAsync returned unexpected type: ' + typeof exported);
+}
+
+function bytesToBase64(bytes) {
+  var CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  var b64 = '';
+  var i = 0;
+  while (i < bytes.length) {
+    var b0 = bytes[i++];
+    var b1 = i < bytes.length ? bytes[i++] : 0;
+    var b2 = i < bytes.length ? bytes[i++] : 0;
+    b64 += CHARS[b0 >> 2];
+    b64 += CHARS[((b0 & 3) << 4) | (b1 >> 4)];
+    b64 += CHARS[((b1 & 15) << 2) | (b2 >> 6)];
+    b64 += CHARS[b2 & 63];
+  }
+  var pad = bytes.length % 3;
+  if (pad === 1) {
+    b64 = b64.slice(0, -2) + '==';
+  } else if (pad === 2) {
+    b64 = b64.slice(0, -1) + '=';
+  }
+  return b64;
+}
+
+function bytesToString(bytes) {
+  var result = '';
+  var chunkSize = 8192;
+  for (var i = 0; i < bytes.length; i += chunkSize) {
+    var end = i + chunkSize < bytes.length ? i + chunkSize : bytes.length;
+    var slice = bytes.slice(i, end);
+    result += String.fromCharCode.apply(null, slice);
+  }
+  return result;
+}
+
 async function handleCommand(command, params) {
   switch (command) {
     case 'get_document_info':
@@ -19,77 +74,39 @@ async function handleCommand(command, params) {
       });
 
     case 'get_node': {
-      var nodeId = params.nodeId;
-      var node = await figma.getNodeByIdAsync(nodeId);
+      var node = await figma.getNodeByIdAsync(params.nodeId);
       if (!node) {
-        return { error: 'Node not found: ' + nodeId };
+        return { error: 'Node not found: ' + params.nodeId };
       }
-      if (node.type === 'DOCUMENT' || node.type === 'PAGE') {
-        return {
-          id: node.id,
-          name: node.name,
-          type: node.type,
-          children: node.children ? node.children.map(function(child) {
-            return { id: child.id, name: child.name, type: child.type };
-          }) : [],
-        };
-      }
-      var bytes = await node.exportAsync({ format: 'JSON_REST_V1' });
-      var jsonStr = '';
-      for (var bi = 0; bi < bytes.length; bi++) {
-        jsonStr += String.fromCharCode(bytes[bi]);
-      }
-      var parsed = JSON.parse(jsonStr);
-      return parsed.document;
+      return exportNodeDocument(node);
     }
 
     case 'get_nodes': {
       var nodeIds = params.nodeIds || [];
-      var results = await Promise.all(nodeIds.map(async function(nodeId) {
+      return Promise.all(nodeIds.map(async function(nodeId) {
         var node = await figma.getNodeByIdAsync(nodeId);
         if (!node) {
           return { id: nodeId, error: 'Node not found' };
         }
-        if (node.type === 'DOCUMENT' || node.type === 'PAGE') {
-          return {
-            id: node.id,
-            name: node.name,
-            type: node.type,
-            children: node.children ? node.children.map(function(child) {
-              return { id: child.id, name: child.name, type: child.type };
-            }) : [],
-          };
-        }
-        var bytes = await node.exportAsync({ format: 'JSON_REST_V1' });
-        var jsonStr = '';
-        for (var bi = 0; bi < bytes.length; bi++) {
-          jsonStr += String.fromCharCode(bytes[bi]);
-        }
-        var parsed = JSON.parse(jsonStr);
-        return parsed.document;
+        return exportNodeDocument(node);
       }));
-      return results;
     }
 
     case 'get_page_layout': {
-      var frames = [];
-      var children = figma.currentPage.children;
-      for (var i = 0; i < children.length; i++) {
-        var frame = children[i];
-        frames.push({
-          id: frame.id,
-          name: frame.name,
-          type: frame.type,
-          x: frame.x,
-          y: frame.y,
-          width: frame.width,
-          height: frame.height,
-          childCount: frame.children ? frame.children.length : 0,
-        });
-      }
       return {
         pageName: figma.currentPage.name,
-        frames: frames,
+        frames: figma.currentPage.children.map(function(frame) {
+          return {
+            id: frame.id,
+            name: frame.name,
+            type: frame.type,
+            x: frame.x,
+            y: frame.y,
+            width: frame.width,
+            height: frame.height,
+            childCount: frame.children ? frame.children.length : 0,
+          };
+        }),
       };
     }
 
@@ -104,42 +121,14 @@ async function handleCommand(command, params) {
       });
 
     case 'export_node': {
-      var exportNodeId = params.nodeId;
+      var exportNode = await figma.getNodeByIdAsync(params.nodeId);
+      if (!exportNode) {
+        return { error: 'Node not found: ' + params.nodeId };
+      }
       var exportFormat = params.format || 'PNG';
       var exportScale = params.scale || 1;
-      var exportNode = await figma.getNodeByIdAsync(exportNodeId);
-      if (!exportNode) {
-        return { error: 'Node not found: ' + exportNodeId };
-      }
       var bytes = await exportNode.exportAsync({ format: exportFormat, constraint: { type: 'SCALE', value: exportScale } });
-      var data;
-      if (exportFormat === 'SVG') {
-        var chars = [];
-        for (var si = 0; si < bytes.length; si++) {
-          chars.push(String.fromCharCode(bytes[si]));
-        }
-        data = chars.join('');
-      } else {
-        var CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-        var b64 = '';
-        var bi = 0;
-        while (bi < bytes.length) {
-          var b0 = bytes[bi++];
-          var b1 = bi < bytes.length ? bytes[bi++] : 0;
-          var b2 = bi < bytes.length ? bytes[bi++] : 0;
-          b64 += CHARS[b0 >> 2];
-          b64 += CHARS[((b0 & 3) << 4) | (b1 >> 4)];
-          b64 += CHARS[((b1 & 15) << 2) | (b2 >> 6)];
-          b64 += CHARS[b2 & 63];
-        }
-        var pad = bytes.length % 3;
-        if (pad === 1) {
-          b64 = b64.slice(0, -2) + '==';
-        } else if (pad === 2) {
-          b64 = b64.slice(0, -1) + '=';
-        }
-        data = b64;
-      }
+      var data = exportFormat === 'SVG' ? bytesToString(bytes) : bytesToBase64(bytes);
       return { format: exportFormat, scale: exportScale, data: data };
     }
 
@@ -182,7 +171,6 @@ async function handleCommand(command, params) {
       var componentSets = figma.root.findAllWithCriteria({ types: ['COMPONENT_SET'] });
       var components = figma.root.findAllWithCriteria({ types: ['COMPONENT'] });
 
-      // Build component set entries with variant info
       var setMap = {};
       for (var csi = 0; csi < componentSets.length; csi++) {
         var cs = componentSets[csi];
@@ -219,7 +207,6 @@ async function handleCommand(command, params) {
         };
       }
 
-      // Standalone components (not inside a component set)
       var standaloneComponents = [];
       for (var si = 0; si < components.length; si++) {
         var comp = components[si];
@@ -242,7 +229,6 @@ async function handleCommand(command, params) {
         });
       }
 
-      // Remote components discovered via instances
       var instances = figma.root.findAllWithCriteria({ types: ['INSTANCE'] });
       var remoteMap = {};
       for (var ii = 0; ii < instances.length; ii++) {
@@ -262,20 +248,9 @@ async function handleCommand(command, params) {
         }
       }
 
-      var localAll = [];
-      var setKeys = Object.keys(setMap);
-      for (var ski = 0; ski < setKeys.length; ski++) {
-        localAll.push(setMap[setKeys[ski]]);
-      }
-      for (var sai = 0; sai < standaloneComponents.length; sai++) {
-        localAll.push(standaloneComponents[sai]);
-      }
-
-      var remoteAll = [];
-      var remoteKeys = Object.keys(remoteMap);
-      for (var rki = 0; rki < remoteKeys.length; rki++) {
-        remoteAll.push(remoteMap[remoteKeys[rki]]);
-      }
+      var localAll = Object.keys(setMap).map(function(k) { return setMap[k]; });
+      localAll = localAll.concat(standaloneComponents);
+      var remoteAll = Object.keys(remoteMap).map(function(k) { return remoteMap[k]; });
 
       return { local: localAll, remote: remoteAll };
     }
@@ -286,7 +261,6 @@ async function handleCommand(command, params) {
       var searchPageId = params.pageId || null;
       var searchLimit = params.limit || 50;
 
-      // Determine which pages to search
       var searchPages = [];
       if (searchPageId) {
         var pageNode = await figma.getNodeByIdAsync(searchPageId);
@@ -294,7 +268,6 @@ async function handleCommand(command, params) {
           searchPages.push(pageNode);
         }
       } else {
-        // Search all pages
         for (var spi = 0; spi < figma.root.children.length; spi++) {
           searchPages.push(figma.root.children[spi]);
         }
@@ -304,16 +277,14 @@ async function handleCommand(command, params) {
       var nameRegex = searchName ? new RegExp(globPattern, 'i') : null;
 
       var matches = [];
-      var stopped = false;
-      for (var spi2 = 0; spi2 < searchPages.length; spi2++) {
-        if (stopped) { break; }
-        var sp = searchPages[spi2];
+      for (var pi = 0; pi < searchPages.length; pi++) {
+        var sp = searchPages[pi];
         var found = sp.findAll(function(node) {
           if (nameRegex && !nameRegex.test(node.name)) { return false; }
           if (searchType && node.type !== searchType) { return false; }
           return true;
         });
-        for (var fi = 0; fi < found.length; fi++) {
+        for (var fi = 0; fi < found.length && matches.length < searchLimit; fi++) {
           var fn = found[fi];
           matches.push({
             id: fn.id,
@@ -324,18 +295,12 @@ async function handleCommand(command, params) {
             width: fn.width !== undefined ? fn.width : null,
             height: fn.height !== undefined ? fn.height : null,
           });
-          if (matches.length > searchLimit) {
-            stopped = true;
-            break;
-          }
         }
+        if (matches.length >= searchLimit) { break; }
       }
 
-      var truncated = matches.length > searchLimit;
-      if (truncated) {
-        matches = matches.slice(0, searchLimit);
-      }
-      return { results: matches, truncated: truncated };
+      var truncated = matches.length >= searchLimit;
+      return { results: matches.slice(0, searchLimit), truncated: truncated };
     }
 
     default:
@@ -345,7 +310,12 @@ async function handleCommand(command, params) {
 
 figma.ui.onmessage = async function (msg) {
   if (msg.type === 'execute-command') {
-    var result = await handleCommand(msg.command, msg.params);
+    var result;
+    try {
+      result = await handleCommand(msg.command, msg.params);
+    } catch (err) {
+      result = { error: String(err) };
+    }
 
     figma.ui.postMessage({
       type: 'command-result',

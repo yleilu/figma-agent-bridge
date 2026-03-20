@@ -11,6 +11,12 @@ import pageLayoutFixture from '../fixtures/page-layout-raw.json'
 import stylesFixture from '../fixtures/styles-raw.json'
 import componentsFixture from '../fixtures/components-raw.json'
 
+const MOCK_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect fill="red" width="100" height="100"/></svg>'
+
+const MOCK_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+
 type MockPluginOptions = {
   relayUrl: string
   channel: string
@@ -107,13 +113,16 @@ export const createMockPlugin = (
         }
         break
 
-      case 'export_node':
+      case 'export_node': {
+        const fmt = (cmd.params?.format as string) || 'PNG'
+        const scale = (cmd.params?.scale as number) || 1
         result = {
-          format: 'PNG',
-          scale: 1,
-          data: 'bW9ja2Jhc2U2NA==',
+          format: fmt,
+          scale,
+          data: fmt === 'SVG' ? MOCK_SVG : MOCK_PNG_BASE64,
         }
         break
+      }
 
       default:
         error = 'Unknown command'
