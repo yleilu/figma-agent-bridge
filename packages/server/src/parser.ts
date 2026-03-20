@@ -371,10 +371,7 @@ export const computeSummary = (
   }
 }
 
-export const toInspectYaml = (
-  parsed: ParsedNode,
-): string => {
-  const summary = computeSummary(parsed)
+const buildHeader = (summary: InspectSummary): string => {
   const sizeStr = `${summary.size[0]}×${summary.size[1]}`
   const typeCounts = Object.entries(summary.typeBreakdown)
     .map(([t, c]) => `${c} ${t}`)
@@ -384,7 +381,7 @@ export const toInspectYaml = (
       ? `auto-layout: ${summary.layoutMode}`
       : 'no auto-layout'
 
-  const header = [
+  return [
     `# ${summary.name} [${summary.id}]`,
     `# ${summary.totalLayers} layers, depth ${summary.maxDepth} | ${sizeStr} | ${alStr}`,
     `# types: ${typeCounts}`,
@@ -395,10 +392,70 @@ export const toInspectYaml = (
       : []),
     '',
   ].join('\n')
+}
 
+export const toInspectYaml = (
+  parsed: ParsedNode,
+): string => {
+  const summary = computeSummary(parsed)
+  const header = buildHeader(summary)
   const yamlStr = YAML.stringify(parsed, { lineWidth: 120 })
 
   return header + yamlStr
+}
+
+const renderNode = (
+  node: ParsedNode,
+  lines: string[],
+  depth: number,
+): void => {
+  const indent = '  '.repeat(depth) + '- '
+  const sizeStr = `${node.size[0]}×${node.size[1]}`
+
+  let typeStr = node.type
+  if (
+    node.type === 'INSTANCE' &&
+    node.component !== undefined
+  ) {
+    typeStr = `INSTANCE<${node.component.name}>`
+  }
+
+  let extras = ''
+  if (node.layout !== undefined) {
+    extras += ` ${node.layout.mode}`
+  }
+  if (node.text !== undefined) {
+    let { content } = node.text
+    if (content.length > 50) {
+      content = content.slice(0, 50) + '...'
+    }
+    extras += ` "${content}"`
+  }
+
+  const hasChildren =
+    node.children !== undefined && node.children.length > 0
+  const suffix = hasChildren ? ':' : ''
+
+  lines.push(
+    `${indent}${node.name} [${node.id}] ${typeStr} ${sizeStr}${extras}${suffix}`,
+  )
+
+  if (hasChildren) {
+    for (const child of node.children!) {
+      renderNode(child, lines, depth + 1)
+    }
+  }
+}
+
+export const toInspectTree = (
+  parsed: ParsedNode,
+): string => {
+  const summary = computeSummary(parsed)
+  const header = buildHeader(summary)
+  const lines: string[] = []
+  renderNode(parsed, lines, 0)
+
+  return header + lines.join('\n') + '\n'
 }
 
 // --- toFullJson ---

@@ -4,6 +4,7 @@ import {
   parseNode,
   computeSummary,
   toInspectYaml,
+  toInspectTree,
   toFullJson,
   toPageLayoutYaml,
   toStylesYaml,
@@ -125,6 +126,128 @@ describe('toInspectYaml', () => {
     expect(yaml).not.toContain('strokes:')
     expect(yaml).not.toContain('opacity:')
     expect(yaml).not.toContain('position:')
+  })
+})
+
+// --- toInspectTree ---
+
+describe('toInspectTree', () => {
+  it('includes summary header with layers, depth, size, layout', () => {
+    const parsed = parseNode(cardFixture)
+    const tree = toInspectTree(parsed)
+    expect(tree).toContain('# Card [1:42]')
+    expect(tree).toContain('4 layers')
+    expect(tree).toContain('depth 1')
+    expect(tree).toContain('320×200')
+    expect(tree).toContain('auto-layout: V')
+  })
+
+  it('renders root node as first YAML list item with layout direction', () => {
+    const parsed = parseNode(cardFixture)
+    const tree = toInspectTree(parsed)
+    expect(tree).toContain('- Card [1:42] FRAME 320×200 V:')
+  })
+
+  it('renders children indented under parent', () => {
+    const parsed = parseNode(cardFixture)
+    const tree = toInspectTree(parsed)
+    expect(tree).toContain(
+      '  - Title [1:43] TEXT 288×24 "Card Title"',
+    )
+    expect(tree).toContain(
+      '  - Body [1:44] TEXT 288×48 "Description text here..."',
+    )
+  })
+
+  it('shows INSTANCE<component.name> for component instances', () => {
+    const parsed = parseNode(cardFixture)
+    const tree = toInspectTree(parsed)
+    expect(tree).toContain(
+      '  - Action Button [1:45] INSTANCE<Action Button> 100×40',
+    )
+  })
+
+  it('leaf nodes have no trailing colon', () => {
+    const parsed = parseNode(cardFixture)
+    const tree = toInspectTree(parsed)
+    const titleLine = tree
+      .split('\n')
+      .find(l => l.includes('Title [1:43]'))
+    expect(titleLine).not.toMatch(/:$/)
+  })
+
+  it('omits layout direction for frames without auto-layout', () => {
+    const noLayoutFrame: ParsedNode = {
+      id: '1:50',
+      name: 'Static Frame',
+      type: 'FRAME',
+      size: [400, 300],
+      children: [
+        {
+          id: '1:51',
+          name: 'Child',
+          type: 'RECTANGLE',
+          size: [100, 100],
+        },
+      ],
+    }
+    const tree = toInspectTree(noLayoutFrame)
+    expect(tree).toContain(
+      '- Static Frame [1:50] FRAME 400×300:',
+    )
+    expect(tree).not.toContain('H:')
+    expect(tree).not.toContain('V:')
+  })
+
+  it('truncates long text content to 50 chars', () => {
+    const longTextNode: ParsedNode = {
+      id: '1:99',
+      name: 'Long',
+      type: 'TEXT',
+      size: [200, 24],
+      text: {
+        content: 'A'.repeat(80),
+        font: 'Inter/Regular/14',
+      },
+    }
+    const wrapper: ParsedNode = {
+      id: '1:98',
+      name: 'Wrapper',
+      type: 'FRAME',
+      size: [200, 100],
+      children: [longTextNode],
+    }
+    const tree = toInspectTree(wrapper)
+    expect(tree).toContain('"' + 'A'.repeat(50) + '..."')
+  })
+
+  it('handles deeply nested indentation correctly', () => {
+    const deep: ParsedNode = {
+      id: '1:1',
+      name: 'L0',
+      type: 'FRAME',
+      size: [100, 100],
+      children: [
+        {
+          id: '1:2',
+          name: 'L1',
+          type: 'FRAME',
+          size: [80, 80],
+          children: [
+            {
+              id: '1:3',
+              name: 'L2',
+              type: 'RECTANGLE',
+              size: [60, 60],
+            },
+          ],
+        },
+      ],
+    }
+    const tree = toInspectTree(deep)
+    expect(tree).toContain('- L0 [1:1] FRAME 100×100:')
+    expect(tree).toContain('  - L1 [1:2] FRAME 80×80:')
+    expect(tree).toContain('    - L2 [1:3] RECTANGLE 60×60')
   })
 })
 

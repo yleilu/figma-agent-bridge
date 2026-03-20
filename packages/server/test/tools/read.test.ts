@@ -44,7 +44,7 @@ describe('handleInspect', () => {
       'auto-layout: V',
     )
     expect(result.content[0].text).toContain(
-      'font: Inter/SemiBold/18',
+      '- Card [1:42] FRAME 320×200 V:',
     )
   })
 

@@ -2,7 +2,7 @@ import YAML from 'yaml'
 import type { FigmaClient } from '../figma-client'
 import {
   parseNode,
-  toInspectYaml,
+  toInspectTree,
   toPageLayoutYaml,
   toFullJson,
   filterNode,
@@ -68,9 +68,9 @@ export const handleInspect = async (
   }
 
   const parsed = parseNode(raw)
-  const yaml = toInspectYaml(parsed)
+  const tree = toInspectTree(parsed)
 
-  return { content: [{ type: 'text', text: yaml }] }
+  return { content: [{ type: 'text', text: tree }] }
 }
 
 export const handleInspectPageLayout = async (
