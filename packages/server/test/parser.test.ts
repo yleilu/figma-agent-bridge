@@ -51,6 +51,7 @@ describe('parseNode', () => {
       font: 'Inter/SemiBold/18',
       align: 'LEFT',
       color: '#1A1A1A',
+      lineHeight: '24px',
     })
     expect(title.sizing).toEqual(['FILL', 'HUG'])
   })

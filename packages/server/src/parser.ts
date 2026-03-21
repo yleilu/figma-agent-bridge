@@ -14,6 +14,8 @@ type FigmaFill = {
   type: string
   visible?: boolean
   color?: RGBA
+  gradientStops?: { position: number; color: RGBA }[]
+  gradientTransform?: number[][]
 }
 
 type FigmaEffect = {
@@ -52,14 +54,53 @@ const parseFills = (
   fills: FigmaFill[],
 ): string[] | undefined => {
   const result = fills
-    .filter(
-      f =>
-        f.visible !== false &&
+    .filter(f => f.visible !== false)
+    .map(f => {
+      if (
         f.type === 'SOLID' &&
         f.color !== null &&
-        f.color !== undefined,
-    )
-    .map(f => rgbaToHex(f.color as RGBA))
+        f.color !== undefined
+      ) {
+        return rgbaToHex(f.color)
+      }
+      if (f.type === 'IMAGE') {
+        return 'image'
+      }
+      if (f.gradientStops !== undefined) {
+        const stops = f.gradientStops
+          .map(
+            (s: { position: number; color: RGBA }) =>
+              `${rgbaToHex(s.color)} ${Math.round(s.position * 100)}%`,
+          )
+          .join(', ')
+        if (f.type === 'GRADIENT_LINEAR') {
+          const transform = f.gradientTransform
+          const angle =
+            transform !== undefined
+              ? Math.round(
+                  (Math.atan2(
+                    transform[0][1],
+                    transform[0][0],
+                  ) *
+                    180) /
+                    Math.PI,
+                )
+              : 0
+          return `linear-gradient(${angle}deg, ${stops})`
+        }
+        if (f.type === 'GRADIENT_RADIAL') {
+          return `radial-gradient(${stops})`
+        }
+        if (f.type === 'GRADIENT_ANGULAR') {
+          return `angular-gradient(${stops})`
+        }
+        if (f.type === 'GRADIENT_DIAMOND') {
+          return `diamond-gradient(${stops})`
+        }
+      }
+      return f.type.toLowerCase()
+    })
+    .filter((v): v is string => Boolean(v))
 
   return result.length > 0 ? result : undefined
 }
@@ -86,13 +127,21 @@ const parseEffects = (
           e.offset !== null && e.offset !== undefined
             ? e.offset.y
             : 0
+        const prefix =
+          e.type === 'DROP_SHADOW'
+            ? 'shadow'
+            : 'inner-shadow'
+        const spreadStr =
+          e.spread !== undefined && e.spread !== 0
+            ? `,${e.spread}`
+            : ''
 
-        return `shadow(${ox},${oy},${e.radius ?? 0},${colorHex})`
+        return `${prefix}(${ox},${oy},${e.radius ?? 0},${colorHex}${spreadStr})`
       }
-      if (
-        e.type === 'LAYER_BLUR' ||
-        e.type === 'BACKGROUND_BLUR'
-      ) {
+      if (e.type === 'BACKGROUND_BLUR') {
+        return `bg-blur(${e.radius ?? 0})`
+      }
+      if (e.type === 'LAYER_BLUR') {
         return `blur(${e.radius ?? 0})`
       }
 
@@ -108,9 +157,23 @@ const parseTextStyle = (
     fontStyle?: string
     fontSize?: number
     textAlignHorizontal?: string
+    lineHeightPx?: number
+    lineHeightUnit?: string
+    lineHeightPercent?: number
+    letterSpacing?: number
+    textDecoration?: string
+    textCase?: string
   },
   fills: FigmaFill[],
-): { font: string; align?: string; color?: string } => {
+): {
+  font: string
+  align?: string
+  color?: string
+  lineHeight?: string
+  letterSpacing?: string
+  decoration?: string
+  case?: string
+} => {
   const family = style.fontFamily ?? 'Unknown'
   const weight = (style.fontStyle ?? 'Regular').replace(
     /\s+/g,
@@ -131,10 +194,43 @@ const parseTextStyle = (
       ? rgbaToHex(colorFills[0].color as RGBA)
       : undefined
 
+  const lineHeight =
+    style.lineHeightUnit === 'PIXELS' &&
+    style.lineHeightPx !== undefined
+      ? `${style.lineHeightPx}px`
+      : style.lineHeightUnit === 'PERCENT' &&
+          style.lineHeightPercent !== undefined
+        ? `${style.lineHeightPercent}%`
+        : undefined
+
+  const letterSpacing =
+    style.letterSpacing !== undefined &&
+    style.letterSpacing !== 0
+      ? `${style.letterSpacing}px`
+      : undefined
+
+  const decoration =
+    style.textDecoration !== undefined &&
+    style.textDecoration !== 'NONE'
+      ? style.textDecoration
+      : undefined
+
+  const textCase =
+    style.textCase !== undefined &&
+    style.textCase !== 'ORIGINAL'
+      ? style.textCase
+      : undefined
+
   return {
     font,
     ...(align !== undefined ? { align } : {}),
     ...(color !== undefined ? { color } : {}),
+    ...(lineHeight !== undefined ? { lineHeight } : {}),
+    ...(letterSpacing !== undefined
+      ? { letterSpacing }
+      : {}),
+    ...(decoration !== undefined ? { decoration } : {}),
+    ...(textCase !== undefined ? { case: textCase } : {}),
   }
 }
 
@@ -253,8 +349,36 @@ export const parseNode = (
       ? [sizingH, sizingV]
       : undefined
 
-  const radius = raw.cornerRadius as number | undefined
+  const cornerRadius = raw.cornerRadius as
+    | number
+    | null
+    | undefined
+  const perCornerRadii = raw.rectangleCornerRadii as
+    | [number, number, number, number]
+    | undefined
+  const radius =
+    cornerRadius !== undefined &&
+    cornerRadius !== null &&
+    cornerRadius !== 0
+      ? cornerRadius
+      : perCornerRadii !== undefined
+        ? perCornerRadii
+        : undefined
   const opacity = raw.opacity as number | undefined
+
+  const strokeWeight = raw.strokeWeight as
+    | number
+    | undefined
+  const strokeAlign = raw.strokeAlign as string | undefined
+  const dashPattern = raw.dashPattern as
+    | number[]
+    | undefined
+  const layoutPositioning = raw.layoutPositioning as
+    | string
+    | undefined
+  const textAutoResize = raw.textAutoResize as
+    | string
+    | undefined
 
   const children =
     raw.children !== null && raw.children !== undefined
@@ -270,6 +394,12 @@ export const parseNode = (
         fontStyle?: string
         fontSize?: number
         textAlignHorizontal?: string
+        lineHeightPx?: number
+        lineHeightUnit?: string
+        lineHeightPercent?: number
+        letterSpacing?: number
+        textDecoration?: string
+        textCase?: string
       }
     | undefined
   const text =
@@ -319,6 +449,30 @@ export const parseNode = (
   }
   if (component !== undefined) {
     result.component = component
+  }
+  if (strokeWeight !== undefined && strokeWeight > 0) {
+    result.strokeWeight = strokeWeight
+  }
+  if (
+    strokeAlign !== undefined &&
+    strokeAlign !== 'CENTER'
+  ) {
+    result.strokeAlign = strokeAlign
+  }
+  if (dashPattern !== undefined && dashPattern.length > 0) {
+    result.strokeDash = dashPattern
+  }
+  if (
+    layoutPositioning !== undefined &&
+    layoutPositioning !== 'AUTO'
+  ) {
+    result.layoutPositioning = layoutPositioning
+  }
+  if (
+    textAutoResize !== undefined &&
+    textAutoResize !== 'NONE'
+  ) {
+    result.textAutoResize = textAutoResize
   }
   if (children !== undefined && children.length > 0) {
     result.children = children

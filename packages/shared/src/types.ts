@@ -86,6 +86,9 @@ export type ParsedNode = {
   sizing?: [string, string]
   fills?: string[]
   strokes?: string[]
+  strokeWeight?: number
+  strokeAlign?: string
+  strokeDash?: number[]
   radius?: number | [number, number, number, number]
   opacity?: number
   effects?: string[]
@@ -94,6 +97,10 @@ export type ParsedNode = {
     font: string
     align?: string
     color?: string
+    lineHeight?: string
+    letterSpacing?: string
+    decoration?: string
+    case?: string
   }
   component?: {
     name: string
@@ -101,6 +108,8 @@ export type ParsedNode = {
     variant?: Record<string, string>
     overrides?: string[]
   }
+  layoutPositioning?: string
+  textAutoResize?: string
   children?: ParsedNode[]
 }
 
