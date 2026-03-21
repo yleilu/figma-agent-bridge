@@ -8,7 +8,7 @@ import stylesFixture from '../fixtures/styles-raw.json'
 import componentsFixture from '../fixtures/components-raw.json'
 
 describe('handleInspectStyles', () => {
-  it('sends get_styles and returns YAML via toStylesYaml', async () => {
+  it('sends get_styles and returns compact tree via toStylesTree', async () => {
     const mockClient: FigmaClient = {
       joinChannel: () => Promise.resolve(''),
       sendCommand: cmd => {
@@ -28,7 +28,7 @@ describe('handleInspectStyles', () => {
     expect(result.content[0].type).toBe('text')
     expect(result.content[0].text).toContain('# 5 styles')
     expect(result.content[0].text).toContain(
-      'color: "#3B82F6"',
+      'paint #3B82F6',
     )
   })
 
@@ -53,10 +53,35 @@ describe('handleInspectStyles', () => {
     )
 
     expect(result.content[0].text).toContain(
-      'font: Inter/Bold/32',
+      'text Inter/Bold/32',
     )
     expect(result.content[0].text).not.toContain(
-      'color: "#3B82F6"',
+      'paint #3B82F6',
+    )
+  })
+
+  it('returns error for invalid type filter', async () => {
+    const mockClient: FigmaClient = {
+      joinChannel: () => Promise.resolve(''),
+      sendCommand: cmd => {
+        if (cmd === 'get_styles') {
+          return Promise.resolve(stylesFixture)
+        }
+
+        return Promise.resolve(null)
+      },
+      disconnect: () => undefined,
+      isConnected: () => true,
+      currentChannel: () => 'test-ch',
+    }
+
+    const result = await handleInspectStyles(
+      { type: 'bogus' },
+      mockClient,
+    )
+
+    expect(result.content[0].text).toContain(
+      'Invalid style type',
     )
   })
 
@@ -78,7 +103,7 @@ describe('handleInspectStyles', () => {
 })
 
 describe('handleInspectComponents', () => {
-  it('sends get_local_components and returns YAML via toComponentsYaml', async () => {
+  it('sends get_local_components and returns compact tree via toComponentsTree', async () => {
     const mockClient: FigmaClient = {
       joinChannel: () => Promise.resolve(''),
       sendCommand: cmd => {
@@ -100,9 +125,9 @@ describe('handleInspectComponents', () => {
 
     expect(result.content[0].type).toBe('text')
     expect(result.content[0].text).toContain(
-      '# 2 local components',
+      '# 2 local, 1 remote',
     )
-    expect(result.content[0].text).toContain('name: Button')
+    expect(result.content[0].text).toContain('- Button [')
   })
 
   it('filters by query when provided', async () => {
@@ -125,10 +150,8 @@ describe('handleInspectComponents', () => {
       mockClient,
     )
 
-    expect(result.content[0].text).toContain('name: Button')
-    expect(result.content[0].text).not.toContain(
-      'name: Avatar',
-    )
+    expect(result.content[0].text).toContain('- Button [')
+    expect(result.content[0].text).not.toContain('Avatar')
   })
 
   it('returns error when not connected', async () => {

@@ -3,7 +3,8 @@ import type { FigmaClient } from '../figma-client'
 import {
   parseNode,
   toInspectTree,
-  toPageLayoutYaml,
+  toInspectTreeMulti,
+  toPageLayoutTree,
   toFullJson,
   filterNode,
 } from '../parser'
@@ -27,49 +28,98 @@ export const handleInspect = async (
     }
   }
 
-  let targetId = nodeId
-
-  if (targetId === undefined) {
-    const selection = (await client.sendCommand(
-      'get_selection',
-      {},
-    )) as
-      | {
-          id: string
-          name: string
-          type: string
-        }[]
-      | null
-    if (selection === null || selection.length === 0) {
+  if (nodeId !== undefined) {
+    const raw = (await client.sendCommand('get_node', {
+      nodeId,
+    })) as Record<string, unknown> | null
+    if (raw === null) {
       return {
         content: [
           {
             type: 'text',
-            text: 'No node selected. Select a node in Figma or provide a nodeId.',
+            text: `Node not found: ${nodeId}`,
           },
         ],
       }
     }
-    targetId = selection[0].id
+    const parsed = parseNode(raw)
+    const tree = toInspectTree(parsed)
+    return { content: [{ type: 'text', text: tree }] }
   }
 
-  const raw = (await client.sendCommand('get_node', {
-    nodeId: targetId,
-  })) as Record<string, unknown> | null
-  if (raw === null) {
+  const selection = (await client.sendCommand(
+    'get_selection',
+    {},
+  )) as
+    | {
+        id: string
+        name: string
+        type: string
+      }[]
+    | null
+  if (selection === null || selection.length === 0) {
     return {
       content: [
         {
           type: 'text',
-          text: `Node not found: ${targetId}`,
+          text: 'No node selected. Select a node in Figma or provide a nodeId.',
         },
       ],
     }
   }
 
-  const parsed = parseNode(raw)
-  const tree = toInspectTree(parsed)
+  if (selection.length === 1) {
+    const raw = (await client.sendCommand('get_node', {
+      nodeId: selection[0].id,
+    })) as Record<string, unknown> | null
+    if (raw === null) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Node not found: ${selection[0].id}`,
+          },
+        ],
+      }
+    }
+    const parsed = parseNode(raw)
+    const tree = toInspectTree(parsed)
+    return { content: [{ type: 'text', text: tree }] }
+  }
 
+  // Multi-selection: fetch all nodes in parallel
+  const raws = await Promise.all(
+    selection.map(sel =>
+      client.sendCommand('get_node', {
+        nodeId: sel.id,
+      }),
+    ),
+  )
+  const parsedNodes = raws
+    .filter(
+      (raw): raw is Record<string, unknown> => raw !== null,
+    )
+    .map(raw => parseNode(raw))
+
+  // If only one node resolved, fall back to single-node format
+  if (parsedNodes.length === 1) {
+    const singleTree = toInspectTree(parsedNodes[0])
+    return {
+      content: [{ type: 'text', text: singleTree }],
+    }
+  }
+  if (parsedNodes.length === 0) {
+    return {
+      content: [
+        {
+          type: 'text',
+          text: 'No nodes could be fetched from selection.',
+        },
+      ],
+    }
+  }
+
+  const tree = toInspectTreeMulti(parsedNodes)
   return { content: [{ type: 'text', text: tree }] }
 }
 
@@ -105,9 +155,9 @@ export const handleInspectPageLayout = async (
     }
   }
 
-  const yaml = toPageLayoutYaml(raw)
+  const tree = toPageLayoutTree(raw)
 
-  return { content: [{ type: 'text', text: yaml }] }
+  return { content: [{ type: 'text', text: tree }] }
 }
 
 export const handleGetNodeInfo = async (

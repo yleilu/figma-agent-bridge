@@ -119,6 +119,7 @@ export type InspectSummary = {
 export type PageFrameInfo = {
   id: string
   name: string
+  type: string
   size: [number, number]
   position: [number, number]
   childrenCount: number

@@ -5,10 +5,14 @@ import {
   computeSummary,
   toInspectYaml,
   toInspectTree,
+  toInspectTreeMulti,
   toFullJson,
   toPageLayoutYaml,
+  toPageLayoutTree,
   toStylesYaml,
+  toStylesTree,
   toComponentsYaml,
+  toComponentsTree,
 } from '@figma-agent-bridge/server/parser'
 import cardFixture from './fixtures/card-node-raw.json'
 import pageLayoutFixture from './fixtures/page-layout-raw.json'
@@ -349,5 +353,606 @@ describe('toComponentsYaml', () => {
     expect(yaml).toContain('remote_in_use:')
     expect(yaml).toContain('name: Input')
     expect(yaml).toContain('library: Design System v2')
+  })
+})
+
+// --- Task 1: toInspectTreeMulti ---
+
+describe('toInspectTreeMulti', () => {
+  it('shows "N selected" header for multiple nodes', () => {
+    const nodes: ParsedNode[] = [
+      {
+        id: '1:1',
+        name: 'A',
+        type: 'FRAME',
+        size: [100, 100],
+      },
+      {
+        id: '1:2',
+        name: 'B',
+        type: 'TEXT',
+        size: [200, 24],
+        text: {
+          content: 'Hello',
+          font: 'Inter/Regular/16',
+        },
+      },
+    ]
+    const tree = toInspectTreeMulti(nodes)
+    expect(tree).toContain('# 2 selected')
+    expect(tree).toContain('2 layers total')
+  })
+
+  it('shows aggregate type breakdown', () => {
+    const nodes: ParsedNode[] = [
+      {
+        id: '1:1',
+        name: 'A',
+        type: 'FRAME',
+        size: [100, 100],
+        children: [
+          {
+            id: '1:3',
+            name: 'C',
+            type: 'TEXT',
+            size: [80, 24],
+            text: {
+              content: 'Hi',
+              font: 'Inter/Regular/16',
+            },
+          },
+        ],
+      },
+      {
+        id: '1:2',
+        name: 'B',
+        type: 'RECTANGLE',
+        size: [50, 50],
+      },
+    ]
+    const tree = toInspectTreeMulti(nodes)
+    expect(tree).toContain(
+      'types: 1 FRAME, 1 TEXT, 1 RECTANGLE',
+    )
+  })
+
+  it('renders each selected node as root-level tree item', () => {
+    const nodes: ParsedNode[] = [
+      {
+        id: '1:1',
+        name: 'A',
+        type: 'FRAME',
+        size: [100, 100],
+        children: [
+          {
+            id: '1:3',
+            name: 'C',
+            type: 'RECTANGLE',
+            size: [50, 50],
+          },
+        ],
+      },
+      {
+        id: '1:2',
+        name: 'B',
+        type: 'TEXT',
+        size: [200, 24],
+        text: {
+          content: 'Hello',
+          font: 'Inter/Regular/16',
+        },
+      },
+    ]
+    const tree = toInspectTreeMulti(nodes)
+    expect(tree).toContain('- A [1:1] FRAME 100×100:')
+    expect(tree).toContain('  - C [1:3] RECTANGLE 50×50')
+    expect(tree).toContain('- B [1:2] TEXT 200×24 "Hello"')
+  })
+
+  it('aggregates component names across all selected nodes', () => {
+    const nodes: ParsedNode[] = [
+      {
+        id: '1:1',
+        name: 'Btn',
+        type: 'INSTANCE',
+        size: [100, 40],
+        component: { name: 'Button', id: 'C:1' },
+      },
+      {
+        id: '1:2',
+        name: 'Av',
+        type: 'INSTANCE',
+        size: [48, 48],
+        component: { name: 'Avatar', id: 'C:2' },
+      },
+    ]
+    const tree = toInspectTreeMulti(nodes)
+    expect(tree).toContain('components: Button, Avatar')
+  })
+})
+
+// --- Task 2: toPageLayoutTree ---
+
+describe('toPageLayoutTree', () => {
+  it('includes page name and item count in header', () => {
+    const tree = toPageLayoutTree(pageLayoutFixture)
+    expect(tree).toContain('# Homepage')
+    expect(tree).toContain('3 items')
+  })
+
+  it('includes canvas dimensions in header', () => {
+    const tree = toPageLayoutTree(pageLayoutFixture)
+    expect(tree).toContain('canvas: 1440×1080')
+  })
+
+  it('includes type breakdown in header', () => {
+    const tree = toPageLayoutTree(pageLayoutFixture)
+    expect(tree).toContain('types:')
+    expect(tree).toContain('FRAME')
+  })
+
+  it('renders each frame as one line with type, size, and position', () => {
+    const tree = toPageLayoutTree(pageLayoutFixture)
+    expect(tree).toContain(
+      '- Header [2:1] FRAME 1440×80 @ 0,0',
+    )
+    expect(tree).toContain(
+      '- Hero [2:15] FRAME 1440×600 @ 0,80',
+    )
+    expect(tree).toContain(
+      '- Features [2:42] FRAME 1440×400 @ 0,680',
+    )
+  })
+
+  it('does not include children count', () => {
+    const tree = toPageLayoutTree(pageLayoutFixture)
+    expect(tree).not.toContain('children')
+  })
+})
+
+// --- Task 3: toStylesTree ---
+
+describe('toStylesTree', () => {
+  // --- Header ---
+  it('includes count by type in header', () => {
+    const tree = toStylesTree(stylesFixture)
+    expect(tree).toContain(
+      '# 5 styles: 2 paint, 2 text, 1 effect',
+    )
+  })
+
+  it('omits zero-count types from header', () => {
+    const tree = toStylesTree(stylesFixture)
+    expect(tree).not.toContain('grid')
+  })
+
+  // --- Paint: solid colors ---
+  it('renders solid color as #RRGGBB', () => {
+    const tree = toStylesTree(stylesFixture)
+    expect(tree).toContain(
+      '- Colors/Primary/500 [S:abc123] paint #3B82F6',
+    )
+  })
+
+  it('renders solid color with alpha as #RRGGBBAA', () => {
+    const fixture = {
+      paint: [
+        {
+          id: 'S:a1',
+          name: 'Overlay',
+          paints: [
+            {
+              type: 'SOLID',
+              color: { r: 0, g: 0, b: 0, a: 0.5 },
+            },
+          ],
+        },
+      ],
+      text: [],
+      effect: [],
+      grid: [],
+    }
+    const tree = toStylesTree(fixture)
+    expect(tree).toContain('] paint #00000080')
+  })
+
+  // --- Paint: gradients ---
+  it('renders linear gradient with angle and stop positions', () => {
+    const fixture = {
+      paint: [
+        {
+          id: 'S:g1',
+          name: 'Gradient/Linear',
+          paints: [
+            {
+              type: 'GRADIENT_LINEAR',
+              gradientStops: [
+                {
+                  position: 0,
+                  color: { r: 1, g: 0, b: 0, a: 1 },
+                },
+                {
+                  position: 0.5,
+                  color: { r: 0, g: 1, b: 0, a: 1 },
+                },
+                {
+                  position: 1,
+                  color: { r: 0, g: 0, b: 1, a: 1 },
+                },
+              ],
+              gradientTransform: [
+                [0.707, 0.707, 0],
+                [-0.707, 0.707, 0],
+              ],
+            },
+          ],
+        },
+      ],
+      text: [],
+      effect: [],
+      grid: [],
+    }
+    const tree = toStylesTree(fixture)
+    expect(tree).toMatch(
+      /- Gradient\/Linear \[S:g1\] paint linear-gradient\(\d+deg, #FF0000 0%, #00FF00 50%, #0000FF 100%\)/,
+    )
+  })
+
+  it('renders radial gradient with stop positions', () => {
+    const fixture = {
+      paint: [
+        {
+          id: 'S:g2',
+          name: 'Gradient/Radial',
+          paints: [
+            {
+              type: 'GRADIENT_RADIAL',
+              gradientStops: [
+                {
+                  position: 0,
+                  color: { r: 1, g: 1, b: 1, a: 1 },
+                },
+                {
+                  position: 1,
+                  color: { r: 0, g: 0, b: 0, a: 0 },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      text: [],
+      effect: [],
+      grid: [],
+    }
+    const tree = toStylesTree(fixture)
+    expect(tree).toContain(
+      '] paint radial-gradient(#FFFFFF 0%, #00000000 100%)',
+    )
+  })
+
+  it('renders angular gradient', () => {
+    const fixture = {
+      paint: [
+        {
+          id: 'S:g3',
+          name: 'Gradient/Angular',
+          paints: [
+            {
+              type: 'GRADIENT_ANGULAR',
+              gradientStops: [
+                {
+                  position: 0,
+                  color: { r: 1, g: 0, b: 0, a: 1 },
+                },
+                {
+                  position: 1,
+                  color: { r: 0, g: 0, b: 1, a: 1 },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      text: [],
+      effect: [],
+      grid: [],
+    }
+    const tree = toStylesTree(fixture)
+    expect(tree).toContain(
+      '] paint angular-gradient(#FF0000 0%, #0000FF 100%)',
+    )
+  })
+
+  it('renders diamond gradient', () => {
+    const fixture = {
+      paint: [
+        {
+          id: 'S:g4',
+          name: 'Gradient/Diamond',
+          paints: [
+            {
+              type: 'GRADIENT_DIAMOND',
+              gradientStops: [
+                {
+                  position: 0,
+                  color: { r: 1, g: 0, b: 0, a: 1 },
+                },
+                {
+                  position: 1,
+                  color: { r: 0, g: 0, b: 1, a: 1 },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      text: [],
+      effect: [],
+      grid: [],
+    }
+    const tree = toStylesTree(fixture)
+    expect(tree).toContain(
+      '] paint diamond-gradient(#FF0000 0%, #0000FF 100%)',
+    )
+  })
+
+  it('renders image paint style', () => {
+    const fixture = {
+      paint: [
+        {
+          id: 'S:img1',
+          name: 'Pattern/Dots',
+          paints: [{ type: 'IMAGE' }],
+        },
+      ],
+      text: [],
+      effect: [],
+      grid: [],
+    }
+    const tree = toStylesTree(fixture)
+    expect(tree).toContain(
+      '- Pattern/Dots [S:img1] paint image',
+    )
+  })
+
+  // --- Text: font shorthand ---
+  it('renders text style as Family/Style/Size', () => {
+    const tree = toStylesTree(stylesFixture)
+    expect(tree).toContain(
+      '- Heading/H1 [S:def456] text Inter/Bold/32',
+    )
+    expect(tree).toContain(
+      '- Body/Regular [S:def457] text Inter/Regular/16',
+    )
+  })
+
+  // --- Effect: all types ---
+  it('renders drop shadow effect', () => {
+    const tree = toStylesTree(stylesFixture)
+    expect(tree).toContain(
+      '- Elevation/Medium [S:ghi789] effect shadow(0,4,12,#0000001A)',
+    )
+  })
+
+  it('renders inner shadow effect', () => {
+    const fixture = {
+      paint: [],
+      text: [],
+      grid: [],
+      effect: [
+        {
+          id: 'S:e1',
+          name: 'InnerGlow',
+          effects: [
+            {
+              type: 'INNER_SHADOW',
+              color: { r: 1, g: 1, b: 1, a: 0.5 },
+              offset: { x: 0, y: 2 },
+              radius: 4,
+              spread: 0,
+            },
+          ],
+        },
+      ],
+    }
+    const tree = toStylesTree(fixture)
+    expect(tree).toContain(
+      '] effect inner-shadow(0,2,4,#FFFFFF80)',
+    )
+  })
+
+  it('renders blur effect', () => {
+    const fixture = {
+      paint: [],
+      text: [],
+      grid: [],
+      effect: [
+        {
+          id: 'S:e2',
+          name: 'Frosted',
+          effects: [
+            { type: 'BACKGROUND_BLUR', radius: 20 },
+          ],
+        },
+      ],
+    }
+    const tree = toStylesTree(fixture)
+    expect(tree).toContain('] effect bg-blur(20)')
+  })
+
+  it('renders layer blur effect', () => {
+    const fixture = {
+      paint: [],
+      text: [],
+      grid: [],
+      effect: [
+        {
+          id: 'S:e3',
+          name: 'Soft',
+          effects: [{ type: 'LAYER_BLUR', radius: 10 }],
+        },
+      ],
+    }
+    const tree = toStylesTree(fixture)
+    expect(tree).toContain('] effect blur(10)')
+  })
+
+  it('renders multiple effects joined', () => {
+    const fixture = {
+      paint: [],
+      text: [],
+      grid: [],
+      effect: [
+        {
+          id: 'S:e4',
+          name: 'Complex',
+          effects: [
+            {
+              type: 'DROP_SHADOW',
+              color: { r: 0, g: 0, b: 0, a: 0.25 },
+              offset: { x: 0, y: 4 },
+              radius: 8,
+              spread: 0,
+            },
+            { type: 'LAYER_BLUR', radius: 2 },
+          ],
+        },
+      ],
+    }
+    const tree = toStylesTree(fixture)
+    expect(tree).toContain(
+      '] effect shadow(0,4,8,#00000040)+blur(2)',
+    )
+  })
+
+  // --- Grid ---
+  it('renders grid style with columns', () => {
+    const fixture = {
+      paint: [],
+      text: [],
+      effect: [],
+      grid: [
+        {
+          id: 'S:gr1',
+          name: 'Layout/12col',
+          grids: [
+            {
+              pattern: 'COLUMNS',
+              count: 12,
+              sectionSize: 32,
+              gutterSize: 16,
+              alignment: 'STRETCH',
+              offset: 0,
+            },
+          ],
+        },
+      ],
+    }
+    const tree = toStylesTree(fixture)
+    expect(tree).toContain(
+      '- Layout/12col [S:gr1] grid columns(12,32,16)',
+    )
+  })
+
+  it('renders grid style with rows', () => {
+    const fixture = {
+      paint: [],
+      text: [],
+      effect: [],
+      grid: [
+        {
+          id: 'S:gr2',
+          name: 'Layout/8row',
+          grids: [
+            {
+              pattern: 'ROWS',
+              count: 8,
+              sectionSize: 40,
+              gutterSize: 8,
+              alignment: 'STRETCH',
+              offset: 0,
+            },
+          ],
+        },
+      ],
+    }
+    const tree = toStylesTree(fixture)
+    expect(tree).toContain(
+      '- Layout/8row [S:gr2] grid rows(8,40,8)',
+    )
+  })
+
+  it('renders uniform grid', () => {
+    const fixture = {
+      paint: [],
+      text: [],
+      effect: [],
+      grid: [
+        {
+          id: 'S:gr3',
+          name: 'Layout/Grid',
+          grids: [{ pattern: 'GRID', sectionSize: 16 }],
+        },
+      ],
+    }
+    const tree = toStylesTree(fixture)
+    expect(tree).toContain(
+      '- Layout/Grid [S:gr3] grid grid(16)',
+    )
+  })
+
+  // --- One line per style ---
+  it('renders each style as one line', () => {
+    const tree = toStylesTree(stylesFixture)
+    const lines = tree
+      .split('\n')
+      .filter(l => l.startsWith('- '))
+    expect(lines).toHaveLength(5)
+  })
+})
+
+// --- Task 4: toComponentsTree ---
+
+describe('toComponentsTree', () => {
+  it('includes local and remote counts in header', () => {
+    const tree = toComponentsTree(componentsFixture)
+    expect(tree).toContain('# 2 local, 1 remote')
+  })
+
+  it('renders component with variant key=value pairs', () => {
+    const tree = toComponentsTree(componentsFixture)
+    expect(tree).toContain('- Button [')
+    expect(tree).toMatch(/Size=/)
+    expect(tree).toMatch(/Style=/)
+  })
+
+  it('renders component properties as name:TYPE', () => {
+    const tree = toComponentsTree(componentsFixture)
+    expect(tree).toMatch(/label:TEXT/)
+    expect(tree).toMatch(/showIcon:BOOL/)
+  })
+
+  it('renders simple component with no extras', () => {
+    const tree = toComponentsTree(componentsFixture)
+    const avatarLine = tree
+      .split('\n')
+      .find(l => l.includes('Avatar'))
+    expect(avatarLine).toMatch(/^- Avatar \[.+\]$/)
+  })
+
+  it('renders remote components with library and key', () => {
+    const tree = toComponentsTree(componentsFixture)
+    expect(tree).toContain(
+      '- Input [remote:Design System v2] key:',
+    )
+  })
+
+  it('each component is one line', () => {
+    const tree = toComponentsTree(componentsFixture)
+    const lines = tree
+      .split('\n')
+      .filter(l => l.startsWith('- '))
+    expect(lines).toHaveLength(3)
   })
 })

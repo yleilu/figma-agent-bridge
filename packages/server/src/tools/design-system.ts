@@ -1,5 +1,5 @@
 import type { FigmaClient } from '../figma-client'
-import { toStylesYaml, toComponentsYaml } from '../parser'
+import { toStylesTree, toComponentsTree } from '../parser'
 
 type ToolResult = {
   content: { type: 'text'; text: string }[]
@@ -42,23 +42,35 @@ export const handleInspectStyles = async (
   }
 
   if (type !== undefined) {
+    const validTypes = ['paint', 'text', 'effect', 'grid']
+    if (!validTypes.includes(type)) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Invalid style type: "${type}". Must be one of: ${validTypes.join(', ')}`,
+          },
+        ],
+      }
+    }
+
     const filtered = {
-      paint: [],
-      text: [],
-      effect: [],
-      grid: [],
-      ...{ [type]: raw[type as keyof typeof raw] },
+      paint: [] as Record<string, unknown>[],
+      text: [] as Record<string, unknown>[],
+      effect: [] as Record<string, unknown>[],
+      grid: [] as Record<string, unknown>[],
+      [type]: raw[type as keyof typeof raw],
     }
 
     return {
       content: [
-        { type: 'text', text: toStylesYaml(filtered) },
+        { type: 'text', text: toStylesTree(filtered) },
       ],
     }
   }
 
   return {
-    content: [{ type: 'text', text: toStylesYaml(raw) }],
+    content: [{ type: 'text', text: toStylesTree(raw) }],
   }
 }
 
@@ -112,14 +124,14 @@ export const handleInspectComponents = async (
 
     return {
       content: [
-        { type: 'text', text: toComponentsYaml(filtered) },
+        { type: 'text', text: toComponentsTree(filtered) },
       ],
     }
   }
 
   return {
     content: [
-      { type: 'text', text: toComponentsYaml(raw) },
+      { type: 'text', text: toComponentsTree(raw) },
     ],
   }
 }

@@ -138,6 +138,19 @@ const parseTextStyle = (
   }
 }
 
+const computeCanvasBounds = (
+  items: { x: number; y: number; w: number; h: number }[],
+): [number, number] => {
+  if (items.length === 0) {
+    return [0, 0]
+  }
+
+  return [
+    Math.max(...items.map(f => f.x + f.w)),
+    Math.max(...items.map(f => f.y + f.h)),
+  ]
+}
+
 const parseLayout = (
   node: Record<string, unknown>,
 ): ParsedNode['layout'] | undefined => {
@@ -458,6 +471,348 @@ export const toInspectTree = (
   return header + lines.join('\n') + '\n'
 }
 
+// --- toInspectTreeMulti ---
+
+export const toInspectTreeMulti = (
+  nodes: ParsedNode[],
+): string => {
+  const typeBreakdown: Record<string, number> = {}
+  const componentNames: string[] = []
+  let totalLayers = 0
+
+  const walk = (node: ParsedNode): void => {
+    totalLayers++
+    typeBreakdown[node.type] =
+      (typeBreakdown[node.type] ?? 0) + 1
+    if (
+      node.component !== undefined &&
+      !componentNames.includes(node.component.name)
+    ) {
+      componentNames.push(node.component.name)
+    }
+    if (node.children !== undefined) {
+      node.children.forEach(walk)
+    }
+  }
+
+  nodes.forEach(walk)
+
+  const typeCounts = Object.entries(typeBreakdown)
+    .map(([t, c]) => `${c} ${t}`)
+    .join(', ')
+
+  const headerLines = [
+    `# ${nodes.length} selected`,
+    `# ${totalLayers} layers total | types: ${typeCounts}`,
+  ]
+  if (componentNames.length > 0) {
+    headerLines.push(
+      `# components: ${componentNames.join(', ')}`,
+    )
+  }
+
+  const lines: string[] = []
+  for (const node of nodes) {
+    renderNode(node, lines, 0)
+  }
+
+  return (
+    headerLines.join('\n') +
+    '\n\n' +
+    lines.join('\n') +
+    '\n'
+  )
+}
+
+// --- toPageLayoutTree ---
+
+export const toPageLayoutTree = (raw: {
+  pageName: string
+  frames: Record<string, unknown>[]
+}): string => {
+  const { pageName, frames } = raw
+
+  const items: PageFrameInfo[] = frames.map(f => ({
+    id: f.id as string,
+    name: f.name as string,
+    type: (f.type as string) ?? 'FRAME',
+    size: [f.width as number, f.height as number] as [
+      number,
+      number,
+    ],
+    position: [f.x as number, f.y as number] as [
+      number,
+      number,
+    ],
+    childrenCount: (f.childCount as number) ?? 0,
+  }))
+
+  const [canvasW, canvasH] = computeCanvasBounds(
+    items.map(f => ({
+      x: f.position[0],
+      y: f.position[1],
+      w: f.size[0],
+      h: f.size[1],
+    })),
+  )
+
+  const typeBreakdown: Record<string, number> = {}
+  for (const item of items) {
+    typeBreakdown[item.type] =
+      (typeBreakdown[item.type] ?? 0) + 1
+  }
+  const typeCounts = Object.entries(typeBreakdown)
+    .map(([t, c]) => `${c} ${t}`)
+    .join(', ')
+
+  const header = [
+    `# ${pageName}`,
+    `# ${items.length} items | canvas: ${canvasW}×${canvasH}`,
+    `# types: ${typeCounts}`,
+    '',
+  ].join('\n')
+
+  const lines = items.map(
+    f =>
+      `- ${f.name} [${f.id}] ${f.type} ${f.size[0]}×${f.size[1]} @ ${f.position[0]},${f.position[1]}`,
+  )
+
+  return header + lines.join('\n') + '\n'
+}
+
+// --- toStylesTree ---
+
+const renderPaintValue = (
+  paints: Record<string, unknown>[],
+): string => {
+  if (paints.length === 0) {
+    return 'none'
+  }
+
+  const paint = paints[0] as {
+    type: string
+    color?: RGBA
+    gradientStops?: {
+      position: number
+      color: RGBA
+    }[]
+    gradientTransform?: number[][]
+  }
+
+  if (paint.type === 'SOLID' && paint.color !== undefined) {
+    return rgbaToHex(paint.color)
+  }
+
+  if (paint.type === 'IMAGE') {
+    return 'image'
+  }
+
+  if (paint.gradientStops !== undefined) {
+    const stops = paint.gradientStops
+      .map(
+        s =>
+          `${rgbaToHex(s.color)} ${Math.round(s.position * 100)}%`,
+      )
+      .join(', ')
+
+    if (paint.type === 'GRADIENT_LINEAR') {
+      const transform = paint.gradientTransform
+      const angle =
+        transform !== undefined
+          ? Math.round(
+              (Math.atan2(
+                transform[0][1],
+                transform[0][0],
+              ) *
+                180) /
+                Math.PI,
+            )
+          : 0
+      return `linear-gradient(${angle}deg, ${stops})`
+    }
+    if (paint.type === 'GRADIENT_RADIAL') {
+      return `radial-gradient(${stops})`
+    }
+    if (paint.type === 'GRADIENT_ANGULAR') {
+      return `angular-gradient(${stops})`
+    }
+    if (paint.type === 'GRADIENT_DIAMOND') {
+      return `diamond-gradient(${stops})`
+    }
+  }
+
+  return paint.type.toLowerCase()
+}
+
+const renderStyleEffect = (effect: FigmaEffect): string => {
+  if (effect.type === 'DROP_SHADOW') {
+    const colorHex =
+      effect.color !== undefined
+        ? rgbaToHex(effect.color)
+        : '?'
+    const ox = effect.offset?.x ?? 0
+    const oy = effect.offset?.y ?? 0
+    return `shadow(${ox},${oy},${effect.radius ?? 0},${colorHex})`
+  }
+  if (effect.type === 'INNER_SHADOW') {
+    const colorHex =
+      effect.color !== undefined
+        ? rgbaToHex(effect.color)
+        : '?'
+    const ox = effect.offset?.x ?? 0
+    const oy = effect.offset?.y ?? 0
+    return `inner-shadow(${ox},${oy},${effect.radius ?? 0},${colorHex})`
+  }
+  if (effect.type === 'BACKGROUND_BLUR') {
+    return `bg-blur(${effect.radius ?? 0})`
+  }
+  if (effect.type === 'LAYER_BLUR') {
+    return `blur(${effect.radius ?? 0})`
+  }
+  return effect.type.toLowerCase()
+}
+
+const renderGridValue = (
+  grids: Record<string, unknown>[],
+): string => {
+  if (grids.length === 0) {
+    return 'none'
+  }
+  const grid = grids[0] as {
+    pattern: string
+    count?: number
+    sectionSize?: number
+    gutterSize?: number
+  }
+  if (grid.pattern === 'COLUMNS') {
+    return `columns(${grid.count},${grid.sectionSize},${grid.gutterSize})`
+  }
+  if (grid.pattern === 'ROWS') {
+    return `rows(${grid.count},${grid.sectionSize},${grid.gutterSize})`
+  }
+  if (grid.pattern === 'GRID') {
+    return `grid(${grid.sectionSize})`
+  }
+  return grid.pattern.toLowerCase()
+}
+
+export const toStylesTree = (raw: {
+  paint: Record<string, unknown>[]
+  text: Record<string, unknown>[]
+  effect: Record<string, unknown>[]
+  grid: Record<string, unknown>[]
+}): string => {
+  const counts: string[] = []
+  if (raw.paint.length > 0) {
+    counts.push(`${raw.paint.length} paint`)
+  }
+  if (raw.text.length > 0) {
+    counts.push(`${raw.text.length} text`)
+  }
+  if (raw.effect.length > 0) {
+    counts.push(`${raw.effect.length} effect`)
+  }
+  if (raw.grid.length > 0) {
+    counts.push(`${raw.grid.length} grid`)
+  }
+
+  const total =
+    raw.paint.length +
+    raw.text.length +
+    raw.effect.length +
+    raw.grid.length
+  const header = `# ${total} styles: ${counts.join(', ')}`
+
+  const lines: string[] = []
+
+  for (const s of raw.paint) {
+    const value = renderPaintValue(
+      s.paints as Record<string, unknown>[],
+    )
+    lines.push(`- ${s.name} [${s.id}] paint ${value}`)
+  }
+
+  for (const s of raw.text) {
+    const font = `${s.fontFamily}/${s.fontStyle}/${s.fontSize}`
+    lines.push(`- ${s.name} [${s.id}] text ${font}`)
+  }
+
+  for (const s of raw.effect) {
+    const effects = (s.effects as FigmaEffect[])
+      .filter(e => e.visible !== false)
+      .map(renderStyleEffect)
+      .join('+')
+    lines.push(`- ${s.name} [${s.id}] effect ${effects}`)
+  }
+
+  for (const s of raw.grid) {
+    const value = renderGridValue(
+      s.grids as Record<string, unknown>[],
+    )
+    lines.push(`- ${s.name} [${s.id}] grid ${value}`)
+  }
+
+  return header + '\n\n' + lines.join('\n') + '\n'
+}
+
+// --- toComponentsTree ---
+
+export const toComponentsTree = (raw: {
+  local: Record<string, unknown>[]
+  remote: Record<string, unknown>[]
+}): string => {
+  const header = `# ${raw.local.length} local, ${raw.remote.length} remote`
+
+  const lines: string[] = []
+
+  for (const c of raw.local) {
+    let line = `- ${c.name} [${c.id}]`
+
+    const variants = c.variants as Record<
+      string,
+      string[]
+    > | null
+    if (
+      variants !== null &&
+      variants !== undefined &&
+      Object.keys(variants).length > 0
+    ) {
+      const variantStr = Object.entries(variants)
+        .map(([k, v]) => `${k}=${v.join('|')}`)
+        .join(', ')
+      line += ` ${variantStr}`
+    }
+
+    const properties = c.properties as
+      | { name: string; type: string }[]
+      | undefined
+    if (properties !== undefined && properties.length > 0) {
+      const propStr = properties
+        .map(p => {
+          const shortType =
+            p.type === 'BOOLEAN'
+              ? 'BOOL'
+              : p.type === 'INSTANCE_SWAP'
+                ? 'SWAP'
+                : p.type
+          return `${p.name}:${shortType}`
+        })
+        .join(' ')
+      line += ` ${propStr}`
+    }
+
+    lines.push(line)
+  }
+
+  for (const r of raw.remote) {
+    lines.push(
+      `- ${r.name} [remote:${r.library}] key:${r.key}`,
+    )
+  }
+
+  return header + '\n\n' + lines.join('\n') + '\n'
+}
+
 // --- toFullJson ---
 
 const FILTERED_KEYS = new Set([
@@ -557,6 +912,7 @@ export const toFullJson = (
 
 // --- toPageLayoutYaml ---
 
+/** @deprecated Use toPageLayoutTree instead */
 export const toPageLayoutYaml = (raw: {
   pageName: string
   frames: Record<string, unknown>[]
@@ -565,6 +921,7 @@ export const toPageLayoutYaml = (raw: {
   const mapped: PageFrameInfo[] = frames.map(f => ({
     id: f.id as string,
     name: f.name as string,
+    type: (f.type as string) ?? 'FRAME',
     size: [f.width as number, f.height as number] as [
       number,
       number,
@@ -576,22 +933,18 @@ export const toPageLayoutYaml = (raw: {
     childrenCount: (f.childCount as number) ?? 0,
   }))
 
-  const maxX =
-    mapped.length > 0
-      ? Math.max(
-          ...mapped.map(f => f.position[0] + f.size[0]),
-        )
-      : 0
-  const maxY =
-    mapped.length > 0
-      ? Math.max(
-          ...mapped.map(f => f.position[1] + f.size[1]),
-        )
-      : 0
+  const [canvasW, canvasH] = computeCanvasBounds(
+    mapped.map(f => ({
+      x: f.position[0],
+      y: f.position[1],
+      w: f.size[0],
+      h: f.size[1],
+    })),
+  )
 
   const header = [
     `# ${pageName}`,
-    `# ${mapped.length} top-level frames | canvas: ${maxX}×${maxY}`,
+    `# ${mapped.length} top-level frames | canvas: ${canvasW}×${canvasH}`,
     '',
   ].join('\n')
 
@@ -610,6 +963,7 @@ export const toPageLayoutYaml = (raw: {
 
 // --- toStylesYaml ---
 
+/** @deprecated Use toStylesTree instead */
 export const toStylesYaml = (raw: {
   paint: Record<string, unknown>[]
   text: Record<string, unknown>[]
@@ -708,6 +1062,7 @@ export const toSearchYaml = (
 
 // --- toComponentsYaml ---
 
+/** @deprecated Use toComponentsTree instead */
 export const toComponentsYaml = (raw: {
   local: Record<string, unknown>[]
   remote: Record<string, unknown>[]

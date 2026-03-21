@@ -94,7 +94,7 @@ describe('handleInspect', () => {
 })
 
 describe('handleInspectPageLayout', () => {
-  it('returns YAML with page name and frames', async () => {
+  it('returns compact tree with page name and frames', async () => {
     const mockClient: FigmaClient = {
       joinChannel: () => Promise.resolve(''),
       sendCommand: cmd => {
@@ -112,13 +112,82 @@ describe('handleInspectPageLayout', () => {
     const result = await handleInspectPageLayout(mockClient)
 
     expect(result.content[0].text).toContain('# Homepage')
+    expect(result.content[0].text).toContain('3 items')
     expect(result.content[0].text).toContain(
-      '3 top-level frames',
+      '- Header [2:1] FRAME 1440×80 @ 0,0',
     )
-    expect(result.content[0].text).toContain('name: Header')
+  })
+
+  it('uses multi-selection when multiple nodes selected', async () => {
+    const secondFixture = JSON.parse(
+      JSON.stringify(cardFixture),
+    )
+    secondFixture.id = '2:1'
+    secondFixture.name = 'Card2'
+
+    const mockClient: FigmaClient = {
+      joinChannel: () => Promise.resolve(''),
+      sendCommand: (cmd, params) => {
+        if (cmd === 'get_selection') {
+          return Promise.resolve([
+            { id: '1:42', name: 'Card', type: 'FRAME' },
+            { id: '2:1', name: 'Card2', type: 'FRAME' },
+          ])
+        }
+        if (cmd === 'get_node') {
+          const p = params as { nodeId: string }
+          if (p.nodeId === '2:1') {
+            return Promise.resolve(secondFixture)
+          }
+          return Promise.resolve(cardFixture)
+        }
+        return Promise.resolve(null)
+      },
+      disconnect: () => undefined,
+      isConnected: () => true,
+      currentChannel: () => 'test-ch',
+    }
+
+    const result = await handleInspect({}, mockClient)
+
+    expect(result.content[0].text).toContain('# 2 selected')
+  })
+
+  it('skips nodes that fail to fetch in multi-selection', async () => {
+    const mockClient: FigmaClient = {
+      joinChannel: () => Promise.resolve(''),
+      sendCommand: (cmd, params) => {
+        if (cmd === 'get_selection') {
+          return Promise.resolve([
+            { id: '1:42', name: 'Card', type: 'FRAME' },
+            {
+              id: '9:99',
+              name: 'Missing',
+              type: 'FRAME',
+            },
+          ])
+        }
+        if (cmd === 'get_node') {
+          const p = params as { nodeId: string }
+          if (p.nodeId === '9:99') {
+            return Promise.resolve(null)
+          }
+          return Promise.resolve(cardFixture)
+        }
+        return Promise.resolve(null)
+      },
+      disconnect: () => undefined,
+      isConnected: () => true,
+      currentChannel: () => 'test-ch',
+    }
+
+    const result = await handleInspect({}, mockClient)
+
+    // Should fall back to single-node tree since only one resolved
     expect(result.content[0].text).toContain(
-      'children_count: 8',
+      '# Card [1:42]',
     )
+    expect(result.content[0].text).not.toContain('Missing')
   })
 })
 
