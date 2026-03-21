@@ -3,8 +3,8 @@ import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
 import {
   handleInspect,
   handleInspectPageLayout,
-  handleGetNodeInfo,
-  handleGetNodesInfo,
+  handleGetNode,
+  handleGetNodes,
   handleListPages,
 } from '@figma-agent-bridge/server/tools/read'
 import cardFixture from '../fixtures/card-node-raw.json'
@@ -191,7 +191,7 @@ describe('handleInspectPageLayout', () => {
   })
 })
 
-describe('handleGetNodeInfo', () => {
+describe('handleGetNode', () => {
   it('sends get_node command and returns JSON via toFullJson', async () => {
     const mockClient: FigmaClient = {
       joinChannel: () => Promise.resolve(''),
@@ -207,7 +207,7 @@ describe('handleGetNodeInfo', () => {
       currentChannel: () => 'test-ch',
     }
 
-    const result = await handleGetNodeInfo(
+    const result = await handleGetNode(
       { nodeId: '1:42' },
       mockClient,
     )
@@ -233,7 +233,7 @@ describe('handleGetNodeInfo', () => {
       currentChannel: () => 'test-ch',
     }
 
-    const result = await handleGetNodeInfo(
+    const result = await handleGetNode(
       { nodeId: '1:42', depth: 0 },
       mockClient,
     )
@@ -255,7 +255,7 @@ describe('handleGetNodeInfo', () => {
       currentChannel: () => null,
     }
 
-    const result = await handleGetNodeInfo(
+    const result = await handleGetNode(
       { nodeId: '1:42' },
       mockClient,
     )
@@ -266,7 +266,7 @@ describe('handleGetNodeInfo', () => {
   })
 })
 
-describe('handleGetNodesInfo', () => {
+describe('handleGetNodes', () => {
   it('sends get_nodes command and returns JSON array', async () => {
     const mockClient: FigmaClient = {
       joinChannel: () => Promise.resolve(''),
@@ -282,7 +282,7 @@ describe('handleGetNodesInfo', () => {
       currentChannel: () => 'test-ch',
     }
 
-    const result = await handleGetNodesInfo(
+    const result = await handleGetNodes(
       { nodeIds: ['1:42'] },
       mockClient,
     )

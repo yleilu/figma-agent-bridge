@@ -160,7 +160,7 @@ export const handleInspectPageLayout = async (
   return { content: [{ type: 'text', text: tree }] }
 }
 
-export const handleGetNodeInfo = async (
+export const handleGetNode = async (
   { nodeId, depth }: { nodeId: string; depth?: number },
   client: FigmaClient,
 ): Promise<ToolResult> => {
@@ -191,7 +191,7 @@ export const handleGetNodeInfo = async (
   return { content: [{ type: 'text', text: json }] }
 }
 
-export const handleGetNodesInfo = async (
+export const handleGetNodes = async (
   { nodeIds, depth }: { nodeIds: string[]; depth?: number },
   client: FigmaClient,
 ): Promise<ToolResult> => {

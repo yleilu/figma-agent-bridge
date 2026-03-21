@@ -66,7 +66,7 @@ export const searchParamsSchema = z.object({
     .describe('Max results to return (default 50).'),
 })
 
-export const getNodeInfoParamsSchema = z.object({
+export const getNodeParamsSchema = z.object({
   nodeId: z.string().describe('The node ID to retrieve.'),
   depth: z
     .number()
@@ -76,7 +76,7 @@ export const getNodeInfoParamsSchema = z.object({
     ),
 })
 
-export const getNodesInfoParamsSchema = z.object({
+export const getNodesParamsSchema = z.object({
   nodeIds: z
     .array(z.string())
     .describe('Array of node IDs to retrieve.'),

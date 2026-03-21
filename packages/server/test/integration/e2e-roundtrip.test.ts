@@ -18,7 +18,7 @@ import {
 } from '@figma-agent-bridge/server/tools/session'
 import {
   handleInspect,
-  handleGetNodeInfo,
+  handleGetNode,
   handleListPages,
 } from '@figma-agent-bridge/server/tools/read'
 import {
@@ -197,8 +197,8 @@ describe('M2 read tools e2e', () => {
     )
   })
 
-  it('get_node_info returns JSON with depth control', async () => {
-    const result = await handleGetNodeInfo(
+  it('get_node returns JSON with depth control', async () => {
+    const result = await handleGetNode(
       { nodeId: '1:42', depth: 0 },
       client,
     )

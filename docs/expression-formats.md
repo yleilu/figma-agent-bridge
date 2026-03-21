@@ -32,7 +32,7 @@ Notes:
 ### Where used in M2
 
 - `inspect_styles`: style value column (e.g., `- Colors/Primary/500 [S:abc] paint #3B82F6`)
-- `ParsedNode.fills`, `ParsedNode.strokes`, `ParsedNode.text.color` in `get_node_info` output
+- `ParsedNode.fills`, `ParsedNode.strokes`, `ParsedNode.text.color` in `get_node` output
 
 ---
 
@@ -55,7 +55,7 @@ Notes:
 ### Where used in M2
 
 - `inspect_styles`: style value column (e.g., `- Heading/H1 [S:def] text Inter/Bold/32`)
-- `ParsedNode.text.font` in `get_node_info` output
+- `ParsedNode.text.font` in `get_node` output
 
 ---
 
@@ -78,12 +78,12 @@ Notes:
 - `bg-blur` = Figma `BACKGROUND_BLUR`
 - Multiple effects on one node: array `["shadow(0,4,8,#000)", "blur(2)"]`
 - Multiple effects in `inspect_styles` (per style): joined with `+` → `shadow(0,4,8,#000)+blur(2)`
-- Spread omitted from shorthand (rarely used). Full data available via raw Figma JSON in `get_node_info`
+- Spread omitted from shorthand (rarely used). Full data available via raw Figma JSON in `get_node`
 
 ### Where used in M2
 
 - `inspect_styles`: style value column (e.g., `- Elevation/Medium [S:ghi] effect shadow(0,4,12,#0000001A)`)
-- `ParsedNode.effects` in `get_node_info` output
+- `ParsedNode.effects` in `get_node` output
 
 ---
 

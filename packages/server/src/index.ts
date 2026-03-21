@@ -10,8 +10,8 @@ import {
   inspectStylesParamsSchema,
   inspectComponentsParamsSchema,
   searchParamsSchema,
-  getNodeInfoParamsSchema,
-  getNodesInfoParamsSchema,
+  getNodeParamsSchema,
+  getNodesParamsSchema,
   listPagesParamsSchema,
   exportParamsSchema,
 } from '@figma-agent-bridge/shared'
@@ -23,8 +23,8 @@ import {
 import {
   handleInspect,
   handleInspectPageLayout,
-  handleGetNodeInfo,
-  handleGetNodesInfo,
+  handleGetNode,
+  handleGetNodes,
   handleListPages,
 } from './tools/read'
 import {
@@ -92,17 +92,17 @@ server.tool(
 )
 
 server.tool(
-  'get_node_info',
-  getNodeInfoParamsSchema.shape,
+  'get_node',
+  getNodeParamsSchema.shape,
   async ({ nodeId, depth }) =>
-    handleGetNodeInfo({ nodeId, depth }, client),
+    handleGetNode({ nodeId, depth }, client),
 )
 
 server.tool(
-  'get_nodes_info',
-  getNodesInfoParamsSchema.shape,
+  'get_nodes',
+  getNodesParamsSchema.shape,
   async ({ nodeIds, depth }) =>
-    handleGetNodesInfo({ nodeIds, depth }, client),
+    handleGetNodes({ nodeIds, depth }, client),
 )
 
 server.tool(
