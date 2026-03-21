@@ -173,7 +173,9 @@ describe('createNodeParamsSchema', () => {
         type: 'RECTANGLE',
         name: 'Gradient BG',
         size: [400, 300],
-        fills: ['linear-gradient(90deg, #FF0000 0%, #0000FF 100%)'],
+        fills: [
+          'linear-gradient(90deg, #FF0000 0%, #0000FF 100%)',
+        ],
       },
     })
     expect(result.success).toBe(true)
@@ -209,7 +211,10 @@ describe('createNodeParamsSchema', () => {
         name: 'Custom Path',
         size: [100, 100],
         vectorPaths: [
-          { windingRule: 'EVENODD', data: 'M 0 0 L 100 0 L 100 100 Z' },
+          {
+            windingRule: 'EVENODD',
+            data: 'M 0 0 L 100 0 L 100 100 Z',
+          },
         ],
       },
     })
@@ -376,8 +381,18 @@ describe('createTreeParamsSchema', () => {
         name: 'Icon Group',
         size: [100, 100],
         children: [
-          { type: 'ELLIPSE', name: 'Circle', size: [50, 50], fills: ['#FF0000'] },
-          { type: 'RECTANGLE', name: 'Square', size: [50, 50], fills: ['#0000FF'] },
+          {
+            type: 'ELLIPSE',
+            name: 'Circle',
+            size: [50, 50],
+            fills: ['#FF0000'],
+          },
+          {
+            type: 'RECTANGLE',
+            name: 'Square',
+            size: [50, 50],
+            fills: ['#0000FF'],
+          },
         ],
       },
     })
@@ -393,8 +408,18 @@ describe('createTreeParamsSchema', () => {
         size: [100, 100],
         booleanOperation: 'SUBTRACT',
         children: [
-          { type: 'RECTANGLE', name: 'Base', size: [100, 100], fills: ['#000000'] },
-          { type: 'ELLIPSE', name: 'Cutout', size: [60, 60], fills: ['#000000'] },
+          {
+            type: 'RECTANGLE',
+            name: 'Base',
+            size: [100, 100],
+            fills: ['#000000'],
+          },
+          {
+            type: 'ELLIPSE',
+            name: 'Cutout',
+            size: [60, 60],
+            fills: ['#000000'],
+          },
         ],
       },
     })
@@ -410,7 +435,12 @@ describe('createTreeParamsSchema', () => {
         size: [100, 100],
         modifiers: { rotation: 45 },
         children: [
-          { type: 'RECTANGLE', name: 'Inner', size: [50, 50], fills: ['#FF0000'] },
+          {
+            type: 'RECTANGLE',
+            name: 'Inner',
+            size: [50, 50],
+            fills: ['#FF0000'],
+          },
         ],
       },
     })
@@ -424,9 +454,7 @@ describe('createTreeParamsSchema', () => {
         type: 'FRAME',
         name: 'Container',
         size: [400, 200],
-        children: [
-          { id: '5:99' },
-        ],
+        children: [{ id: '5:99' }],
       },
     })
     expect(result.success).toBe(true)
@@ -461,9 +489,17 @@ describe('createComponentParamsSchema', () => {
     const result = createComponentParamsSchema.safeParse({
       nodeId: '1:42',
       componentProperties: [
-        { name: 'Show Icon', type: 'BOOLEAN', default: true },
+        {
+          name: 'Show Icon',
+          type: 'BOOLEAN',
+          default: true,
+        },
         { name: 'Label', type: 'TEXT', default: 'Button' },
-        { name: 'Icon', type: 'INSTANCE_SWAP', default: 'key:icon123' },
+        {
+          name: 'Icon',
+          type: 'INSTANCE_SWAP',
+          default: 'key:icon123',
+        },
       ],
     })
     expect(result.success).toBe(true)
@@ -473,7 +509,11 @@ describe('createComponentParamsSchema', () => {
     const result = createComponentParamsSchema.safeParse({
       nodeId: '1:42',
       componentProperties: [
-        { name: 'Prop', type: 'INVALID_TYPE', default: 'x' },
+        {
+          name: 'Prop',
+          type: 'INVALID_TYPE',
+          default: 'x',
+        },
       ],
     })
     expect(result.success).toBe(false)

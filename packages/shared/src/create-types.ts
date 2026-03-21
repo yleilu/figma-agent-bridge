@@ -94,7 +94,11 @@ export type CreateNodeSpec = {
   arcData?: CreateArcDataSpec
   vectorPaths?: CreateVectorPathSpec[]
   sectionContentsHidden?: boolean
-  booleanOperation?: 'UNION' | 'SUBTRACT' | 'INTERSECT' | 'EXCLUDE'
+  booleanOperation?:
+    | 'UNION'
+    | 'SUBTRACT'
+    | 'INTERSECT'
+    | 'EXCLUDE'
 
   // TEXT_PATH
   vectorNodeId?: string

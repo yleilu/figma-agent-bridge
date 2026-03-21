@@ -6,7 +6,9 @@ const createTextSpecSchema = z.object({
   content: z.string().describe('The text string.'),
   font: z
     .string()
-    .describe('Font expression: Family/Style/Size (e.g., Inter/SemiBold/18).'),
+    .describe(
+      'Font expression: Family/Style/Size (e.g., Inter/SemiBold/18).',
+    ),
   align: z
     .enum(['LEFT', 'CENTER', 'RIGHT', 'JUSTIFIED'])
     .optional()
@@ -18,7 +20,9 @@ const createTextSpecSchema = z.object({
   color: z
     .string()
     .optional()
-    .describe('Text color as hex expression (e.g., #1A1A1A).'),
+    .describe(
+      'Text color as hex expression (e.g., #1A1A1A).',
+    ),
   lineHeight: z
     .string()
     .optional()
@@ -32,7 +36,13 @@ const createTextSpecSchema = z.object({
     .optional()
     .describe('Text decoration.'),
   case: z
-    .enum(['UPPER', 'LOWER', 'TITLE', 'SMALL_CAPS', 'SMALL_CAPS_FORCED'])
+    .enum([
+      'UPPER',
+      'LOWER',
+      'TITLE',
+      'SMALL_CAPS',
+      'SMALL_CAPS_FORCED',
+    ])
     .optional()
     .describe('Text case transform.'),
   paragraphSpacing: z
@@ -42,15 +52,22 @@ const createTextSpecSchema = z.object({
 })
 
 const createLayoutSpecSchema = z.object({
-  mode: z.enum(['H', 'V']).describe('H = HORIZONTAL, V = VERTICAL.'),
+  mode: z
+    .enum(['H', 'V'])
+    .describe('H = HORIZONTAL, V = VERTICAL.'),
   spacing: z.number().describe('Item spacing in px.'),
   padding: z
     .tuple([z.number(), z.number(), z.number(), z.number()])
     .describe('[top, right, bottom, left] in px.'),
   align: z
     .tuple([z.string(), z.string()])
-    .describe('[primaryAxisAlignItems, counterAxisAlignItems].'),
-  wrap: z.boolean().optional().describe('Enable WRAP layout.'),
+    .describe(
+      '[primaryAxisAlignItems, counterAxisAlignItems].',
+    ),
+  wrap: z
+    .boolean()
+    .optional()
+    .describe('Enable WRAP layout.'),
   counterAxisSpacing: z
     .number()
     .optional()
@@ -58,7 +75,9 @@ const createLayoutSpecSchema = z.object({
   counterAxisAlignContent: z
     .enum(['AUTO', 'SPACE_BETWEEN'])
     .optional()
-    .describe('Alignment of wrapped tracks along the counter axis.'),
+    .describe(
+      'Alignment of wrapped tracks along the counter axis.',
+    ),
   primaryAxisSizingMode: z
     .enum(['FIXED', 'AUTO'])
     .optional()
@@ -92,8 +111,15 @@ const createArcDataSchema = z.object({
 
 const nodeSpecSchema = z.object({
   // Identity
-  type: z.string().describe('Figma node type (FRAME, RECTANGLE, TEXT, etc.).'),
-  name: z.string().optional().describe('Node name. Defaults to type name.'),
+  type: z
+    .string()
+    .describe(
+      'Figma node type (FRAME, RECTANGLE, TEXT, etc.).',
+    ),
+  name: z
+    .string()
+    .optional()
+    .describe('Node name. Defaults to type name.'),
 
   // Geometry
   size: z
@@ -113,7 +139,9 @@ const nodeSpecSchema = z.object({
   sizing: z
     .tuple([z.string(), z.string()])
     .optional()
-    .describe('[horizontal, vertical] sizing: FIXED, HUG, or FILL.'),
+    .describe(
+      '[horizontal, vertical] sizing: FIXED, HUG, or FILL.',
+    ),
   layoutPositioning: z
     .enum(['AUTO', 'ABSOLUTE'])
     .optional()
@@ -133,26 +161,50 @@ const nodeSpecSchema = z.object({
     .optional()
     .describe('Stroke color expressions.'),
   strokeWeight: z.number().optional(),
-  strokeAlign: z.enum(['CENTER', 'INSIDE', 'OUTSIDE']).optional(),
-  strokeDash: z.array(z.number()).optional().describe('Dash pattern [dash, gap, ...].'),
-  radius: z
-    .union([z.number(), z.tuple([z.number(), z.number(), z.number(), z.number()])])
+  strokeAlign: z
+    .enum(['CENTER', 'INSIDE', 'OUTSIDE'])
+    .optional(),
+  strokeDash: z
+    .array(z.number())
     .optional()
-    .describe('Corner radius: uniform number or [TL, TR, BR, BL].'),
+    .describe('Dash pattern [dash, gap, ...].'),
+  radius: z
+    .union([
+      z.number(),
+      z.tuple([
+        z.number(),
+        z.number(),
+        z.number(),
+        z.number(),
+      ]),
+    ])
+    .optional()
+    .describe(
+      'Corner radius: uniform number or [TL, TR, BR, BL].',
+    ),
   opacity: z.number().min(0).max(1).optional(),
   effects: z
     .array(z.string())
     .optional()
-    .describe('Effect expressions: shadow(), inner-shadow(), blur(), bg-blur().'),
+    .describe(
+      'Effect expressions: shadow(), inner-shadow(), blur(), bg-blur().',
+    ),
   blendMode: z.string().optional(),
   rotation: z.number().optional(),
   visible: z.boolean().optional(),
   clipsContent: z.boolean().optional(),
 
   // Text
-  text: createTextSpecSchema.optional().describe('Text properties (TEXT nodes only).'),
+  text: createTextSpecSchema
+    .optional()
+    .describe('Text properties (TEXT nodes only).'),
   textAutoResize: z
-    .enum(['NONE', 'WIDTH_AND_HEIGHT', 'HEIGHT', 'TRUNCATE'])
+    .enum([
+      'NONE',
+      'WIDTH_AND_HEIGHT',
+      'HEIGHT',
+      'TRUNCATE',
+    ])
     .optional(),
 
   // Component / Instance
@@ -161,35 +213,69 @@ const nodeSpecSchema = z.object({
     .describe('Component reference for INSTANCE nodes.'),
 
   // Type-specific
-  pointCount: z.number().optional().describe('Number of points/sides (POLYGON, STAR).'),
+  pointCount: z
+    .number()
+    .optional()
+    .describe('Number of points/sides (POLYGON, STAR).'),
   innerRadius: z
     .number()
     .optional()
-    .describe('Inner radius ratio 0-1 (STAR, ELLIPSE arcData).'),
-  arcData: createArcDataSchema.optional().describe('Arc configuration (ELLIPSE).'),
+    .describe(
+      'Inner radius ratio 0-1 (STAR, ELLIPSE arcData).',
+    ),
+  arcData: createArcDataSchema
+    .optional()
+    .describe('Arc configuration (ELLIPSE).'),
   vectorPaths: z
     .array(createVectorPathSchema)
     .optional()
     .describe('Vector path data (VECTOR).'),
-  sectionContentsHidden: z.boolean().optional().describe('Hide section contents (SECTION).'),
+  sectionContentsHidden: z
+    .boolean()
+    .optional()
+    .describe('Hide section contents (SECTION).'),
   booleanOperation: z
     .enum(['UNION', 'SUBTRACT', 'INTERSECT', 'EXCLUDE'])
     .optional()
-    .describe('Boolean operation type (BOOLEAN_OPERATION in create_tree).'),
+    .describe(
+      'Boolean operation type (BOOLEAN_OPERATION in create_tree).',
+    ),
 
   // TEXT_PATH
-  vectorNodeId: z.string().optional().describe('VectorNode ID for TEXT_PATH type.'),
-  startSegment: z.number().optional().describe('Start segment index on the vector path (TEXT_PATH).'),
-  startPosition: z.number().optional().describe('Start position along the segment 0-1 (TEXT_PATH).'),
+  vectorNodeId: z
+    .string()
+    .optional()
+    .describe('VectorNode ID for TEXT_PATH type.'),
+  startSegment: z
+    .number()
+    .optional()
+    .describe(
+      'Start segment index on the vector path (TEXT_PATH).',
+    ),
+  startPosition: z
+    .number()
+    .optional()
+    .describe(
+      'Start position along the segment 0-1 (TEXT_PATH).',
+    ),
 
   // TRANSFORM_GROUP
-  modifiers: z.record(z.unknown()).optional().describe('Transform modifiers for TRANSFORM_GROUP (rotation, scale, skew).'),
+  modifiers: z
+    .record(z.unknown())
+    .optional()
+    .describe(
+      'Transform modifiers for TRANSFORM_GROUP (rotation, scale, skew).',
+    ),
 })
 
 // --- Tree node spec (recursive, for create_tree) ---
 
 const cloneRefSchema = z.object({
-  id: z.string().describe('ID of existing node to clone. COMPONENT → creates INSTANCE.'),
+  id: z
+    .string()
+    .describe(
+      'ID of existing node to clone. COMPONENT → creates INSTANCE.',
+    ),
 })
 
 // Zod lazy for recursive type
@@ -218,7 +304,9 @@ export const createNodeParamsSchema = z.object({
 export const createTreeParamsSchema = z.object({
   parentId: z
     .string()
-    .describe('Parent node ID where the root of the tree will be appended.'),
+    .describe(
+      'Parent node ID where the root of the tree will be appended.',
+    ),
   node: treeNodeSpecSchema.describe(
     'Root node specification with optional children[]. Supports { id } for cloning existing nodes.',
   ),
@@ -232,48 +320,74 @@ const componentPropertySchema = z.object({
   default: z
     .union([z.string(), z.boolean()])
     .optional()
-    .describe('Default value. For INSTANCE_SWAP, must be a valid component key (not empty string).'),
+    .describe(
+      'Default value. For INSTANCE_SWAP, must be a valid component key (not empty string).',
+    ),
 })
 
-export const createComponentParamsSchema = z.object({
-  nodeId: z
-    .string()
-    .optional()
-    .describe('Node ID to promote to component via createComponentFromNode().'),
-  nodeIds: z
-    .array(z.string())
-    .optional()
-    .describe('Node IDs to combine as variants via combineAsVariants().'),
-  combineAsVariants: z
-    .boolean()
-    .optional()
-    .describe('If true, combines nodeIds into a ComponentSet (variant group).'),
-  slots: z
-    .array(z.string())
-    .optional()
-    .describe('Child names to promote to SLOT after component creation.'),
-  componentProperties: z
-    .array(componentPropertySchema)
-    .optional()
-    .describe('Component properties to add after promotion (BOOLEAN, TEXT, INSTANCE_SWAP, SLOT).'),
-}).refine(
-  (data) => data.nodeId !== undefined || data.nodeIds !== undefined,
-  { message: 'Either nodeId or nodeIds must be provided' },
-)
+export const createComponentParamsSchema = z
+  .object({
+    nodeId: z
+      .string()
+      .optional()
+      .describe(
+        'Node ID to promote to component via createComponentFromNode().',
+      ),
+    nodeIds: z
+      .array(z.string())
+      .optional()
+      .describe(
+        'Node IDs to combine as variants via combineAsVariants().',
+      ),
+    combineAsVariants: z
+      .boolean()
+      .optional()
+      .describe(
+        'If true, combines nodeIds into a ComponentSet (variant group).',
+      ),
+    slots: z
+      .array(z.string())
+      .optional()
+      .describe(
+        'Child names to promote to SLOT after component creation.',
+      ),
+    componentProperties: z
+      .array(componentPropertySchema)
+      .optional()
+      .describe(
+        'Component properties to add after promotion (BOOLEAN, TEXT, INSTANCE_SWAP, SLOT).',
+      ),
+  })
+  .refine(
+    data =>
+      data.nodeId !== undefined ||
+      data.nodeIds !== undefined,
+    {
+      message: 'Either nodeId or nodeIds must be provided',
+    },
+  )
 
 export const createFromSvgParamsSchema = z.object({
   parentId: z
     .string()
-    .describe('Parent node ID where the SVG frame will be appended.'),
+    .describe(
+      'Parent node ID where the SVG frame will be appended.',
+    ),
   svg: z
     .string()
-    .describe('SVG string to import. Must be valid SVG markup.'),
+    .describe(
+      'SVG string to import. Must be valid SVG markup.',
+    ),
   name: z
     .string()
     .optional()
-    .describe('Name for the created frame. Defaults to "SVG".'),
+    .describe(
+      'Name for the created frame. Defaults to "SVG".',
+    ),
   size: z
     .tuple([z.number(), z.number()])
     .optional()
-    .describe('Optional [width, height] to resize the SVG frame after creation.'),
+    .describe(
+      'Optional [width, height] to resize the SVG frame after creation.',
+    ),
 })

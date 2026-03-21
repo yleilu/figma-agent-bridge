@@ -9,13 +9,14 @@
     "./tools/*": "./src/tools/*",
     "./ensure-relay": "./src/ensure-relay.ts",
     "./figma-client": "./src/figma-client.ts",
-    "./parser": "./src/parser.ts"
+    "./parser": "./src/parser.ts",
+    "./expression-parser": "./src/expression-parser.ts"
   },
   "types": "src/index.ts",
   "scripts": {
     "start": "bun run src/index.ts",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit --project tsconfig.src.json"
   },
   "dependencies": {
     "@figma-agent-bridge/shared": "workspace:*",
