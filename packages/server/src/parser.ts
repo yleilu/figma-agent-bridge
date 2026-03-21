@@ -815,81 +815,30 @@ export const toComponentsTree = (raw: {
 
 // --- toFullJson ---
 
-const FILTERED_KEYS = new Set([
-  'boundVariables',
-  'imageRef',
-  'relativeTransform',
-  'exportSettings',
-  'isMask',
-  'absoluteRenderBounds',
-])
-
-export const filterNode = (
+export const truncateChildren = (
   raw: Record<string, unknown>,
   maxDepth: number,
   currentDepth: number,
 ): Record<string, unknown> => {
-  const result: Record<string, unknown> = {}
+  const result = { ...raw }
 
-  Object.entries(raw).forEach(([key, value]) => {
-    if (FILTERED_KEYS.has(key)) {
-      return
-    }
-
-    if (key === 'children' && Array.isArray(value)) {
-      if (maxDepth !== -1 && currentDepth >= maxDepth) {
-        result.children = value.map(
-          (child: Record<string, unknown>) => ({
-            id: child.id,
-            name: child.name,
-            type: child.type,
-          }),
-        )
-      } else {
-        result.children = value.map(
-          (child: Record<string, unknown>) =>
-            filterNode(child, maxDepth, currentDepth + 1),
-        )
-      }
-
-      return
-    }
-
-    if (
-      typeof value === 'object' &&
-      value !== null &&
-      !Array.isArray(value)
-    ) {
-      const filtered = filterNode(
-        value as Record<string, unknown>,
-        maxDepth,
-        currentDepth,
+  if (result.children && Array.isArray(result.children)) {
+    if (maxDepth !== -1 && currentDepth >= maxDepth) {
+      result.children = (
+        result.children as Record<string, unknown>[]
+      ).map(child => ({
+        id: child.id,
+        name: child.name,
+        type: child.type,
+      }))
+    } else {
+      result.children = (
+        result.children as Record<string, unknown>[]
+      ).map(child =>
+        truncateChildren(child, maxDepth, currentDepth + 1),
       )
-      if (Object.keys(filtered).length > 0) {
-        result[key] = filtered
-      }
-
-      return
     }
-
-    if (Array.isArray(value)) {
-      result[key] = value.map(item => {
-        if (typeof item === 'object' && item !== null) {
-          return filterNode(
-            item as Record<string, unknown>,
-            maxDepth,
-            currentDepth,
-          )
-        }
-
-        return item
-      })
-
-      return
-    }
-
-    result[key] = value
-  })
+  }
 
   return result
 }
@@ -905,9 +854,14 @@ export const toFullJson = (
   raw: Record<string, unknown>,
   depth = 3,
 ): string => {
-  const filtered = filterNode(raw, depth, 0)
-
-  return JSON.stringify(filtered, null, 2)
+  if (depth === -1) {
+    return JSON.stringify(raw, null, 2)
+  }
+  return JSON.stringify(
+    truncateChildren(raw, depth, 0),
+    null,
+    2,
+  )
 }
 
 // --- toPageLayoutYaml ---

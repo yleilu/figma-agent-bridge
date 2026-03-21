@@ -6,7 +6,7 @@ import {
   toInspectTreeMulti,
   toPageLayoutTree,
   toFullJson,
-  filterNode,
+  truncateChildren,
 } from '../parser'
 
 type ToolResult = {
@@ -221,10 +221,10 @@ export const handleGetNodesInfo = async (
   }
 
   const effectiveDepth = depth ?? 3
-  const filtered = raw.map(node =>
-    filterNode(node, effectiveDepth, 0),
+  const truncated = raw.map(node =>
+    truncateChildren(node, effectiveDepth, 0),
   )
-  const json = JSON.stringify(filtered, null, 2)
+  const json = JSON.stringify(truncated, null, 2)
 
   return { content: [{ type: 'text', text: json }] }
 }

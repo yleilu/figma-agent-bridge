@@ -268,13 +268,14 @@ describe('toFullJson', () => {
     expect(json.children).toHaveLength(3)
   })
 
-  it('filters out boundVariables, imageRef, relativeTransform', () => {
+  it('preserves all raw Figma keys without filtering', () => {
     const result = toFullJson(cardFixture)
     const json = JSON.parse(result)
-    expect(json.fills[0].boundVariables).toBeUndefined()
-    expect(json.relativeTransform).toBeUndefined()
-    expect(json.exportSettings).toBeUndefined()
-    expect(json.isMask).toBeUndefined()
+    expect(json.fills[0].boundVariables).toBeDefined()
+    expect(json.relativeTransform).toBeDefined()
+    expect(json.exportSettings).toBeDefined()
+    expect(json.isMask).toBe(false)
+    expect(json.absoluteRenderBounds).toBeDefined()
   })
 
   it('depth 0 = root node with child stubs only', () => {
