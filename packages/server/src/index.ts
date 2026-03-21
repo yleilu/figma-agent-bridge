@@ -14,7 +14,12 @@ import {
   getNodesParamsSchema,
   listPagesParamsSchema,
   exportParamsSchema,
+  createNodeParamsSchema,
+  createTreeParamsSchema,
+  createComponentParamsSchema,
+  createFromSvgParamsSchema,
 } from '@figma-agent-bridge/shared'
+import type { CreateTreeNodeSpec } from '@figma-agent-bridge/shared'
 import { createFigmaClient } from './figma-client'
 import {
   handleConnect,
@@ -33,6 +38,12 @@ import {
 } from './tools/design-system'
 import { handleSearch } from './tools/search'
 import { handleExport } from './tools/export'
+import {
+  handleCreateNode,
+  handleCreateTree,
+} from './tools/create'
+import { handleCreateComponent } from './tools/create-component'
+import { handleCreateFromSvg } from './tools/create-svg'
 
 const server = new McpServer({
   name: APP_NAME,
@@ -115,6 +126,69 @@ server.tool(
   'export',
   exportParamsSchema.shape,
   async params => handleExport(params, client),
+)
+
+server.tool(
+  'create_node',
+  createNodeParamsSchema.shape,
+  async params =>
+    handleCreateNode(
+      {
+        parentId: params.parentId,
+        node: params.node,
+      },
+      client,
+    ),
+)
+
+server.tool(
+  'create_tree',
+  createTreeParamsSchema.shape,
+  async params =>
+    handleCreateTree(
+      {
+        parentId: params.parentId,
+        node: params.node as CreateTreeNodeSpec,
+      },
+      client,
+    ),
+)
+
+server.tool(
+  'create_component',
+  createComponentParamsSchema.innerType().shape,
+  async params =>
+    handleCreateComponent(
+      {
+        nodeId: params.nodeId,
+        nodeIds: params.nodeIds,
+        combineAsVariants: params.combineAsVariants,
+        slots: params.slots,
+        componentProperties: params.componentProperties as
+          | {
+              name: string
+              type: string
+              default: string | boolean
+            }[]
+          | undefined,
+      },
+      client,
+    ),
+)
+
+server.tool(
+  'create_from_svg',
+  createFromSvgParamsSchema.shape,
+  async params =>
+    handleCreateFromSvg(
+      {
+        parentId: params.parentId,
+        svg: params.svg,
+        name: params.name,
+        size: params.size,
+      },
+      client,
+    ),
 )
 
 const transport = new StdioServerTransport()

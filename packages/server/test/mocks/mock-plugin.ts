@@ -124,6 +124,98 @@ export const createMockPlugin = (
         break
       }
 
+      case 'create_node': {
+        const nodeSpec = cmd.params?.node as
+          | Record<string, unknown>
+          | undefined
+        const parentId = cmd.params?.parentId as string
+        result = {
+          id: `created:${Math.random().toString(36).slice(2, 8)}`,
+          name:
+            (nodeSpec?.name as string) ??
+            (nodeSpec?.type as string),
+          type: nodeSpec?.type as string,
+          parentId,
+        }
+        break
+      }
+
+      case 'create_tree': {
+        const treeSpec = cmd.params?.node as
+          | Record<string, unknown>
+          | undefined
+        const treeParentId = cmd.params?.parentId as string
+        const countNodes = (
+          node: Record<string, unknown>,
+        ): number => {
+          let count = 1
+          const children = node.children as
+            | Record<string, unknown>[]
+            | undefined
+          if (children) {
+            for (const child of children) {
+              count += countNodes(child)
+            }
+          }
+          return count
+        }
+        const totalNodes = treeSpec
+          ? countNodes(treeSpec)
+          : 1
+        result = {
+          id: `created:${Math.random().toString(36).slice(2, 8)}`,
+          name:
+            (treeSpec?.name as string) ??
+            (treeSpec?.type as string),
+          type: treeSpec?.type as string,
+          parentId: treeParentId,
+          totalNodes,
+        }
+        break
+      }
+
+      case 'create_component': {
+        const compNodeId = cmd.params?.nodeId as
+          | string
+          | undefined
+        const compNodeIds = cmd.params?.nodeIds as
+          | string[]
+          | undefined
+        const combine = cmd.params?.combineAsVariants as
+          | boolean
+          | undefined
+        if (combine && compNodeIds) {
+          result = {
+            id: `cs:${Math.random().toString(36).slice(2, 8)}`,
+            name: 'VariantSet',
+            type: 'COMPONENT_SET',
+            key: `key:${Math.random().toString(36).slice(2, 8)}`,
+          }
+        } else {
+          result = {
+            id:
+              compNodeId ??
+              `comp:${Math.random().toString(36).slice(2, 8)}`,
+            name: 'Component',
+            type: 'COMPONENT',
+            key: `key:${Math.random().toString(36).slice(2, 8)}`,
+          }
+        }
+        break
+      }
+
+      case 'create_from_svg': {
+        const svgName =
+          (cmd.params?.name as string) ?? 'SVG'
+        result = {
+          id: `svg:${Math.random().toString(36).slice(2, 8)}`,
+          name: svgName,
+          type: 'FRAME',
+          childCount: 3,
+        }
+        break
+      }
+
       default:
         error = 'Unknown command'
         break
