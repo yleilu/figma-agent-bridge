@@ -667,7 +667,7 @@ describe('handleCreateTree', () => {
               name: 'Box',
               size: [100, 100],
               fills: ['#FF0000'],
-              effects: ['shadow(0,2,4,#000)'],
+              effects: ['shadow(0,2,4,#000000)'],
             },
           ],
         },

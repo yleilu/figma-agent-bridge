@@ -26,7 +26,7 @@ image                                                   — image fill
 Notes:
 - Gradient stops listed in Figma's stop order, positions as `%`
 - Linear gradient includes `deg` angle (computed from Figma's `gradientTransform` matrix)
-- Multiple fills on one node: array `["#3B82F6", "linear-gradient(90deg, #000 0%, #FFF 100%)"]`
+- Multiple fills on one node: array `["#3B82F6", "linear-gradient(90deg, #000000 0%, #FFFFFF 100%)"]`
 - Hex is always uppercase, 6 or 8 chars (no shorthand)
 
 ### Where used in M2
@@ -76,8 +76,8 @@ Notes:
 - `inner-shadow` = Figma `INNER_SHADOW`
 - `blur` = Figma `LAYER_BLUR`
 - `bg-blur` = Figma `BACKGROUND_BLUR`
-- Multiple effects on one node: array `["shadow(0,4,8,#000)", "blur(2)"]`
-- Multiple effects in `inspect_styles` (per style): joined with `+` → `shadow(0,4,8,#000)+blur(2)`
+- Multiple effects on one node: array `["shadow(0,4,8,#000000)", "blur(2)"]`
+- Multiple effects in `inspect_styles` (per style): joined with `+` → `shadow(0,4,8,#000000)+blur(2)`
 - Spread omitted from shorthand (rarely used). Full data available via raw Figma JSON in `get_node`
 
 ### Where used in M2

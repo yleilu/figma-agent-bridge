@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import {
   parseColorExpression,
   parseFillExpressions,
+  parseEffectExpression,
   parseEffectExpressions,
   parseFontExpression,
   parseLineHeightExpression,
@@ -177,6 +178,11 @@ describe('parseColorExpression', () => {
       'https://cdn.example.com/img.png',
     )
   })
+
+  it('returns null for 3-char hex shorthand', () => {
+    const result = parseColorExpression('#F00')
+    expect(result).toBeNull()
+  })
 })
 
 describe('parseFillExpressions', () => {
@@ -256,12 +262,27 @@ describe('parseEffectExpressions', () => {
 
   it('parses multiple mixed effects', () => {
     const effects = parseEffectExpressions([
-      'shadow(0,4,8,#000)',
+      'shadow(0,4,8,#000000)',
       'blur(2)',
     ])
     expect(effects).toHaveLength(2)
     expect(effects[0].type).toBe('DROP_SHADOW')
     expect(effects[1].type).toBe('LAYER_BLUR')
+  })
+
+  it('parses shadow with full 6-char hex color values', () => {
+    const result = parseEffectExpression('shadow(0,4,8,#000000)')
+    expect(result).not.toBeNull()
+    if (result && result.type === 'DROP_SHADOW') {
+      expect(result.color.r).toBe(0)
+      expect(result.color.g).toBe(0)
+      expect(result.color.b).toBe(0)
+    }
+  })
+
+  it('returns null for shadow with 3-char hex', () => {
+    const result = parseEffectExpression('shadow(0,4,8,#000)')
+    expect(result).toBeNull()
   })
 
   it('strips style() prefix from effects', () => {

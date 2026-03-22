@@ -81,17 +81,7 @@ const round3 = (n: number): number =>
 const hexToRgb = (
   hex: string,
 ): { r: number; g: number; b: number; a: number } => {
-  let clean = hex.replace('#', '')
-  // Expand 3-char shorthand to 6-char
-  if (clean.length === 3) {
-    clean =
-      clean[0] +
-      clean[0] +
-      clean[1] +
-      clean[1] +
-      clean[2] +
-      clean[2]
-  }
+  const clean = hex.replace('#', '')
   const r = round3(parseInt(clean.slice(0, 2), 16) / 255)
   const g = round3(parseInt(clean.slice(2, 4), 16) / 255)
   const b = round3(parseInt(clean.slice(4, 6), 16) / 255)
@@ -100,6 +90,11 @@ const hexToRgb = (
       ? round3(parseInt(clean.slice(6, 8), 16) / 255)
       : 1
   return { r, g, b, a }
+}
+
+const isValidHexLength = (hex: string): boolean => {
+  const clean = hex.replace('#', '')
+  return clean.length === 6 || clean.length === 8
 }
 
 const parseGradientStops = (
@@ -121,7 +116,7 @@ const parseGradientStops = (
 
 export const parseColorExpression = (
   expr: string,
-): ParsedPaint => {
+): ParsedPaint | null => {
   const { styleName, value } = extractStylePrefix(expr)
 
   if (value === 'image') {
@@ -201,7 +196,10 @@ export const parseColorExpression = (
     return result
   }
 
-  // Solid hex
+  // Solid hex — must be 6 or 8 chars (no shorthand)
+  if (!isValidHexLength(value)) {
+    return null
+  }
   const color = hexToRgb(value)
   const result: ParsedSolidPaint = {
     type: 'SOLID',
@@ -215,7 +213,58 @@ export const parseColorExpression = (
 export const parseFillExpressions = (
   expressions: string[],
 ): ParsedPaint[] => {
-  return expressions.map(parseColorExpression)
+  return expressions
+    .map(parseColorExpression)
+    .filter((p): p is ParsedPaint => p !== null)
+}
+
+export const parseEffectExpression = (
+  expr: string,
+): ParsedEffect | null => {
+  const { styleName, value } = extractStylePrefix(expr)
+
+  // shadow(x,y,radius,color) or shadow(x,y,radius,color,spread)
+  const shadowMatch = value.match(
+    /^(shadow|inner-shadow)\((-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(\d+(?:\.\d+)?),(#[0-9A-Fa-f]{6,8})(?:,(\d+(?:\.\d+)?))?\)$/,
+  )
+  if (shadowMatch) {
+    const color = hexToRgb(shadowMatch[5])
+    const result: ParsedShadowEffect = {
+      type:
+        shadowMatch[1] === 'shadow'
+          ? 'DROP_SHADOW'
+          : 'INNER_SHADOW',
+      offset: {
+        x: parseFloat(shadowMatch[2]),
+        y: parseFloat(shadowMatch[3]),
+      },
+      radius: parseFloat(shadowMatch[4]),
+      color,
+      ...(shadowMatch[6] !== undefined
+        ? { spread: parseFloat(shadowMatch[6]) }
+        : {}),
+      ...(styleName ? { styleName } : {}),
+    }
+    return result
+  }
+
+  // blur(radius)
+  const blurMatch = value.match(
+    /^(blur|bg-blur)\((\d+(?:\.\d+)?)\)$/,
+  )
+  if (blurMatch) {
+    const result: ParsedBlurEffect = {
+      type:
+        blurMatch[1] === 'blur'
+          ? 'LAYER_BLUR'
+          : 'BACKGROUND_BLUR',
+      radius: parseFloat(blurMatch[2]),
+      ...(styleName ? { styleName } : {}),
+    }
+    return result
+  }
+
+  return null
 }
 
 export const parseEffectExpressions = (
@@ -226,7 +275,7 @@ export const parseEffectExpressions = (
 
     // shadow(x,y,radius,color) or shadow(x,y,radius,color,spread)
     const shadowMatch = value.match(
-      /^(shadow|inner-shadow)\((-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(\d+(?:\.\d+)?),(#[0-9A-Fa-f]{3,8})(?:,(\d+(?:\.\d+)?))?\)$/,
+      /^(shadow|inner-shadow)\((-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(\d+(?:\.\d+)?),(#[0-9A-Fa-f]{6,8})(?:,(\d+(?:\.\d+)?))?\)$/,
     )
     if (shadowMatch) {
       const color = hexToRgb(shadowMatch[5])
