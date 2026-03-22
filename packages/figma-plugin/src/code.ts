@@ -1263,29 +1263,7 @@ const handleCommand = async (
         nodeToPromote as SceneNode,
       )
 
-      // Create slots if specified
-      const slots = params.slots as string[] | undefined
-      if (slots) {
-        const compWithSlot = comp as ComponentNode & {
-          createSlot?: (name: string) => void
-        }
-        if (compWithSlot.createSlot) {
-          for (const slotName of slots) {
-            compWithSlot.createSlot(slotName)
-          }
-        } else {
-          return {
-            id: comp.id,
-            name: comp.name,
-            type: comp.type,
-            key: comp.key,
-            warning:
-              'createSlot is not available in this Figma version; requested slots were not created.',
-          }
-        }
-      }
-
-      // Add component properties if specified
+      // Add component properties if specified (before slots, so they always run)
       const componentProperties =
         params.componentProperties as
           | {
@@ -1304,12 +1282,31 @@ const handleCommand = async (
         }
       }
 
-      return {
+      // Create slots if specified
+      const slots = params.slots as string[] | undefined
+      let slotWarning: string | undefined
+      if (slots) {
+        const compWithSlot = comp as ComponentNode & {
+          createSlot?: (name: string) => void
+        }
+        if (compWithSlot.createSlot) {
+          for (const slotName of slots) {
+            compWithSlot.createSlot(slotName)
+          }
+        } else {
+          slotWarning =
+            'createSlot is not available in this Figma version; requested slots were not created.'
+        }
+      }
+
+      const result: Record<string, unknown> = {
         id: comp.id,
         name: comp.name,
         type: comp.type,
         key: comp.key,
       }
+      if (slotWarning) result.warning = slotWarning
+      return result
     }
 
     case 'create_from_svg': {

@@ -18,7 +18,7 @@ export const handleCreateComponent = async (
   },
   client: FigmaClient,
 ): Promise<ToolResult> => {
-  if (!params.nodeId && !params.nodeIds) {
+  if (!params.nodeId && (!params.nodeIds || params.nodeIds.length === 0)) {
     return {
       content: [{ type: 'text' as const, text: 'Error: Either nodeId or nodeIds must be provided.' }],
     }

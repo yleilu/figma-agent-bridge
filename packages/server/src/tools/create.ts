@@ -190,7 +190,8 @@ const convertNodeSpec = (
       text.valign = spec.text.valign
     }
     if (spec.text.color !== undefined) {
-      text.color = parseColorExpression(spec.text.color)
+      const parsed = parseColorExpression(spec.text.color)
+      if (parsed) text.color = parsed
     }
     if (spec.text.lineHeight !== undefined) {
       text.lineHeight = parseLineHeightExpression(

@@ -12,12 +12,13 @@ import {
 describe('parseColorExpression', () => {
   it('parses 6-char hex', () => {
     const result = parseColorExpression('#3B82F6')
+    expect(result).not.toBeNull()
+    if (!result || result.type !== 'SOLID') throw new Error('Expected SOLID')
     expect(result).toEqual({
       type: 'SOLID',
       color: { r: 0.231, g: 0.51, b: 0.965 },
       opacity: 1,
     })
-    if (result.type !== 'SOLID') throw new Error('Expected SOLID')
     expect(result.color.r).toBeCloseTo(0.231, 2)
     expect(result.color.g).toBeCloseTo(0.51, 2)
     expect(result.color.b).toBeCloseTo(0.965, 2)
@@ -25,7 +26,7 @@ describe('parseColorExpression', () => {
 
   it('parses 8-char hex with alpha', () => {
     const result = parseColorExpression('#00000040')
-    if (result.type !== 'SOLID') throw new Error('Expected SOLID')
+    if (!result || result.type !== 'SOLID') throw new Error('Expected SOLID')
     expect(result.color.r).toBe(0)
     expect(result.color.g).toBe(0)
     expect(result.color.b).toBe(0)
@@ -36,7 +37,7 @@ describe('parseColorExpression', () => {
     const result = parseColorExpression(
       'style(Colors/Primary/500)#3B82F6',
     )
-    if (result.type !== 'SOLID') throw new Error('Expected SOLID')
+    if (!result || result.type !== 'SOLID') throw new Error('Expected SOLID')
     expect(result.color.r).toBeCloseTo(0.231, 2)
     expect(result.styleName).toBe('Colors/Primary/500')
   })
@@ -45,12 +46,12 @@ describe('parseColorExpression', () => {
     const result = parseColorExpression(
       'linear-gradient(90deg, #FF0000 0%, #0000FF 100%)',
     )
-    expect(result.type).toBe('GRADIENT_LINEAR')
     if (
-      result.type !== 'GRADIENT_LINEAR' &&
+      !result ||
+      (result.type !== 'GRADIENT_LINEAR' &&
       result.type !== 'GRADIENT_RADIAL' &&
       result.type !== 'GRADIENT_ANGULAR' &&
-      result.type !== 'GRADIENT_DIAMOND'
+      result.type !== 'GRADIENT_DIAMOND')
     ) {
       throw new Error('Expected gradient type')
     }
@@ -66,12 +67,12 @@ describe('parseColorExpression', () => {
     const result = parseColorExpression(
       'radial-gradient(#FFFFFF 0%, #00000000 100%)',
     )
-    expect(result.type).toBe('GRADIENT_RADIAL')
     if (
-      result.type !== 'GRADIENT_LINEAR' &&
+      !result ||
+      (result.type !== 'GRADIENT_LINEAR' &&
       result.type !== 'GRADIENT_RADIAL' &&
       result.type !== 'GRADIENT_ANGULAR' &&
-      result.type !== 'GRADIENT_DIAMOND'
+      result.type !== 'GRADIENT_DIAMOND')
     ) {
       throw new Error('Expected gradient type')
     }
@@ -82,12 +83,12 @@ describe('parseColorExpression', () => {
     const result = parseColorExpression(
       'angular-gradient(#FF0000 0%, #00FF00 50%, #0000FF 100%)',
     )
-    expect(result.type).toBe('GRADIENT_ANGULAR')
     if (
-      result.type !== 'GRADIENT_LINEAR' &&
+      !result ||
+      (result.type !== 'GRADIENT_LINEAR' &&
       result.type !== 'GRADIENT_RADIAL' &&
       result.type !== 'GRADIENT_ANGULAR' &&
-      result.type !== 'GRADIENT_DIAMOND'
+      result.type !== 'GRADIENT_DIAMOND')
     ) {
       throw new Error('Expected gradient type')
     }
@@ -98,12 +99,12 @@ describe('parseColorExpression', () => {
     const result = parseColorExpression(
       'diamond-gradient(#FF0000 0%, #0000FF 100%)',
     )
-    expect(result.type).toBe('GRADIENT_DIAMOND')
     if (
-      result.type !== 'GRADIENT_LINEAR' &&
+      !result ||
+      (result.type !== 'GRADIENT_LINEAR' &&
       result.type !== 'GRADIENT_RADIAL' &&
       result.type !== 'GRADIENT_ANGULAR' &&
-      result.type !== 'GRADIENT_DIAMOND'
+      result.type !== 'GRADIENT_DIAMOND')
     ) {
       throw new Error('Expected gradient type')
     }
@@ -112,6 +113,7 @@ describe('parseColorExpression', () => {
 
   it('returns image sentinel for "image"', () => {
     const result = parseColorExpression('image')
+    if (!result) throw new Error('Expected non-null')
     expect(result.type).toBe('IMAGE')
   })
 
@@ -119,8 +121,7 @@ describe('parseColorExpression', () => {
     const result = parseColorExpression(
       'image(https://example.com/photo.jpg)',
     )
-    expect(result.type).toBe('IMAGE')
-    if (result.type !== 'IMAGE') throw new Error('Expected IMAGE')
+    if (!result || result.type !== 'IMAGE') throw new Error('Expected IMAGE')
     expect(result.imageUrl).toBe('https://example.com/photo.jpg')
   })
 
@@ -128,24 +129,21 @@ describe('parseColorExpression', () => {
     const result = parseColorExpression(
       'image(https://example.com/photo.jpg,FIT)',
     )
-    expect(result.type).toBe('IMAGE')
-    if (result.type !== 'IMAGE') throw new Error('Expected IMAGE')
+    if (!result || result.type !== 'IMAGE') throw new Error('Expected IMAGE')
     expect(result.imageUrl).toBe('https://example.com/photo.jpg')
     expect(result.scaleMode).toBe('FIT')
   })
 
   it('parses image-hash() with hash value', () => {
     const result = parseColorExpression('image-hash(abc123def)')
-    expect(result.type).toBe('IMAGE')
-    if (result.type !== 'IMAGE') throw new Error('Expected IMAGE')
+    if (!result || result.type !== 'IMAGE') throw new Error('Expected IMAGE')
     expect(result.imageHash).toBe('abc123def')
   })
 
   // Type narrowing: verify discriminated union narrows correctly
   it('SOLID paint has color and opacity but not gradient fields', () => {
     const result = parseColorExpression('#FF0000')
-    expect(result.type).toBe('SOLID')
-    if (result.type !== 'SOLID') throw new Error('Expected SOLID')
+    if (!result || result.type !== 'SOLID') throw new Error('Expected SOLID')
     expect(result.color).toBeDefined()
     expect(result.opacity).toBe(1)
     // Type narrowing means gradientStops is not accessible here
@@ -155,12 +153,12 @@ describe('parseColorExpression', () => {
     const result = parseColorExpression(
       'linear-gradient(45deg, #FF0000 0%, #0000FF 100%)',
     )
-    expect(result.type).toBe('GRADIENT_LINEAR')
     if (
-      result.type !== 'GRADIENT_LINEAR' &&
+      !result ||
+      (result.type !== 'GRADIENT_LINEAR' &&
       result.type !== 'GRADIENT_RADIAL' &&
       result.type !== 'GRADIENT_ANGULAR' &&
-      result.type !== 'GRADIENT_DIAMOND'
+      result.type !== 'GRADIENT_DIAMOND')
     ) {
       throw new Error('Expected gradient type')
     }
@@ -172,8 +170,7 @@ describe('parseColorExpression', () => {
     const result = parseColorExpression(
       'image(https://cdn.example.com/img.png)',
     )
-    expect(result.type).toBe('IMAGE')
-    if (result.type !== 'IMAGE') throw new Error('Expected IMAGE')
+    if (!result || result.type !== 'IMAGE') throw new Error('Expected IMAGE')
     expect(result.imageUrl).toBe(
       'https://cdn.example.com/img.png',
     )
