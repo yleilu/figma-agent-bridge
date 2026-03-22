@@ -156,7 +156,7 @@ server.tool(
 
 server.tool(
   'create_component',
-  createComponentParamsSchema.innerType().shape,
+  createComponentParamsSchema.shape,
   async params =>
     handleCreateComponent(
       {

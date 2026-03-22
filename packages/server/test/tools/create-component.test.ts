@@ -138,6 +138,13 @@ describe('handleCreateComponent', () => {
     expect(props[1].name).toBe('Label')
   })
 
+  it('returns error when neither nodeId nor nodeIds provided', async () => {
+    const mockClient = createMockClient(() => null)
+    const result = await handleCreateComponent({} as any, mockClient)
+    const text = result.content[0].text
+    expect(text).toContain('nodeId or nodeIds')
+  })
+
   it('returns error when not connected', async () => {
     const client: FigmaClient = {
       joinChannel: () => Promise.resolve(''),

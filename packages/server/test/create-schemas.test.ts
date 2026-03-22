@@ -519,9 +519,9 @@ describe('createComponentParamsSchema', () => {
     expect(result.success).toBe(false)
   })
 
-  it('rejects empty object (requires nodeId or nodeIds)', () => {
+  it('accepts empty object at schema level (validation in handler)', () => {
     const result = createComponentParamsSchema.safeParse({})
-    expect(result.success).toBe(false)
+    expect(result.success).toBe(true)
   })
 })
 

@@ -358,14 +358,6 @@ export const createComponentParamsSchema = z
         'Component properties to add after promotion (BOOLEAN, TEXT, INSTANCE_SWAP, SLOT).',
       ),
   })
-  .refine(
-    data =>
-      data.nodeId !== undefined ||
-      data.nodeIds !== undefined,
-    {
-      message: 'Either nodeId or nodeIds must be provided',
-    },
-  )
 
 export const createFromSvgParamsSchema = z.object({
   parentId: z

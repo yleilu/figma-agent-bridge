@@ -18,6 +18,12 @@ export const handleCreateComponent = async (
   },
   client: FigmaClient,
 ): Promise<ToolResult> => {
+  if (!params.nodeId && !params.nodeIds) {
+    return {
+      content: [{ type: 'text' as const, text: 'Error: Either nodeId or nodeIds must be provided.' }],
+    }
+  }
+
   if (!client.isConnected()) {
     return {
       content: [
