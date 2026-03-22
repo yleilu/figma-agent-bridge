@@ -233,6 +233,26 @@ describe('M3 create tools e2e', () => {
     expect(parsed.warning as string).toContain('createSlot')
   })
 
+  it('creates SECTION node ignoring unsupported fills gracefully', async () => {
+    const result = await handleCreateNode(
+      {
+        parentId: '0:1',
+        node: {
+          type: 'SECTION',
+          name: 'Test Section',
+          size: [400, 300],
+          fills: ['#FF0000'],
+        },
+      },
+      client,
+    )
+    const parsed = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(parsed.type).toBe('SECTION')
+    expect(parsed.name).toBe('Test Section')
+  })
+
   it('create_node returns error when not connected', async () => {
     client.disconnect()
 

@@ -129,12 +129,16 @@ export const createMockPlugin = (
           | Record<string, unknown>
           | undefined
         const parentId = cmd.params?.parentId as string
+        const nodeType = nodeSpec?.type as string
+        // SECTION nodes use MinimalFillsMixin (read-only fills),
+        // so the plugin must guard before assigning fills/strokes.
+        // Simulate by returning the node without fills/strokes
+        // to confirm they were silently skipped (no error thrown).
         result = {
           id: `created:${Math.random().toString(36).slice(2, 8)}`,
           name:
-            (nodeSpec?.name as string) ??
-            (nodeSpec?.type as string),
-          type: nodeSpec?.type as string,
+            (nodeSpec?.name as string) ?? nodeType,
+          type: nodeType,
           parentId,
         }
         break

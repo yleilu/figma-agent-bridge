@@ -178,7 +178,9 @@ const applyCommonProperties = async (
         paintArray.push(fill)
       }
     }
-    ;(node as GeometryMixin & SceneNode).fills = paintArray
+    if ('fills' in node) {
+      ;(node as GeometryMixin & SceneNode).fills = paintArray
+    }
   }
 
   // Strokes
@@ -188,20 +190,22 @@ const applyCommonProperties = async (
     for (const stroke of strokes) {
       strokeArray.push(stroke)
     }
-    ;(node as GeometryMixin & SceneNode).strokes =
-      strokeArray
+    if ('strokes' in node) {
+      ;(node as GeometryMixin & SceneNode).strokes =
+        strokeArray
+    }
   }
 
   // Stroke properties
-  if (spec.strokeWeight !== undefined) {
+  if (spec.strokeWeight !== undefined && 'strokeWeight' in node) {
     ;(node as GeometryMixin & SceneNode).strokeWeight =
       spec.strokeWeight as number
   }
-  if (spec.strokeAlign !== undefined) {
+  if (spec.strokeAlign !== undefined && 'strokeAlign' in node) {
     ;(node as GeometryMixin & SceneNode).strokeAlign =
       spec.strokeAlign as 'CENTER' | 'INSIDE' | 'OUTSIDE'
   }
-  if (spec.strokeDash !== undefined) {
+  if (spec.strokeDash !== undefined && 'dashPattern' in node) {
     ;(node as GeometryMixin & SceneNode).dashPattern =
       spec.strokeDash as number[]
   }
@@ -333,11 +337,11 @@ const applyCommonProperties = async (
       | null
 
   // Apply resolved style IDs (server resolves style(name) → styleId)
-  if (spec.fillStyleId !== undefined) {
+  if (spec.fillStyleId !== undefined && 'fillStyleId' in node) {
     ;(node as GeometryMixin & SceneNode).fillStyleId =
       spec.fillStyleId as string
   }
-  if (spec.strokeStyleId !== undefined) {
+  if (spec.strokeStyleId !== undefined && 'strokeStyleId' in node) {
     ;(node as GeometryMixin & SceneNode).strokeStyleId =
       spec.strokeStyleId as string
   }
