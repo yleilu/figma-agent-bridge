@@ -16,6 +16,7 @@ describe('parseColorExpression', () => {
       color: { r: 0.231, g: 0.51, b: 0.965 },
       opacity: 1,
     })
+    if (result.type !== 'SOLID') throw new Error('Expected SOLID')
     expect(result.color.r).toBeCloseTo(0.231, 2)
     expect(result.color.g).toBeCloseTo(0.51, 2)
     expect(result.color.b).toBeCloseTo(0.965, 2)
@@ -23,6 +24,7 @@ describe('parseColorExpression', () => {
 
   it('parses 8-char hex with alpha', () => {
     const result = parseColorExpression('#00000040')
+    if (result.type !== 'SOLID') throw new Error('Expected SOLID')
     expect(result.color.r).toBe(0)
     expect(result.color.g).toBe(0)
     expect(result.color.b).toBe(0)
@@ -33,6 +35,7 @@ describe('parseColorExpression', () => {
     const result = parseColorExpression(
       'style(Colors/Primary/500)#3B82F6',
     )
+    if (result.type !== 'SOLID') throw new Error('Expected SOLID')
     expect(result.color.r).toBeCloseTo(0.231, 2)
     expect(result.styleName).toBe('Colors/Primary/500')
   })
@@ -42,17 +45,19 @@ describe('parseColorExpression', () => {
       'linear-gradient(90deg, #FF0000 0%, #0000FF 100%)',
     )
     expect(result.type).toBe('GRADIENT_LINEAR')
+    if (
+      result.type !== 'GRADIENT_LINEAR' &&
+      result.type !== 'GRADIENT_RADIAL' &&
+      result.type !== 'GRADIENT_ANGULAR' &&
+      result.type !== 'GRADIENT_DIAMOND'
+    ) {
+      throw new Error('Expected gradient type')
+    }
     expect(result.gradientStops).toHaveLength(2)
     expect(result.gradientStops[0].position).toBe(0)
-    expect(result.gradientStops[0].color.r).toBeCloseTo(
-      1,
-      2,
-    )
+    expect(result.gradientStops[0].color.r).toBeCloseTo(1, 2)
     expect(result.gradientStops[1].position).toBe(1)
-    expect(result.gradientStops[1].color.b).toBeCloseTo(
-      1,
-      2,
-    )
+    expect(result.gradientStops[1].color.b).toBeCloseTo(1, 2)
     expect(result.angle).toBe(90)
   })
 
@@ -61,6 +66,14 @@ describe('parseColorExpression', () => {
       'radial-gradient(#FFFFFF 0%, #00000000 100%)',
     )
     expect(result.type).toBe('GRADIENT_RADIAL')
+    if (
+      result.type !== 'GRADIENT_LINEAR' &&
+      result.type !== 'GRADIENT_RADIAL' &&
+      result.type !== 'GRADIENT_ANGULAR' &&
+      result.type !== 'GRADIENT_DIAMOND'
+    ) {
+      throw new Error('Expected gradient type')
+    }
     expect(result.gradientStops).toHaveLength(2)
   })
 
@@ -69,6 +82,14 @@ describe('parseColorExpression', () => {
       'angular-gradient(#FF0000 0%, #00FF00 50%, #0000FF 100%)',
     )
     expect(result.type).toBe('GRADIENT_ANGULAR')
+    if (
+      result.type !== 'GRADIENT_LINEAR' &&
+      result.type !== 'GRADIENT_RADIAL' &&
+      result.type !== 'GRADIENT_ANGULAR' &&
+      result.type !== 'GRADIENT_DIAMOND'
+    ) {
+      throw new Error('Expected gradient type')
+    }
     expect(result.gradientStops).toHaveLength(3)
   })
 
@@ -77,6 +98,14 @@ describe('parseColorExpression', () => {
       'diamond-gradient(#FF0000 0%, #0000FF 100%)',
     )
     expect(result.type).toBe('GRADIENT_DIAMOND')
+    if (
+      result.type !== 'GRADIENT_LINEAR' &&
+      result.type !== 'GRADIENT_RADIAL' &&
+      result.type !== 'GRADIENT_ANGULAR' &&
+      result.type !== 'GRADIENT_DIAMOND'
+    ) {
+      throw new Error('Expected gradient type')
+    }
     expect(result.gradientStops).toHaveLength(2)
   })
 
@@ -90,9 +119,8 @@ describe('parseColorExpression', () => {
       'image(https://example.com/photo.jpg)',
     )
     expect(result.type).toBe('IMAGE')
-    expect((result as { imageUrl: string }).imageUrl).toBe(
-      'https://example.com/photo.jpg',
-    )
+    if (result.type !== 'IMAGE') throw new Error('Expected IMAGE')
+    expect(result.imageUrl).toBe('https://example.com/photo.jpg')
   })
 
   it('parses image() with URL and scaleMode', () => {
@@ -100,22 +128,54 @@ describe('parseColorExpression', () => {
       'image(https://example.com/photo.jpg,FIT)',
     )
     expect(result.type).toBe('IMAGE')
-    expect((result as { imageUrl: string }).imageUrl).toBe(
-      'https://example.com/photo.jpg',
-    )
-    expect(
-      (result as { scaleMode: string }).scaleMode,
-    ).toBe('FIT')
+    if (result.type !== 'IMAGE') throw new Error('Expected IMAGE')
+    expect(result.imageUrl).toBe('https://example.com/photo.jpg')
+    expect(result.scaleMode).toBe('FIT')
   })
 
   it('parses image-hash() with hash value', () => {
+    const result = parseColorExpression('image-hash(abc123def)')
+    expect(result.type).toBe('IMAGE')
+    if (result.type !== 'IMAGE') throw new Error('Expected IMAGE')
+    expect(result.imageHash).toBe('abc123def')
+  })
+
+  // Type narrowing: verify discriminated union narrows correctly
+  it('SOLID paint has color and opacity but not gradient fields', () => {
+    const result = parseColorExpression('#FF0000')
+    expect(result.type).toBe('SOLID')
+    if (result.type !== 'SOLID') throw new Error('Expected SOLID')
+    expect(result.color).toBeDefined()
+    expect(result.opacity).toBe(1)
+    // Type narrowing means gradientStops is not accessible here
+  })
+
+  it('GRADIENT_LINEAR paint has gradientStops and angle', () => {
     const result = parseColorExpression(
-      'image-hash(abc123def)',
+      'linear-gradient(45deg, #FF0000 0%, #0000FF 100%)',
+    )
+    expect(result.type).toBe('GRADIENT_LINEAR')
+    if (
+      result.type !== 'GRADIENT_LINEAR' &&
+      result.type !== 'GRADIENT_RADIAL' &&
+      result.type !== 'GRADIENT_ANGULAR' &&
+      result.type !== 'GRADIENT_DIAMOND'
+    ) {
+      throw new Error('Expected gradient type')
+    }
+    expect(result.gradientStops).toHaveLength(2)
+    expect(result.angle).toBe(45)
+  })
+
+  it('IMAGE paint has imageUrl field', () => {
+    const result = parseColorExpression(
+      'image(https://cdn.example.com/img.png)',
     )
     expect(result.type).toBe('IMAGE')
-    expect(
-      (result as { imageHash: string }).imageHash,
-    ).toBe('abc123def')
+    if (result.type !== 'IMAGE') throw new Error('Expected IMAGE')
+    expect(result.imageUrl).toBe(
+      'https://cdn.example.com/img.png',
+    )
   })
 })
 
@@ -127,7 +187,9 @@ describe('parseFillExpressions', () => {
     ])
     expect(paints).toHaveLength(2)
     expect(paints[0].type).toBe('SOLID')
-    expect(paints[1].opacity).toBeCloseTo(0.502, 2)
+    const paint1 = paints[1]
+    if (paint1.type !== 'SOLID') throw new Error('Expected SOLID')
+    expect(paint1.opacity).toBeCloseTo(0.502, 2)
   })
 
   it('handles empty array', () => {
@@ -143,9 +205,16 @@ describe('parseEffectExpressions', () => {
     ])
     expect(effects).toHaveLength(1)
     expect(effects[0].type).toBe('DROP_SHADOW')
-    expect(effects[0].offset).toEqual({ x: 0, y: 4 })
-    expect(effects[0].radius).toBe(8)
-    expect(effects[0].color.a).toBeCloseTo(0.251, 2)
+    const effect = effects[0]
+    if (
+      effect.type !== 'DROP_SHADOW' &&
+      effect.type !== 'INNER_SHADOW'
+    ) {
+      throw new Error('Expected shadow type')
+    }
+    expect(effect.offset).toEqual({ x: 0, y: 4 })
+    expect(effect.radius).toBe(8)
+    expect(effect.color.a).toBeCloseTo(0.251, 2)
   })
 
   it('parses shadow() with spread', () => {
@@ -153,7 +222,14 @@ describe('parseEffectExpressions', () => {
       'shadow(0,4,8,#000000,2)',
     ])
     expect(effects).toHaveLength(1)
-    expect(effects[0].spread).toBe(2)
+    const effect = effects[0]
+    if (
+      effect.type !== 'DROP_SHADOW' &&
+      effect.type !== 'INNER_SHADOW'
+    ) {
+      throw new Error('Expected shadow type')
+    }
+    expect(effect.spread).toBe(2)
   })
 
   it('parses inner-shadow() expression', () => {
@@ -196,6 +272,55 @@ describe('parseEffectExpressions', () => {
     expect(effects[0].type).toBe('DROP_SHADOW')
     expect(effects[0].styleName).toBe('Elevation/Medium')
   })
+
+  // Type narrowing: verify discriminated union narrows correctly
+  it('DROP_SHADOW effect has offset, color, radius, spread fields', () => {
+    const effects = parseEffectExpressions([
+      'shadow(2,4,8,#0000FF80,3)',
+    ])
+    const effect = effects[0]
+    expect(effect.type).toBe('DROP_SHADOW')
+    if (
+      effect.type !== 'DROP_SHADOW' &&
+      effect.type !== 'INNER_SHADOW'
+    ) {
+      throw new Error('Expected shadow type')
+    }
+    expect(effect.offset).toEqual({ x: 2, y: 4 })
+    expect(effect.radius).toBe(8)
+    expect(effect.spread).toBe(3)
+    expect(effect.color.r).toBe(0)
+    expect(effect.color.g).toBe(0)
+    expect(effect.color.b).toBeCloseTo(1, 2)
+    expect(effect.color.a).toBeCloseTo(0.502, 2)
+  })
+
+  it('LAYER_BLUR effect has only radius field', () => {
+    const effects = parseEffectExpressions(['blur(15)'])
+    const effect = effects[0]
+    expect(effect.type).toBe('LAYER_BLUR')
+    if (
+      effect.type !== 'LAYER_BLUR' &&
+      effect.type !== 'BACKGROUND_BLUR'
+    ) {
+      throw new Error('Expected blur type')
+    }
+    expect(effect.radius).toBe(15)
+    // offset and color are not accessible with narrowing — blur has no offset/color
+  })
+
+  it('BACKGROUND_BLUR effect has only radius field', () => {
+    const effects = parseEffectExpressions(['bg-blur(8)'])
+    const effect = effects[0]
+    expect(effect.type).toBe('BACKGROUND_BLUR')
+    if (
+      effect.type !== 'LAYER_BLUR' &&
+      effect.type !== 'BACKGROUND_BLUR'
+    ) {
+      throw new Error('Expected blur type')
+    }
+    expect(effect.radius).toBe(8)
+  })
 })
 
 describe('parseFontExpression', () => {
@@ -217,18 +342,14 @@ describe('parseFontExpression', () => {
   })
 
   it('handles multi-word style names', () => {
-    const result = parseFontExpression(
-      'Inter/Bold Italic/16',
-    )
+    const result = parseFontExpression('Inter/Bold Italic/16')
     expect(result.family).toBe('Inter')
     expect(result.style).toBe('Bold Italic')
     expect(result.size).toBe(16)
   })
 
   it('handles font families with spaces', () => {
-    const result = parseFontExpression(
-      'Noto Sans/Regular/14',
-    )
+    const result = parseFontExpression('Noto Sans/Regular/14')
     expect(result.family).toBe('Noto Sans')
     expect(result.style).toBe('Regular')
     expect(result.size).toBe(14)

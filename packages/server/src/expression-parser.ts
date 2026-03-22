@@ -5,40 +5,46 @@ export type ParsedGradientStop = {
   color: { r: number; g: number; b: number; a: number }
 }
 
-// Flat paint descriptor — all fields are present on every variant
-// (fields irrelevant to a given type will be absent at runtime but
-//  TypeScript treats them as potentially present so tests can access
-//  them without narrowing)
-export interface ParsedPaint {
-  type:
-    | 'SOLID'
-    | 'GRADIENT_LINEAR'
-    | 'GRADIENT_RADIAL'
-    | 'GRADIENT_ANGULAR'
-    | 'GRADIENT_DIAMOND'
-    | 'IMAGE'
+export type ParsedSolidPaint = {
+  type: 'SOLID'
   color: { r: number; g: number; b: number }
   opacity: number
-  gradientStops: ParsedGradientStop[]
-  angle: number
-  imageUrl: string
-  imageHash: string
-  scaleMode: string
-  styleName: string
+  styleName?: string
 }
 
-export interface ParsedEffect {
-  type:
-    | 'DROP_SHADOW'
-    | 'INNER_SHADOW'
-    | 'LAYER_BLUR'
-    | 'BACKGROUND_BLUR'
+export type ParsedGradientPaint = {
+  type: 'GRADIENT_LINEAR' | 'GRADIENT_RADIAL' | 'GRADIENT_ANGULAR' | 'GRADIENT_DIAMOND'
+  gradientStops: ParsedGradientStop[]
+  angle: number
+  styleName?: string
+}
+
+export type ParsedImagePaint = {
+  type: 'IMAGE'
+  imageUrl?: string
+  imageHash?: string
+  scaleMode?: string
+  styleName?: string
+}
+
+export type ParsedPaint = ParsedSolidPaint | ParsedGradientPaint | ParsedImagePaint
+
+export type ParsedShadowEffect = {
+  type: 'DROP_SHADOW' | 'INNER_SHADOW'
   offset: { x: number; y: number }
   radius: number
+  spread?: number
   color: { r: number; g: number; b: number; a: number }
-  spread: number
-  styleName: string
+  styleName?: string
 }
+
+export type ParsedBlurEffect = {
+  type: 'LAYER_BLUR' | 'BACKGROUND_BLUR'
+  radius: number
+  styleName?: string
+}
+
+export type ParsedEffect = ParsedShadowEffect | ParsedBlurEffect
 
 export type ParsedFont = {
   family: string
@@ -119,10 +125,11 @@ export const parseColorExpression = (
   const { styleName, value } = extractStylePrefix(expr)
 
   if (value === 'image') {
-    return {
+    const result: ParsedImagePaint = {
       type: 'IMAGE',
       ...(styleName ? { styleName } : {}),
-    } as unknown as ParsedPaint
+    }
+    return result
   }
 
   // image(url) or image(url,scaleMode)
@@ -130,14 +137,15 @@ export const parseColorExpression = (
     /^image\((.+?)(?:,(\w+))?\)$/,
   )
   if (imageUrlMatch) {
-    return {
+    const result: ParsedImagePaint = {
       type: 'IMAGE',
       imageUrl: imageUrlMatch[1],
       ...(imageUrlMatch[2]
         ? { scaleMode: imageUrlMatch[2] }
         : {}),
       ...(styleName ? { styleName } : {}),
-    } as unknown as ParsedPaint
+    }
+    return result
   }
 
   // image-hash(hash)
@@ -145,11 +153,12 @@ export const parseColorExpression = (
     /^image-hash\((.+?)\)$/,
   )
   if (imageHashMatch) {
-    return {
+    const result: ParsedImagePaint = {
       type: 'IMAGE',
       imageHash: imageHashMatch[1],
       ...(styleName ? { styleName } : {}),
-    } as unknown as ParsedPaint
+    }
+    return result
   }
 
   // Gradient patterns
@@ -160,14 +169,14 @@ export const parseColorExpression = (
     const gradientType = gradientMatch[1]
     const inner = gradientMatch[2]
 
-    const typeMap: Record<string, ParsedPaint['type']> = {
+    const typeMap: Record<string, ParsedGradientPaint['type']> = {
       linear: 'GRADIENT_LINEAR',
       radial: 'GRADIENT_RADIAL',
       angular: 'GRADIENT_ANGULAR',
       diamond: 'GRADIENT_DIAMOND',
     }
 
-    let angle: number | undefined
+    let angle = 0
     let stopsStr = inner
 
     if (gradientType === 'linear') {
@@ -183,22 +192,24 @@ export const parseColorExpression = (
 
     const gradientStops = parseGradientStops(stopsStr)
 
-    return {
+    const result: ParsedGradientPaint = {
       type: typeMap[gradientType],
       gradientStops,
-      ...(angle !== undefined ? { angle } : {}),
+      angle,
       ...(styleName ? { styleName } : {}),
-    } as unknown as ParsedPaint
+    }
+    return result
   }
 
   // Solid hex
   const color = hexToRgb(value)
-  return {
+  const result: ParsedSolidPaint = {
     type: 'SOLID',
     color: { r: color.r, g: color.g, b: color.b },
     opacity: color.a,
     ...(styleName ? { styleName } : {}),
-  } as unknown as ParsedPaint
+  }
+  return result
 }
 
 export const parseFillExpressions = (
@@ -219,7 +230,7 @@ export const parseEffectExpressions = (
     )
     if (shadowMatch) {
       const color = hexToRgb(shadowMatch[5])
-      return {
+      const result: ParsedShadowEffect = {
         type:
           shadowMatch[1] === 'shadow'
             ? 'DROP_SHADOW'
@@ -234,7 +245,8 @@ export const parseEffectExpressions = (
           ? { spread: parseFloat(shadowMatch[6]) }
           : {}),
         ...(styleName ? { styleName } : {}),
-      } as unknown as ParsedEffect
+      }
+      return result
     }
 
     // blur(radius)
@@ -242,14 +254,15 @@ export const parseEffectExpressions = (
       /^(blur|bg-blur)\((\d+(?:\.\d+)?)\)$/,
     )
     if (blurMatch) {
-      return {
+      const result: ParsedBlurEffect = {
         type:
           blurMatch[1] === 'blur'
             ? 'LAYER_BLUR'
             : 'BACKGROUND_BLUR',
         radius: parseFloat(blurMatch[2]),
         ...(styleName ? { styleName } : {}),
-      } as unknown as ParsedEffect
+      }
+      return result
     }
 
     throw new Error(`Unknown effect expression: ${expr}`)
