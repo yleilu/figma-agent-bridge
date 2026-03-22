@@ -184,12 +184,27 @@ export const createMockPlugin = (
         const combine = cmd.params?.combineAsVariants as
           | boolean
           | undefined
+        const slots = cmd.params?.slots as
+          | string[]
+          | undefined
         if (combine && compNodeIds) {
           result = {
             id: `cs:${Math.random().toString(36).slice(2, 8)}`,
             name: 'VariantSet',
             type: 'COMPONENT_SET',
             key: `key:${Math.random().toString(36).slice(2, 8)}`,
+          }
+        } else if (slots && slots.length > 0) {
+          // Mock: createSlot is not available in test environment
+          result = {
+            id:
+              compNodeId ??
+              `comp:${Math.random().toString(36).slice(2, 8)}`,
+            name: 'Component',
+            type: 'COMPONENT',
+            key: `key:${Math.random().toString(36).slice(2, 8)}`,
+            warning:
+              'createSlot is not available in this Figma version; requested slots were not created.',
           }
         } else {
           result = {

@@ -218,6 +218,21 @@ describe('M3 create tools e2e', () => {
     expect(data.type).toBe('RECTANGLE')
   })
 
+  it('create_component returns warning when createSlot unavailable', async () => {
+    const result = await handleCreateComponent(
+      {
+        nodeId: '1:2',
+        slots: ['Content'],
+      },
+      client,
+    )
+    const parsed = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(parsed.warning).toBeDefined()
+    expect(parsed.warning as string).toContain('createSlot')
+  })
+
   it('create_node returns error when not connected', async () => {
     client.disconnect()
 

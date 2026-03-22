@@ -1269,6 +1269,15 @@ const handleCommand = async (
           for (const slotName of slots) {
             compWithSlot.createSlot(slotName)
           }
+        } else {
+          return {
+            id: comp.id,
+            name: comp.name,
+            type: comp.type,
+            key: comp.key,
+            warning:
+              'createSlot is not available in this Figma version; requested slots were not created.',
+          }
         }
       }
 
