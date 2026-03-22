@@ -1,10 +1,10 @@
 const POLL_INTERVAL_MS = 200
-const MAX_POLL_ATTEMPTS = 15
+const MAX_POLL_ATTEMPTS = 30
 
 export const ensureRelay = async (
   httpUrl: string,
   port: number,
-): Promise<{ started: boolean; error?: string }> => {
+): Promise<{ started: boolean; error?: string; proc?: ReturnType<typeof Bun.spawn> }> => {
   // Health check — if relay is already running, return early
   try {
     const res = await fetch(`${httpUrl}/channels`)
@@ -36,7 +36,7 @@ export const ensureRelay = async (
       const res = await fetch(`${httpUrl}/channels`)
 
       if (res.ok) {
-        return { started: true }
+        return { started: true, proc }
       }
     } catch {
       // Not ready yet
@@ -46,6 +46,6 @@ export const ensureRelay = async (
   return {
     started: false,
     error:
-      'Relay process was spawned but did not become ready within 3 seconds.',
+      'Relay process was spawned but did not become ready within 6 seconds.',
   }
 }
