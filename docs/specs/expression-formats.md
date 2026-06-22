@@ -1,8 +1,25 @@
+---
+title: figma-agent-bridge Spec — Expression Formats
+created: 2026-06-22T17:00:00+08:00
+tags:
+  - spec
+  - figma-bridge
+  - expression-formats
+type: spec
+related:
+  - "[[figma-bridge/docs/principles]]"
+  - "[[figma-bridge/docs/specs/tool-surface]]"
+---
+
 # Expression Formats
+
+> Governed by [[figma-bridge/docs/principles|the principles]] (T8 — one expression grammar, one source of truth).
 
 Canonical reference for all value expressions used across the bridge. These formats are used in `ParsedNode` fields (read side) and `create_tree` / `update_node` specs (write side).
 
 **Universal prefix rule:** `style(name)` wraps any raw value to indicate it comes from a named Figma style. `var(name)` (M4) wraps any raw value to indicate a variable binding. The resolved raw value always follows so the agent sees both the semantic source and the actual appearance.
+
+**`var()` scope (this phase):** `var(name)` is **read-only** in the current phase. It is **emitted on reads** to surface an existing variable binding, but on **write** it resolves to a **literal** — the binding is not applied. Binding a field to a variable is done via the dedicated `bind_variable` tool, which supports **scalar fields only** (tool-surface fork F-C). This is a **deliberate, documented asymmetry** (principle T2): the `var()` round-trip is intentionally lossy on the write side for now, not silently dropped.
 
 ---
 
@@ -31,7 +48,7 @@ Notes:
 
 ### Where used in M2
 
-- `inspect_styles`: style value column (e.g., `- Colors/Primary/500 [S:abc] paint #3B82F6`)
+- `get_local_styles`: style value column (e.g., `- Colors/Primary/500 [S:abc] paint #3B82F6`)
 - `ParsedNode.fills`, `ParsedNode.strokes`, `ParsedNode.text.color` in `get_node` output
 
 ---
@@ -52,9 +69,24 @@ Notes:
 - Style is Figma's `fontStyle` (Regular, Bold, SemiBold, Italic, Bold Italic, etc.)
 - Size is always in px (Figma's unit)
 
+### Style-creation font value (text-style grammar)
+
+`create_styles` / `update_styles` text-style values use a **distinct, richer** font grammar (parsed by `parseStyleFontValue`):
+
+```
+Family/Style/Size                                      — minimal (3-part)
+Family/Style/Size/LineHeight                           — with line height
+Family/Style/Size/LineHeight?ls=<letterSpacing>        — with optional letter-spacing suffix
+Inter/SemiBold/18/24px?ls=0.5px                        — example
+```
+
+- The trailing `LineHeight` segment is **optional** (`Family/Style/Size[/LineHeight]`).
+- The `?ls=<letterSpacing>` suffix is **optional** and supplies letter spacing.
+- This is **DISTINCT** from the 3-part node text font (`Family/Style/Size`, parsed by `parseFontExpression`) used in `text.font`. (tool-surface Resolved decision #5.)
+
 ### Where used in M2
 
-- `inspect_styles`: style value column (e.g., `- Heading/H1 [S:def] text Inter/Bold/32`)
+- `get_local_styles`: style value column (e.g., `- Heading/H1 [S:def] text Inter/Bold/32`)
 - `ParsedNode.text.font` in `get_node` output
 
 ---
@@ -77,19 +109,19 @@ Notes:
 - `blur` = Figma `LAYER_BLUR`
 - `bg-blur` = Figma `BACKGROUND_BLUR`
 - Multiple effects on one node: array `["shadow(0,4,8,#000000)", "blur(2)"]`
-- Multiple effects in `inspect_styles` (per style): joined with `+` → `shadow(0,4,8,#000000)+blur(2)`
+- Multiple effects in `get_local_styles` (per style): joined with `+` → `shadow(0,4,8,#000000)+blur(2)`
 - Spread omitted from shorthand (rarely used). Full data available via raw Figma JSON in `get_node`
 
 ### Where used in M2
 
-- `inspect_styles`: style value column (e.g., `- Elevation/Medium [S:ghi] effect shadow(0,4,12,#0000001A)`)
+- `get_local_styles`: style value column (e.g., `- Elevation/Medium [S:ghi] effect shadow(0,4,12,#0000001A)`)
 - `ParsedNode.effects` in `get_node` output
 
 ---
 
 ## Grid Style
 
-Used in: `inspect_styles` only
+Used in: `get_local_styles` only
 
 ```
 columns(12,32,auto)                                     — column grid: count, width, gutter
@@ -100,7 +132,7 @@ style(Layout/12col)columns(12,32,auto)                  — grid style, resolved
 
 ### Where used in M2
 
-- `inspect_styles`: style value column
+- `get_local_styles`: style value column
 
 ---
 
@@ -113,7 +145,7 @@ Used in: `radius`
 [8,8,0,0]                                              — per-corner: [TL, TR, BR, BL]
 ```
 
-No style binding. Variable binding in M4: `var(radius/medium)8`
+No style binding. A variable binding is **read** as `var(radius/medium)8` when present, but `var()` is not a current write capability (see the `var()` scope note above — write resolves to the literal; use `bind_variable` for scalar fields).
 
 ---
 
@@ -248,20 +280,22 @@ clipsContent: true          — omitted if false
 
 | Expression | M2 (Read) | M3 (Create) | M4 (Design System) | M5 (Modify) |
 |-----------|-----------|-------------|--------------------|-----------  |
-| Color (`#hex`, gradient) | `inspect_styles`, `ParsedNode` | `create_tree` fills/strokes | `var(name)#hex` | `update_node` |
-| Font (`Family/Style/Size`) | `inspect_styles`, `ParsedNode` | `create_tree` text | `var()` binding | `update_node` |
-| Effect (`shadow`, `blur`) | `inspect_styles`, `ParsedNode` | `create_tree` effects | — | `update_node` |
+| Color (`#hex`, gradient) | `get_local_styles`, `ParsedNode` | `create_tree` fills/strokes | `var(name)#hex` | `update_node` |
+| Font (`Family/Style/Size`) | `get_local_styles`, `ParsedNode` | `create_tree` text | `var()` binding | `update_node` |
+| Effect (`shadow`, `blur`) | `get_local_styles`, `ParsedNode` | `create_tree` effects | — | `update_node` |
 | `style()` prefix | `ParsedNode` reads | `create_tree` applies | — | `update_node` |
-| `var()` prefix | — | — | all properties | `update_node` |
+| `var()` prefix | **read-only** (emitted on reads; write resolves to literal — bind via `bind_variable`, scalar fields only) | — | — | — |
 | Stroke props | `ParsedNode` | `create_tree` | — | `update_node` |
 | Text props | `ParsedNode` | `create_tree` | — | `update_node` |
 | Layout/sizing/constraints | `ParsedNode` | `create_tree` | — | `update_node` |
 | Scalars (opacity, rotation, etc.) | `ParsedNode` | `create_tree` | — | `update_node` |
-| Grid style | `inspect_styles` | — | — | — |
+| Grid style | `get_local_styles` | — | — | — |
 
 ---
 
 ## ParsedNode Type (complete)
+
+> **Illustrative.** The authoritative `ParsedNode` schema lives in `packages/shared`; this block mirrors it for reference and may lag — defer to the shared package.
 
 ```typescript
 type ParsedNode = {
@@ -316,10 +350,11 @@ type ParsedNode = {
     paragraphSpacing?: number
   }
 
-  // Component
+  // Component (INSTANCE)
   component?: {
     name: string
     id: string
+    key: string                                  // main-component key (tool-surface Resolved decision #3)
     variant?: Record<string, string>
     overrides?: string[]
   }
