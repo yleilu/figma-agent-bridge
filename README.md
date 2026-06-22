@@ -55,7 +55,7 @@ bun install
 # …or run them via root scripts
 bun run relay      # relay only
 bun run server     # server only
-bun run dev        # relay + plugin watch builds (ui, code)
+bun run dev        # relay + plugin watch builds (ui, code, relay)
 
 # Build the Figma plugin
 bun run --filter @figma-agent-bridge/figma-plugin build

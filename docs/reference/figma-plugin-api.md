@@ -32,9 +32,8 @@ verified to exist at runtime. Items that exist but are **not in Figma's public d
 flagged `UNDOCUMENTED` — treat them as feature-detect-only (degrade gracefully per
 [[figma-bridge/docs/principles#T7 — Honest capability|T7]]).
 
-> This file supersedes the two former sources `docs/figma-plugin-api-reference.md` (the
-> curated method list) and `docs/plans/figma-api-reference.md` (the runtime dump), which
-> are slated for deletion. One fact, one place.
+> Consolidated from two former sources — a curated method list and a runtime dump —
+> since removed. One fact, one place.
 
 ---
 

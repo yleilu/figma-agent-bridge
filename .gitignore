@@ -4,3 +4,4 @@ dist/
 *.log
 bun.lock
 .claude/
+.obsidian/

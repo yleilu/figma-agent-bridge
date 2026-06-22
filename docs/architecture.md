@@ -11,7 +11,7 @@ related:
   - "[[figma-bridge/docs/specs/overview]]"
   - "[[figma-bridge/docs/specs/tool-surface]]"
   - "[[figma-bridge/docs/specs/expression-formats]]"
-  - "[[figma-bridge/docs/plans/2026-03-17-m1-foundation]]"
+  - "[[figma-bridge/docs/milestones]]"
 ---
 
 # figma-agent-bridge — Architecture
