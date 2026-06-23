@@ -4,6 +4,7 @@ import {
   type ToolResult,
   textResult,
   requireConnected,
+  errorMessage,
 } from './shared'
 
 export const handleSearch = async (
@@ -70,8 +71,6 @@ export const handleSearch = async (
 
     return textResult(toSearchYaml(mapped, raw.truncated))
   } catch (err) {
-    return textResult(
-      `Error: ${err instanceof Error ? err.message : String(err)}`,
-    )
+    return textResult(`Error: ${errorMessage(err)}`)
   }
 }

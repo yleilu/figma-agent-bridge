@@ -16,6 +16,7 @@ import {
   textResult,
   requireConnected,
   formatMutationResult,
+  errorMessage,
 } from './shared'
 
 /**
@@ -252,9 +253,7 @@ export const handleCreateNode = async (
       'Failed to create node.',
     )
   } catch (err) {
-    return textResult(
-      `Error: ${err instanceof Error ? err.message : String(err)}`,
-    )
+    return textResult(`Error: ${errorMessage(err)}`)
   }
 }
 
@@ -286,8 +285,6 @@ export const handleCreateTree = async (
       'Failed to create tree.',
     )
   } catch (err) {
-    return textResult(
-      `Error: ${err instanceof Error ? err.message : String(err)}`,
-    )
+    return textResult(`Error: ${errorMessage(err)}`)
   }
 }

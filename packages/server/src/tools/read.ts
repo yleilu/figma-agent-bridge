@@ -12,6 +12,7 @@ import {
   type ToolResult,
   textResult,
   requireConnected,
+  errorMessage,
 } from './shared'
 
 export const handleInspect = async (
@@ -103,9 +104,7 @@ export const handleInspect = async (
     const tree = toInspectTreeMulti(parsedNodes)
     return textResult(note + tree)
   } catch (err) {
-    return textResult(
-      `Error: ${err instanceof Error ? err.message : String(err)}`,
-    )
+    return textResult(`Error: ${errorMessage(err)}`)
   }
 }
 
@@ -135,9 +134,7 @@ export const handleInspectPageLayout = async (
 
     return textResult(tree)
   } catch (err) {
-    return textResult(
-      `Error: ${err instanceof Error ? err.message : String(err)}`,
-    )
+    return textResult(`Error: ${errorMessage(err)}`)
   }
 }
 
@@ -162,9 +159,7 @@ export const handleGetNode = async (
 
     return textResult(json)
   } catch (err) {
-    return textResult(
-      `Error: ${err instanceof Error ? err.message : String(err)}`,
-    )
+    return textResult(`Error: ${errorMessage(err)}`)
   }
 }
 
@@ -197,9 +192,7 @@ export const handleGetNodes = async (
 
     return textResult(json)
   } catch (err) {
-    return textResult(
-      `Error: ${err instanceof Error ? err.message : String(err)}`,
-    )
+    return textResult(`Error: ${errorMessage(err)}`)
   }
 }
 
@@ -239,8 +232,6 @@ export const handleListPages = async (
 
     return textResult(header + yamlStr)
   } catch (err) {
-    return textResult(
-      `Error: ${err instanceof Error ? err.message : String(err)}`,
-    )
+    return textResult(`Error: ${errorMessage(err)}`)
   }
 }

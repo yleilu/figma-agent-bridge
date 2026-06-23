@@ -1,7 +1,11 @@
 import type { FigmaClient } from '../figma-client'
 import { discoverChannels } from '../figma-client'
 import { ensureRelay } from '../ensure-relay'
-import { type ToolResult, textResult } from './shared'
+import {
+  type ToolResult,
+  textResult,
+  errorMessage,
+} from './shared'
 
 export const handleConnect = async (
   params: { channel?: string },
@@ -55,10 +59,7 @@ export const handleConnect = async (
 
     return textResult(`Connected to channel: ${channel}`)
   } catch (err) {
-    const message =
-      err instanceof Error ? err.message : String(err)
-
-    return textResult(`Error: ${message}`)
+    return textResult(`Error: ${errorMessage(err)}`)
   }
 }
 

@@ -4,6 +4,7 @@ import {
   textResult,
   requireConnected,
   formatMutationResult,
+  errorMessage,
 } from './shared'
 
 export const handleCreateComponent = async (
@@ -51,8 +52,6 @@ export const handleCreateComponent = async (
       'Failed to create component.',
     )
   } catch (err) {
-    return textResult(
-      `Error: ${err instanceof Error ? err.message : String(err)}`,
-    )
+    return textResult(`Error: ${errorMessage(err)}`)
   }
 }

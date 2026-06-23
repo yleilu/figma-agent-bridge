@@ -8,6 +8,9 @@ export const textResult = (text: string): ToolResult => ({
   content: [{ type: 'text', text }],
 })
 
+export const errorMessage = (err: unknown): string =>
+  err instanceof Error ? err.message : String(err)
+
 export const requireConnected = (
   client: FigmaClient,
 ): ToolResult | null =>

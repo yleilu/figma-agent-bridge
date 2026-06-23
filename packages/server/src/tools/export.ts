@@ -1,5 +1,9 @@
 import type { FigmaClient } from '../figma-client'
-import { requireConnected, textResult } from './shared'
+import {
+  requireConnected,
+  textResult,
+  errorMessage,
+} from './shared'
 
 type ExportParams = {
   nodeId: string
@@ -79,7 +83,7 @@ export const handleExport = async (
       content: [
         {
           type: 'text' as const,
-          text: `Error: ${err instanceof Error ? err.message : String(err)}`,
+          text: `Error: ${errorMessage(err)}`,
         },
       ],
     }

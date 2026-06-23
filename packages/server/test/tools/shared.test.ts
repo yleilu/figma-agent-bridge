@@ -4,6 +4,7 @@ import {
   textResult,
   requireConnected,
   formatMutationResult,
+  errorMessage,
 } from '@figma-agent-bridge/server/tools/shared'
 
 const connected: FigmaClient = {
@@ -37,6 +38,18 @@ describe('requireConnected', () => {
     expect(r?.content[0].text).toBe(
       'Not connected to Figma. Use connect tool first.',
     )
+  })
+})
+
+describe('errorMessage', () => {
+  it('returns err.message for Error instances', () => {
+    expect(errorMessage(new Error('boom'))).toBe('boom')
+  })
+
+  it('stringifies non-Error values', () => {
+    expect(errorMessage('raw string')).toBe('raw string')
+    expect(errorMessage(42)).toBe('42')
+    expect(errorMessage(null)).toBe('null')
   })
 })
 

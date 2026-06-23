@@ -4,6 +4,7 @@ import {
   textResult,
   requireConnected,
   formatMutationResult,
+  errorMessage,
 } from './shared'
 
 export const handleCreateFromSvg = async (
@@ -36,8 +37,6 @@ export const handleCreateFromSvg = async (
       'Failed to create from SVG.',
     )
   } catch (err) {
-    return textResult(
-      `Error: ${err instanceof Error ? err.message : String(err)}`,
-    )
+    return textResult(`Error: ${errorMessage(err)}`)
   }
 }
