@@ -103,7 +103,7 @@ describe('handleInspectStyles', () => {
 })
 
 describe('handleInspectComponents', () => {
-  it('returns Unexpected response when local is not an array', async () => {
+  it('returns Unexpected response when local is not an array (with query)', async () => {
     const mockClient: FigmaClient = {
       joinChannel: () => Promise.resolve(''),
       sendCommand: () =>
@@ -114,6 +114,42 @@ describe('handleInspectComponents', () => {
     }
     const result = await handleInspectComponents(
       { query: 'Button' },
+      mockClient,
+    )
+    expect(result.content[0].text).toBe(
+      'Unexpected response from plugin',
+    )
+  })
+
+  it('returns Unexpected response when local is not an array (no query)', async () => {
+    const mockClient: FigmaClient = {
+      joinChannel: () => Promise.resolve(''),
+      sendCommand: () =>
+        Promise.resolve({ local: null, remote: [] }),
+      disconnect: () => undefined,
+      isConnected: () => true,
+      currentChannel: () => 'test-ch',
+    }
+    const result = await handleInspectComponents(
+      {},
+      mockClient,
+    )
+    expect(result.content[0].text).toBe(
+      'Unexpected response from plugin',
+    )
+  })
+
+  it('returns Unexpected response when remote is not an array', async () => {
+    const mockClient: FigmaClient = {
+      joinChannel: () => Promise.resolve(''),
+      sendCommand: () =>
+        Promise.resolve({ local: [], remote: null }),
+      disconnect: () => undefined,
+      isConnected: () => true,
+      currentChannel: () => 'test-ch',
+    }
+    const result = await handleInspectComponents(
+      {},
       mockClient,
     )
     expect(result.content[0].text).toBe(

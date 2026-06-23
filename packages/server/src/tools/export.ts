@@ -1,5 +1,5 @@
 import type { FigmaClient } from '../figma-client'
-import { requireConnected } from './shared'
+import { requireConnected, textResult } from './shared'
 
 type ExportParams = {
   nodeId: string
@@ -51,14 +51,7 @@ export const handleExport = async (
     }
 
     if (typeof result.data !== 'string') {
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: 'Unexpected response from plugin',
-          },
-        ],
-      }
+      return textResult('Unexpected response from plugin')
     }
 
     if (format === 'SVG') {
