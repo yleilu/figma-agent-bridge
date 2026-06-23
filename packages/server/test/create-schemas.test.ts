@@ -523,6 +523,47 @@ describe('createComponentParamsSchema', () => {
     const result = createComponentParamsSchema.safeParse({})
     expect(result.success).toBe(true)
   })
+
+  it('rejects INSTANCE_SWAP with an empty-string default', () => {
+    const r = createComponentParamsSchema.safeParse({
+      nodeId: '1:1',
+      componentProperties: [
+        {
+          name: 'Icon',
+          type: 'INSTANCE_SWAP',
+          default: '',
+        },
+      ],
+    })
+    expect(r.success).toBe(false)
+  })
+
+  it('rejects BOOLEAN with a non-boolean default', () => {
+    const r = createComponentParamsSchema.safeParse({
+      nodeId: '1:1',
+      componentProperties: [
+        { name: 'Show', type: 'BOOLEAN', default: 'yes' },
+      ],
+    })
+    expect(r.success).toBe(false)
+  })
+
+  it('accepts a valid BOOLEAN/TEXT/INSTANCE_SWAP property set', () => {
+    const r = createComponentParamsSchema.safeParse({
+      nodeId: '1:1',
+      componentProperties: [
+        { name: 'Show', type: 'BOOLEAN', default: true },
+        { name: 'Label', type: 'TEXT', default: 'Hi' },
+        {
+          name: 'Icon',
+          type: 'INSTANCE_SWAP',
+          default: 'comp-key',
+        },
+        { name: 'Body', type: 'SLOT' },
+      ],
+    })
+    expect(r.success).toBe(true)
+  })
 })
 
 describe('createFromSvgParamsSchema', () => {

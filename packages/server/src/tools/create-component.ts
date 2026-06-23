@@ -15,7 +15,7 @@ export const handleCreateComponent = async (
     componentProperties?: {
       name: string
       type: string
-      default: string | boolean
+      default?: string | boolean
     }[]
   },
   client: FigmaClient,

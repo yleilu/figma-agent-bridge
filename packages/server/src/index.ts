@@ -164,13 +164,7 @@ server.tool(
         nodeIds: params.nodeIds,
         combineAsVariants: params.combineAsVariants,
         slots: params.slots,
-        componentProperties: params.componentProperties as
-          | {
-              name: string
-              type: string
-              default: string | boolean
-            }[]
-          | undefined,
+        componentProperties: params.componentProperties,
       },
       client,
     ),

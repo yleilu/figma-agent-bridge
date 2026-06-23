@@ -312,18 +312,43 @@ export const createTreeParamsSchema = z.object({
   ),
 })
 
-const componentPropertySchema = z.object({
-  name: z.string().describe('Property name.'),
-  type: z
-    .enum(['BOOLEAN', 'TEXT', 'INSTANCE_SWAP', 'SLOT'])
-    .describe('Property type.'),
-  default: z
-    .union([z.string(), z.boolean()])
-    .optional()
-    .describe(
-      'Default value. For INSTANCE_SWAP, must be a valid component key (not empty string).',
-    ),
-})
+const componentPropertySchema = z.discriminatedUnion(
+  'type',
+  [
+    z.object({
+      name: z.string().describe('Property name.'),
+      type: z.literal('BOOLEAN'),
+      default: z
+        .boolean()
+        .describe(
+          'Default boolean value for a BOOLEAN property.',
+        ),
+    }),
+    z.object({
+      name: z.string().describe('Property name.'),
+      type: z.literal('TEXT'),
+      default: z
+        .string()
+        .describe(
+          'Default text value for a TEXT property.',
+        ),
+    }),
+    z.object({
+      name: z.string().describe('Property name.'),
+      type: z.literal('INSTANCE_SWAP'),
+      default: z
+        .string()
+        .min(1)
+        .describe(
+          'Default component key for INSTANCE_SWAP (must not be empty).',
+        ),
+    }),
+    z.object({
+      name: z.string().describe('Property name.'),
+      type: z.literal('SLOT'),
+    }),
+  ],
+)
 
 export const createComponentParamsSchema = z.object({
   nodeId: z
