@@ -1,11 +1,10 @@
 import { randomUUID } from 'node:crypto'
+import { relayOutgoingSchema } from '@figma-agent-bridge/shared'
 import type {
-  BroadcastMessage,
   ChannelInfo,
   ChannelMessage,
   CommandMessage,
   JoinMessage,
-  SystemMessage,
 } from '@figma-agent-bridge/shared'
 
 export type FigmaClient = {
@@ -44,6 +43,7 @@ export const discoverChannels = async (
 
 export const createFigmaClient = (
   relayUrl: string,
+  joinTimeoutMs = JOIN_TIMEOUT_MS,
 ): FigmaClient => {
   let ws: WebSocket | null = null
   let disconnected = false
@@ -68,15 +68,22 @@ export const createFigmaClient = (
   }
 
   const handleMessage = (event: MessageEvent) => {
-    let parsed: BroadcastMessage | SystemMessage
-
-    try {
-      parsed = JSON.parse(event.data as string) as
-        | BroadcastMessage
-        | SystemMessage
-    } catch {
+    const raw = (() => {
+      try {
+        return JSON.parse(event.data as string) as unknown
+      } catch {
+        return null
+      }
+    })()
+    if (raw === null) {
       return
     }
+
+    const parsedResult = relayOutgoingSchema.safeParse(raw)
+    if (!parsedResult.success) {
+      return
+    }
+    const parsed = parsedResult.data
 
     if (parsed.type === 'system') {
       if (joinPending !== null) {
@@ -84,27 +91,25 @@ export const createFigmaClient = (
         joinPending = null
         clearTimeout(timer)
         channel = pendingChannel
-        pendingChannel = null
         resolve(parsed.message.result)
       }
 
       return
     }
 
-    if (parsed.type === 'broadcast') {
-      const { message } = parsed
-      const hasResponse =
-        message.result !== undefined ||
-        message.error !== undefined
-      const req = pending.get(message.id)
-      if (req !== undefined && hasResponse) {
-        clearTimeout(req.timer)
-        pending.delete(message.id)
-        if (message.error !== undefined) {
-          req.reject(new Error(message.error))
-        } else {
-          req.resolve(message.result)
-        }
+    // parsed.type === 'broadcast'
+    const { message } = parsed
+    const hasResponse =
+      message.result !== undefined ||
+      message.error !== undefined
+    const req = pending.get(message.id)
+    if (req !== undefined && hasResponse) {
+      clearTimeout(req.timer)
+      pending.delete(message.id)
+      if (message.error !== undefined) {
+        req.reject(new Error(message.error))
+      } else {
+        req.resolve(message.result)
       }
     }
   }
@@ -165,7 +170,7 @@ export const createFigmaClient = (
           joinPending = null
           pendingChannel = null
           reject(new Error('Join timed out'))
-        }, JOIN_TIMEOUT_MS)
+        }, joinTimeoutMs)
 
         joinPending = { resolve, reject, timer }
       },

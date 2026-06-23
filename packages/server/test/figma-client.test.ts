@@ -229,6 +229,82 @@ describe('figma-client', () => {
     expect((caught as Error).message).toBe('Disconnected')
   })
 
+  it('rejects join with "Join timed out" when relay never confirms', async () => {
+    // A silent ws server: upgrades, but never answers the join frame.
+    const silent = Bun.serve({
+      port: 0,
+      fetch(req, srv) {
+        if (srv.upgrade(req)) {
+          return undefined
+        }
+        return new Response('no', { status: 400 })
+      },
+      websocket: { message() {} },
+    })
+    const silentUrl = `ws://localhost:${silent.port}`
+
+    const client = createFigmaClient(silentUrl, 200)
+
+    let caught: Error | null = null
+    try {
+      await client.joinChannel('never-ch')
+    } catch (err) {
+      caught = err as Error
+    }
+
+    expect(caught).not.toBeNull()
+    expect((caught as Error).message).toBe('Join timed out')
+
+    client.disconnect()
+    silent.stop(true)
+  })
+
+  it('ignores a malformed inbound frame and still serves later commands', async () => {
+    const client = createFigmaClient(WS_URL)
+    await client.joinChannel('robust-ch')
+
+    const plugin = await connectRaw()
+    const nextMessage = createMessageQueue(plugin)
+    plugin.send(
+      JSON.stringify({
+        type: 'join',
+        channel: 'robust-ch',
+      }),
+    )
+    await nextMessage()
+
+    plugin.onmessage = (event: MessageEvent) => {
+      const msg = JSON.parse(
+        event.data as string,
+      ) as BroadcastMessage
+      if (msg.type !== 'broadcast') {
+        return
+      }
+      // First send a garbage frame the client must ignore, then the real reply.
+      plugin.send(JSON.stringify({ type: 'broadcast' })) // missing `message`
+      const reply: ChannelMessage = {
+        type: 'message',
+        channel: 'robust-ch',
+        message: {
+          id: msg.message.id,
+          command: msg.message.command,
+          result: { ok: true },
+        },
+      }
+      plugin.send(JSON.stringify(reply))
+    }
+
+    const response = await client.sendCommand(
+      'ping',
+      {},
+      2000,
+    )
+    expect(response).toEqual({ ok: true })
+
+    await closeWs(plugin)
+    client.disconnect()
+  })
+
   it('rejects an in-flight sendCommand when the socket closes', async () => {
     const client = createFigmaClient(WS_URL)
     await client.joinChannel('inflight-ch')
