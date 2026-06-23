@@ -1,23 +1,18 @@
 import type { FigmaClient } from '../figma-client'
 import { toStylesTree, toComponentsTree } from '../parser'
-
-type ToolResult = {
-  content: { type: 'text'; text: string }[]
-}
+import {
+  type ToolResult,
+  textResult,
+  requireConnected,
+} from './shared'
 
 export const handleInspectStyles = async (
   { type }: { type?: string },
   client: FigmaClient,
 ): Promise<ToolResult> => {
-  if (!client.isConnected()) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Not connected to Figma. Use connect tool first.',
-        },
-      ],
-    }
+  const guard = requireConnected(client)
+  if (guard) {
+    return guard
   }
 
   const raw = (await client.sendCommand(
@@ -31,27 +26,15 @@ export const handleInspectStyles = async (
   } | null
 
   if (raw === null) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Failed to get styles from plugin.',
-        },
-      ],
-    }
+    return textResult('Failed to get styles from plugin.')
   }
 
   if (type !== undefined) {
     const validTypes = ['paint', 'text', 'effect', 'grid']
     if (!validTypes.includes(type)) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Invalid style type: "${type}". Must be one of: ${validTypes.join(', ')}`,
-          },
-        ],
-      }
+      return textResult(
+        `Invalid style type: "${type}". Must be one of: ${validTypes.join(', ')}`,
+      )
     }
 
     const filtered = {
@@ -62,31 +45,19 @@ export const handleInspectStyles = async (
       [type]: raw[type as keyof typeof raw],
     }
 
-    return {
-      content: [
-        { type: 'text', text: toStylesTree(filtered) },
-      ],
-    }
+    return textResult(toStylesTree(filtered))
   }
 
-  return {
-    content: [{ type: 'text', text: toStylesTree(raw) }],
-  }
+  return textResult(toStylesTree(raw))
 }
 
 export const handleInspectComponents = async (
   { query }: { query?: string },
   client: FigmaClient,
 ): Promise<ToolResult> => {
-  if (!client.isConnected()) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Not connected to Figma. Use connect tool first.',
-        },
-      ],
-    }
+  const guard = requireConnected(client)
+  if (guard) {
+    return guard
   }
 
   const raw = (await client.sendCommand(
@@ -98,14 +69,9 @@ export const handleInspectComponents = async (
   } | null
 
   if (raw === null) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Failed to get components from plugin.',
-        },
-      ],
-    }
+    return textResult(
+      'Failed to get components from plugin.',
+    )
   }
 
   if (query !== undefined) {
@@ -122,16 +88,8 @@ export const handleInspectComponents = async (
       ),
     }
 
-    return {
-      content: [
-        { type: 'text', text: toComponentsTree(filtered) },
-      ],
-    }
+    return textResult(toComponentsTree(filtered))
   }
 
-  return {
-    content: [
-      { type: 'text', text: toComponentsTree(raw) },
-    ],
-  }
+  return textResult(toComponentsTree(raw))
 }

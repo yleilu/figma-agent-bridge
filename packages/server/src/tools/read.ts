@@ -8,24 +8,19 @@ import {
   toFullJson,
   truncateChildren,
 } from '../parser'
-
-type ToolResult = {
-  content: { type: 'text'; text: string }[]
-}
+import {
+  type ToolResult,
+  textResult,
+  requireConnected,
+} from './shared'
 
 export const handleInspect = async (
   { nodeId }: { nodeId?: string },
   client: FigmaClient,
 ): Promise<ToolResult> => {
-  if (!client.isConnected()) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Not connected to Figma. Use connect tool first.',
-        },
-      ],
-    }
+  const guard = requireConnected(client)
+  if (guard) {
+    return guard
   }
 
   if (nodeId !== undefined) {
@@ -33,18 +28,11 @@ export const handleInspect = async (
       nodeId,
     })) as Record<string, unknown> | null
     if (raw === null) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Node not found: ${nodeId}`,
-          },
-        ],
-      }
+      return textResult(`Node not found: ${nodeId}`)
     }
     const parsed = parseNode(raw)
     const tree = toInspectTree(parsed)
-    return { content: [{ type: 'text', text: tree }] }
+    return textResult(tree)
   }
 
   const selection = (await client.sendCommand(
@@ -58,14 +46,9 @@ export const handleInspect = async (
       }[]
     | null
   if (selection === null || selection.length === 0) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'No node selected. Select a node in Figma or provide a nodeId.',
-        },
-      ],
-    }
+    return textResult(
+      'No node selected. Select a node in Figma or provide a nodeId.',
+    )
   }
 
   if (selection.length === 1) {
@@ -73,18 +56,13 @@ export const handleInspect = async (
       nodeId: selection[0].id,
     })) as Record<string, unknown> | null
     if (raw === null) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Node not found: ${selection[0].id}`,
-          },
-        ],
-      }
+      return textResult(
+        `Node not found: ${selection[0].id}`,
+      )
     }
     const parsed = parseNode(raw)
     const tree = toInspectTree(parsed)
-    return { content: [{ type: 'text', text: tree }] }
+    return textResult(tree)
   }
 
   // Multi-selection: fetch all nodes in parallel
@@ -104,37 +82,24 @@ export const handleInspect = async (
   // If only one node resolved, fall back to single-node format
   if (parsedNodes.length === 1) {
     const singleTree = toInspectTree(parsedNodes[0])
-    return {
-      content: [{ type: 'text', text: singleTree }],
-    }
+    return textResult(singleTree)
   }
   if (parsedNodes.length === 0) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'No nodes could be fetched from selection.',
-        },
-      ],
-    }
+    return textResult(
+      'No nodes could be fetched from selection.',
+    )
   }
 
   const tree = toInspectTreeMulti(parsedNodes)
-  return { content: [{ type: 'text', text: tree }] }
+  return textResult(tree)
 }
 
 export const handleInspectPageLayout = async (
   client: FigmaClient,
 ): Promise<ToolResult> => {
-  if (!client.isConnected()) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Not connected to Figma. Use connect tool first.',
-        },
-      ],
-    }
+  const guard = requireConnected(client)
+  if (guard) {
+    return guard
   }
 
   const raw = (await client.sendCommand(
@@ -145,79 +110,51 @@ export const handleInspectPageLayout = async (
     frames: Record<string, unknown>[]
   } | null
   if (raw === null) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Failed to get page layout from plugin.',
-        },
-      ],
-    }
+    return textResult(
+      'Failed to get page layout from plugin.',
+    )
   }
 
   const tree = toPageLayoutTree(raw)
 
-  return { content: [{ type: 'text', text: tree }] }
+  return textResult(tree)
 }
 
 export const handleGetNode = async (
   { nodeId, depth }: { nodeId: string; depth?: number },
   client: FigmaClient,
 ): Promise<ToolResult> => {
-  if (!client.isConnected()) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Not connected to Figma. Use connect tool first.',
-        },
-      ],
-    }
+  const guard = requireConnected(client)
+  if (guard) {
+    return guard
   }
 
   const raw = (await client.sendCommand('get_node', {
     nodeId,
   })) as Record<string, unknown> | null
   if (raw === null) {
-    return {
-      content: [
-        { type: 'text', text: `Node not found: ${nodeId}` },
-      ],
-    }
+    return textResult(`Node not found: ${nodeId}`)
   }
 
   const json = toFullJson(raw, depth)
 
-  return { content: [{ type: 'text', text: json }] }
+  return textResult(json)
 }
 
 export const handleGetNodes = async (
   { nodeIds, depth }: { nodeIds: string[]; depth?: number },
   client: FigmaClient,
 ): Promise<ToolResult> => {
-  if (!client.isConnected()) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Not connected to Figma. Use connect tool first.',
-        },
-      ],
-    }
+  const guard = requireConnected(client)
+  if (guard) {
+    return guard
   }
 
   const raw = (await client.sendCommand('get_nodes', {
     nodeIds,
   })) as Record<string, unknown>[] | null
   if (raw === null) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Failed to get nodes from plugin.',
-        },
-      ],
-    }
+    return textResult('Failed to get nodes from plugin.')
   }
 
   const effectiveDepth = depth ?? 3
@@ -226,21 +163,15 @@ export const handleGetNodes = async (
   )
   const json = JSON.stringify(truncated, null, 2)
 
-  return { content: [{ type: 'text', text: json }] }
+  return textResult(json)
 }
 
 export const handleListPages = async (
   client: FigmaClient,
 ): Promise<ToolResult> => {
-  if (!client.isConnected()) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Not connected to Figma. Use connect tool first.',
-        },
-      ],
-    }
+  const guard = requireConnected(client)
+  if (guard) {
+    return guard
   }
 
   const raw = (await client.sendCommand(
@@ -255,14 +186,7 @@ export const handleListPages = async (
       }[]
     | null
   if (raw === null) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Failed to get pages from plugin.',
-        },
-      ],
-    }
+    return textResult('Failed to get pages from plugin.')
   }
 
   const header = `# ${raw.length} pages\n\n`
@@ -275,7 +199,5 @@ export const handleListPages = async (
     })),
   )
 
-  return {
-    content: [{ type: 'text', text: header + yamlStr }],
-  }
+  return textResult(header + yamlStr)
 }

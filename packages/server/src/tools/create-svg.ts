@@ -1,8 +1,9 @@
 import type { FigmaClient } from '../figma-client'
-
-type ToolResult = {
-  content: { type: 'text'; text: string }[]
-}
+import {
+  type ToolResult,
+  requireConnected,
+  formatMutationResult,
+} from './shared'
 
 export const handleCreateFromSvg = async (
   params: {
@@ -13,15 +14,9 @@ export const handleCreateFromSvg = async (
   },
   client: FigmaClient,
 ): Promise<ToolResult> => {
-  if (!client.isConnected()) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Not connected to Figma. Use connect tool first.',
-        },
-      ],
-    }
+  const guard = requireConnected(client)
+  if (guard) {
+    return guard
   }
 
   const result = (await client.sendCommand(
@@ -34,31 +29,8 @@ export const handleCreateFromSvg = async (
     },
   )) as Record<string, unknown> | null
 
-  if (result === null) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Failed to create from SVG.',
-        },
-      ],
-    }
-  }
-
-  if (result.error !== undefined) {
-    return {
-      content: [
-        { type: 'text', text: `Error: ${result.error}` },
-      ],
-    }
-  }
-
-  return {
-    content: [
-      {
-        type: 'text',
-        text: JSON.stringify(result, null, 2),
-      },
-    ],
-  }
+  return formatMutationResult(
+    result,
+    'Failed to create from SVG.',
+  )
 }

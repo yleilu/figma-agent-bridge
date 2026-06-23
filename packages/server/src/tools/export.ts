@@ -1,4 +1,5 @@
 import type { FigmaClient } from '../figma-client'
+import { requireConnected } from './shared'
 
 type ExportParams = {
   nodeId: string
@@ -16,15 +17,9 @@ export const handleExport = async (
   params: ExportParams,
   client: FigmaClient,
 ) => {
-  if (!client.isConnected()) {
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: 'Not connected to Figma. Use connect tool first.',
-        },
-      ],
-    }
+  const guard = requireConnected(client)
+  if (guard) {
+    return guard
   }
 
   const format = params.format ?? 'PNG'

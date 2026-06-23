@@ -1,8 +1,10 @@
 import type { FigmaClient } from '../figma-client'
-
-type ToolResult = {
-  content: { type: 'text'; text: string }[]
-}
+import {
+  type ToolResult,
+  textResult,
+  requireConnected,
+  formatMutationResult,
+} from './shared'
 
 export const handleCreateComponent = async (
   params: {
@@ -22,25 +24,14 @@ export const handleCreateComponent = async (
     !params.nodeId &&
     (!params.nodeIds || params.nodeIds.length === 0)
   ) {
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: 'Error: Either nodeId or nodeIds must be provided.',
-        },
-      ],
-    }
+    return textResult(
+      'Error: Either nodeId or nodeIds must be provided.',
+    )
   }
 
-  if (!client.isConnected()) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Not connected to Figma. Use connect tool first.',
-        },
-      ],
-    }
+  const guard = requireConnected(client)
+  if (guard) {
+    return guard
   }
 
   const result = (await client.sendCommand(
@@ -54,31 +45,8 @@ export const handleCreateComponent = async (
     },
   )) as Record<string, unknown> | null
 
-  if (result === null) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Failed to create component.',
-        },
-      ],
-    }
-  }
-
-  if (result.error !== undefined) {
-    return {
-      content: [
-        { type: 'text', text: `Error: ${result.error}` },
-      ],
-    }
-  }
-
-  return {
-    content: [
-      {
-        type: 'text',
-        text: JSON.stringify(result, null, 2),
-      },
-    ],
-  }
+  return formatMutationResult(
+    result,
+    'Failed to create component.',
+  )
 }

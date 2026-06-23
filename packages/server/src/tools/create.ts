@@ -11,10 +11,11 @@ import {
   parseLetterSpacingExpression,
   parseColorExpression,
 } from '../expression-parser'
-
-type ToolResult = {
-  content: { type: 'text'; text: string }[]
-}
+import {
+  type ToolResult,
+  requireConnected,
+  formatMutationResult,
+} from './shared'
 
 /** Style cache type — populated by inspect_styles or similar tools */
 type StyleCache = Map<string, string> // styleName → styleId
@@ -299,15 +300,9 @@ export const handleCreateNode = async (
   client: FigmaClient,
   styleCache?: StyleCache,
 ): Promise<ToolResult> => {
-  if (!client.isConnected()) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Not connected to Figma. Use connect tool first.',
-        },
-      ],
-    }
+  const guard = requireConnected(client)
+  if (guard) {
+    return guard
   }
 
   const converted = convertNodeSpec(params.node)
@@ -322,30 +317,10 @@ export const handleCreateNode = async (
     node: converted,
   })) as Record<string, unknown> | null
 
-  if (result === null) {
-    return {
-      content: [
-        { type: 'text', text: 'Failed to create node.' },
-      ],
-    }
-  }
-
-  if (result.error !== undefined) {
-    return {
-      content: [
-        { type: 'text', text: `Error: ${result.error}` },
-      ],
-    }
-  }
-
-  return {
-    content: [
-      {
-        type: 'text',
-        text: JSON.stringify(result, null, 2),
-      },
-    ],
-  }
+  return formatMutationResult(
+    result,
+    'Failed to create node.',
+  )
 }
 
 export const handleCreateTree = async (
@@ -356,15 +331,9 @@ export const handleCreateTree = async (
   client: FigmaClient,
   styleCache?: StyleCache,
 ): Promise<ToolResult> => {
-  if (!client.isConnected()) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Not connected to Figma. Use connect tool first.',
-        },
-      ],
-    }
+  const guard = requireConnected(client)
+  if (guard) {
+    return guard
   }
 
   const converted = convertTreeNodeSpec(params.node)
@@ -394,28 +363,8 @@ export const handleCreateTree = async (
     node: converted,
   })) as Record<string, unknown> | null
 
-  if (result === null) {
-    return {
-      content: [
-        { type: 'text', text: 'Failed to create tree.' },
-      ],
-    }
-  }
-
-  if (result.error !== undefined) {
-    return {
-      content: [
-        { type: 'text', text: `Error: ${result.error}` },
-      ],
-    }
-  }
-
-  return {
-    content: [
-      {
-        type: 'text',
-        text: JSON.stringify(result, null, 2),
-      },
-    ],
-  }
+  return formatMutationResult(
+    result,
+    'Failed to create tree.',
+  )
 }

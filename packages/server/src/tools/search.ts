@@ -1,9 +1,10 @@
 import type { FigmaClient } from '../figma-client'
 import { toSearchYaml } from '../parser'
-
-type ToolResult = {
-  content: { type: 'text'; text: string }[]
-}
+import {
+  type ToolResult,
+  textResult,
+  requireConnected,
+} from './shared'
 
 export const handleSearch = async (
   params: {
@@ -14,15 +15,9 @@ export const handleSearch = async (
   },
   client: FigmaClient,
 ): Promise<ToolResult> => {
-  if (!client.isConnected()) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Not connected to Figma. Use connect tool first.',
-        },
-      ],
-    }
+  const guard = requireConnected(client)
+  if (guard) {
+    return guard
   }
 
   const pluginParams: Record<string, unknown> = {}
@@ -54,14 +49,9 @@ export const handleSearch = async (
   } | null
 
   if (raw === null) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Search failed: no response from plugin.',
-        },
-      ],
-    }
+    return textResult(
+      'Search failed: no response from plugin.',
+    )
   }
 
   const mapped = raw.results.map(r => ({
@@ -73,12 +63,5 @@ export const handleSearch = async (
     size: [r.width, r.height] as [number, number],
   }))
 
-  return {
-    content: [
-      {
-        type: 'text',
-        text: toSearchYaml(mapped, raw.truncated),
-      },
-    ],
-  }
+  return textResult(toSearchYaml(mapped, raw.truncated))
 }
