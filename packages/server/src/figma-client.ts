@@ -20,19 +20,13 @@ export type FigmaClient = {
   currentChannel: () => string | null
 }
 
-type PendingRequest = {
-  resolve: (value: unknown) => void
+type Pending<T> = {
+  resolve: (value: T) => void
   reject: (reason: Error) => void
   timer: ReturnType<typeof setTimeout>
 }
 
 const JOIN_TIMEOUT_MS = 3e4
-
-type JoinPending = {
-  resolve: (result: string) => void
-  reject: (reason: Error) => void
-  timer: ReturnType<typeof setTimeout>
-}
 
 export const discoverChannels = async (
   relayHttpUrl: string,
@@ -52,10 +46,11 @@ export const createFigmaClient = (
   relayUrl: string,
 ): FigmaClient => {
   let ws: WebSocket | null = null
+  let disconnected = false
   let channel: string | null = null
   let pendingChannel: string | null = null
-  const pending = new Map<string, PendingRequest>()
-  let joinPending: JoinPending | null = null
+  const pending = new Map<string, Pending<unknown>>()
+  let joinPending: Pending<string> | null = null
 
   const rejectAll = (reason: string) => {
     pending.forEach(({ reject, timer }) => {
@@ -89,6 +84,7 @@ export const createFigmaClient = (
         joinPending = null
         clearTimeout(timer)
         channel = pendingChannel
+        pendingChannel = null
         resolve(parsed.message.result)
       }
 
@@ -115,6 +111,11 @@ export const createFigmaClient = (
 
   const connect = (): Promise<WebSocket> =>
     new Promise((resolve, reject) => {
+      if (disconnected) {
+        reject(new Error('WebSocket connection failed'))
+        return
+      }
+
       if (ws !== null && ws.readyState === WebSocket.OPEN) {
         resolve(ws)
         return
@@ -123,6 +124,13 @@ export const createFigmaClient = (
       const socket = new WebSocket(relayUrl)
 
       socket.onopen = () => {
+        // Guard against disconnect() being called while connect() was in flight.
+        if (disconnected) {
+          // disconnect() already ran; close this socket to avoid leaking a relay slot.
+          socket.close()
+          reject(new Error('WebSocket connection failed'))
+          return
+        }
         ws = socket
         resolve(socket)
       }
@@ -137,6 +145,7 @@ export const createFigmaClient = (
         if (ws !== null) {
           ws = null
           channel = null
+          pendingChannel = null
           rejectAll('Disconnected')
         }
       }
@@ -154,6 +163,7 @@ export const createFigmaClient = (
       (resolve, reject) => {
         const timer = setTimeout(() => {
           joinPending = null
+          pendingChannel = null
           reject(new Error('Join timed out'))
         }, JOIN_TIMEOUT_MS)
 
@@ -176,6 +186,7 @@ export const createFigmaClient = (
         if (joinPending !== null) {
           const { reject, timer } = joinPending
           joinPending = null
+          pendingChannel = null
           clearTimeout(timer)
           reject(err as Error)
         }
@@ -226,6 +237,7 @@ export const createFigmaClient = (
   }
 
   const disconnect = (): void => {
+    disconnected = true
     const socket = ws
     ws = null
     channel = null

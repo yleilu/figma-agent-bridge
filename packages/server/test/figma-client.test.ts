@@ -183,13 +183,40 @@ describe('figma-client', () => {
   })
 
   it('rejects a pending join when the socket disconnects', async () => {
-    // Start a join — joinPending is set synchronously before any I/O.
-    // Calling disconnect() immediately rejects it via rejectAll.
-    const client = createFigmaClient(WS_URL)
+    // Use a silent server that accepts the WebSocket but never sends a
+    // system frame, so joinPending remains set when the server closes.
+    // This exercises the onclose → rejectAll → joinPending rejection path.
+    const SILENT_PORT = TEST_PORT + 1
+    const silentServer = Bun.serve({
+      port: SILENT_PORT,
+      hostname: '127.0.0.1',
+      fetch(req, srv) {
+        const upgraded = srv.upgrade(req, { data: {} })
+        if (upgraded) {
+          return undefined
+        }
+        return new Response('ws only', { status: 426 })
+      },
+      websocket: {
+        open() {
+          // accept without replying
+        },
+        message() {
+          // intentionally ignore join frames so joinPending stays set
+        },
+        close() {},
+      },
+    })
+
+    const client = createFigmaClient(
+      `ws://127.0.0.1:${SILENT_PORT}`,
+    )
 
     const joinPromise = client.joinChannel('drop-ch')
-    // Disconnect before the relay can respond (joinPending is set synchronously).
-    client.disconnect()
+    // Give the socket a tick to open + send the join frame.
+    await Bun.sleep(50)
+    // Tear down the silent server to force an onclose → rejectAll.
+    silentServer.stop(true)
 
     let caught: Error | null = null
     try {
