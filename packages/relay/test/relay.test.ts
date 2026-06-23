@@ -18,6 +18,8 @@ import {
 } from '@figma-agent-bridge/relay/relay'
 
 const TEST_PORT = 3099
+// HB_PORT must not collide with TEST_PORT (3099); used only by the eviction test
+const HB_PORT = 3110
 const WS_URL = `ws://localhost:${TEST_PORT}`
 const HTTP_URL = `http://localhost:${TEST_PORT}`
 
@@ -418,40 +420,42 @@ describe('relay', () => {
   })
 
   it('evicts a client that misses a heartbeat', async () => {
-    const HB_PORT = 3110
     const hbServer = startRelay(HB_PORT, { heartbeatInterval: 30 })
 
-    // Bun's WebSocket auto-pongs native pings, so use a raw TCP socket that
-    // performs the WS handshake but never responds to ping frames.
-    // The relay flips alive=false on tick 1, sends a ping, and if no pong
-    // arrives before tick 2, closes the socket (collect-then-close path).
-    const wsHandshake = [
-      'GET / HTTP/1.1',
-      `Host: localhost:${HB_PORT}`,
-      'Upgrade: websocket',
-      'Connection: Upgrade',
-      'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
-      'Sec-WebSocket-Version: 13',
-      '',
-      '',
-    ].join('\r\n')
+    try {
+      // Bun's WebSocket auto-pongs native pings, so use a raw TCP socket that
+      // performs the WS handshake but never responds to ping frames.
+      // The relay flips alive=false on tick 1, sends a ping, and if no pong
+      // arrives before tick 2, closes the socket (collect-then-close path).
+      const wsHandshake = [
+        'GET / HTTP/1.1',
+        `Host: localhost:${HB_PORT}`,
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+        'Sec-WebSocket-Version: 13',
+        '',
+        '',
+      ].join('\r\n')
 
-    const closed = new Promise<void>((resolve, reject) => {
-      const socket = net.createConnection(
-        { port: HB_PORT, host: '127.0.0.1' },
-        () => socket.write(wsHandshake),
-      )
-      socket.on('close', () => resolve())
-      socket.on('error', e => reject(e))
-    })
+      const closed = new Promise<void>((resolve, reject) => {
+        const socket = net.createConnection(
+          { port: HB_PORT, host: '127.0.0.1' },
+          () => socket.write(wsHandshake),
+        )
+        socket.on('close', () => resolve())
+        socket.on('error', e => reject(e))
+      })
 
-    const result = await Promise.race([
-      closed.then(() => 'closed' as const),
-      Bun.sleep(500).then(() => 'timeout' as const),
-    ])
+      const result = await Promise.race([
+        closed.then(() => 'closed' as const),
+        Bun.sleep(500).then(() => 'timeout' as const),
+      ])
 
-    expect(result).toBe('closed')
-    stopRelay(hbServer)
+      expect(result).toBe('closed')
+    } finally {
+      stopRelay(hbServer)
+    }
   })
 
   it('double-join is idempotent and re-confirms', async () => {
