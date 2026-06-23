@@ -338,9 +338,19 @@ export const parseFontExpression = (
   // Font format: Family/Style/Size
   // Split from the right — size is always last, style is second-to-last
   const lastSlash = value.lastIndexOf('/')
+  if (lastSlash === -1) {
+    throw new Error(
+      `Invalid font expression "${expr}": expected Family/Style/Size`,
+    )
+  }
   const sizeStr = value.slice(lastSlash + 1)
   const rest = value.slice(0, lastSlash)
   const secondSlash = rest.lastIndexOf('/')
+  if (secondSlash === -1) {
+    throw new Error(
+      `Invalid font expression "${expr}": expected Family/Style/Size`,
+    )
+  }
   const style = rest.slice(secondSlash + 1)
   const family = rest.slice(0, secondSlash)
 

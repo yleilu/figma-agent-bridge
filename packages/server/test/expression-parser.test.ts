@@ -412,6 +412,18 @@ describe('parseFontExpression', () => {
     expect(result.style).toBe('Regular')
     expect(result.size).toBe(14)
   })
+
+  it('throws on a 0-slash font expression', () => {
+    expect(() => parseFontExpression('Inter')).toThrow(
+      'Invalid font expression',
+    )
+  })
+
+  it('throws on a 1-slash font expression', () => {
+    expect(() => parseFontExpression('Inter/18')).toThrow(
+      'Invalid font expression',
+    )
+  })
 })
 
 describe('parseLineHeightExpression', () => {
