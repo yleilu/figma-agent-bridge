@@ -52,6 +52,39 @@ const send = (
   ws.send(JSON.stringify(msg))
 }
 
+const consumeToken = (
+  ctx: RelayContext,
+  ws: ServerWebSocket<WsData>,
+): boolean => {
+  const state = ctx.rate.get(ws)
+  if (state === undefined) {
+    return true
+  }
+  const now = Date.now()
+  const elapsed = (now - state.last) / 1000
+  state.tokens = Math.min(
+    RATE_BURST,
+    state.tokens + elapsed * RATE_TOKENS_PER_SEC,
+  )
+  state.last = now
+  if (state.tokens < 1) {
+    return false
+  }
+  state.tokens -= 1
+  return true
+}
+
+const rejectJoin = (
+  ws: ServerWebSocket<WsData>,
+  reason: string,
+) => {
+  const reply: SystemMessage = {
+    type: 'system',
+    message: { id: randomUUID(), result: `Error: ${reason}` },
+  }
+  send(ws, reply)
+}
+
 const removeClient = (
   ctx: RelayContext,
   ws: ServerWebSocket<WsData>,
@@ -80,6 +113,26 @@ const handleJoin = (
   channel: string,
 ) => {
   const { id } = ws.data
+
+  const joinedSet = ctx.clientChannels.get(id)
+  const alreadyIn = joinedSet?.has(channel) === true
+
+  if (!alreadyIn) {
+    if ((joinedSet?.size ?? 0) >= MAX_CHANNELS_PER_CONNECTION) {
+      rejectJoin(ws, 'channel limit reached for this connection')
+      return
+    }
+    const existing = ctx.channels.get(channel)
+    if (existing === undefined) {
+      if (ctx.channels.size >= MAX_TOTAL_CHANNELS) {
+        rejectJoin(ws, 'global channel limit reached')
+        return
+      }
+    } else if (existing.size >= MAX_MEMBERS_PER_CHANNEL) {
+      rejectJoin(ws, 'member limit reached for this channel')
+      return
+    }
+  }
 
   let members = ctx.channels.get(channel)
   if (members === undefined) {
@@ -203,6 +256,7 @@ export const startRelay = (
       open: ws => {
         ctx.sockets.add(ws)
         ctx.alive.set(ws, true)
+        ctx.rate.set(ws, { tokens: RATE_BURST, last: Date.now() })
       },
       message: (ws, raw) => {
         let json: unknown
@@ -214,6 +268,9 @@ export const startRelay = (
 
         const parsed = relayIncomingSchema.safeParse(json)
         if (!parsed.success) {
+          return
+        }
+        if (!consumeToken(ctx, ws)) {
           return
         }
         const frame = parsed.data

@@ -353,6 +353,32 @@ describe('relay', () => {
     await closeWs(ws2)
   })
 
+  it('rejects joins beyond the per-connection channel cap', async () => {
+    const ws = await connect()
+    const nextMessage = createMessageQueue(ws)
+
+    // 32 accepted joins
+    for (let i = 0; i < 32; i++) {
+      ws.send(JSON.stringify({ type: 'join', channel: `cap-${i}` }))
+      const ok = (await nextMessage()) as SystemMessage
+      expect(ok.message.result).toBe(`Connected to channel: cap-${i}`)
+    }
+
+    // 33rd is rejected
+    ws.send(JSON.stringify({ type: 'join', channel: 'cap-over' }))
+    const rejected = (await nextMessage()) as SystemMessage
+    expect(rejected.type).toBe('system')
+    expect(rejected.message.result).toMatch(/^Error:/)
+
+    // rejected channel never entered the registry
+    const data = (await (
+      await fetch(`${HTTP_URL}/channels`)
+    ).json()) as ChannelInfo[]
+    expect(data.some(c => c.channel === 'cap-over')).toBe(false)
+
+    await closeWs(ws)
+  })
+
   it('drops malformed frames without affecting the connection', async () => {
     const ws = await connect()
     const nextMessage = createMessageQueue(ws)
