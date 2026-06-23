@@ -289,6 +289,70 @@ describe('relay', () => {
     })
   })
 
+  it('ignores register for a channel the client never joined', async () => {
+    const owner = await connect()
+    const ownerNext = createMessageQueue(owner)
+    owner.send(JSON.stringify({ type: 'join', channel: 'guard-ch' }))
+    await ownerNext()
+
+    // attacker joins a DIFFERENT channel, then tries to register guard-ch
+    const attacker = await connect()
+    const attackerNext = createMessageQueue(attacker)
+    attacker.send(JSON.stringify({ type: 'join', channel: 'other-ch' }))
+    await attackerNext()
+    attacker.send(
+      JSON.stringify({
+        type: 'register',
+        channel: 'guard-ch',
+        fileName: 'HIJACK.fig',
+      }),
+    )
+    await Bun.sleep(50)
+
+    const data = (await (
+      await fetch(`${HTTP_URL}/channels`)
+    ).json()) as ChannelInfo[]
+    const guard = data.find(c => c.channel === 'guard-ch')
+    expect(guard?.fileName).toBeNull()
+
+    await closeWs(owner)
+    await closeWs(attacker)
+  })
+
+  it('excludes the sending socket from its own broadcast', async () => {
+    const ws1 = await connect()
+    const ws2 = await connect()
+    const next1 = createMessageQueue(ws1)
+    const next2 = createMessageQueue(ws2)
+
+    ws1.send(JSON.stringify({ type: 'join', channel: 'echo-ch' }))
+    await next1()
+    ws2.send(JSON.stringify({ type: 'join', channel: 'echo-ch' }))
+    await next2()
+
+    ws1.send(
+      JSON.stringify({
+        type: 'message',
+        channel: 'echo-ch',
+        message: { id: 'cmd-x', command: 'noop' },
+      }),
+    )
+
+    // ws2 receives the broadcast
+    const broadcast = (await next2()) as BroadcastMessage
+    expect(broadcast.type).toBe('broadcast')
+    expect(broadcast.message.id).toBe('cmd-x')
+
+    // ws1 must NOT receive its own broadcast: send a marker join and assert
+    // the next frame ws1 sees is the system reply, not the broadcast
+    ws1.send(JSON.stringify({ type: 'join', channel: 'echo-ch' }))
+    const afterSelf = (await next1()) as SystemMessage
+    expect(afterSelf.type).toBe('system')
+
+    await closeWs(ws1)
+    await closeWs(ws2)
+  })
+
   it('drops malformed frames without affecting the connection', async () => {
     const ws = await connect()
     const nextMessage = createMessageQueue(ws)

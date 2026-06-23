@@ -3,6 +3,7 @@ import type {
   BroadcastMessage,
   ChannelInfo,
   ChannelMessage,
+  RelayOutgoing,
   SystemMessage,
 } from '@figma-agent-bridge/shared'
 import {
@@ -43,6 +44,13 @@ const createContext = (): RelayContext => ({
   rate: new WeakMap(),
   heartbeatTimer: null,
 })
+
+const send = (
+  ws: ServerWebSocket<WsData>,
+  msg: RelayOutgoing,
+) => {
+  ws.send(JSON.stringify(msg))
+}
 
 const removeClient = (
   ctx: RelayContext,
@@ -104,14 +112,18 @@ const handleJoin = (
     },
   }
 
-  ws.send(JSON.stringify(reply))
+  send(ws, reply)
 }
 
 const handleRegister = (
   ctx: RelayContext,
+  ws: ServerWebSocket<WsData>,
   channel: string,
   fileName: string | null,
 ) => {
+  if (ctx.clientChannels.get(ws.data.id)?.has(channel) !== true) {
+    return
+  }
   const entry = ctx.channelRegistry.get(channel)
   if (entry !== undefined) {
     entry.fileName = fileName
@@ -120,6 +132,7 @@ const handleRegister = (
 
 const handleMessage = (
   ctx: RelayContext,
+  ws: ServerWebSocket<WsData>,
   channel: string,
   message: ChannelMessage,
 ) => {
@@ -132,10 +145,11 @@ const handleMessage = (
     type: 'broadcast',
     message: message.message,
   }
-  const payload = JSON.stringify(broadcast)
 
   members.forEach(client => {
-    client.send(payload)
+    if (client !== ws) {
+      send(client, broadcast)
+    }
   })
 }
 
@@ -207,9 +221,9 @@ export const startRelay = (
         if (frame.type === 'join') {
           handleJoin(ctx, ws, frame.channel)
         } else if (frame.type === 'register') {
-          handleRegister(ctx, frame.channel, frame.fileName)
+          handleRegister(ctx, ws, frame.channel, frame.fileName)
         } else if (frame.type === 'message') {
-          handleMessage(ctx, frame.channel, frame)
+          handleMessage(ctx, ws, frame.channel, frame)
         }
       },
       pong: ws => {
