@@ -5,6 +5,7 @@ import {
   APP_NAME,
   APP_VERSION,
   DEFAULT_PORT,
+  connectParamsSchema,
   inspectParamsSchema,
   inspectPageLayoutParamsSchema,
   inspectStylesParamsSchema,
@@ -64,7 +65,7 @@ const client = createFigmaClient(relayUrl)
 
 server.tool(
   'connect',
-  { channel: z.string().min(1).optional() },
+  connectParamsSchema.shape,
   async ({ channel }) =>
     handleConnect({ channel }, client, relayHttpUrl, port),
 )

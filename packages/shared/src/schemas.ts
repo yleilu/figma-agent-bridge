@@ -4,8 +4,9 @@ export const connectParamsSchema = z.object({
   channel: z
     .string()
     .min(1)
+    .optional()
     .describe(
-      'Channel ID to join. Pairs with the Figma plugin.',
+      'Channel ID to join. Pairs with the Figma plugin. Omit to auto-discover.',
     ),
 })
 
