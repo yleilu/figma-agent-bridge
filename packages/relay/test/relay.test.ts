@@ -6,6 +6,7 @@ import {
   it,
 } from 'bun:test'
 import type { Server } from 'bun'
+import net from 'node:net'
 import type {
   BroadcastMessage,
   ChannelInfo,
@@ -414,6 +415,70 @@ describe('relay', () => {
     expect(recovered.type).toBe('system')
 
     await closeWs(ws)
+  })
+
+  it('evicts a client that misses a heartbeat', async () => {
+    const HB_PORT = 3110
+    const hbServer = startRelay(HB_PORT, { heartbeatInterval: 30 })
+
+    // Bun's WebSocket auto-pongs native pings, so use a raw TCP socket that
+    // performs the WS handshake but never responds to ping frames.
+    // The relay flips alive=false on tick 1, sends a ping, and if no pong
+    // arrives before tick 2, closes the socket (collect-then-close path).
+    const wsHandshake = [
+      'GET / HTTP/1.1',
+      `Host: localhost:${HB_PORT}`,
+      'Upgrade: websocket',
+      'Connection: Upgrade',
+      'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+      'Sec-WebSocket-Version: 13',
+      '',
+      '',
+    ].join('\r\n')
+
+    const closed = new Promise<void>((resolve, reject) => {
+      const socket = net.createConnection(
+        { port: HB_PORT, host: '127.0.0.1' },
+        () => socket.write(wsHandshake),
+      )
+      socket.on('close', () => resolve())
+      socket.on('error', e => reject(e))
+    })
+
+    const result = await Promise.race([
+      closed.then(() => 'closed' as const),
+      Bun.sleep(500).then(() => 'timeout' as const),
+    ])
+
+    expect(result).toBe('closed')
+    stopRelay(hbServer)
+  })
+
+  it('double-join is idempotent and re-confirms', async () => {
+    const ws = await connect()
+    const nextMessage = createMessageQueue(ws)
+
+    ws.send(JSON.stringify({ type: 'join', channel: 'idem-ch' }))
+    const first = (await nextMessage()) as SystemMessage
+    expect(first.message.result).toBe('Connected to channel: idem-ch')
+
+    ws.send(JSON.stringify({ type: 'join', channel: 'idem-ch' }))
+    const second = (await nextMessage()) as SystemMessage
+    expect(second.message.result).toBe('Connected to channel: idem-ch')
+
+    // still exactly one registry entry
+    const data = (await (
+      await fetch(`${HTTP_URL}/channels`)
+    ).json()) as ChannelInfo[]
+    expect(data.filter(c => c.channel === 'idem-ch')).toHaveLength(1)
+
+    await closeWs(ws)
+  })
+
+  it('returns 426 for non-websocket, non-/channels requests', async () => {
+    const res = await fetch(`${HTTP_URL}/anything-else`)
+    expect(res.status).toBe(426)
+    expect(await res.text()).toBe('WebSocket only')
   })
 
   it('drops malformed frames without affecting the connection', async () => {
