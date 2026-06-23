@@ -424,6 +424,12 @@ describe('parseFontExpression', () => {
       'Invalid font expression',
     )
   })
+
+  it('throws on a non-numeric font size', () => {
+    expect(() =>
+      parseFontExpression('Inter/Regular/abc'),
+    ).toThrow('Invalid font size')
+  })
 })
 
 describe('parseLineHeightExpression', () => {
@@ -441,6 +447,12 @@ describe('parseLineHeightExpression', () => {
     const result = parseLineHeightExpression('auto')
     expect(result).toEqual({ unit: 'AUTO' })
   })
+
+  it('throws on a non-numeric line height', () => {
+    expect(() =>
+      parseLineHeightExpression('abcpx'),
+    ).toThrow('Invalid line height')
+  })
 })
 
 describe('parseLetterSpacingExpression', () => {
@@ -452,5 +464,11 @@ describe('parseLetterSpacingExpression', () => {
   it('parses percentage value', () => {
     const result = parseLetterSpacingExpression('2%')
     expect(result).toEqual({ value: 2, unit: 'PERCENT' })
+  })
+
+  it('throws on a non-numeric letter spacing', () => {
+    expect(() =>
+      parseLetterSpacingExpression('abcpx'),
+    ).toThrow('Invalid letter spacing')
   })
 })

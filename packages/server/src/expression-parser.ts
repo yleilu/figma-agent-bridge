@@ -354,10 +354,15 @@ export const parseFontExpression = (
   const style = rest.slice(secondSlash + 1)
   const family = rest.slice(0, secondSlash)
 
+  const size = parseFloat(sizeStr)
+  if (!Number.isFinite(size)) {
+    throw new Error(`Invalid font size in "${expr}"`)
+  }
+
   return {
     family,
     style,
-    size: parseFloat(sizeStr),
+    size,
     ...(styleName ? { styleName } : {}),
   }
 }
@@ -368,24 +373,26 @@ export const parseLineHeightExpression = (
   if (expr === 'auto') {
     return { unit: 'AUTO' }
   }
-  if (expr.endsWith('px')) {
-    return { value: parseFloat(expr), unit: 'PIXELS' }
+  const value = parseFloat(expr)
+  if (!Number.isFinite(value)) {
+    throw new Error(`Invalid line height "${expr}"`)
   }
   if (expr.endsWith('%')) {
-    return { value: parseFloat(expr), unit: 'PERCENT' }
+    return { value, unit: 'PERCENT' }
   }
-  // Default to pixels if no unit
-  return { value: parseFloat(expr), unit: 'PIXELS' }
+  // px (explicit suffix) or bare number both default to pixels
+  return { value, unit: 'PIXELS' }
 }
 
 export const parseLetterSpacingExpression = (
   expr: string,
 ): ParsedLetterSpacing => {
+  const value = parseFloat(expr)
+  if (!Number.isFinite(value)) {
+    throw new Error(`Invalid letter spacing "${expr}"`)
+  }
   if (expr.endsWith('%')) {
-    return { value: parseFloat(expr), unit: 'PERCENT' }
+    return { value, unit: 'PERCENT' }
   }
-  if (expr.endsWith('px')) {
-    return { value: parseFloat(expr), unit: 'PIXELS' }
-  }
-  return { value: parseFloat(expr), unit: 'PIXELS' }
+  return { value, unit: 'PIXELS' }
 }
