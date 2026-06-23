@@ -25,45 +25,59 @@ export const handleExport = async (
   const format = params.format ?? 'PNG'
   const scale = params.scale ?? 1
 
-  const result = (await client.sendCommand('export_node', {
-    nodeId: params.nodeId,
-    format,
-    scale,
-  })) as {
-    format: string
-    scale: number
-    data: string
-  } | null
+  try {
+    const result = (await client.sendCommand(
+      'export_node',
+      {
+        nodeId: params.nodeId,
+        format,
+        scale,
+      },
+    )) as {
+      format: string
+      scale: number
+      data: string
+    } | null
 
-  if (result === null) {
+    if (result === null) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Export failed: no response from plugin.',
+          },
+        ],
+      }
+    }
+
+    if (format === 'SVG') {
+      return {
+        content: [
+          { type: 'text' as const, text: result.data },
+        ],
+      }
+    }
+
+    const mimeType =
+      MIME_MAP[format] ?? 'application/octet-stream'
+
+    return {
+      content: [
+        {
+          type: 'image' as const,
+          data: result.data,
+          mimeType,
+        },
+      ],
+    }
+  } catch (err) {
     return {
       content: [
         {
           type: 'text' as const,
-          text: 'Export failed: no response from plugin.',
+          text: `Error: ${err instanceof Error ? err.message : String(err)}`,
         },
       ],
     }
-  }
-
-  if (format === 'SVG') {
-    return {
-      content: [
-        { type: 'text' as const, text: result.data },
-      ],
-    }
-  }
-
-  const mimeType =
-    MIME_MAP[format] ?? 'application/octet-stream'
-
-  return {
-    content: [
-      {
-        type: 'image' as const,
-        data: result.data,
-        mimeType,
-      },
-    ],
   }
 }

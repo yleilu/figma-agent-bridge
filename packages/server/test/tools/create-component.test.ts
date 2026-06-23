@@ -166,4 +166,24 @@ describe('handleCreateComponent', () => {
       'Not connected',
     )
   })
+
+  it('maps a thrown plugin error to a tool-formatted message', async () => {
+    const client: FigmaClient = {
+      joinChannel: () => Promise.resolve(''),
+      sendCommand: () =>
+        Promise.reject(new Error('plugin exploded')),
+      disconnect: () => undefined,
+      isConnected: () => true,
+      currentChannel: () => 'test-ch',
+    }
+
+    const result = await handleCreateComponent(
+      { nodeId: '1:42' },
+      client,
+    )
+
+    expect(result.content[0].text).toBe(
+      'Error: plugin exploded',
+    )
+  })
 })

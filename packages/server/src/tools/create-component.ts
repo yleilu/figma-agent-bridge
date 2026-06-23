@@ -34,19 +34,25 @@ export const handleCreateComponent = async (
     return guard
   }
 
-  const result = (await client.sendCommand(
-    'create_component',
-    {
-      nodeId: params.nodeId,
-      nodeIds: params.nodeIds,
-      combineAsVariants: params.combineAsVariants,
-      slots: params.slots,
-      componentProperties: params.componentProperties,
-    },
-  )) as Record<string, unknown> | null
+  try {
+    const result = (await client.sendCommand(
+      'create_component',
+      {
+        nodeId: params.nodeId,
+        nodeIds: params.nodeIds,
+        combineAsVariants: params.combineAsVariants,
+        slots: params.slots,
+        componentProperties: params.componentProperties,
+      },
+    )) as Record<string, unknown> | null
 
-  return formatMutationResult(
-    result,
-    'Failed to create component.',
-  )
+    return formatMutationResult(
+      result,
+      'Failed to create component.',
+    )
+  } catch (err) {
+    return textResult(
+      `Error: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
 }

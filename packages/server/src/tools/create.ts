@@ -13,6 +13,7 @@ import {
 } from '../expression-parser'
 import {
   type ToolResult,
+  textResult,
   requireConnected,
   formatMutationResult,
 } from './shared'
@@ -237,15 +238,24 @@ export const handleCreateNode = async (
 
   const converted = convertNodeSpec(params.node)
 
-  const result = (await client.sendCommand('create_node', {
-    parentId: params.parentId,
-    node: converted,
-  })) as Record<string, unknown> | null
+  try {
+    const result = (await client.sendCommand(
+      'create_node',
+      {
+        parentId: params.parentId,
+        node: converted,
+      },
+    )) as Record<string, unknown> | null
 
-  return formatMutationResult(
-    result,
-    'Failed to create node.',
-  )
+    return formatMutationResult(
+      result,
+      'Failed to create node.',
+    )
+  } catch (err) {
+    return textResult(
+      `Error: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
 }
 
 export const handleCreateTree = async (
@@ -262,13 +272,22 @@ export const handleCreateTree = async (
 
   const converted = convertTreeNodeSpec(params.node)
 
-  const result = (await client.sendCommand('create_tree', {
-    parentId: params.parentId,
-    node: converted,
-  })) as Record<string, unknown> | null
+  try {
+    const result = (await client.sendCommand(
+      'create_tree',
+      {
+        parentId: params.parentId,
+        node: converted,
+      },
+    )) as Record<string, unknown> | null
 
-  return formatMutationResult(
-    result,
-    'Failed to create tree.',
-  )
+    return formatMutationResult(
+      result,
+      'Failed to create tree.',
+    )
+  } catch (err) {
+    return textResult(
+      `Error: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
 }

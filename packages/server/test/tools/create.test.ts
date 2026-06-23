@@ -519,6 +519,29 @@ describe('handleCreateNode', () => {
       properties: { Label: 'Click me' },
     })
   })
+
+  it('maps a thrown plugin error to a tool-formatted message', async () => {
+    const client: FigmaClient = {
+      joinChannel: () => Promise.resolve(''),
+      sendCommand: () =>
+        Promise.reject(new Error('plugin exploded')),
+      disconnect: () => undefined,
+      isConnected: () => true,
+      currentChannel: () => 'test-ch',
+    }
+
+    const result = await handleCreateNode(
+      {
+        parentId: '1:2',
+        node: { type: 'FRAME', name: 'X', size: [10, 10] },
+      },
+      client,
+    )
+
+    expect(result.content[0].text).toBe(
+      'Error: plugin exploded',
+    )
+  })
 })
 
 describe('handleCreateTree', () => {
