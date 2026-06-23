@@ -158,17 +158,23 @@ describe('relay', () => {
     // join on the first server's port only
     const ws = await connect()
     const nextMessage = createMessageQueue(ws)
-    ws.send(JSON.stringify({ type: 'join', channel: 'iso-ch' }))
+    ws.send(
+      JSON.stringify({ type: 'join', channel: 'iso-ch' }),
+    )
     await nextMessage()
 
     const firstChannels = (await (
       await fetch(`${HTTP_URL}/channels`)
     ).json()) as ChannelInfo[]
     const secondChannels = (await (
-      await fetch(`http://localhost:${SECOND_PORT}/channels`)
+      await fetch(
+        `http://localhost:${SECOND_PORT}/channels`,
+      )
     ).json()) as ChannelInfo[]
 
-    expect(firstChannels.map(c => c.channel)).toEqual(['iso-ch'])
+    expect(firstChannels.map(c => c.channel)).toEqual([
+      'iso-ch',
+    ])
     expect(secondChannels).toEqual([])
 
     await closeWs(ws)
@@ -295,13 +301,17 @@ describe('relay', () => {
   it('ignores register for a channel the client never joined', async () => {
     const owner = await connect()
     const ownerNext = createMessageQueue(owner)
-    owner.send(JSON.stringify({ type: 'join', channel: 'guard-ch' }))
+    owner.send(
+      JSON.stringify({ type: 'join', channel: 'guard-ch' }),
+    )
     await ownerNext()
 
     // attacker joins a DIFFERENT channel, then tries to register guard-ch
     const attacker = await connect()
     const attackerNext = createMessageQueue(attacker)
-    attacker.send(JSON.stringify({ type: 'join', channel: 'other-ch' }))
+    attacker.send(
+      JSON.stringify({ type: 'join', channel: 'other-ch' }),
+    )
     await attackerNext()
     attacker.send(
       JSON.stringify({
@@ -328,9 +338,13 @@ describe('relay', () => {
     const next1 = createMessageQueue(ws1)
     const next2 = createMessageQueue(ws2)
 
-    ws1.send(JSON.stringify({ type: 'join', channel: 'echo-ch' }))
+    ws1.send(
+      JSON.stringify({ type: 'join', channel: 'echo-ch' }),
+    )
     await next1()
-    ws2.send(JSON.stringify({ type: 'join', channel: 'echo-ch' }))
+    ws2.send(
+      JSON.stringify({ type: 'join', channel: 'echo-ch' }),
+    )
     await next2()
 
     ws1.send(
@@ -348,7 +362,9 @@ describe('relay', () => {
 
     // ws1 must NOT receive its own broadcast: send a marker join and assert
     // the next frame ws1 sees is the system reply, not the broadcast
-    ws1.send(JSON.stringify({ type: 'join', channel: 'echo-ch' }))
+    ws1.send(
+      JSON.stringify({ type: 'join', channel: 'echo-ch' }),
+    )
     const afterSelf = (await next1()) as SystemMessage
     expect(afterSelf.type).toBe('system')
 
@@ -362,13 +378,22 @@ describe('relay', () => {
 
     // 32 accepted joins
     for (let i = 0; i < 32; i++) {
-      ws.send(JSON.stringify({ type: 'join', channel: `cap-${i}` }))
+      ws.send(
+        JSON.stringify({
+          type: 'join',
+          channel: `cap-${i}`,
+        }),
+      )
       const ok = (await nextMessage()) as SystemMessage
-      expect(ok.message.result).toBe(`Connected to channel: cap-${i}`)
+      expect(ok.message.result).toBe(
+        `Connected to channel: cap-${i}`,
+      )
     }
 
     // 33rd is rejected
-    ws.send(JSON.stringify({ type: 'join', channel: 'cap-over' }))
+    ws.send(
+      JSON.stringify({ type: 'join', channel: 'cap-over' }),
+    )
     const rejected = (await nextMessage()) as SystemMessage
     expect(rejected.type).toBe('system')
     expect(rejected.message.result).toBe(
@@ -379,7 +404,9 @@ describe('relay', () => {
     const data = (await (
       await fetch(`${HTTP_URL}/channels`)
     ).json()) as ChannelInfo[]
-    expect(data.some(c => c.channel === 'cap-over')).toBe(false)
+    expect(data.some(c => c.channel === 'cap-over')).toBe(
+      false,
+    )
 
     await closeWs(ws)
   })
@@ -389,12 +416,19 @@ describe('relay', () => {
     const nextMessage = createMessageQueue(ws)
 
     // Join the channel once — costs 1 token (99 remaining from RATE_BURST=100)
-    ws.send(JSON.stringify({ type: 'join', channel: 'rate-ch' }))
+    ws.send(
+      JSON.stringify({ type: 'join', channel: 'rate-ch' }),
+    )
     await nextMessage()
 
     // Send 99 idempotent re-joins — each costs 1 token, draining the bucket to 0
     for (let i = 0; i < 99; i++) {
-      ws.send(JSON.stringify({ type: 'join', channel: 'rate-ch' }))
+      ws.send(
+        JSON.stringify({
+          type: 'join',
+          channel: 'rate-ch',
+        }),
+      )
       await nextMessage()
     }
 
@@ -405,22 +439,29 @@ describe('relay', () => {
       void event
       extraMessages++
     }
-    ws.send(JSON.stringify({ type: 'join', channel: 'rate-ch' }))
+    ws.send(
+      JSON.stringify({ type: 'join', channel: 'rate-ch' }),
+    )
     await Bun.sleep(200)
     expect(extraMessages).toBe(0)
 
     // Connection is still alive — a new frame after token refill works
     await Bun.sleep(100) // ~5 tokens refilled at 50/s
     const nextMessage2 = createMessageQueue(ws)
-    ws.send(JSON.stringify({ type: 'join', channel: 'rate-ch' }))
-    const recovered = (await nextMessage2()) as SystemMessage
+    ws.send(
+      JSON.stringify({ type: 'join', channel: 'rate-ch' }),
+    )
+    const recovered =
+      (await nextMessage2()) as SystemMessage
     expect(recovered.type).toBe('system')
 
     await closeWs(ws)
   })
 
   it('evicts a client that misses a heartbeat', async () => {
-    const hbServer = startRelay(HB_PORT, { heartbeatInterval: 30 })
+    const hbServer = startRelay(HB_PORT, {
+      heartbeatInterval: 30,
+    })
 
     try {
       // Bun's WebSocket auto-pongs native pings, so use a raw TCP socket that
@@ -438,14 +479,16 @@ describe('relay', () => {
         '',
       ].join('\r\n')
 
-      const closed = new Promise<void>((resolve, reject) => {
-        const socket = net.createConnection(
-          { port: HB_PORT, host: '127.0.0.1' },
-          () => socket.write(wsHandshake),
-        )
-        socket.on('close', () => resolve())
-        socket.on('error', e => reject(e))
-      })
+      const closed = new Promise<void>(
+        (resolve, reject) => {
+          const socket = net.createConnection(
+            { port: HB_PORT, host: '127.0.0.1' },
+            () => socket.write(wsHandshake),
+          )
+          socket.on('close', () => resolve())
+          socket.on('error', e => reject(e))
+        },
+      )
 
       const result = await Promise.race([
         closed.then(() => 'closed' as const),
@@ -462,19 +505,29 @@ describe('relay', () => {
     const ws = await connect()
     const nextMessage = createMessageQueue(ws)
 
-    ws.send(JSON.stringify({ type: 'join', channel: 'idem-ch' }))
+    ws.send(
+      JSON.stringify({ type: 'join', channel: 'idem-ch' }),
+    )
     const first = (await nextMessage()) as SystemMessage
-    expect(first.message.result).toBe('Connected to channel: idem-ch')
+    expect(first.message.result).toBe(
+      'Connected to channel: idem-ch',
+    )
 
-    ws.send(JSON.stringify({ type: 'join', channel: 'idem-ch' }))
+    ws.send(
+      JSON.stringify({ type: 'join', channel: 'idem-ch' }),
+    )
     const second = (await nextMessage()) as SystemMessage
-    expect(second.message.result).toBe('Connected to channel: idem-ch')
+    expect(second.message.result).toBe(
+      'Connected to channel: idem-ch',
+    )
 
     // still exactly one registry entry
     const data = (await (
       await fetch(`${HTTP_URL}/channels`)
     ).json()) as ChannelInfo[]
-    expect(data.filter(c => c.channel === 'idem-ch')).toHaveLength(1)
+    expect(
+      data.filter(c => c.channel === 'idem-ch'),
+    ).toHaveLength(1)
 
     await closeWs(ws)
   })
@@ -497,10 +550,14 @@ describe('relay', () => {
     ws.send('not json at all')
 
     // a valid join still works on the same socket
-    ws.send(JSON.stringify({ type: 'join', channel: 'ok-ch' }))
+    ws.send(
+      JSON.stringify({ type: 'join', channel: 'ok-ch' }),
+    )
     const msg = (await nextMessage()) as SystemMessage
     expect(msg.type).toBe('system')
-    expect(msg.message.result).toBe('Connected to channel: ok-ch')
+    expect(msg.message.result).toBe(
+      'Connected to channel: ok-ch',
+    )
 
     // registry has only the valid channel
     const data = (await (

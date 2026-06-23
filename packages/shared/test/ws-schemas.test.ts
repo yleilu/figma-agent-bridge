@@ -25,28 +25,67 @@ import type {
 // --- compile-time bidirectional assignability ---
 // If either direction breaks, `bun run typecheck` fails (the suite is the gate).
 type Equal<A, B> =
-  (<T>() => T extends A ? 1 : 2) extends
-  (<T>() => T extends B ? 1 : 2) ? true : false
-const assertEqual = <_T extends true>(): void => undefined
+  (<T>() => T extends A ? 1 : 2) extends <
+    T,
+  >() => T extends B ? 1 : 2
+    ? true
+    : false
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- compile-time type assertion: Constraint is only used at call-site
+const assertEqual = <Constraint extends true>(): void =>
+  undefined
 
-assertEqual<Equal<z.infer<typeof joinMessageSchema>, JoinMessage>>()
-assertEqual<Equal<z.infer<typeof channelMessageSchema>, ChannelMessage>>()
-assertEqual<Equal<z.infer<typeof registerMessageSchema>, RegisterMessage>>()
-assertEqual<Equal<z.infer<typeof broadcastMessageSchema>, BroadcastMessage>>()
-assertEqual<Equal<z.infer<typeof systemMessageSchema>, SystemMessage>>()
-assertEqual<Equal<z.infer<typeof commandMessageSchema>, CommandMessage>>()
-assertEqual<Equal<z.infer<typeof relayIncomingSchema>, RelayIncoming>>()
-assertEqual<Equal<z.infer<typeof relayOutgoingSchema>, RelayOutgoing>>()
+assertEqual<
+  Equal<z.infer<typeof joinMessageSchema>, JoinMessage>
+>()
+assertEqual<
+  Equal<
+    z.infer<typeof channelMessageSchema>,
+    ChannelMessage
+  >
+>()
+assertEqual<
+  Equal<
+    z.infer<typeof registerMessageSchema>,
+    RegisterMessage
+  >
+>()
+assertEqual<
+  Equal<
+    z.infer<typeof broadcastMessageSchema>,
+    BroadcastMessage
+  >
+>()
+assertEqual<
+  Equal<z.infer<typeof systemMessageSchema>, SystemMessage>
+>()
+assertEqual<
+  Equal<
+    z.infer<typeof commandMessageSchema>,
+    CommandMessage
+  >
+>()
+assertEqual<
+  Equal<z.infer<typeof relayIncomingSchema>, RelayIncoming>
+>()
+assertEqual<
+  Equal<z.infer<typeof relayOutgoingSchema>, RelayOutgoing>
+>()
 
 // runtime assignment both directions (value-level guard the type checks the shapes)
-const _in: z.infer<typeof relayIncomingSchema> = {} as RelayIncoming
-const _inBack: RelayIncoming = {} as z.infer<typeof relayIncomingSchema>
-const _out: z.infer<typeof relayOutgoingSchema> = {} as RelayOutgoing
-const _outBack: RelayOutgoing = {} as z.infer<typeof relayOutgoingSchema>
-void _in
-void _inBack
-void _out
-void _outBack
+const assignIn: z.infer<typeof relayIncomingSchema> =
+  {} as RelayIncoming
+const assignInBack: RelayIncoming = {} as z.infer<
+  typeof relayIncomingSchema
+>
+const assignOut: z.infer<typeof relayOutgoingSchema> =
+  {} as RelayOutgoing
+const assignOutBack: RelayOutgoing = {} as z.infer<
+  typeof relayOutgoingSchema
+>
+void assignIn
+void assignInBack
+void assignOut
+void assignOutBack
 
 describe('ws-schemas relayIncomingSchema', () => {
   it('accepts a valid join frame', () => {
@@ -84,12 +123,17 @@ describe('ws-schemas relayIncomingSchema', () => {
   })
 
   it('rejects an unknown frame type (no more ping)', () => {
-    const r = relayIncomingSchema.safeParse({ type: 'ping' })
+    const r = relayIncomingSchema.safeParse({
+      type: 'ping',
+    })
     expect(r.success).toBe(false)
   })
 
   it('rejects a malformed frame missing required fields', () => {
-    const r = relayIncomingSchema.safeParse({ type: 'message', channel: 'x' })
+    const r = relayIncomingSchema.safeParse({
+      type: 'message',
+      channel: 'x',
+    })
     expect(r.success).toBe(false)
   })
 })
@@ -98,7 +142,11 @@ describe('ws-schemas relayOutgoingSchema', () => {
   it('accepts a valid broadcast frame', () => {
     const r = relayOutgoingSchema.safeParse({
       type: 'broadcast',
-      message: { id: 'cmd-1', command: 'inspect', result: { ok: true } },
+      message: {
+        id: 'cmd-1',
+        command: 'inspect',
+        result: { ok: true },
+      },
     })
     expect(r.success).toBe(true)
   })

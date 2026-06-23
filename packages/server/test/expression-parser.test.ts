@@ -13,7 +13,9 @@ describe('parseColorExpression', () => {
   it('parses 6-char hex', () => {
     const result = parseColorExpression('#3B82F6')
     expect(result).not.toBeNull()
-    if (!result || result.type !== 'SOLID') throw new Error('Expected SOLID')
+    if (!result || result.type !== 'SOLID') {
+      throw new Error('Expected SOLID')
+    }
     expect(result).toEqual({
       type: 'SOLID',
       color: { r: 0.231, g: 0.51, b: 0.965 },
@@ -26,7 +28,9 @@ describe('parseColorExpression', () => {
 
   it('parses 8-char hex with alpha', () => {
     const result = parseColorExpression('#00000040')
-    if (!result || result.type !== 'SOLID') throw new Error('Expected SOLID')
+    if (!result || result.type !== 'SOLID') {
+      throw new Error('Expected SOLID')
+    }
     expect(result.color.r).toBe(0)
     expect(result.color.g).toBe(0)
     expect(result.color.b).toBe(0)
@@ -37,7 +41,9 @@ describe('parseColorExpression', () => {
     const result = parseColorExpression(
       'style(Colors/Primary/500)#3B82F6',
     )
-    if (!result || result.type !== 'SOLID') throw new Error('Expected SOLID')
+    if (!result || result.type !== 'SOLID') {
+      throw new Error('Expected SOLID')
+    }
     expect(result.color.r).toBeCloseTo(0.231, 2)
     expect(result.styleName).toBe('Colors/Primary/500')
   })
@@ -49,17 +55,23 @@ describe('parseColorExpression', () => {
     if (
       !result ||
       (result.type !== 'GRADIENT_LINEAR' &&
-      result.type !== 'GRADIENT_RADIAL' &&
-      result.type !== 'GRADIENT_ANGULAR' &&
-      result.type !== 'GRADIENT_DIAMOND')
+        result.type !== 'GRADIENT_RADIAL' &&
+        result.type !== 'GRADIENT_ANGULAR' &&
+        result.type !== 'GRADIENT_DIAMOND')
     ) {
       throw new Error('Expected gradient type')
     }
     expect(result.gradientStops).toHaveLength(2)
     expect(result.gradientStops[0].position).toBe(0)
-    expect(result.gradientStops[0].color.r).toBeCloseTo(1, 2)
+    expect(result.gradientStops[0].color.r).toBeCloseTo(
+      1,
+      2,
+    )
     expect(result.gradientStops[1].position).toBe(1)
-    expect(result.gradientStops[1].color.b).toBeCloseTo(1, 2)
+    expect(result.gradientStops[1].color.b).toBeCloseTo(
+      1,
+      2,
+    )
     expect(result.angle).toBe(90)
   })
 
@@ -70,9 +82,9 @@ describe('parseColorExpression', () => {
     if (
       !result ||
       (result.type !== 'GRADIENT_LINEAR' &&
-      result.type !== 'GRADIENT_RADIAL' &&
-      result.type !== 'GRADIENT_ANGULAR' &&
-      result.type !== 'GRADIENT_DIAMOND')
+        result.type !== 'GRADIENT_RADIAL' &&
+        result.type !== 'GRADIENT_ANGULAR' &&
+        result.type !== 'GRADIENT_DIAMOND')
     ) {
       throw new Error('Expected gradient type')
     }
@@ -86,9 +98,9 @@ describe('parseColorExpression', () => {
     if (
       !result ||
       (result.type !== 'GRADIENT_LINEAR' &&
-      result.type !== 'GRADIENT_RADIAL' &&
-      result.type !== 'GRADIENT_ANGULAR' &&
-      result.type !== 'GRADIENT_DIAMOND')
+        result.type !== 'GRADIENT_RADIAL' &&
+        result.type !== 'GRADIENT_ANGULAR' &&
+        result.type !== 'GRADIENT_DIAMOND')
     ) {
       throw new Error('Expected gradient type')
     }
@@ -102,9 +114,9 @@ describe('parseColorExpression', () => {
     if (
       !result ||
       (result.type !== 'GRADIENT_LINEAR' &&
-      result.type !== 'GRADIENT_RADIAL' &&
-      result.type !== 'GRADIENT_ANGULAR' &&
-      result.type !== 'GRADIENT_DIAMOND')
+        result.type !== 'GRADIENT_RADIAL' &&
+        result.type !== 'GRADIENT_ANGULAR' &&
+        result.type !== 'GRADIENT_DIAMOND')
     ) {
       throw new Error('Expected gradient type')
     }
@@ -113,7 +125,9 @@ describe('parseColorExpression', () => {
 
   it('returns image sentinel for "image"', () => {
     const result = parseColorExpression('image')
-    if (!result) throw new Error('Expected non-null')
+    if (!result) {
+      throw new Error('Expected non-null')
+    }
     expect(result.type).toBe('IMAGE')
   })
 
@@ -121,29 +135,43 @@ describe('parseColorExpression', () => {
     const result = parseColorExpression(
       'image(https://example.com/photo.jpg)',
     )
-    if (!result || result.type !== 'IMAGE') throw new Error('Expected IMAGE')
-    expect(result.imageUrl).toBe('https://example.com/photo.jpg')
+    if (!result || result.type !== 'IMAGE') {
+      throw new Error('Expected IMAGE')
+    }
+    expect(result.imageUrl).toBe(
+      'https://example.com/photo.jpg',
+    )
   })
 
   it('parses image() with URL and scaleMode', () => {
     const result = parseColorExpression(
       'image(https://example.com/photo.jpg,FIT)',
     )
-    if (!result || result.type !== 'IMAGE') throw new Error('Expected IMAGE')
-    expect(result.imageUrl).toBe('https://example.com/photo.jpg')
+    if (!result || result.type !== 'IMAGE') {
+      throw new Error('Expected IMAGE')
+    }
+    expect(result.imageUrl).toBe(
+      'https://example.com/photo.jpg',
+    )
     expect(result.scaleMode).toBe('FIT')
   })
 
   it('parses image-hash() with hash value', () => {
-    const result = parseColorExpression('image-hash(abc123def)')
-    if (!result || result.type !== 'IMAGE') throw new Error('Expected IMAGE')
+    const result = parseColorExpression(
+      'image-hash(abc123def)',
+    )
+    if (!result || result.type !== 'IMAGE') {
+      throw new Error('Expected IMAGE')
+    }
     expect(result.imageHash).toBe('abc123def')
   })
 
   // Type narrowing: verify discriminated union narrows correctly
   it('SOLID paint has color and opacity but not gradient fields', () => {
     const result = parseColorExpression('#FF0000')
-    if (!result || result.type !== 'SOLID') throw new Error('Expected SOLID')
+    if (!result || result.type !== 'SOLID') {
+      throw new Error('Expected SOLID')
+    }
     expect(result.color).toBeDefined()
     expect(result.opacity).toBe(1)
     // Type narrowing means gradientStops is not accessible here
@@ -156,9 +184,9 @@ describe('parseColorExpression', () => {
     if (
       !result ||
       (result.type !== 'GRADIENT_LINEAR' &&
-      result.type !== 'GRADIENT_RADIAL' &&
-      result.type !== 'GRADIENT_ANGULAR' &&
-      result.type !== 'GRADIENT_DIAMOND')
+        result.type !== 'GRADIENT_RADIAL' &&
+        result.type !== 'GRADIENT_ANGULAR' &&
+        result.type !== 'GRADIENT_DIAMOND')
     ) {
       throw new Error('Expected gradient type')
     }
@@ -170,7 +198,9 @@ describe('parseColorExpression', () => {
     const result = parseColorExpression(
       'image(https://cdn.example.com/img.png)',
     )
-    if (!result || result.type !== 'IMAGE') throw new Error('Expected IMAGE')
+    if (!result || result.type !== 'IMAGE') {
+      throw new Error('Expected IMAGE')
+    }
     expect(result.imageUrl).toBe(
       'https://cdn.example.com/img.png',
     )
@@ -191,7 +221,9 @@ describe('parseFillExpressions', () => {
     expect(paints).toHaveLength(2)
     expect(paints[0].type).toBe('SOLID')
     const paint1 = paints[1]
-    if (paint1.type !== 'SOLID') throw new Error('Expected SOLID')
+    if (paint1.type !== 'SOLID') {
+      throw new Error('Expected SOLID')
+    }
     expect(paint1.opacity).toBeCloseTo(0.502, 2)
   })
 
@@ -268,7 +300,9 @@ describe('parseEffectExpressions', () => {
   })
 
   it('parses shadow with full 6-char hex color values', () => {
-    const result = parseEffectExpression('shadow(0,4,8,#000000)')
+    const result = parseEffectExpression(
+      'shadow(0,4,8,#000000)',
+    )
     expect(result).not.toBeNull()
     if (result && result.type === 'DROP_SHADOW') {
       expect(result.color.r).toBe(0)
@@ -278,7 +312,9 @@ describe('parseEffectExpressions', () => {
   })
 
   it('returns null for shadow with 3-char hex', () => {
-    const result = parseEffectExpression('shadow(0,4,8,#000)')
+    const result = parseEffectExpression(
+      'shadow(0,4,8,#000)',
+    )
     expect(result).toBeNull()
   })
 
@@ -360,14 +396,18 @@ describe('parseFontExpression', () => {
   })
 
   it('handles multi-word style names', () => {
-    const result = parseFontExpression('Inter/Bold Italic/16')
+    const result = parseFontExpression(
+      'Inter/Bold Italic/16',
+    )
     expect(result.family).toBe('Inter')
     expect(result.style).toBe('Bold Italic')
     expect(result.size).toBe(16)
   })
 
   it('handles font families with spaces', () => {
-    const result = parseFontExpression('Noto Sans/Regular/14')
+    const result = parseFontExpression(
+      'Noto Sans/Regular/14',
+    )
     expect(result.family).toBe('Noto Sans')
     expect(result.style).toBe('Regular')
     expect(result.size).toBe(14)

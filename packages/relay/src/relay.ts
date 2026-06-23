@@ -81,7 +81,10 @@ const rejectJoin = (
 ) => {
   const reply: SystemMessage = {
     type: 'system',
-    message: { id: randomUUID(), result: `Error: ${reason}` },
+    message: {
+      id: randomUUID(),
+      result: `Error: ${reason}`,
+    },
   }
   send(ws, reply)
 }
@@ -119,8 +122,13 @@ const handleJoin = (
   const alreadyIn = joinedSet?.has(channel) === true
 
   if (!alreadyIn) {
-    if ((joinedSet?.size ?? 0) >= MAX_CHANNELS_PER_CONNECTION) {
-      rejectJoin(ws, 'channel limit reached for this connection')
+    if (
+      (joinedSet?.size ?? 0) >= MAX_CHANNELS_PER_CONNECTION
+    ) {
+      rejectJoin(
+        ws,
+        'channel limit reached for this connection',
+      )
       return
     }
     const existing = ctx.channels.get(channel)
@@ -130,7 +138,10 @@ const handleJoin = (
         return
       }
     } else if (existing.size >= MAX_MEMBERS_PER_CHANNEL) {
-      rejectJoin(ws, 'member limit reached for this channel')
+      rejectJoin(
+        ws,
+        'member limit reached for this channel',
+      )
       return
     }
   }
@@ -175,7 +186,10 @@ const handleRegister = (
   channel: string,
   fileName: string | null,
 ) => {
-  if (ctx.clientChannels.get(ws.data.id)?.has(channel) !== true) {
+  if (
+    ctx.clientChannels.get(ws.data.id)?.has(channel) !==
+    true
+  ) {
     return
   }
   const entry = ctx.channelRegistry.get(channel)
@@ -257,7 +271,10 @@ export const startRelay = (
       open: ws => {
         ctx.sockets.add(ws)
         ctx.alive.set(ws, true)
-        ctx.rate.set(ws, { tokens: RATE_BURST, last: Date.now() })
+        ctx.rate.set(ws, {
+          tokens: RATE_BURST,
+          last: Date.now(),
+        })
       },
       message: (ws, raw) => {
         let json: unknown
@@ -279,7 +296,12 @@ export const startRelay = (
         if (frame.type === 'join') {
           handleJoin(ctx, ws, frame.channel)
         } else if (frame.type === 'register') {
-          handleRegister(ctx, ws, frame.channel, frame.fileName)
+          handleRegister(
+            ctx,
+            ws,
+            frame.channel,
+            frame.fileName,
+          )
         } else if (frame.type === 'message') {
           handleMessage(ctx, ws, frame.channel, frame)
         }

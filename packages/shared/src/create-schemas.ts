@@ -325,39 +325,38 @@ const componentPropertySchema = z.object({
     ),
 })
 
-export const createComponentParamsSchema = z
-  .object({
-    nodeId: z
-      .string()
-      .optional()
-      .describe(
-        'Node ID to promote to component via createComponentFromNode().',
-      ),
-    nodeIds: z
-      .array(z.string())
-      .optional()
-      .describe(
-        'Node IDs to combine as variants via combineAsVariants().',
-      ),
-    combineAsVariants: z
-      .boolean()
-      .optional()
-      .describe(
-        'If true, combines nodeIds into a ComponentSet (variant group).',
-      ),
-    slots: z
-      .array(z.string())
-      .optional()
-      .describe(
-        'Child names to promote to SLOT after component creation.',
-      ),
-    componentProperties: z
-      .array(componentPropertySchema)
-      .optional()
-      .describe(
-        'Component properties to add after promotion (BOOLEAN, TEXT, INSTANCE_SWAP, SLOT).',
-      ),
-  })
+export const createComponentParamsSchema = z.object({
+  nodeId: z
+    .string()
+    .optional()
+    .describe(
+      'Node ID to promote to component via createComponentFromNode().',
+    ),
+  nodeIds: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Node IDs to combine as variants via combineAsVariants().',
+    ),
+  combineAsVariants: z
+    .boolean()
+    .optional()
+    .describe(
+      'If true, combines nodeIds into a ComponentSet (variant group).',
+    ),
+  slots: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Child names to promote to SLOT after component creation.',
+    ),
+  componentProperties: z
+    .array(componentPropertySchema)
+    .optional()
+    .describe(
+      'Component properties to add after promotion (BOOLEAN, TEXT, INSTANCE_SWAP, SLOT).',
+    ),
+})
 
 export const createFromSvgParamsSchema = z.object({
   parentId: z

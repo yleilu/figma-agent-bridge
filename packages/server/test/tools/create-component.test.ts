@@ -140,8 +140,11 @@ describe('handleCreateComponent', () => {
 
   it('returns error when neither nodeId nor nodeIds provided', async () => {
     const mockClient = createMockClient(() => null)
-    const result = await handleCreateComponent({} as any, mockClient)
-    const text = result.content[0].text
+    const result = await handleCreateComponent(
+      {},
+      mockClient,
+    )
+    const { text } = result.content[0]
     expect(text).toContain('nodeId or nodeIds')
   })
 

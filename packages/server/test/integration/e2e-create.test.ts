@@ -224,7 +224,12 @@ describe('M3 create tools e2e', () => {
       angle: number
       gradientStops: {
         position: number
-        color: { r: number; g: number; b: number; a: number }
+        color: {
+          r: number
+          g: number
+          b: number
+          a: number
+        }
       }[]
     }[]
     expect(fills).toHaveLength(1)

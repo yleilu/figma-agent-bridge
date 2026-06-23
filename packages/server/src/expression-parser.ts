@@ -13,7 +13,11 @@ export type ParsedSolidPaint = {
 }
 
 export type ParsedGradientPaint = {
-  type: 'GRADIENT_LINEAR' | 'GRADIENT_RADIAL' | 'GRADIENT_ANGULAR' | 'GRADIENT_DIAMOND'
+  type:
+    | 'GRADIENT_LINEAR'
+    | 'GRADIENT_RADIAL'
+    | 'GRADIENT_ANGULAR'
+    | 'GRADIENT_DIAMOND'
   gradientStops: ParsedGradientStop[]
   angle: number
   styleName?: string
@@ -27,7 +31,10 @@ export type ParsedImagePaint = {
   styleName?: string
 }
 
-export type ParsedPaint = ParsedSolidPaint | ParsedGradientPaint | ParsedImagePaint
+export type ParsedPaint =
+  | ParsedSolidPaint
+  | ParsedGradientPaint
+  | ParsedImagePaint
 
 export type ParsedShadowEffect = {
   type: 'DROP_SHADOW' | 'INNER_SHADOW'
@@ -44,7 +51,9 @@ export type ParsedBlurEffect = {
   styleName?: string
 }
 
-export type ParsedEffect = ParsedShadowEffect | ParsedBlurEffect
+export type ParsedEffect =
+  | ParsedShadowEffect
+  | ParsedBlurEffect
 
 export type ParsedFont = {
   family: string
@@ -164,7 +173,10 @@ export const parseColorExpression = (
     const gradientType = gradientMatch[1]
     const inner = gradientMatch[2]
 
-    const typeMap: Record<string, ParsedGradientPaint['type']> = {
+    const typeMap: Record<
+      string,
+      ParsedGradientPaint['type']
+    > = {
       linear: 'GRADIENT_LINEAR',
       radial: 'GRADIENT_RADIAL',
       angular: 'GRADIENT_ANGULAR',

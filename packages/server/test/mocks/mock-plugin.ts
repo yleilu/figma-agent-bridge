@@ -136,7 +136,10 @@ export const createMockPlugin = (
         // MinimalFillsMixin (read-only fills); the real plugin guards
         // before assigning, but echoing the spec is sufficient for
         // serialization-regression coverage.
-        const { children: _children, ...echo } = nodeSpec ?? {}
+        const echo: Record<string, unknown> = {
+          ...(nodeSpec ?? {}),
+        }
+        delete echo.children
         result = {
           ...echo,
           id: `created:${Math.random().toString(36).slice(2, 8)}`,

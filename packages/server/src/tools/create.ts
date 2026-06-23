@@ -191,7 +191,9 @@ const convertNodeSpec = (
     }
     if (spec.text.color !== undefined) {
       const parsed = parseColorExpression(spec.text.color)
-      if (parsed) text.color = parsed
+      if (parsed) {
+        text.color = parsed
+      }
     }
     if (spec.text.lineHeight !== undefined) {
       text.lineHeight = parseLineHeightExpression(

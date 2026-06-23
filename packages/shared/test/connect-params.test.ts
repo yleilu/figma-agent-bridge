@@ -3,14 +3,18 @@ import { connectParamsSchema } from '@figma-agent-bridge/shared/schemas'
 
 describe('connectParamsSchema', () => {
   it('accepts a channel string', () => {
-    const r = connectParamsSchema.safeParse({ channel: 'abc123' })
+    const r = connectParamsSchema.safeParse({
+      channel: 'abc123',
+    })
     expect(r.success).toBe(true)
   })
 
   it('accepts an omitted channel (auto-discovery)', () => {
     const r = connectParamsSchema.safeParse({})
     expect(r.success).toBe(true)
-    if (r.success) expect(r.data.channel).toBeUndefined()
+    if (r.success) {
+      expect(r.data.channel).toBeUndefined()
+    }
   })
 
   it('rejects an empty channel string', () => {

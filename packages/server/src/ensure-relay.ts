@@ -4,7 +4,11 @@ const MAX_POLL_ATTEMPTS = 30
 export const ensureRelay = async (
   httpUrl: string,
   port: number,
-): Promise<{ started: boolean; error?: string; proc?: ReturnType<typeof Bun.spawn> }> => {
+): Promise<{
+  started: boolean
+  error?: string
+  proc?: ReturnType<typeof Bun.spawn>
+}> => {
   // Health check — if relay is already running, return early
   try {
     const res = await fetch(`${httpUrl}/channels`)

@@ -26,11 +26,14 @@ export const registerMessageSchema = z.object({
   fileName: z.string().nullable(),
 })
 
-export const relayIncomingSchema = z.discriminatedUnion('type', [
-  joinMessageSchema,
-  channelMessageSchema,
-  registerMessageSchema,
-])
+export const relayIncomingSchema = z.discriminatedUnion(
+  'type',
+  [
+    joinMessageSchema,
+    channelMessageSchema,
+    registerMessageSchema,
+  ],
+)
 
 export const broadcastMessageSchema = z.object({
   type: z.literal('broadcast'),
@@ -42,7 +45,7 @@ export const systemMessageSchema = z.object({
   message: z.object({ id: z.string(), result: z.string() }),
 })
 
-export const relayOutgoingSchema = z.discriminatedUnion('type', [
-  broadcastMessageSchema,
-  systemMessageSchema,
-])
+export const relayOutgoingSchema = z.discriminatedUnion(
+  'type',
+  [broadcastMessageSchema, systemMessageSchema],
+)
