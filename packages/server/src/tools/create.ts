@@ -17,75 +17,6 @@ import {
   formatMutationResult,
 } from './shared'
 
-/** Style cache type — populated by inspect_styles or similar tools */
-type StyleCache = Map<string, string> // styleName → styleId
-
-/**
- * Resolve style(name) references to styleIds using the style cache.
- * When a fill/effect/text expression contains style(Name), resolve the name
- * to a Figma style ID and attach it to the converted node spec.
- */
-const resolveStyleIds = (
-  converted: Record<string, unknown>,
-  styleCache: StyleCache,
-): void => {
-  // Resolve fill style
-  const fills = converted.fills as
-    | { styleName?: string }[]
-    | undefined
-  if (fills) {
-    for (const fill of fills) {
-      if (fill.styleName) {
-        const styleId = styleCache.get(fill.styleName)
-        if (styleId) {
-          converted.fillStyleId = styleId
-        }
-      }
-    }
-  }
-
-  // Resolve stroke style
-  const strokes = converted.strokes as
-    | { styleName?: string }[]
-    | undefined
-  if (strokes) {
-    for (const stroke of strokes) {
-      if (stroke.styleName) {
-        const styleId = styleCache.get(stroke.styleName)
-        if (styleId) {
-          converted.strokeStyleId = styleId
-        }
-      }
-    }
-  }
-
-  // Resolve effect style
-  const effects = converted.effects as
-    | { styleName?: string }[]
-    | undefined
-  if (effects) {
-    for (const effect of effects) {
-      if (effect.styleName) {
-        const styleId = styleCache.get(effect.styleName)
-        if (styleId) {
-          converted.effectStyleId = styleId
-        }
-      }
-    }
-  }
-
-  // Resolve text style
-  const text = converted.text as
-    | { font?: { styleName?: string } }
-    | undefined
-  if (text?.font?.styleName) {
-    const styleId = styleCache.get(text.font.styleName)
-    if (styleId) {
-      converted.textStyleId = styleId
-    }
-  }
-}
-
 /**
  * Convert expression strings in a node spec to structured Figma API objects.
  * This transforms the agent-friendly format into plugin-ready format.
@@ -298,7 +229,6 @@ export const handleCreateNode = async (
     node: CreateNodeSpec
   },
   client: FigmaClient,
-  styleCache?: StyleCache,
 ): Promise<ToolResult> => {
   const guard = requireConnected(client)
   if (guard) {
@@ -306,11 +236,6 @@ export const handleCreateNode = async (
   }
 
   const converted = convertNodeSpec(params.node)
-
-  // Resolve style(name) → styleId if style cache is available
-  if (styleCache) {
-    resolveStyleIds(converted, styleCache)
-  }
 
   const result = (await client.sendCommand('create_node', {
     parentId: params.parentId,
@@ -329,7 +254,6 @@ export const handleCreateTree = async (
     node: CreateTreeNodeSpec
   },
   client: FigmaClient,
-  styleCache?: StyleCache,
 ): Promise<ToolResult> => {
   const guard = requireConnected(client)
   if (guard) {
@@ -337,26 +261,6 @@ export const handleCreateTree = async (
   }
 
   const converted = convertTreeNodeSpec(params.node)
-
-  // Resolve style references recursively in tree
-  if (styleCache) {
-    const resolveTreeStyles = (
-      node: Record<string, unknown>,
-    ) => {
-      if ('type' in node) {
-        resolveStyleIds(node, styleCache)
-        const children = node.children as
-          | Record<string, unknown>[]
-          | undefined
-        if (children) {
-          for (const child of children) {
-            resolveTreeStyles(child)
-          }
-        }
-      }
-    }
-    resolveTreeStyles(converted)
-  }
 
   const result = (await client.sendCommand('create_tree', {
     parentId: params.parentId,

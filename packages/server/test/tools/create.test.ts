@@ -83,48 +83,6 @@ describe('handleCreateNode', () => {
     expect(fills[0].type).toBe('SOLID')
   })
 
-  it('resolves style names to style IDs when style cache is provided', async () => {
-    let sentParams: Record<string, unknown> = {}
-    const client = createMockClient((cmd, params) => {
-      if (cmd === 'create_node') {
-        sentParams = params
-        return {
-          id: '99:20',
-          name: 'Styled',
-          type: 'RECTANGLE',
-        }
-      }
-      return null
-    })
-
-    // Provide a style cache with known style mappings
-    const styleCache = new Map([
-      ['Colors/Primary/500', 'S:fill-style-id'],
-      ['Elevation/Medium', 'S:effect-style-id'],
-    ])
-
-    await handleCreateNode(
-      {
-        parentId: '1:2',
-        node: {
-          type: 'RECTANGLE',
-          name: 'Styled',
-          size: [100, 100],
-          fills: ['style(Colors/Primary/500)#3B82F6'],
-          effects: [
-            'style(Elevation/Medium)shadow(0,4,8,#00000040)',
-          ],
-        },
-      },
-      client,
-      styleCache,
-    )
-
-    const node = sentParams.node as Record<string, unknown>
-    expect(node.fillStyleId).toBe('S:fill-style-id')
-    expect(node.effectStyleId).toBe('S:effect-style-id')
-  })
-
   it('sends create_node with parsed effects', async () => {
     let sentParams: Record<string, unknown> = {}
     const client = createMockClient((cmd, params) => {
