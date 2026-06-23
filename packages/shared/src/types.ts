@@ -24,31 +24,17 @@ export type SystemMessage = {
   }
 }
 
-export type PingMessage = {
-  type: 'ping'
-}
-
 export type RegisterMessage = {
   type: 'register'
   channel: string
   fileName: string | null
 }
 
-export type PongMessage = {
-  type: 'pong'
-  name: string
-  version: string
-}
-
 export type RelayIncoming =
   | JoinMessage
   | ChannelMessage
-  | PingMessage
   | RegisterMessage
-export type RelayOutgoing =
-  | BroadcastMessage
-  | SystemMessage
-  | PongMessage
+export type RelayOutgoing = BroadcastMessage | SystemMessage
 
 // --- Command types ---
 
