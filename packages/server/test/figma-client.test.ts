@@ -158,6 +158,71 @@ describe('figma-client', () => {
 
     client.disconnect()
   })
+
+  it('rejects a concurrent join while one is in progress', async () => {
+    const client = createFigmaClient(WS_URL)
+
+    const first = client.joinChannel('serial-ch')
+    let caught: Error | null = null
+    try {
+      await client.joinChannel('serial-ch-2')
+    } catch (err) {
+      caught = err as Error
+    }
+
+    expect(caught).not.toBeNull()
+    expect((caught as Error).message).toBe(
+      'Join already in progress',
+    )
+
+    // first join still resolves normally
+    const result = await first
+    expect(result).toContain('serial-ch')
+
+    client.disconnect()
+  })
+
+  it('rejects a pending join when the socket disconnects', async () => {
+    // Start a join — joinPending is set synchronously before any I/O.
+    // Calling disconnect() immediately rejects it via rejectAll.
+    const client = createFigmaClient(WS_URL)
+
+    const joinPromise = client.joinChannel('drop-ch')
+    // Disconnect before the relay can respond (joinPending is set synchronously).
+    client.disconnect()
+
+    let caught: Error | null = null
+    try {
+      await joinPromise
+    } catch (err) {
+      caught = err as Error
+    }
+
+    expect(caught).not.toBeNull()
+    expect((caught as Error).message).toBe('Disconnected')
+  })
+
+  it('rejects an in-flight sendCommand when the socket closes', async () => {
+    const client = createFigmaClient(WS_URL)
+    await client.joinChannel('inflight-ch')
+
+    // No plugin echoes back, so this command stays pending.
+    const cmd = client.sendCommand('slow', {}, 30_000)
+    await Bun.sleep(50)
+    stopRelay(server)
+
+    let caught: Error | null = null
+    try {
+      await cmd
+    } catch (err) {
+      caught = err as Error
+    }
+
+    expect(caught).not.toBeNull()
+    expect((caught as Error).message).toBe('Disconnected')
+
+    server = startRelay(TEST_PORT)
+  })
 })
 
 describe('discoverChannels', () => {

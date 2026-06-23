@@ -26,6 +26,14 @@ type PendingRequest = {
   timer: ReturnType<typeof setTimeout>
 }
 
+const JOIN_TIMEOUT_MS = 3e4
+
+type JoinPending = {
+  resolve: (result: string) => void
+  reject: (reason: Error) => void
+  timer: ReturnType<typeof setTimeout>
+}
+
 export const discoverChannels = async (
   relayHttpUrl: string,
 ): Promise<ChannelInfo[]> => {
@@ -45,8 +53,9 @@ export const createFigmaClient = (
 ): FigmaClient => {
   let ws: WebSocket | null = null
   let channel: string | null = null
+  let pendingChannel: string | null = null
   const pending = new Map<string, PendingRequest>()
-  let joinResolve: ((result: string) => void) | null = null
+  let joinPending: JoinPending | null = null
 
   const rejectAll = (reason: string) => {
     pending.forEach(({ reject, timer }) => {
@@ -54,6 +63,13 @@ export const createFigmaClient = (
       reject(new Error(reason))
     })
     pending.clear()
+
+    if (joinPending !== null) {
+      const { reject, timer } = joinPending
+      joinPending = null
+      clearTimeout(timer)
+      reject(new Error(reason))
+    }
   }
 
   const handleMessage = (event: MessageEvent) => {
@@ -68,9 +84,11 @@ export const createFigmaClient = (
     }
 
     if (parsed.type === 'system') {
-      if (joinResolve !== null) {
-        const resolve = joinResolve
-        joinResolve = null
+      if (joinPending !== null) {
+        const { resolve, timer } = joinPending
+        joinPending = null
+        clearTimeout(timer)
+        channel = pendingChannel
         resolve(parsed.message.result)
       }
 
@@ -124,25 +142,46 @@ export const createFigmaClient = (
       }
     })
 
-  const joinChannel = async (
-    ch: string,
-  ): Promise<string> => {
-    const socket = await connect()
+  const joinChannel = (ch: string): Promise<string> => {
+    if (joinPending !== null) {
+      return Promise.reject(
+        new Error('Join already in progress'),
+      )
+    }
 
-    return new Promise((resolve, reject) => {
-      joinResolve = (result: string) => {
-        channel = ch
-        resolve(result)
-      }
+    // Set joinPending synchronously before any await to prevent concurrent joins.
+    const joinPromise = new Promise<string>(
+      (resolve, reject) => {
+        const timer = setTimeout(() => {
+          joinPending = null
+          reject(new Error('Join timed out'))
+        }, JOIN_TIMEOUT_MS)
 
-      socket.onerror = () => {
-        joinResolve = null
-        reject(new Error('WebSocket error during join'))
-      }
+        joinPending = { resolve, reject, timer }
+      },
+    )
 
-      const msg: JoinMessage = { type: 'join', channel: ch }
-      socket.send(JSON.stringify(msg))
-    })
+    pendingChannel = ch
+
+    // Connect and send join frame; errors propagate via rejectAll or socket close.
+    connect()
+      .then(socket => {
+        const msg: JoinMessage = {
+          type: 'join',
+          channel: ch,
+        }
+        socket.send(JSON.stringify(msg))
+      })
+      .catch(err => {
+        if (joinPending !== null) {
+          const { reject, timer } = joinPending
+          joinPending = null
+          clearTimeout(timer)
+          reject(err as Error)
+        }
+      })
+
+    return joinPromise
   }
 
   const sendCommand = (
