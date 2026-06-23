@@ -244,6 +244,52 @@ describe('handleInspectComponents', () => {
     expect(result.content[0].text).not.toContain('Avatar')
   })
 
+  it('treats * in query as a literal character, not a glob', async () => {
+    // A query of 'Btn*' should match a component literally named 'Btn*Primary'
+    // because * is treated as a plain substring character, not a wildcard.
+    // It must NOT match 'BtnPrimary' (which would match a glob pattern Btn*).
+    const mockClient: FigmaClient = {
+      joinChannel: () => Promise.resolve(''),
+      sendCommand: cmd => {
+        if (cmd === 'get_local_components') {
+          return Promise.resolve({
+            local: [
+              {
+                name: 'Btn*Primary',
+                id: '2:1',
+                key: 'k1',
+              },
+              { name: 'BtnPrimary', id: '2:2', key: 'k2' },
+              {
+                name: 'BtnSecondary',
+                id: '2:3',
+                key: 'k3',
+              },
+            ],
+            remote: [],
+          })
+        }
+        return Promise.resolve(null)
+      },
+      disconnect: () => undefined,
+      isConnected: () => true,
+      currentChannel: () => 'test-ch',
+    }
+
+    const result = await handleInspectComponents(
+      { query: 'Btn*' },
+      mockClient,
+    )
+
+    expect(result.content[0].text).toContain('Btn*Primary')
+    expect(result.content[0].text).not.toContain(
+      'BtnPrimary',
+    )
+    expect(result.content[0].text).not.toContain(
+      'BtnSecondary',
+    )
+  })
+
   it('returns error when not connected', async () => {
     const mockClient: FigmaClient = {
       joinChannel: () => Promise.resolve(''),

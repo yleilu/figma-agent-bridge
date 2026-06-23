@@ -319,7 +319,7 @@ export const startRelay = (
   })
 
   ctx.heartbeatTimer = setInterval(() => {
-    const dead = []
+    const dead: ServerWebSocket<WsData>[] = []
     for (const ws of ctx.sockets) {
       if (ctx.alive.get(ws) === false) {
         dead.push(ws)

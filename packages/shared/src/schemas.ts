@@ -10,8 +10,6 @@ export const connectParamsSchema = z.object({
     ),
 })
 
-export const statusParamsSchema = z.object({}).optional()
-
 // --- M2 tool schemas ---
 
 export const inspectParamsSchema = z.object({
