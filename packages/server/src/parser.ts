@@ -13,6 +13,7 @@ type RGBA = { r: number; g: number; b: number; a: number }
 type FigmaFill = {
   type: string
   visible?: boolean
+  opacity?: number
   color?: RGBA
   gradientStops?: { position: number; color: RGBA }[]
   gradientTransform?: number[][]
@@ -61,7 +62,9 @@ const parseFills = (
         f.color !== null &&
         f.color !== undefined
       ) {
-        return rgbaToHex(f.color)
+        const effectiveAlpha =
+          (f.color.a ?? 1) * (f.opacity ?? 1)
+        return rgbaToHex({ ...f.color, a: effectiveAlpha })
       }
       if (f.type === 'IMAGE') {
         return 'image'

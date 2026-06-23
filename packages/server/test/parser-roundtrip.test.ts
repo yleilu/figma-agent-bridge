@@ -352,4 +352,83 @@ describe('parser round-trip fixes', () => {
     }
     expect(reparsed.angle).toBe(-90)
   })
+
+  it('folds fill paint.opacity into emitted hex alpha', () => {
+    const raw = {
+      id: '1:10',
+      name: 'TranslucentFill',
+      type: 'RECTANGLE',
+      absoluteBoundingBox: {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 100,
+      },
+      fills: [
+        {
+          type: 'SOLID',
+          visible: true,
+          color: { r: 0, g: 0, b: 0, a: 1 },
+          opacity: 0.5,
+        },
+      ],
+    }
+
+    const parsed = parseNode(raw)
+    // a(1) * opacity(0.5) = 0.5 -> 0x80 -> #00000080
+    expect(parsed.fills![0]).toBe('#00000080')
+  })
+
+  it('folds stroke paint.opacity into emitted hex alpha', () => {
+    const raw = {
+      id: '1:11',
+      name: 'TranslucentStroke',
+      type: 'RECTANGLE',
+      absoluteBoundingBox: {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 100,
+      },
+      fills: [],
+      strokes: [
+        {
+          type: 'SOLID',
+          visible: true,
+          color: { r: 1, g: 0, b: 0, a: 1 },
+          opacity: 0.5,
+        },
+      ],
+      strokeWeight: 2,
+    }
+
+    const parsed = parseNode(raw)
+    expect(parsed.strokes![0]).toBe('#FF000080')
+  })
+
+  it('multiplies color alpha by paint.opacity', () => {
+    const raw = {
+      id: '1:12',
+      name: 'DoubleAlpha',
+      type: 'RECTANGLE',
+      absoluteBoundingBox: {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 100,
+      },
+      fills: [
+        {
+          type: 'SOLID',
+          visible: true,
+          color: { r: 0, g: 0, b: 0, a: 0.5 },
+          opacity: 0.5,
+        },
+      ],
+    }
+
+    const parsed = parseNode(raw)
+    // 0.5 * 0.5 = 0.25 -> 0x40 -> #00000040
+    expect(parsed.fills![0]).toBe('#00000040')
+  })
 })
