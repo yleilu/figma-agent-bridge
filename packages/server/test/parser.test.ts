@@ -3,15 +3,11 @@ import type { ParsedNode } from '@figma-agent-bridge/shared/types'
 import {
   parseNode,
   computeSummary,
-  toInspectYaml,
   toInspectTree,
   toInspectTreeMulti,
   toFullJson,
-  toPageLayoutYaml,
   toPageLayoutTree,
-  toStylesYaml,
   toStylesTree,
-  toComponentsYaml,
   toComponentsTree,
 } from '@figma-agent-bridge/server/parser'
 import cardFixture from './fixtures/card-node-raw.json'
@@ -19,7 +15,7 @@ import pageLayoutFixture from './fixtures/page-layout-raw.json'
 import stylesFixture from './fixtures/styles-raw.json'
 import componentsFixture from './fixtures/components-raw.json'
 
-// --- Task 2: parseNode, computeSummary, toInspectYaml ---
+// --- Task 2: parseNode, computeSummary ---
 
 describe('parseNode', () => {
   it('transforms raw Figma node to ParsedNode', () => {
@@ -110,27 +106,6 @@ describe('computeSummary', () => {
     const summary = computeSummary(parsed)
     expect(summary.layoutMode).toBe('V')
     expect(summary.rootFill).toBe('#FFFFFF')
-  })
-})
-
-describe('toInspectYaml', () => {
-  it('produces YAML with summary comments', () => {
-    const parsed = parseNode(cardFixture)
-    const yaml = toInspectYaml(parsed)
-    expect(yaml).toContain('# Card [1:42]')
-    expect(yaml).toContain('4 layers')
-    expect(yaml).toContain('auto-layout: V')
-    expect(yaml).toContain('320×200')
-    expect(yaml).toContain('id: 1:42')
-    expect(yaml).toContain('font: Inter/SemiBold/18')
-  })
-
-  it('omits undefined fields in YAML', () => {
-    const parsed = parseNode(cardFixture)
-    const yaml = toInspectYaml(parsed)
-    expect(yaml).not.toContain('strokes:')
-    expect(yaml).not.toContain('opacity:')
-    expect(yaml).not.toContain('position:')
   })
 })
 
@@ -301,60 +276,6 @@ describe('toFullJson', () => {
     const result = toFullJson(cardFixture, -1)
     const json = JSON.parse(result)
     expect(json.children[0].characters).toBe('Card Title')
-  })
-})
-
-// --- Task 4: toPageLayoutYaml ---
-
-describe('toPageLayoutYaml', () => {
-  it('produces YAML with summary and frame list', () => {
-    const yaml = toPageLayoutYaml(pageLayoutFixture)
-    expect(yaml).toContain('# Homepage')
-    expect(yaml).toContain('3 top-level frames')
-    expect(yaml).toContain('name: Header')
-    expect(yaml).toContain('size:\n')
-    expect(yaml).toContain('children_count: 8')
-  })
-
-  it('includes canvas bounding box in summary', () => {
-    const yaml = toPageLayoutYaml(pageLayoutFixture)
-    expect(yaml).toContain('canvas: 1440×1080')
-  })
-})
-
-// --- Task 5: toStylesYaml, toComponentsYaml ---
-
-describe('toStylesYaml', () => {
-  it('produces YAML grouped by type with summary', () => {
-    const yaml = toStylesYaml(stylesFixture)
-    expect(yaml).toContain(
-      '# 5 styles: 2 paint, 2 text, 1 effect',
-    )
-    expect(yaml).toContain('name: Colors/Primary/500')
-    expect(yaml).toContain('color: "#3B82F6"')
-    expect(yaml).toContain('font: Inter/Bold/32')
-  })
-
-  it('omits empty style groups', () => {
-    const yaml = toStylesYaml(stylesFixture)
-    expect(yaml).not.toContain('grid:')
-  })
-})
-
-describe('toComponentsYaml', () => {
-  it('produces YAML with local and remote sections', () => {
-    const yaml = toComponentsYaml(componentsFixture)
-    expect(yaml).toContain(
-      '# 2 local components, 1 remote in use',
-    )
-    expect(yaml).toContain('name: Button')
-  })
-
-  it('includes remote components from libraries', () => {
-    const yaml = toComponentsYaml(componentsFixture)
-    expect(yaml).toContain('remote_in_use:')
-    expect(yaml).toContain('name: Input')
-    expect(yaml).toContain('library: Design System v2')
   })
 })
 
