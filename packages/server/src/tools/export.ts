@@ -50,6 +50,17 @@ export const handleExport = async (
       }
     }
 
+    if (typeof result.data !== 'string') {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Unexpected response from plugin',
+          },
+        ],
+      }
+    }
+
     if (format === 'SVG') {
       return {
         content: [

@@ -55,6 +55,10 @@ export const handleSearch = async (
       )
     }
 
+    if (!Array.isArray(raw.results)) {
+      return textResult('Unexpected response from plugin')
+    }
+
     const mapped = raw.results.map(r => ({
       id: r.id,
       name: r.name,

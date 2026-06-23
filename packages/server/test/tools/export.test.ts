@@ -173,4 +173,26 @@ describe('handleExport', () => {
       (result.content[0] as { text: string }).text,
     ).toBe('Error: plugin exploded')
   })
+
+  it('returns Unexpected response when data is not a string', async () => {
+    const mockClient: FigmaClient = {
+      joinChannel: () => Promise.resolve(''),
+      sendCommand: () =>
+        Promise.resolve({
+          format: 'PNG',
+          scale: 1,
+          data: 123,
+        }),
+      disconnect: () => undefined,
+      isConnected: () => true,
+      currentChannel: () => 'test-ch',
+    }
+    const result = await handleExport(
+      { nodeId: '1:42' },
+      mockClient,
+    )
+    expect(
+      (result.content[0] as { text: string }).text,
+    ).toBe('Unexpected response from plugin')
+  })
 })

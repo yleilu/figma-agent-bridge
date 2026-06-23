@@ -174,4 +174,25 @@ describe('handleSearch', () => {
       'Error: plugin exploded',
     )
   })
+
+  it('returns Unexpected response when results is not an array', async () => {
+    const mockClient: FigmaClient = {
+      joinChannel: () => Promise.resolve(''),
+      sendCommand: () =>
+        Promise.resolve({
+          results: null,
+          truncated: false,
+        }),
+      disconnect: () => undefined,
+      isConnected: () => true,
+      currentChannel: () => 'test-ch',
+    }
+    const result = await handleSearch(
+      { name: 'X' },
+      mockClient,
+    )
+    expect(result.content[0].text).toBe(
+      'Unexpected response from plugin',
+    )
+  })
 })

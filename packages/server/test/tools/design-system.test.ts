@@ -103,6 +103,24 @@ describe('handleInspectStyles', () => {
 })
 
 describe('handleInspectComponents', () => {
+  it('returns Unexpected response when local is not an array', async () => {
+    const mockClient: FigmaClient = {
+      joinChannel: () => Promise.resolve(''),
+      sendCommand: () =>
+        Promise.resolve({ local: null, remote: [] }),
+      disconnect: () => undefined,
+      isConnected: () => true,
+      currentChannel: () => 'test-ch',
+    }
+    const result = await handleInspectComponents(
+      { query: 'Button' },
+      mockClient,
+    )
+    expect(result.content[0].text).toBe(
+      'Unexpected response from plugin',
+    )
+  })
+
   it('sends get_local_components and returns compact tree via toComponentsTree', async () => {
     const mockClient: FigmaClient = {
       joinChannel: () => Promise.resolve(''),

@@ -177,6 +177,10 @@ export const handleGetNodes = async (
       return textResult('Failed to get nodes from plugin.')
     }
 
+    if (!Array.isArray(raw)) {
+      return textResult('Unexpected response from plugin')
+    }
+
     const effectiveDepth = depth ?? 3
     const truncated = raw.map(node =>
       truncateChildren(node, effectiveDepth, 0),

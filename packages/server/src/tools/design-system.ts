@@ -75,6 +75,12 @@ export const handleInspectComponents = async (
   }
 
   if (query !== undefined) {
+    if (
+      !Array.isArray(raw.local) ||
+      !Array.isArray(raw.remote)
+    ) {
+      return textResult('Unexpected response from plugin')
+    }
     const escaped = query
       .replace(/[.+^${}()|[\]\\]/g, '\\$&')
       .replace(/\*/g, '.*')

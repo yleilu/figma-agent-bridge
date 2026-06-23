@@ -312,6 +312,24 @@ describe('handleGetNodes', () => {
     expect(Array.isArray(json)).toBe(true)
     expect(json[0].id).toBe('1:42')
   })
+
+  it('returns Unexpected response when plugin returns a non-array', async () => {
+    const mockClient: FigmaClient = {
+      joinChannel: () => Promise.resolve(''),
+      sendCommand: () =>
+        Promise.resolve({ not: 'an array' }),
+      disconnect: () => undefined,
+      isConnected: () => true,
+      currentChannel: () => 'test-ch',
+    }
+    const result = await handleGetNodes(
+      { nodeIds: ['1:42'] },
+      mockClient,
+    )
+    expect(result.content[0].text).toBe(
+      'Unexpected response from plugin',
+    )
+  })
 })
 
 describe('handleListPages', () => {
