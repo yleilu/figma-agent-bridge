@@ -1,55 +1,87 @@
-const POLL_INTERVAL_MS = 200
-const MAX_POLL_ATTEMPTS = 30
+const DEFAULT_POLL_INTERVAL_MS = 200
+const DEFAULT_MAX_POLL_ATTEMPTS = 30
+
+export type EnsureRelayOptions = {
+  pollIntervalMs?: number
+  maxPollAttempts?: number
+}
+
+const isRelayUp = async (
+  httpUrl: string,
+): Promise<boolean> => {
+  try {
+    const res = await fetch(`${httpUrl}/channels`)
+    return res.ok
+  } catch {
+    return false
+  }
+}
 
 export const ensureRelay = async (
   httpUrl: string,
   port: number,
+  opts: EnsureRelayOptions = {},
 ): Promise<{
-  started: boolean
   error?: string
   proc?: ReturnType<typeof Bun.spawn>
 }> => {
-  // Health check — if relay is already running, return early
+  const pollIntervalMs =
+    opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
+  const maxPollAttempts =
+    opts.maxPollAttempts ?? DEFAULT_MAX_POLL_ATTEMPTS
+
+  // Health check — if relay is already running, return early.
+  if (await isRelayUp(httpUrl)) {
+    return {}
+  }
+
+  let proc: ReturnType<typeof Bun.spawn>
   try {
-    const res = await fetch(`${httpUrl}/channels`)
+    // Resolve relay entry point path.
+    const relayUrl = import.meta
+      .resolve('@figma-agent-bridge/relay')
+    const relayPath = Bun.fileURLToPath(relayUrl)
 
-    if (res.ok) {
-      return { started: false }
+    // Single-flight: re-check immediately before spawn in case another
+    // instance won the race between the first check and now (TOCTOU).
+    if (await isRelayUp(httpUrl)) {
+      return {}
     }
-  } catch {
-    // Not running — continue to spawn
+
+    // Spawn detached relay process.
+    proc = Bun.spawn(['bun', 'run', relayPath], {
+      env: { ...process.env, PORT: String(port) },
+      stdio: ['ignore', 'ignore', 'ignore'],
+    })
+    proc.unref()
+  } catch (err) {
+    return {
+      error: `Failed to spawn relay process: ${(err as Error).message}`,
+    }
   }
 
-  // Resolve relay entry point path
-  const relayUrl = import.meta
-    .resolve('@figma-agent-bridge/relay')
-  const relayPath = Bun.fileURLToPath(relayUrl)
+  // Poll for readiness.
+  for (let i = 0; i < maxPollAttempts; i++) {
+    await Bun.sleep(pollIntervalMs)
 
-  // Spawn detached relay process
-  const proc = Bun.spawn(['bun', 'run', relayPath], {
-    env: { ...process.env, PORT: String(port) },
-    stdio: ['ignore', 'ignore', 'ignore'],
-  })
-  proc.unref()
-
-  // Poll for readiness
-  for (let i = 0; i < MAX_POLL_ATTEMPTS; i++) {
-    await Bun.sleep(POLL_INTERVAL_MS)
-
-    try {
-      const res = await fetch(`${httpUrl}/channels`)
-
-      if (res.ok) {
-        return { started: true, proc }
+    // Early-crash detection: the child exited before becoming ready.
+    if (proc.exitCode !== null) {
+      return {
+        error: `Relay process exited early with code ${proc.exitCode}.`,
       }
-    } catch {
-      // Not ready yet
+    }
+
+    if (await isRelayUp(httpUrl)) {
+      return { proc }
     }
   }
 
+  // Timed out — kill the orphan and wait for it to exit.
+  proc.kill()
+  await proc.exited
   return {
-    started: false,
-    error:
-      'Relay process was spawned but did not become ready within 6 seconds.',
+    error: `Relay process was spawned but did not become ready within ${
+      (pollIntervalMs * maxPollAttempts) / 1000
+    } seconds.`,
   }
 }

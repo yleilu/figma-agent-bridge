@@ -8,6 +8,8 @@ import { ensureRelay } from '@figma-agent-bridge/server/ensure-relay'
 const TEST_PORT = 3100
 const HTTP_URL = `http://localhost:${TEST_PORT}`
 
+const FAST = { pollIntervalMs: 50, maxPollAttempts: 40 }
+
 const killPort = async (port: number) => {
   try {
     const proc = Bun.spawn(['lsof', '-ti', `:${port}`], {
@@ -32,35 +34,39 @@ const killPort = async (port: number) => {
 describe('ensureRelay', () => {
   afterEach(async () => {
     await killPort(TEST_PORT)
-    // Give OS time to release the port
     await Bun.sleep(200)
   })
 
-  it('returns started: false when relay is already running', async () => {
+  it('returns no error and no proc when relay is already running', async () => {
     const server = startRelay(TEST_PORT)
 
     try {
-      const result = await ensureRelay(HTTP_URL, TEST_PORT)
+      const result = await ensureRelay(
+        HTTP_URL,
+        TEST_PORT,
+        FAST,
+      )
 
-      expect(result).toEqual({ started: false })
+      expect(result.error).toBeUndefined()
+      expect(result.proc).toBeUndefined()
     } finally {
       stopRelay(server)
     }
   })
 
-  it('spawns relay and returns started: true', async () => {
-    const result = await ensureRelay(HTTP_URL, TEST_PORT)
+  it('spawns relay and returns a live proc', async () => {
+    const result = await ensureRelay(
+      HTTP_URL,
+      TEST_PORT,
+      FAST,
+    )
 
-    expect(result.started).toBe(true)
     expect(result.error).toBeUndefined()
+    expect(result.proc).toBeDefined()
 
-    // Verify relay is actually reachable
     const res = await fetch(`${HTTP_URL}/channels`)
     expect(res.ok).toBe(true)
 
-    // Clean up the spawned process
-    if (result.proc) {
-      result.proc.kill()
-    }
+    result.proc?.kill()
   })
 })
