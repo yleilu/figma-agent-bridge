@@ -9,14 +9,12 @@ import type { Server } from 'bun'
 import type {
   BroadcastMessage,
   ChannelInfo,
-  PongMessage,
   SystemMessage,
 } from '@figma-agent-bridge/shared/types'
 import {
   startRelay,
   stopRelay,
 } from '@figma-agent-bridge/relay/relay'
-import { APP_VERSION } from '@figma-agent-bridge/shared/constants'
 
 const TEST_PORT = 3099
 const WS_URL = `ws://localhost:${TEST_PORT}`
@@ -150,20 +148,28 @@ describe('relay', () => {
     await closeWs(ws2)
   })
 
-  it('responds to ping with pong identity', async () => {
+  it('two relays on different ports keep independent state', async () => {
+    const SECOND_PORT = 3100
+    const second = startRelay(SECOND_PORT)
+
+    // join on the first server's port only
     const ws = await connect()
     const nextMessage = createMessageQueue(ws)
+    ws.send(JSON.stringify({ type: 'join', channel: 'iso-ch' }))
+    await nextMessage()
 
-    ws.send(JSON.stringify({ type: 'ping' }))
+    const firstChannels = (await (
+      await fetch(`${HTTP_URL}/channels`)
+    ).json()) as ChannelInfo[]
+    const secondChannels = (await (
+      await fetch(`http://localhost:${SECOND_PORT}/channels`)
+    ).json()) as ChannelInfo[]
 
-    const msg = (await nextMessage()) as PongMessage
-    expect(msg).toEqual({
-      type: 'pong',
-      name: 'figma-agent-bridge',
-      version: APP_VERSION,
-    })
+    expect(firstChannels.map(c => c.channel)).toEqual(['iso-ch'])
+    expect(secondChannels).toEqual([])
 
     await closeWs(ws)
+    stopRelay(second)
   })
 
   describe('channel registry', () => {
