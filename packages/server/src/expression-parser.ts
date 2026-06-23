@@ -283,50 +283,11 @@ export const parseEffectExpressions = (
   expressions: string[],
 ): ParsedEffect[] => {
   return expressions.map(expr => {
-    const { styleName, value } = extractStylePrefix(expr)
-
-    // shadow(x,y,radius,color) or shadow(x,y,radius,color,spread)
-    const shadowMatch = value.match(
-      /^(shadow|inner-shadow)\((-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(\d+(?:\.\d+)?),(#[0-9A-Fa-f]{6,8})(?:,(\d+(?:\.\d+)?))?\)$/,
-    )
-    if (shadowMatch) {
-      const color = hexToRgb(shadowMatch[5])
-      const result: ParsedShadowEffect = {
-        type:
-          shadowMatch[1] === 'shadow'
-            ? 'DROP_SHADOW'
-            : 'INNER_SHADOW',
-        offset: {
-          x: parseFloat(shadowMatch[2]),
-          y: parseFloat(shadowMatch[3]),
-        },
-        radius: parseFloat(shadowMatch[4]),
-        color,
-        ...(shadowMatch[6] !== undefined
-          ? { spread: parseFloat(shadowMatch[6]) }
-          : {}),
-        ...(styleName ? { styleName } : {}),
-      }
-      return result
+    const result = parseEffectExpression(expr)
+    if (result === null) {
+      throw new Error(`Unknown effect expression: ${expr}`)
     }
-
-    // blur(radius)
-    const blurMatch = value.match(
-      /^(blur|bg-blur)\((\d+(?:\.\d+)?)\)$/,
-    )
-    if (blurMatch) {
-      const result: ParsedBlurEffect = {
-        type:
-          blurMatch[1] === 'blur'
-            ? 'LAYER_BLUR'
-            : 'BACKGROUND_BLUR',
-        radius: parseFloat(blurMatch[2]),
-        ...(styleName ? { styleName } : {}),
-      }
-      return result
-    }
-
-    throw new Error(`Unknown effect expression: ${expr}`)
+    return result
   })
 }
 

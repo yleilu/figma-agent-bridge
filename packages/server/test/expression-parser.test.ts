@@ -375,6 +375,29 @@ describe('parseEffectExpressions', () => {
     }
     expect(effect.radius).toBe(8)
   })
+
+  it('throws on an unknown effect expression', () => {
+    expect(() =>
+      parseEffectExpressions(['glow(5)']),
+    ).toThrow('Unknown effect expression: glow(5)')
+  })
+
+  it('matches parseEffectExpression for every supported form', () => {
+    const inputs = [
+      'shadow(0,4,8,#00000040)',
+      'shadow(0,4,8,#000000,2)',
+      'inner-shadow(0,2,4,#00000020)',
+      'blur(10)',
+      'bg-blur(20)',
+      'style(Elevation/Medium)shadow(0,4,8,#00000040)',
+    ]
+    const batch = parseEffectExpressions(inputs)
+    for (let i = 0; i < inputs.length; i++) {
+      expect(batch[i]).toEqual(
+        parseEffectExpression(inputs[i])!,
+      )
+    }
+  })
 })
 
 describe('parseFontExpression', () => {
