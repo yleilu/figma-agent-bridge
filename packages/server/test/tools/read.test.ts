@@ -153,24 +153,30 @@ describe('handleInspectPageLayout', () => {
     expect(result.content[0].text).toContain('# 2 selected')
   })
 
-  it('skips nodes that fail to fetch in multi-selection', async () => {
+  it('prepends a note listing failed ids in multi-selection', async () => {
+    const secondFixture = JSON.parse(
+      JSON.stringify(cardFixture),
+    )
+    secondFixture.id = '2:1'
+    secondFixture.name = 'Card2'
+
     const mockClient: FigmaClient = {
       joinChannel: () => Promise.resolve(''),
       sendCommand: (cmd, params) => {
         if (cmd === 'get_selection') {
           return Promise.resolve([
             { id: '1:42', name: 'Card', type: 'FRAME' },
-            {
-              id: '9:99',
-              name: 'Missing',
-              type: 'FRAME',
-            },
+            { id: '2:1', name: 'Card2', type: 'FRAME' },
+            { id: '9:99', name: 'Missing', type: 'FRAME' },
           ])
         }
         if (cmd === 'get_node') {
           const p = params as { nodeId: string }
           if (p.nodeId === '9:99') {
             return Promise.resolve(null)
+          }
+          if (p.nodeId === '2:1') {
+            return Promise.resolve(secondFixture)
           }
           return Promise.resolve(cardFixture)
         }
@@ -183,11 +189,12 @@ describe('handleInspectPageLayout', () => {
 
     const result = await handleInspect({}, mockClient)
 
-    // Should fall back to single-node tree since only one resolved
+    // multi tree rendered for the 2 resolved nodes
+    expect(result.content[0].text).toContain('# 2 selected')
+    // plus a note naming the failed id
     expect(result.content[0].text).toContain(
-      '# Card [1:42]',
+      'Note: failed to fetch 1 node(s): 9:99',
     )
-    expect(result.content[0].text).not.toContain('Missing')
   })
 })
 

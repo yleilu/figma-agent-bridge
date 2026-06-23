@@ -74,6 +74,9 @@ export const handleInspect = async (
         }),
       ),
     )
+    const failedIds = selection
+      .filter((_, i) => raws[i] === null)
+      .map(sel => sel.id)
     const parsedNodes = raws
       .filter(
         (raw): raw is Record<string, unknown> =>
@@ -81,10 +84,15 @@ export const handleInspect = async (
       )
       .map(raw => parseNode(raw))
 
+    const note =
+      parsedNodes.length < selection.length
+        ? `Note: failed to fetch ${failedIds.length} node(s): ${failedIds.join(', ')}\n\n`
+        : ''
+
     // If only one node resolved, fall back to single-node format
     if (parsedNodes.length === 1) {
       const singleTree = toInspectTree(parsedNodes[0])
-      return textResult(singleTree)
+      return textResult(note + singleTree)
     }
     if (parsedNodes.length === 0) {
       return textResult(
@@ -93,7 +101,7 @@ export const handleInspect = async (
     }
 
     const tree = toInspectTreeMulti(parsedNodes)
-    return textResult(tree)
+    return textResult(note + tree)
   } catch (err) {
     return textResult(
       `Error: ${err instanceof Error ? err.message : String(err)}`,
