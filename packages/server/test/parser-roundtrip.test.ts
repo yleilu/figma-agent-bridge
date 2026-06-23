@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import { parseNode } from '@figma-agent-bridge/server/parser'
+import { parseColorExpression } from '@figma-agent-bridge/server/expression-parser'
 
 describe('parser round-trip fixes', () => {
   it('includes shadow spread in effect expression', () => {
@@ -303,5 +304,52 @@ describe('parser round-trip fixes', () => {
     expect(parsed.fills![0]).toMatch(/^linear-gradient\(/)
     expect(parsed.fills![0]).toContain('#FF0000')
     expect(parsed.fills![0]).toContain('#0000FF')
+  })
+
+  it('round-trips a negative linear-gradient angle exactly', () => {
+    const raw = {
+      id: '1:9',
+      name: 'NegGradient',
+      type: 'RECTANGLE',
+      absoluteBoundingBox: {
+        x: 0,
+        y: 0,
+        width: 400,
+        height: 300,
+      },
+      fills: [
+        {
+          type: 'GRADIENT_LINEAR',
+          visible: true,
+          // atan2(transform[0][1], transform[0][0]) = atan2(-1, 0) = -90deg
+          gradientTransform: [
+            [0, -1, 1],
+            [1, 0, 0],
+          ],
+          gradientStops: [
+            {
+              position: 0,
+              color: { r: 1, g: 0, b: 0, a: 1 },
+            },
+            {
+              position: 1,
+              color: { r: 0, g: 0, b: 1, a: 1 },
+            },
+          ],
+        },
+      ],
+    }
+
+    const parsed = parseNode(raw)
+    const expr = parsed.fills![0]
+    expect(expr).toBe(
+      'linear-gradient(-90deg, #FF0000 0%, #0000FF 100%)',
+    )
+
+    const reparsed = parseColorExpression(expr)
+    if (!reparsed || reparsed.type !== 'GRADIENT_LINEAR') {
+      throw new Error('Expected GRADIENT_LINEAR')
+    }
+    expect(reparsed.angle).toBe(-90)
   })
 })

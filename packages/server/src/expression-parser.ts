@@ -188,7 +188,7 @@ export const parseColorExpression = (
 
     if (gradientType === 'linear') {
       const angleMatch = inner.match(
-        /^(\d+(?:\.\d+)?)deg,\s*(.+)$/,
+        /^(-?\d+(?:\.\d+)?)deg,\s*(.+)$/,
       )
       if (angleMatch) {
         angle = parseFloat(angleMatch[1])
