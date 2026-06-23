@@ -431,4 +431,44 @@ describe('parser round-trip fixes', () => {
     // 0.5 * 0.5 = 0.25 -> 0x40 -> #00000040
     expect(parsed.fills![0]).toBe('#00000040')
   })
+
+  it('parseFills and style paint rendering agree on a linear gradient', () => {
+    // Same gradient via node fills (parseFills path)
+    const nodeRaw = {
+      id: '1:13',
+      name: 'G',
+      type: 'RECTANGLE',
+      absoluteBoundingBox: {
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+      },
+      fills: [
+        {
+          type: 'GRADIENT_LINEAR',
+          visible: true,
+          gradientTransform: [
+            [0.707, 0.707, 0],
+            [-0.707, 0.707, 0],
+          ],
+          gradientStops: [
+            {
+              position: 0,
+              color: { r: 1, g: 0, b: 0, a: 1 },
+            },
+            {
+              position: 1,
+              color: { r: 0, g: 0, b: 1, a: 1 },
+            },
+          ],
+        },
+      ],
+    }
+    const parsed = parseNode(nodeRaw)
+    // atan2(0.707, 0.707) ≈ 45deg
+    expect(parsed.fills![0]).toBe(
+      'linear-gradient(45deg, #FF0000 0%, #0000FF 100%)',
+    )
+  })
 })

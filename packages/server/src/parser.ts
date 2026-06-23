@@ -51,58 +51,109 @@ const rgbaToHex = (color: RGBA): string => {
   return rgb.toUpperCase()
 }
 
+type PaintLike = {
+  type: string
+  opacity?: number
+  color?: RGBA
+  gradientStops?: { position: number; color: RGBA }[]
+  gradientTransform?: number[][]
+}
+
+const paintToExpression = (paint: PaintLike): string => {
+  if (
+    paint.type === 'SOLID' &&
+    paint.color !== null &&
+    paint.color !== undefined
+  ) {
+    const effectiveAlpha =
+      (paint.color.a ?? 1) * (paint.opacity ?? 1)
+    return rgbaToHex({ ...paint.color, a: effectiveAlpha })
+  }
+  if (paint.type === 'IMAGE') {
+    return 'image'
+  }
+  if (paint.gradientStops !== undefined) {
+    const stops = paint.gradientStops
+      .map(
+        s =>
+          `${rgbaToHex(s.color)} ${Math.round(s.position * 100)}%`,
+      )
+      .join(', ')
+    if (paint.type === 'GRADIENT_LINEAR') {
+      const transform = paint.gradientTransform
+      const angle =
+        transform !== undefined
+          ? Math.round(
+              (Math.atan2(
+                transform[0][1],
+                transform[0][0],
+              ) *
+                180) /
+                Math.PI,
+            )
+          : 0
+      return `linear-gradient(${angle}deg, ${stops})`
+    }
+    if (paint.type === 'GRADIENT_RADIAL') {
+      return `radial-gradient(${stops})`
+    }
+    if (paint.type === 'GRADIENT_ANGULAR') {
+      return `angular-gradient(${stops})`
+    }
+    if (paint.type === 'GRADIENT_DIAMOND') {
+      return `diamond-gradient(${stops})`
+    }
+  }
+  return paint.type.toLowerCase()
+}
+
+const effectToExpression = (
+  effect: FigmaEffect,
+  includeSpread: boolean,
+): string => {
+  if (
+    effect.type === 'DROP_SHADOW' ||
+    effect.type === 'INNER_SHADOW'
+  ) {
+    const colorHex =
+      effect.color !== null && effect.color !== undefined
+        ? rgbaToHex(effect.color)
+        : '?'
+    const ox =
+      effect.offset !== null && effect.offset !== undefined
+        ? effect.offset.x
+        : 0
+    const oy =
+      effect.offset !== null && effect.offset !== undefined
+        ? effect.offset.y
+        : 0
+    const prefix =
+      effect.type === 'DROP_SHADOW'
+        ? 'shadow'
+        : 'inner-shadow'
+    const spreadStr =
+      includeSpread &&
+      effect.spread !== undefined &&
+      effect.spread !== 0
+        ? `,${effect.spread}`
+        : ''
+    return `${prefix}(${ox},${oy},${effect.radius ?? 0},${colorHex}${spreadStr})`
+  }
+  if (effect.type === 'BACKGROUND_BLUR') {
+    return `bg-blur(${effect.radius ?? 0})`
+  }
+  if (effect.type === 'LAYER_BLUR') {
+    return `blur(${effect.radius ?? 0})`
+  }
+  return effect.type.toLowerCase()
+}
+
 const parseFills = (
   fills: FigmaFill[],
 ): string[] | undefined => {
   const result = fills
     .filter(f => f.visible !== false)
-    .map(f => {
-      if (
-        f.type === 'SOLID' &&
-        f.color !== null &&
-        f.color !== undefined
-      ) {
-        const effectiveAlpha =
-          (f.color.a ?? 1) * (f.opacity ?? 1)
-        return rgbaToHex({ ...f.color, a: effectiveAlpha })
-      }
-      if (f.type === 'IMAGE') {
-        return 'image'
-      }
-      if (f.gradientStops !== undefined) {
-        const stops = f.gradientStops
-          .map(
-            (s: { position: number; color: RGBA }) =>
-              `${rgbaToHex(s.color)} ${Math.round(s.position * 100)}%`,
-          )
-          .join(', ')
-        if (f.type === 'GRADIENT_LINEAR') {
-          const transform = f.gradientTransform
-          const angle =
-            transform !== undefined
-              ? Math.round(
-                  (Math.atan2(
-                    transform[0][1],
-                    transform[0][0],
-                  ) *
-                    180) /
-                    Math.PI,
-                )
-              : 0
-          return `linear-gradient(${angle}deg, ${stops})`
-        }
-        if (f.type === 'GRADIENT_RADIAL') {
-          return `radial-gradient(${stops})`
-        }
-        if (f.type === 'GRADIENT_ANGULAR') {
-          return `angular-gradient(${stops})`
-        }
-        if (f.type === 'GRADIENT_DIAMOND') {
-          return `diamond-gradient(${stops})`
-        }
-      }
-      return f.type.toLowerCase()
-    })
+    .map(f => paintToExpression(f))
     .filter((v): v is string => Boolean(v))
 
   return result.length > 0 ? result : undefined
@@ -113,43 +164,7 @@ const parseEffects = (
 ): string[] | undefined => {
   const result = effects
     .filter(e => e.visible !== false)
-    .map(e => {
-      if (
-        e.type === 'DROP_SHADOW' ||
-        e.type === 'INNER_SHADOW'
-      ) {
-        const colorHex =
-          e.color !== null && e.color !== undefined
-            ? rgbaToHex(e.color)
-            : '?'
-        const ox =
-          e.offset !== null && e.offset !== undefined
-            ? e.offset.x
-            : 0
-        const oy =
-          e.offset !== null && e.offset !== undefined
-            ? e.offset.y
-            : 0
-        const prefix =
-          e.type === 'DROP_SHADOW'
-            ? 'shadow'
-            : 'inner-shadow'
-        const spreadStr =
-          e.spread !== undefined && e.spread !== 0
-            ? `,${e.spread}`
-            : ''
-
-        return `${prefix}(${ox},${oy},${e.radius ?? 0},${colorHex}${spreadStr})`
-      }
-      if (e.type === 'BACKGROUND_BLUR') {
-        return `bg-blur(${e.radius ?? 0})`
-      }
-      if (e.type === 'LAYER_BLUR') {
-        return `blur(${e.radius ?? 0})`
-      }
-
-      return e.type.toLowerCase()
-    })
+    .map(e => effectToExpression(e, true))
 
   return result.length > 0 ? result : undefined
 }
@@ -745,89 +760,11 @@ const renderPaintValue = (
   if (paints.length === 0) {
     return 'none'
   }
-
-  const paint = paints[0] as {
-    type: string
-    color?: RGBA
-    gradientStops?: {
-      position: number
-      color: RGBA
-    }[]
-    gradientTransform?: number[][]
-  }
-
-  if (paint.type === 'SOLID' && paint.color !== undefined) {
-    return rgbaToHex(paint.color)
-  }
-
-  if (paint.type === 'IMAGE') {
-    return 'image'
-  }
-
-  if (paint.gradientStops !== undefined) {
-    const stops = paint.gradientStops
-      .map(
-        s =>
-          `${rgbaToHex(s.color)} ${Math.round(s.position * 100)}%`,
-      )
-      .join(', ')
-
-    if (paint.type === 'GRADIENT_LINEAR') {
-      const transform = paint.gradientTransform
-      const angle =
-        transform !== undefined
-          ? Math.round(
-              (Math.atan2(
-                transform[0][1],
-                transform[0][0],
-              ) *
-                180) /
-                Math.PI,
-            )
-          : 0
-      return `linear-gradient(${angle}deg, ${stops})`
-    }
-    if (paint.type === 'GRADIENT_RADIAL') {
-      return `radial-gradient(${stops})`
-    }
-    if (paint.type === 'GRADIENT_ANGULAR') {
-      return `angular-gradient(${stops})`
-    }
-    if (paint.type === 'GRADIENT_DIAMOND') {
-      return `diamond-gradient(${stops})`
-    }
-  }
-
-  return paint.type.toLowerCase()
+  return paintToExpression(paints[0] as PaintLike)
 }
 
-const renderStyleEffect = (effect: FigmaEffect): string => {
-  if (effect.type === 'DROP_SHADOW') {
-    const colorHex =
-      effect.color !== undefined
-        ? rgbaToHex(effect.color)
-        : '?'
-    const ox = effect.offset?.x ?? 0
-    const oy = effect.offset?.y ?? 0
-    return `shadow(${ox},${oy},${effect.radius ?? 0},${colorHex})`
-  }
-  if (effect.type === 'INNER_SHADOW') {
-    const colorHex =
-      effect.color !== undefined
-        ? rgbaToHex(effect.color)
-        : '?'
-    const ox = effect.offset?.x ?? 0
-    const oy = effect.offset?.y ?? 0
-    return `inner-shadow(${ox},${oy},${effect.radius ?? 0},${colorHex})`
-  }
-  if (effect.type === 'BACKGROUND_BLUR') {
-    return `bg-blur(${effect.radius ?? 0})`
-  }
-  if (effect.type === 'LAYER_BLUR') {
-    return `blur(${effect.radius ?? 0})`
-  }
-  return effect.type.toLowerCase()
-}
+const renderStyleEffect = (effect: FigmaEffect): string =>
+  effectToExpression(effect, false)
 
 const renderGridValue = (
   grids: Record<string, unknown>[],
