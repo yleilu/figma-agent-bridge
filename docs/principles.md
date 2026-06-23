@@ -11,6 +11,7 @@ related:
   - "[[figma-bridge/docs/specs/overview]]"
   - "[[figma-bridge/docs/specs/tool-surface]]"
   - "[[figma-bridge/docs/specs/expression-formats]]"
+  - "[[figma-bridge/docs/reference/figma-professional-practice]]"
 ---
 
 # figma-agent-bridge — Principles
@@ -118,6 +119,17 @@ parser**. Formats are never reinvented per tool; the grammar is extended in the 
 parser together.
 *Why:* one grammar lets the same string round-trip through read and write and keeps every
 tool consistent; per-tool formats guarantee drift.
+
+### T9 — Native to modern professional Figma practice
+The surface makes the modern professional Figma workflow the path of least resistance —
+each part at least as easy as the naive alternative and never blocked: **auto-layout over
+coordinates**, **composition from components** (variants + boolean/text/instance-swap
+properties + slots), and **binding to semantic tokens/styles over literals** (including
+layout numbers). An agent defaults to HTML-thinking — absolute frames, duplicated shapes,
+hard-coded values — so the tool removes every reason not to build like a professional.
+*Why:* in Figma, quality and maintainability come from this workflow, not pixel-pushing.
+Only the plugin layer should *prefer* it (P1); the tool layer makes it effortless. Refines
+T6. Full reference: [[figma-bridge/docs/reference/figma-professional-practice]].
 
 ## Plugin layer (skills / agents / commands)
 
