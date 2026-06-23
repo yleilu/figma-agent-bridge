@@ -214,9 +214,10 @@ const handleMessage = (
     message: message.message,
   }
 
+  const payload = JSON.stringify(broadcast)
   members.forEach(client => {
     if (client !== ws) {
-      send(client, broadcast)
+      client.send(payload)
     }
   })
 }
@@ -277,6 +278,10 @@ export const startRelay = (
         })
       },
       message: (ws, raw) => {
+        if (!consumeToken(ctx, ws)) {
+          return
+        }
+
         let json: unknown
         try {
           json = JSON.parse(raw as string)
@@ -286,9 +291,6 @@ export const startRelay = (
 
         const parsed = relayIncomingSchema.safeParse(json)
         if (!parsed.success) {
-          return
-        }
-        if (!consumeToken(ctx, ws)) {
           return
         }
         const frame = parsed.data

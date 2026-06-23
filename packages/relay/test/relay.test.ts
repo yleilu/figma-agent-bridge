@@ -532,6 +532,85 @@ describe('relay', () => {
     await closeWs(ws)
   })
 
+  it('rejects the 65th member joining a full channel', async () => {
+    const CAP_PORT = 3120
+    const CAP_CHANNEL = 'full-channel'
+    const capServer = startRelay(CAP_PORT, {
+      heartbeatInterval: 600_000,
+    })
+    const sockets: WebSocket[] = []
+
+    try {
+      // Open MAX_MEMBERS_PER_CHANNEL (64) sockets and join the same channel
+      for (let i = 0; i < 64; i++) {
+        const ws = await new Promise<WebSocket>(
+          (resolve, reject) => {
+            const s = new WebSocket(
+              `ws://localhost:${CAP_PORT}`,
+            )
+            s.onopen = () => resolve(s)
+            s.onerror = () =>
+              reject(
+                new Error('WebSocket connection failed'),
+              )
+          },
+        )
+        sockets.push(ws)
+        const next = createMessageQueue(ws)
+        ws.send(
+          JSON.stringify({
+            type: 'join',
+            channel: CAP_CHANNEL,
+          }),
+        )
+        const ok = (await next()) as SystemMessage
+        expect(ok.message.result).toBe(
+          `Connected to channel: ${CAP_CHANNEL}`,
+        )
+      }
+
+      // 65th socket — should be rejected with member-cap error
+      const ws65 = await new Promise<WebSocket>(
+        (resolve, reject) => {
+          const s = new WebSocket(
+            `ws://localhost:${CAP_PORT}`,
+          )
+          s.onopen = () => resolve(s)
+          s.onerror = () =>
+            reject(new Error('WebSocket connection failed'))
+        },
+      )
+      sockets.push(ws65)
+      const next65 = createMessageQueue(ws65)
+      ws65.send(
+        JSON.stringify({
+          type: 'join',
+          channel: CAP_CHANNEL,
+        }),
+      )
+      const rejected = (await next65()) as SystemMessage
+      expect(rejected.type).toBe('system')
+      expect(rejected.message.result).toBe(
+        'Error: member limit reached for this channel',
+      )
+    } finally {
+      await Promise.all(
+        sockets.map(
+          ws =>
+            new Promise<void>(resolve => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.onclose = () => resolve()
+                ws.close()
+              } else {
+                resolve()
+              }
+            }),
+        ),
+      )
+      stopRelay(capServer)
+    }
+  })
+
   it('returns 426 for non-websocket, non-/channels requests', async () => {
     const res = await fetch(`${HTTP_URL}/anything-else`)
     expect(res.status).toBe(426)
