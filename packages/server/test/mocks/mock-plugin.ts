@@ -130,14 +130,17 @@ export const createMockPlugin = (
           | undefined
         const parentId = cmd.params?.parentId as string
         const nodeType = nodeSpec?.type as string
-        // SECTION nodes use MinimalFillsMixin (read-only fills),
-        // so the plugin must guard before assigning fills/strokes.
-        // Simulate by returning the node without fills/strokes
-        // to confirm they were silently skipped (no error thrown).
+        // Echo the received node spec back (serialized fills/
+        // effects/layout/strokes) so e2e tests can assert that the
+        // converted spec reached the plugin intact. SECTION nodes use
+        // MinimalFillsMixin (read-only fills); the real plugin guards
+        // before assigning, but echoing the spec is sufficient for
+        // serialization-regression coverage.
+        const { children: _children, ...echo } = nodeSpec ?? {}
         result = {
+          ...echo,
           id: `created:${Math.random().toString(36).slice(2, 8)}`,
-          name:
-            (nodeSpec?.name as string) ?? nodeType,
+          name: (nodeSpec?.name as string) ?? nodeType,
           type: nodeType,
           parentId,
         }
@@ -166,7 +169,11 @@ export const createMockPlugin = (
         const totalNodes = treeSpec
           ? countNodes(treeSpec)
           : 1
+        // Echo the received tree spec back (serialized fills/effects/
+        // layout, plus children) so e2e/round-trip tests can assert
+        // the converted spec reached the plugin intact.
         result = {
+          ...(treeSpec ?? {}),
           id: `created:${Math.random().toString(36).slice(2, 8)}`,
           name:
             (treeSpec?.name as string) ??

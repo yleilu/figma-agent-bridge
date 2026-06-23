@@ -196,7 +196,7 @@ describe('M3 create tools e2e', () => {
     expect(data.childCount).toBeGreaterThan(0)
   })
 
-  it('create_tree with gradient fills', async () => {
+  it('create_tree echoes serialized gradient fill (angle + stops) back from plugin', async () => {
     const result = await handleCreateTree(
       {
         parentId: 'page:1',
@@ -216,6 +216,63 @@ describe('M3 create tools e2e', () => {
       result.content[0].text,
     ) as Record<string, unknown>
     expect(data.type).toBe('RECTANGLE')
+
+    // The mock now echoes the params it received, so a serialization
+    // regression (dropped stops, wrong angle) is visible here.
+    const fills = data.fills as {
+      type: string
+      angle: number
+      gradientStops: {
+        position: number
+        color: { r: number; g: number; b: number; a: number }
+      }[]
+    }[]
+    expect(fills).toHaveLength(1)
+    expect(fills[0].type).toBe('GRADIENT_LINEAR')
+    expect(fills[0].angle).toBe(135)
+    expect(fills[0].gradientStops).toHaveLength(2)
+    expect(fills[0].gradientStops[0].position).toBe(0)
+    expect(fills[0].gradientStops[0].color.r).toBeCloseTo(
+      1,
+      2,
+    ) // #FF -> 1.0
+    expect(fills[0].gradientStops[1].position).toBe(1)
+    expect(fills[0].gradientStops[1].color.b).toBeCloseTo(
+      0.769,
+      2,
+    ) // #C4 -> 0.769
+  })
+
+  it('create_node echoes serialized effect (drop shadow) back from plugin', async () => {
+    const result = await handleCreateNode(
+      {
+        parentId: 'page:1',
+        node: {
+          type: 'FRAME',
+          name: 'Shadow Box',
+          size: [200, 200],
+          effects: ['shadow(0,4,8,#00000040)'],
+        },
+      },
+      client,
+    )
+
+    const data = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(data.type).toBe('FRAME')
+
+    const effects = data.effects as {
+      type: string
+      offset: { x: number; y: number }
+      radius: number
+      color: { r: number; g: number; b: number; a: number }
+    }[]
+    expect(effects).toHaveLength(1)
+    expect(effects[0].type).toBe('DROP_SHADOW')
+    expect(effects[0].offset).toEqual({ x: 0, y: 4 })
+    expect(effects[0].radius).toBe(8)
+    expect(effects[0].color.a).toBeCloseTo(0.251, 2) // #40 -> 0.251
   })
 
   it('create_component returns warning when createSlot unavailable', async () => {
