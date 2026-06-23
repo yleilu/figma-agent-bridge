@@ -368,13 +368,50 @@ describe('relay', () => {
     ws.send(JSON.stringify({ type: 'join', channel: 'cap-over' }))
     const rejected = (await nextMessage()) as SystemMessage
     expect(rejected.type).toBe('system')
-    expect(rejected.message.result).toMatch(/^Error:/)
+    expect(rejected.message.result).toBe(
+      'Error: channel limit reached for this connection',
+    )
 
     // rejected channel never entered the registry
     const data = (await (
       await fetch(`${HTTP_URL}/channels`)
     ).json()) as ChannelInfo[]
     expect(data.some(c => c.channel === 'cap-over')).toBe(false)
+
+    await closeWs(ws)
+  })
+
+  it('token-bucket rate limiter silently drops frames when bucket is empty', async () => {
+    const ws = await connect()
+    const nextMessage = createMessageQueue(ws)
+
+    // Join the channel once — costs 1 token (99 remaining from RATE_BURST=100)
+    ws.send(JSON.stringify({ type: 'join', channel: 'rate-ch' }))
+    await nextMessage()
+
+    // Send 99 idempotent re-joins — each costs 1 token, draining the bucket to 0
+    for (let i = 0; i < 99; i++) {
+      ws.send(JSON.stringify({ type: 'join', channel: 'rate-ch' }))
+      await nextMessage()
+    }
+
+    // Count messages received within the drop window.
+    // 101st frame: bucket is now empty — must be silently dropped (no reply).
+    let extraMessages = 0
+    ws.onmessage = event => {
+      void event
+      extraMessages++
+    }
+    ws.send(JSON.stringify({ type: 'join', channel: 'rate-ch' }))
+    await Bun.sleep(200)
+    expect(extraMessages).toBe(0)
+
+    // Connection is still alive — a new frame after token refill works
+    await Bun.sleep(100) // ~5 tokens refilled at 50/s
+    const nextMessage2 = createMessageQueue(ws)
+    ws.send(JSON.stringify({ type: 'join', channel: 'rate-ch' }))
+    const recovered = (await nextMessage2()) as SystemMessage
+    expect(recovered.type).toBe('system')
 
     await closeWs(ws)
   })

@@ -58,7 +58,8 @@ const consumeToken = (
 ): boolean => {
   const state = ctx.rate.get(ws)
   if (state === undefined) {
-    return true
+    // Bucket must always be seeded in `open`; missing state is a bug.
+    return false
   }
   const now = Date.now()
   const elapsed = (now - state.last) / 1000
