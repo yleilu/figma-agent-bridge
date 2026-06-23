@@ -336,6 +336,57 @@ describe('figma-client', () => {
     client.disconnect()
   })
 
+  it('rejects joinChannel and stays disconnected when relay sends an Error: frame', async () => {
+    // Stand up a tiny WS server that always replies with the relay's rejection
+    // system frame format ("Error: <reason>"), simulating cap-exceeded responses.
+    const rejectServer = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch(req, srv) {
+        if (srv.upgrade(req)) {
+          return undefined
+        }
+        return new Response('ws only', { status: 426 })
+      },
+      websocket: {
+        open() {},
+        message(ws) {
+          // Reply with a rejection system frame (same format as relay rejectJoin).
+          ws.send(
+            JSON.stringify({
+              type: 'system',
+              message: {
+                id: 'reject-id',
+                result:
+                  'Error: member limit reached for this channel',
+              },
+            }),
+          )
+        },
+        close() {},
+      },
+    })
+
+    const client = createFigmaClient(
+      `ws://127.0.0.1:${rejectServer.port}`,
+    )
+
+    let caught: Error | null = null
+    try {
+      await client.joinChannel('full-ch')
+    } catch (err) {
+      caught = err as Error
+    }
+
+    expect(caught).not.toBeNull()
+    expect((caught as Error).message).toContain('Error:')
+    expect(client.isConnected()).toBe(false)
+    expect(client.currentChannel()).toBeNull()
+
+    client.disconnect()
+    rejectServer.stop(true)
+  })
+
   it('joinChannel while socket is CONNECTING opens a fresh socket and succeeds', async () => {
     const client = createFigmaClient(WS_URL)
 

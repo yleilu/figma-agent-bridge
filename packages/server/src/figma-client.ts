@@ -87,11 +87,24 @@ export const createFigmaClient = (
 
     if (parsed.type === 'system') {
       if (joinPending !== null) {
-        const { resolve, timer } = joinPending
-        joinPending = null
-        clearTimeout(timer)
-        channel = pendingChannel
-        resolve(parsed.message.result)
+        const { result } = parsed.message
+        // The relay sends "Error: <reason>" for both cap-exceeded rejections and
+        // other join failures. Detect this prefix and reject rather than resolve.
+        // TODO(follow-up): a cleaner long-term fix is a distinct relay frame type
+        // (e.g. type: 'join-rejected') so clients never need to parse free-text.
+        if (result.startsWith('Error:')) {
+          const { reject, timer } = joinPending
+          joinPending = null
+          pendingChannel = null
+          clearTimeout(timer)
+          reject(new Error(result))
+        } else {
+          const { resolve, timer } = joinPending
+          joinPending = null
+          clearTimeout(timer)
+          channel = pendingChannel
+          resolve(result)
+        }
       }
 
       return
