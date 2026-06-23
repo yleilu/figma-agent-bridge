@@ -96,8 +96,10 @@ tail lives, so the core stays short.
 - **Solid:** `solid()` is **optional** — a bare color *is* a solid paint. Color
   notations: `#RRGGBB`, `#RRGGBBAA`, `rgb(r,g,b)`, `rgba(r,g,b,a)` (a = 0–1). The
   view emits hex (most compact); the write parser accepts all.
-- **Gradients:** first arg of `linear` is the angle in degrees (from Figma's
-  `gradientTransform`); stops are `#color@percent`.
+- **Gradients:** `linear`'s first arg is the angle in degrees (derived from Figma's
+  `gradientTransform`). **Angle is linear-only** — `radial`, `angular`, and `diamond`
+  carry no angle (the build side never converts angle back to a transform for them);
+  non-trivial geometry for any gradient goes in `{tf=[a,b,c,d,e,f]}`. Stops are `#color@percent`.
 - **`{…}` keys (any paint):** `op=` (paint opacity, distinct from color alpha),
   `blend=` (blend mode), `vis=false` (hidden paint). Image/video also: `scale=`
   (FILL/FIT/CROP/TILE), `rot=` (0/90/180/270), `tile=` (scaling factor),

@@ -12,16 +12,25 @@ export type ParsedSolidPaint = {
   styleName?: string
 }
 
-export type ParsedGradientPaint = {
-  type:
-    | 'GRADIENT_LINEAR'
-    | 'GRADIENT_RADIAL'
-    | 'GRADIENT_ANGULAR'
-    | 'GRADIENT_DIAMOND'
+export type ParsedLinearGradientPaint = {
+  type: 'GRADIENT_LINEAR'
   gradientStops: ParsedGradientStop[]
   angle: number
   styleName?: string
 }
+
+export type ParsedNonLinearGradientPaint = {
+  type:
+    | 'GRADIENT_RADIAL'
+    | 'GRADIENT_ANGULAR'
+    | 'GRADIENT_DIAMOND'
+  gradientStops: ParsedGradientStop[]
+  styleName?: string
+}
+
+export type ParsedGradientPaint =
+  | ParsedLinearGradientPaint
+  | ParsedNonLinearGradientPaint
 
 export type ParsedImagePaint = {
   type: 'IMAGE'
@@ -183,26 +192,35 @@ export const parseColorExpression = (
       diamond: 'GRADIENT_DIAMOND',
     }
 
-    let angle = 0
     let stopsStr = inner
 
     if (gradientType === 'linear') {
       const angleMatch = inner.match(
         /^(-?\d+(?:\.\d+)?)deg,\s*(.+)$/,
       )
+      let angle = 0
       if (angleMatch) {
         angle = parseFloat(angleMatch[1])
         // eslint-disable-next-line @typescript-eslint/prefer-destructuring
         stopsStr = angleMatch[2]
       }
+      const gradientStops = parseGradientStops(stopsStr)
+      const result: ParsedLinearGradientPaint = {
+        type: 'GRADIENT_LINEAR',
+        gradientStops,
+        angle,
+        ...(styleName ? { styleName } : {}),
+      }
+      return result
     }
 
     const gradientStops = parseGradientStops(stopsStr)
-
-    const result: ParsedGradientPaint = {
-      type: typeMap[gradientType],
+    const result: ParsedNonLinearGradientPaint = {
+      type: typeMap[gradientType] as
+        | 'GRADIENT_RADIAL'
+        | 'GRADIENT_ANGULAR'
+        | 'GRADIENT_DIAMOND',
       gradientStops,
-      angle,
       ...(styleName ? { styleName } : {}),
     }
     return result

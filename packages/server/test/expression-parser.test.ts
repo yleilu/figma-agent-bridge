@@ -52,14 +52,8 @@ describe('parseColorExpression', () => {
     const result = parseColorExpression(
       'linear-gradient(90deg, #FF0000 0%, #0000FF 100%)',
     )
-    if (
-      !result ||
-      (result.type !== 'GRADIENT_LINEAR' &&
-        result.type !== 'GRADIENT_RADIAL' &&
-        result.type !== 'GRADIENT_ANGULAR' &&
-        result.type !== 'GRADIENT_DIAMOND')
-    ) {
-      throw new Error('Expected gradient type')
+    if (!result || result.type !== 'GRADIENT_LINEAR') {
+      throw new Error('Expected GRADIENT_LINEAR')
     }
     expect(result.gradientStops).toHaveLength(2)
     expect(result.gradientStops[0].position).toBe(0)
@@ -181,14 +175,8 @@ describe('parseColorExpression', () => {
     const result = parseColorExpression(
       'linear-gradient(45deg, #FF0000 0%, #0000FF 100%)',
     )
-    if (
-      !result ||
-      (result.type !== 'GRADIENT_LINEAR' &&
-        result.type !== 'GRADIENT_RADIAL' &&
-        result.type !== 'GRADIENT_ANGULAR' &&
-        result.type !== 'GRADIENT_DIAMOND')
-    ) {
-      throw new Error('Expected gradient type')
+    if (!result || result.type !== 'GRADIENT_LINEAR') {
+      throw new Error('Expected GRADIENT_LINEAR')
     }
     expect(result.gradientStops).toHaveLength(2)
     expect(result.angle).toBe(45)
@@ -209,6 +197,34 @@ describe('parseColorExpression', () => {
   it('returns null for 3-char hex shorthand', () => {
     const result = parseColorExpression('#F00')
     expect(result).toBeNull()
+  })
+
+  it('omits angle for non-linear gradients', () => {
+    const radial = parseColorExpression(
+      'radial-gradient(#FFFFFF 0%, #00000000 100%)',
+    )
+    if (!radial || radial.type !== 'GRADIENT_RADIAL') {
+      throw new Error('Expected GRADIENT_RADIAL')
+    }
+    expect('angle' in radial).toBe(false)
+
+    const angular = parseColorExpression(
+      'angular-gradient(#FF0000 0%, #0000FF 100%)',
+    )
+    if (!angular || angular.type !== 'GRADIENT_ANGULAR') {
+      throw new Error('Expected GRADIENT_ANGULAR')
+    }
+    expect('angle' in angular).toBe(false)
+  })
+
+  it('keeps angle for linear gradients', () => {
+    const linear = parseColorExpression(
+      'linear-gradient(45deg, #FF0000 0%, #0000FF 100%)',
+    )
+    if (!linear || linear.type !== 'GRADIENT_LINEAR') {
+      throw new Error('Expected GRADIENT_LINEAR')
+    }
+    expect(linear.angle).toBe(45)
   })
 })
 
