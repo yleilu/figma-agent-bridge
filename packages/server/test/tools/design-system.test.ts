@@ -208,6 +208,42 @@ describe('handleInspectComponents', () => {
     expect(result.content[0].text).not.toContain('Avatar')
   })
 
+  it('matches query as a case-insensitive substring', async () => {
+    const mockClient: FigmaClient = {
+      joinChannel: () => Promise.resolve(''),
+      sendCommand: cmd => {
+        if (cmd === 'get_local_components') {
+          return Promise.resolve({
+            local: [
+              {
+                name: 'Primary Button',
+                id: '1:1',
+                key: 'k1',
+              },
+              { name: 'Avatar', id: '1:2', key: 'k2' },
+              { name: 123, id: '1:3', key: 'k3' },
+            ],
+            remote: [],
+          })
+        }
+        return Promise.resolve(null)
+      },
+      disconnect: () => undefined,
+      isConnected: () => true,
+      currentChannel: () => 'test-ch',
+    }
+
+    const result = await handleInspectComponents(
+      { query: 'tton' },
+      mockClient,
+    )
+
+    expect(result.content[0].text).toContain(
+      'Primary Button',
+    )
+    expect(result.content[0].text).not.toContain('Avatar')
+  })
+
   it('returns error when not connected', async () => {
     const mockClient: FigmaClient = {
       joinChannel: () => Promise.resolve(''),

@@ -82,20 +82,20 @@ export const handleInspectComponents = async (
   }
 
   if (query !== undefined) {
-    const escaped = query
-      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-      .replace(/\*/g, '.*')
-    const regex = new RegExp(escaped, 'i')
+    const needle = query.toLowerCase()
+    const matches = (c: Record<string, unknown>): boolean =>
+      typeof c.name === 'string' &&
+      c.name.toLowerCase().includes(needle)
     const filtered = {
-      local: raw.local.filter(c =>
-        regex.test(c.name as string),
-      ),
-      remote: raw.remote.filter(c =>
-        regex.test(c.name as string),
-      ),
+      local: raw.local.filter(matches),
+      remote: raw.remote.filter(matches),
     }
 
-    return textResult(toComponentsTree(filtered))
+    return {
+      content: [
+        { type: 'text', text: toComponentsTree(filtered) },
+      ],
+    }
   }
 
   return textResult(toComponentsTree(raw))
