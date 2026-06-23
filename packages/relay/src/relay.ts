@@ -3,12 +3,20 @@ import type {
   BroadcastMessage,
   ChannelInfo,
   ChannelMessage,
-  RelayIncoming,
   SystemMessage,
 } from '@figma-agent-bridge/shared'
-import { DEFAULT_PORT } from '@figma-agent-bridge/shared'
+import {
+  DEFAULT_PORT,
+  relayIncomingSchema,
+} from '@figma-agent-bridge/shared'
 import { randomUUID } from 'node:crypto'
 
+const MAX_CHANNELS_PER_CONNECTION = 32
+const MAX_MEMBERS_PER_CHANNEL = 64
+const MAX_TOTAL_CHANNELS = 1024
+const MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
+const RATE_TOKENS_PER_SEC = 50
+const RATE_BURST = 100
 const DEFAULT_HEARTBEAT_INTERVAL = 30_000
 
 type WsData = { id: string }
@@ -177,25 +185,31 @@ export const startRelay = (
       })
     },
     websocket: {
+      maxPayloadLength: MAX_PAYLOAD_BYTES,
       open: ws => {
         ctx.sockets.add(ws)
         ctx.alive.set(ws, true)
       },
       message: (ws, raw) => {
-        let parsed: RelayIncoming
-
+        let json: unknown
         try {
-          parsed = JSON.parse(raw as string) as RelayIncoming
+          json = JSON.parse(raw as string)
         } catch {
           return
         }
 
-        if (parsed.type === 'join') {
-          handleJoin(ctx, ws, parsed.channel)
-        } else if (parsed.type === 'register') {
-          handleRegister(ctx, parsed.channel, parsed.fileName)
-        } else if (parsed.type === 'message') {
-          handleMessage(ctx, parsed.channel, parsed)
+        const parsed = relayIncomingSchema.safeParse(json)
+        if (!parsed.success) {
+          return
+        }
+        const frame = parsed.data
+
+        if (frame.type === 'join') {
+          handleJoin(ctx, ws, frame.channel)
+        } else if (frame.type === 'register') {
+          handleRegister(ctx, frame.channel, frame.fileName)
+        } else if (frame.type === 'message') {
+          handleMessage(ctx, frame.channel, frame)
         }
       },
       pong: ws => {

@@ -288,4 +288,30 @@ describe('relay', () => {
       await closeWs(ws2)
     })
   })
+
+  it('drops malformed frames without affecting the connection', async () => {
+    const ws = await connect()
+    const nextMessage = createMessageQueue(ws)
+
+    // unknown discriminator -> dropped, no reply
+    ws.send(JSON.stringify({ type: 'bogus', channel: 'x' }))
+    // join with empty channel -> fails schema (.min(1)) -> dropped
+    ws.send(JSON.stringify({ type: 'join', channel: '' }))
+    // non-JSON -> dropped
+    ws.send('not json at all')
+
+    // a valid join still works on the same socket
+    ws.send(JSON.stringify({ type: 'join', channel: 'ok-ch' }))
+    const msg = (await nextMessage()) as SystemMessage
+    expect(msg.type).toBe('system')
+    expect(msg.message.result).toBe('Connected to channel: ok-ch')
+
+    // registry has only the valid channel
+    const data = (await (
+      await fetch(`${HTTP_URL}/channels`)
+    ).json()) as ChannelInfo[]
+    expect(data.map(c => c.channel)).toEqual(['ok-ch'])
+
+    await closeWs(ws)
+  })
 })
