@@ -163,6 +163,10 @@ export const createFigmaClient = (
       )
     }
 
+    // A new joinChannel call represents an intentional reconnect — reset the
+    // disconnected flag so connect() can open a fresh socket.
+    disconnected = false
+
     // Set joinPending synchronously before any await to prevent concurrent joins.
     const joinPromise = new Promise<string>(
       (resolve, reject) => {

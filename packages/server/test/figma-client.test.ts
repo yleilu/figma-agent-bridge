@@ -305,6 +305,52 @@ describe('figma-client', () => {
     client.disconnect()
   })
 
+  it('sendCommand rejects with "Not connected" before any join', async () => {
+    const client = createFigmaClient(WS_URL)
+
+    let caught: Error | null = null
+    try {
+      await client.sendCommand('noop')
+    } catch (err) {
+      caught = err as Error
+    }
+
+    expect(caught).not.toBeNull()
+    expect((caught as Error).message).toBe('Not connected')
+    expect(client.isConnected()).toBe(false)
+    expect(client.currentChannel()).toBeNull()
+  })
+
+  it('two sequential joins reuse a single OPEN socket', async () => {
+    const client = createFigmaClient(WS_URL)
+
+    const r1 = await client.joinChannel('seq-a')
+    expect(r1).toContain('seq-a')
+
+    // Second join after the first resolved: socket is OPEN, connect()
+    // must reuse it (no throw, channel switches).
+    const r2 = await client.joinChannel('seq-b')
+    expect(r2).toContain('seq-b')
+    expect(client.currentChannel()).toBe('seq-b')
+
+    client.disconnect()
+  })
+
+  it('joinChannel while socket is CONNECTING opens a fresh socket and succeeds', async () => {
+    const client = createFigmaClient(WS_URL)
+
+    // Kick a join and immediately disconnect to leave ws === null,
+    // then a new join must create a brand-new socket (CONNECTING path).
+    client.joinChannel('connecting-ch').catch(() => {})
+    client.disconnect()
+
+    const result = await client.joinChannel('fresh-ch')
+    expect(result).toContain('fresh-ch')
+    expect(client.isConnected()).toBe(true)
+
+    client.disconnect()
+  })
+
   it('rejects an in-flight sendCommand when the socket closes', async () => {
     const client = createFigmaClient(WS_URL)
     await client.joinChannel('inflight-ch')
