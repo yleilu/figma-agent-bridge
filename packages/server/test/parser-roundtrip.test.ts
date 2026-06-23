@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'bun:test'
-import { parseNode } from '@figma-agent-bridge/server/parser'
+import {
+  parseNode,
+  toStylesTree,
+} from '@figma-agent-bridge/server/parser'
 import { parseColorExpression } from '@figma-agent-bridge/server/expression-parser'
 
 describe('parser round-trip fixes', () => {
@@ -432,8 +435,8 @@ describe('parser round-trip fixes', () => {
     expect(parsed.fills![0]).toBe('#00000040')
   })
 
-  it('parseFills and style paint rendering agree on a linear gradient', () => {
-    // Same gradient via node fills (parseFills path)
+  it('parseFills path emits linear-gradient with angle for a 45deg transform', () => {
+    // Exercises only the parseFills/parseNode path (not toStylesTree)
     const nodeRaw = {
       id: '1:13',
       name: 'G',
@@ -470,5 +473,123 @@ describe('parser round-trip fixes', () => {
     expect(parsed.fills![0]).toBe(
       'linear-gradient(45deg, #FF0000 0%, #0000FF 100%)',
     )
+  })
+
+  // (a) Styles opacity: toStylesTree folds paint.opacity into hex alpha
+  it('toStylesTree folds paint.opacity=0.5 into 8-char #RRGGBBAA for a style paint', () => {
+    // Pins the intended behavior: the styles render path (renderPaintValue ->
+    // paintToExpression) multiplies paint.opacity into the color alpha and
+    // emits an 8-character hex string, consistent with parseFills.
+    const fixture = {
+      paint: [
+        {
+          id: 'S:op1',
+          name: 'Overlay/50',
+          paints: [
+            {
+              type: 'SOLID',
+              color: { r: 0, g: 0, b: 0, a: 1 },
+              opacity: 0.5,
+            },
+          ],
+        },
+      ],
+      text: [],
+      effect: [],
+      grid: [],
+    }
+    const tree = toStylesTree(fixture)
+    // a(1) * opacity(0.5) = 0.5 -> Math.round(0.5 * 255) = 128 = 0x80
+    expect(tree).toContain('] paint #00000080')
+  })
+
+  // (b) Gradient stops: linear gradient with intermediate stop round-trip
+  it('round-trips a linear gradient with an intermediate stop at 50%', () => {
+    const expr =
+      'linear-gradient(45deg, #FF0000 0%, #00FF00 50%, #0000FF 100%)'
+
+    // Serialized string must match exactly
+    const raw = {
+      id: '1:14',
+      name: 'ThreeStop',
+      type: 'RECTANGLE',
+      absoluteBoundingBox: {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 100,
+      },
+      fills: [
+        {
+          type: 'GRADIENT_LINEAR',
+          visible: true,
+          // atan2(0.707, 0.707) ≈ 45deg
+          gradientTransform: [
+            [0.707, 0.707, 0],
+            [-0.707, 0.707, 0],
+          ],
+          gradientStops: [
+            {
+              position: 0,
+              color: { r: 1, g: 0, b: 0, a: 1 },
+            },
+            {
+              position: 0.5,
+              color: { r: 0, g: 1, b: 0, a: 1 },
+            },
+            {
+              position: 1,
+              color: { r: 0, g: 0, b: 1, a: 1 },
+            },
+          ],
+        },
+      ],
+    }
+
+    const parsed = parseNode(raw)
+    expect(parsed.fills![0]).toBe(expr)
+
+    // Re-parse: stop positions must survive exactly
+    const reparsed = parseColorExpression(expr)
+    if (!reparsed || reparsed.type !== 'GRADIENT_LINEAR') {
+      throw new Error('Expected GRADIENT_LINEAR')
+    }
+    expect(reparsed.gradientStops).toHaveLength(3)
+    expect(reparsed.gradientStops[0].position).toBe(0)
+    expect(reparsed.gradientStops[1].position).toBe(0.5)
+    expect(reparsed.gradientStops[2].position).toBe(1)
+  })
+
+  // (c) Radial round-trip: type and stops survive, no angle emitted
+  it('round-trips a radial gradient: type and stops survive, no angle emitted', () => {
+    const expr =
+      'radial-gradient(#FF0000 0%, #00FF00 50%, #0000FF 100%)'
+
+    // Serialized string must NOT contain an angle
+    expect(expr).not.toMatch(/\d+deg/)
+
+    const reparsed = parseColorExpression(expr)
+    if (!reparsed) {
+      throw new Error('Expected a parsed result')
+    }
+
+    // Type must be GRADIENT_RADIAL (not GRADIENT_LINEAR)
+    expect(reparsed.type).toBe('GRADIENT_RADIAL')
+
+    // angle must be absent (non-linear gradients have no angle property)
+    expect(
+      'angle' in reparsed
+        ? (reparsed as { angle?: number }).angle
+        : undefined,
+    ).toBeUndefined()
+
+    // Stop positions must survive exactly
+    if (!('gradientStops' in reparsed)) {
+      throw new Error('Expected gradientStops')
+    }
+    expect(reparsed.gradientStops).toHaveLength(3)
+    expect(reparsed.gradientStops[0].position).toBe(0)
+    expect(reparsed.gradientStops[1].position).toBe(0.5)
+    expect(reparsed.gradientStops[2].position).toBe(1)
   })
 })
