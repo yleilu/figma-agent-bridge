@@ -175,6 +175,16 @@ or `node.fillStyleId = id`, `node.strokeStyleId = id`, `node.effectStyleId = id`
 | `extendLibraryCollectionByKeyAsync(key)` | Extend library collection |
 | `getSubscribedVariables()` | Subscribed variables |
 | `setBoundVariableForPaint` / `setBoundVariableForEffect` / `setBoundVariableForLayoutGrid` | Bind variable into a paint / effect / grid object |
+| `collection.addMode(name)` / `removeMode(modeId)` / `renameMode(modeId, name)` | Mode lifecycle on a collection (+ `collection.modes`, `defaultModeId`) † |
+| `variable.scopes` | `Array<VariableScope>` read-write (GAP, CORNER_RADIUS, WIDTH_HEIGHT, …) † |
+| `variable.codeSyntax` / `setVariableCodeSyntax(platform, value)` / `removeVariableCodeSyntax(platform)` | Per-platform code-syntax (WEB / ANDROID / iOS); read-write † |
+| `variable.hiddenFromPublishing` | Boolean read-write — hide a variable when publishing the file as a library † |
+
+> † Confirmed in the official Plugin API (developers.figma.com, 2026-06-24) but
+> **absent from the 2026-03-22 runtime introspection** that built this table (it
+> under-captured `Variable` / `VariableCollection` instance members). These are
+> long-stable APIs, so present in our sandbox; flagged for an introspection
+> re-capture to reach 100% runtime-verified.
 
 ## Read / Query
 

@@ -89,7 +89,7 @@ tail lives, so the core stays short.
 | radial gradient | `radial(#FFFFFF@0, #00000000@100)` |
 | angular gradient | `angular(#FF0000@0, #00FF00@33, #0000FF@66)` |
 | diamond gradient | `diamond(#FF0000@0, #0000FF@100)` |
-| image | `image(HASH)` |
+| image | `image(HASH)` · write also `image(url)` |
 | video | `video(HASH)` |
 | pattern | `pattern(componentId)` |
 
@@ -104,6 +104,12 @@ tail lives, so the core stays short.
   `blend=` (blend mode), `vis=false` (hidden paint). Image/video also: `scale=`
   (FILL/FIT/CROP/TILE), `rot=` (0/90/180/270), `tile=` (scaling factor),
   `filter=` (exposure/contrast/…). Non-trivial gradient geometry: `tf=[a,b,c,d,e,f]`.
+- **Image source (write asymmetry):** the view always emits `image(HASH)`; the
+  **write parser also accepts `image(url)`** — the server creates the hash
+  (`createImageAsync`, deduped by URL). The `create_image(url|bytes)` tool is the
+  explicit path for raw **bytes** and for pre-creating a reusable hash. Like
+  `rgba()`, `image(url)` is write-only; reads always emit `image(HASH)` so it
+  round-trips.
 
 ### Effects — `effects[]`
 
@@ -165,10 +171,14 @@ Bare literals: `opacity` `0.5` · `rotation` `45` · `blendMode` `MULTIPLY` ·
 Composite types render as YAML maps; their leaves are atoms. The fields a struct
 exposes:
 
-- **node** — `type, name, id, size, position, fills[], strokes[], stroke, effects[], radius, opacity, rotation, blend, visible, clipsContent, layout, sizing, constraints, text, children[]` (children are nested node structs).
+- **node** — `type, name, id, size, position, layoutPositioning, fills[], strokes[], stroke, effects[], radius, opacity, rotation, blend, visible, clipsContent, exportSettings[], layout, sizing, constraints, text, componentProperties, variantProperties, overrides, children[]` (children are nested node structs).
 - **layout** — `{mode: H|V|NONE, gap, pad: [t,r,b,l], align: [primary, counter], wrap}`. `mode: NONE` turns auto-layout off.
 - **css-grid** — `{rows, cols, rowGap, colGap}` (when `layoutMode` is GRID).
 - **text** — `{content, font, color, align, valign, lh, ls, decoration, case, paragraphSpacing, runs}`. `font`/`color` are atoms; `runs` carries per-range overrides (see below).
+- **exportSettings** — array of persistent export presets, each `{format: PNG|JPG|SVG|PDF, suffix?, constraint?: [SCALE|WIDTH|HEIGHT, value]}`. Round-trips via `get_node`/`update_node` (the persistent-presets path; the `export` tool itself is one-off render/asset output).
+- **layoutPositioning** — `AUTO` | `ABSOLUTE` (a child's flow vs absolute participation). Paired with the parent's `layout.mode` it is what distinguishes a true absolute child from a flow child (the §7 absolute-positioning audit reads this — `position` alone can't, since flow children still carry x/y).
+- **componentProperties / variantProperties** *(on INSTANCE / variant nodes)* — the instance's current property values and variant selection. The `componentPropertyDefinitions` (the schema) live on the component/set and are read via `get_components`.
+- **overrides** — the structured override delta on an instance: which fields / nested instances differ from the main component, so the agent can **read, replay, or report** surviving overrides (the read side of `set_instance`; read via `get_node`).
 
 ## The `{…}` attribute catalogue (completeness)
 
@@ -210,15 +220,17 @@ different heads; `style()`/`var()` and `{…}` apply identically everywhere.
 
 ## Reading large / deep trees
 
-The view is paginated by **depth**: tools take a `depth` param, and at the
-boundary a node becomes a **stub `{id, name, type, size, position, childCount}`**
-— it keeps its `id`, so the agent drills down by re-inspecting that id at greater
-depth. Going **deep** is covered this way (drill by id).
+Tree reads are shaped by **depth + budget + a truncation receipt** (the tool-surface
+reading model, decision D1):
 
-> **Known gap (tool-surface follow-up):** there is no **cursor / pagination** for
-> *wide* nodes (very many children) or for continuing past a `limit`. Reads return
-> `truncated: boolean` but no cursor to fetch the next page. Adding a cursor to the
-> read contract is tracked for `tool-surface.md` — see the project note.
+- **depth** — at the boundary a node becomes a **stub `{id, name, type, size, childCount}`** that keeps its `id`, so the agent drills down by re-inspecting that id (drill-by-id).
+- **budget** — an always-on response-size cap, so even a *wide* node (very many children) can't overflow context; it returns a capped chunk + `childCount`.
+- **truncation receipt** — `truncated: [{id, childCount}]` names exactly which subtrees were cut, so "continue" = drill into a named id, not a page scan. A wide node's specific children are fetched by **narrowing with `search`/`match`**, never by paginating.
+
+**Cursor pagination is for flat *list* reads only** (`search`, `get_styles`,
+`get_variables`, …) — an opaque, self-contained token. Tree reads use
+depth/budget/receipt, not a cursor (one rule per output shape — see the
+tool-surface design).
 
 ## var() / style() rules
 
@@ -226,7 +238,8 @@ depth. Going **deep** is covered this way (drill by id).
 - **`var()` is read-only this phase** — it is emitted on reads to surface an
   existing binding, but on **write** it resolves to a literal (binding is applied
   via the `bind_variable` tool, scalar fields only). This is the one
-  **deliberate, documented asymmetry** (principle T2); see tool-surface fork F-C.
+  **deliberate, documented asymmetry** (principle T2); see the tool-surface design
+  → *Expression integration*.
 
 ## Notes
 
