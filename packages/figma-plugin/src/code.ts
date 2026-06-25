@@ -940,7 +940,7 @@ const handleCommand = async (
         })),
       }
 
-    case 'export_node': {
+    case COMMANDS.EXPORT: {
       const exportNode = (await figma.getNodeByIdAsync(
         params.nodeId as string,
       )) as SceneNode | null
@@ -966,93 +966,84 @@ const handleCommand = async (
       }
     }
 
-    case 'get_styles': {
-      const paintStyles = figma
-        .getLocalPaintStyles()
-        .map(s => ({
+    // get_styles: each entry carries the raw figma VALUE the server renders to
+    // a view atom (paint→hex, text→font, effect/grid→head). Uses the ASYNC
+    // style getters; the server applies the type/id filters.
+    case COMMANDS.GET_STYLES: {
+      const paintStylesRaw =
+        await figma.getLocalPaintStylesAsync()
+      const paint = paintStylesRaw.map(s => ({
+        id: s.id,
+        name: s.name,
+        value: s.paints[0],
+      }))
+      const textStylesRaw =
+        await figma.getLocalTextStylesAsync()
+      const text = textStylesRaw.map(s => ({
+        id: s.id,
+        name: s.name,
+        value: {
+          family: s.fontName.family,
+          style: s.fontName.style,
+          size: s.fontSize,
+          lineHeight: s.lineHeight,
+          letterSpacing: s.letterSpacing,
+        },
+      }))
+      const effectStylesRaw =
+        await figma.getLocalEffectStylesAsync()
+      const effect = effectStylesRaw.map(s => ({
+        id: s.id,
+        name: s.name,
+        value: s.effects[0],
+      }))
+      const gridStylesRaw =
+        await figma.getLocalGridStylesAsync()
+      const grid = gridStylesRaw.map(s => {
+        const g = s.layoutGrids?.[0] as
+          | LayoutGrid
+          | undefined
+        return {
           id: s.id,
           name: s.name,
-          paints: s.paints.map(p => ({
-            type: p.type,
-            color:
-              p.type === 'SOLID'
-                ? (p as SolidPaint).color
-                : undefined,
-            opacity: p.opacity,
-          })),
-        }))
-      const textStyles = figma
-        .getLocalTextStyles()
-        .map(s => ({
-          id: s.id,
-          name: s.name,
-          fontFamily: s.fontName.family,
-          fontStyle: s.fontName.style,
-          fontSize: s.fontSize,
-          lineHeight:
-            s.lineHeight.unit === 'PIXELS'
-              ? (
-                  s.lineHeight as {
-                    unit: 'PIXELS'
-                    value: number
-                  }
-                ).value
-              : null,
-        }))
-      const effectStyles = figma
-        .getLocalEffectStyles()
-        .map(s => ({
-          id: s.id,
-          name: s.name,
-          effects: s.effects.map(e => ({
-            type: e.type,
-            color:
-              'color' in e
-                ? (
-                    e as
-                      | DropShadowEffect
-                      | InnerShadowEffect
-                  ).color
-                : undefined,
-            offset:
-              'offset' in e
-                ? (
-                    e as
-                      | DropShadowEffect
-                      | InnerShadowEffect
-                  ).offset
-                : undefined,
-            radius:
-              'radius' in e
-                ? (
-                    e as
-                      | DropShadowEffect
-                      | InnerShadowEffect
-                      | BlurEffectNormal
-                  ).radius
-                : undefined,
-            spread:
-              'spread' in e
-                ? (
-                    e as
-                      | DropShadowEffect
-                      | InnerShadowEffect
-                  ).spread
-                : undefined,
-          })),
-        }))
-      const gridStyles = figma
-        .getLocalGridStyles()
-        .map(s => ({ id: s.id, name: s.name }))
-      return {
-        paint: paintStyles,
-        text: textStyles,
-        effect: effectStyles,
-        grid: gridStyles,
-      }
+          value: g
+            ? {
+                pattern: g.pattern,
+                alignment:
+                  'alignment' in g
+                    ? (
+                        g as RowsColsLayoutGrid
+                      ).alignment
+                    : undefined,
+                count:
+                  'count' in g
+                    ? (g as RowsColsLayoutGrid).count
+                    : undefined,
+                sectionSize:
+                  'sectionSize' in g
+                    ? (g as RowsColsLayoutGrid).sectionSize
+                    : undefined,
+                gutterSize:
+                  'gutterSize' in g
+                    ? (g as RowsColsLayoutGrid).gutterSize
+                    : undefined,
+                offset:
+                  'offset' in g
+                    ? (g as RowsColsLayoutGrid).offset
+                    : undefined,
+                visible: g.visible,
+              }
+            : undefined,
+        }
+      })
+      return { paint, text, effect, grid }
     }
 
-    case 'get_local_components': {
+    // get_components: rich per-entry shape — key, type, page, the full
+    // componentPropertyDefinitions (incl. variantOptions for VARIANT), the
+    // variant axes, and the per-property defaults. The server applies the
+    // name query filter.
+    case COMMANDS.GET_COMPONENTS: {
       const componentSets = figma.root.findAllWithCriteria({
         types: ['COMPONENT_SET'],
       })
@@ -1060,45 +1051,79 @@ const handleCommand = async (
         types: ['COMPONENT'],
       })
 
+      const projectDefs = (
+        defs: ComponentPropertyDefinitions,
+      ): {
+        name: string
+        type: string
+        defaultValue: string | boolean
+        variantOptions?: string[]
+      }[] =>
+        Object.keys(defs).map(key => {
+          const def = defs[key]
+          const entry: {
+            name: string
+            type: string
+            defaultValue: string | boolean
+            variantOptions?: string[]
+          } = {
+            name: key,
+            type: def.type,
+            defaultValue: def.defaultValue,
+          }
+          if (def.type === 'VARIANT' && def.variantOptions) {
+            entry.variantOptions = def.variantOptions
+          }
+          return entry
+        })
+
+      const defaultsOf = (
+        defs: ComponentPropertyDefinitions,
+      ): Record<string, unknown> =>
+        Object.fromEntries(
+          Object.entries(defs).map(([k, d]) => [
+            k,
+            d.defaultValue,
+          ]),
+        )
+
       const setMap: Record<string, unknown> = {}
       for (const cs of componentSets) {
-        const variantKeys: Record<string, string[]> = {}
+        const variantAxes: Record<string, string[]> = {}
         if (cs.children) {
           for (const variant of cs.children) {
             const props = (variant as ComponentNode)
               .variantProperties
             if (props) {
               for (const pkey of Object.keys(props)) {
-                if (!variantKeys[pkey]) {
-                  variantKeys[pkey] = []
+                if (!variantAxes[pkey]) {
+                  variantAxes[pkey] = []
                 }
                 if (
-                  !variantKeys[pkey].includes(props[pkey])
+                  !variantAxes[pkey].includes(props[pkey])
                 ) {
-                  variantKeys[pkey].push(props[pkey])
+                  variantAxes[pkey].push(props[pkey])
                 }
               }
             }
           }
         }
         const csDefs = cs.componentPropertyDefinitions || {}
-        const csProps = Object.keys(csDefs).map(key => ({
-          name: key,
-          type: csDefs[key].type,
-          default: csDefs[key].defaultValue,
-        }))
         setMap[cs.id] = {
           id: cs.id,
           name: cs.name,
+          key: cs.key,
+          type: cs.type,
           page:
             cs.parent && cs.parent.type === 'PAGE'
               ? cs.parent.name
               : null,
-          variants:
-            Object.keys(variantKeys).length > 0
-              ? variantKeys
-              : null,
-          properties: csProps,
+          propertyDefinitions: projectDefs(csDefs),
+          variantAxes:
+            Object.keys(variantAxes).length > 0
+              ? variantAxes
+              : undefined,
+          defaults: defaultsOf(csDefs),
         }
       }
 
@@ -1112,22 +1137,17 @@ const handleCommand = async (
         }
         const compDefs =
           comp.componentPropertyDefinitions || {}
-        const compProps = Object.keys(compDefs).map(
-          key => ({
-            name: key,
-            type: compDefs[key].type,
-            default: compDefs[key].defaultValue,
-          }),
-        )
         standaloneComponents.push({
           id: comp.id,
           name: comp.name,
+          key: comp.key,
+          type: comp.type,
           page:
             comp.parent && comp.parent.type === 'PAGE'
               ? comp.parent.name
               : null,
-          variants: null,
-          properties: compProps,
+          propertyDefinitions: projectDefs(compDefs),
+          defaults: defaultsOf(compDefs),
         })
       }
 
@@ -1560,20 +1580,176 @@ const handleCommand = async (
                   await figma.variables.getVariableByIdAsync(
                     id,
                   )
-                return v
-                  ? {
-                      id: v.id,
-                      name: v.name,
-                      resolvedType: v.resolvedType,
-                      valuesByMode: v.valuesByMode,
-                    }
-                  : null
+                if (!v) {
+                  return null
+                }
+                // aliases: scan valuesByMode for VARIABLE_ALIAS refs.
+                const aliases = Object.values(
+                  v.valuesByMode,
+                ).filter(
+                  val =>
+                    typeof val === 'object' &&
+                    val !== null &&
+                    (val as { type?: string }).type ===
+                      'VARIABLE_ALIAS',
+                )
+                return {
+                  id: v.id,
+                  name: v.name,
+                  resolvedType: v.resolvedType,
+                  valuesByMode: v.valuesByMode,
+                  aliases,
+                  scopes: v.scopes,
+                  codeSyntax: v.codeSyntax,
+                  hiddenFromPublishing:
+                    v.hiddenFromPublishing,
+                }
               }),
             )
           ).filter(v => v !== null),
         })),
       )
       return { results }
+    }
+
+    // list_fonts: group listAvailableFontsAsync() by family, optionally
+    // filtered by a case-insensitive family substring.
+    case COMMANDS.LIST_FONTS: {
+      const fonts = await figma.listAvailableFontsAsync()
+      const byFamily: Record<string, string[]> = {}
+      for (const f of fonts) {
+        const fam = f.fontName.family
+        if (!byFamily[fam]) {
+          byFamily[fam] = []
+        }
+        if (!byFamily[fam].includes(f.fontName.style)) {
+          byFamily[fam].push(f.fontName.style)
+        }
+      }
+      let results = Object.keys(byFamily).map(family => ({
+        family,
+        styles: byFamily[family],
+      }))
+      const fontQuery = params.query as string | undefined
+      if (fontQuery !== undefined) {
+        const needle = fontQuery.toLowerCase()
+        results = results.filter(r =>
+          r.family.toLowerCase().includes(needle),
+        )
+      }
+      return { results }
+    }
+
+    // get_reactions: prototype reactions on a node. Degrade (NEVER throw) when
+    // the node is missing or has no reactions API.
+    case COMMANDS.GET_REACTIONS: {
+      const nodeId = params.nodeId as string
+      const node = await figma.getNodeByIdAsync(nodeId)
+      if (!node) {
+        return {
+          nodeId,
+          reactions: [],
+          warnings: ['Node not found: ' + nodeId],
+        }
+      }
+      if ('reactions' in node) {
+        return {
+          nodeId,
+          reactions:
+            (node as SceneNode & { reactions: unknown[] })
+              .reactions ?? [],
+        }
+      }
+      return {
+        nodeId,
+        reactions: [],
+        warnings: ['Node has no reactions'],
+      }
+    }
+
+    // get_plugin_data: this plugin's data on a node; shared data when a
+    // namespace is given. Degrade (NEVER throw) when the node is missing.
+    case COMMANDS.GET_PLUGIN_DATA: {
+      const nodeId = params.nodeId as string
+      const node = await figma.getNodeByIdAsync(nodeId)
+      if (!node || !('getPluginDataKeys' in node)) {
+        return {
+          nodeId,
+          pluginData: {},
+          warnings: ['Node not found: ' + nodeId],
+        }
+      }
+      const dataNode = node as BaseNode & PluginDataMixin
+      const pluginData = Object.fromEntries(
+        dataNode
+          .getPluginDataKeys()
+          .map(k => [k, dataNode.getPluginData(k)]),
+      )
+      const namespace = params.namespace as
+        | string
+        | undefined
+      if (namespace !== undefined) {
+        const sharedPluginData = Object.fromEntries(
+          dataNode
+            .getSharedPluginDataKeys(namespace)
+            .map(k => [
+              k,
+              dataNode.getSharedPluginData(namespace, k),
+            ]),
+        )
+        return { nodeId, pluginData, sharedPluginData }
+      }
+      return { nodeId, pluginData }
+    }
+
+    // get_annotations: editorType-gated → degrade (NEVER throw) to an empty
+    // Rule-A result with a warning when annotations are unavailable. Annotations
+    // live on the NODE (node.annotations), so feature-detect 'annotations' in node.
+    case COMMANDS.GET_ANNOTATIONS: {
+      const degrade = {
+        results: [] as unknown[],
+        truncated: false,
+        warnings: [
+          'Annotations API unavailable in this editor; returning empty.',
+        ],
+      }
+      try {
+        const targets: BaseNode[] = []
+        if (params.nodeId !== undefined) {
+          const node = await figma.getNodeByIdAsync(
+            params.nodeId as string,
+          )
+          if (node) {
+            targets.push(node)
+          }
+        } else {
+          for (const sel of figma.currentPage.selection) {
+            targets.push(sel)
+          }
+        }
+        const collected: unknown[] = []
+        let supported = false
+        for (const node of targets) {
+          if ('annotations' in node) {
+            supported = true
+            const anns =
+              (
+                node as SceneNode & {
+                  annotations?: unknown[]
+                }
+              ).annotations ?? []
+            for (const a of anns) {
+              collected.push(a)
+            }
+          }
+        }
+        if (targets.length > 0 && !supported) {
+          return degrade
+        }
+        return { results: collected, truncated: false }
+      } catch {
+        return degrade
+      }
     }
 
     default:

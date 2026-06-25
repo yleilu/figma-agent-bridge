@@ -237,3 +237,125 @@ export const getVariablesParamsSchema = z.object({
       'Variable collection ID to filter by. Omit to return all collections.',
     ),
 })
+
+// ---------------------------------------------------------------------------
+// Read tools — design system (styles / components / fonts)
+// ---------------------------------------------------------------------------
+
+/**
+ * Params for `get_styles`: list local styles, optionally narrowed to one
+ * category or a single style ID. Bounded read; `cursor` reserved for a
+ * later Rule-A resume.
+ */
+export const getStylesParamsSchema = z.object({
+  type: z
+    .enum(['paint', 'text', 'effect', 'grid'])
+    .optional()
+    .describe(
+      'Filter to one style category. Omit for all.',
+    ),
+  id: z
+    .string()
+    .optional()
+    .describe('A specific style ID to fetch.'),
+  cursor: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Opaque resume token from a prior get_styles call.',
+    ),
+})
+
+/**
+ * Params for `get_components`: list local + remote components,
+ * optionally filtered by a name substring.
+ */
+export const getComponentsParamsSchema = z.object({
+  query: z
+    .string()
+    .optional()
+    .describe(
+      'Case-insensitive substring filter on component/set name.',
+    ),
+  cursor: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Opaque resume token from a prior get_components call.',
+    ),
+})
+
+/**
+ * Params for `list_fonts`: enumerate available fonts grouped by family,
+ * optionally filtered by a family-name substring.
+ */
+export const listFontsParamsSchema = z.object({
+  query: z
+    .string()
+    .optional()
+    .describe(
+      'Case-insensitive substring filter on font family name.',
+    ),
+})
+
+// ---------------------------------------------------------------------------
+// Read tools — node metadata & prototype
+// ---------------------------------------------------------------------------
+
+/** Params for `get_reactions`: read a node's prototype reactions. */
+export const getReactionsParamsSchema = z.object({
+  nodeId: z
+    .string()
+    .describe(
+      'The node whose prototype reactions to read.',
+    ),
+})
+
+/** Params for `get_plugin_data`: read a node's plugin data. */
+export const getPluginDataParamsSchema = z.object({
+  nodeId: z
+    .string()
+    .describe('The node to read plugin data from.'),
+  namespace: z
+    .string()
+    .optional()
+    .describe(
+      "Shared plugin-data namespace. Omit to read this plugin's own data only.",
+    ),
+})
+
+// ---------------------------------------------------------------------------
+// Handoff — annotations
+// ---------------------------------------------------------------------------
+
+/** Params for `get_annotations`: read a node's (or the selection's) annotations. */
+export const getAnnotationsParamsSchema = z.object({
+  nodeId: z
+    .string()
+    .optional()
+    .describe(
+      "Node whose annotations to read. Omit to read the current selection's annotations.",
+    ),
+})
+
+// ---------------------------------------------------------------------------
+// Read tools — export
+// ---------------------------------------------------------------------------
+
+/** Params for `export`: render a node to PNG/JPG/SVG/PDF. */
+export const exportParamsSchema = z.object({
+  nodeId: z.string().describe('The node to export.'),
+  format: z
+    .enum(['PNG', 'JPG', 'SVG', 'PDF'])
+    .optional()
+    .describe('Export format (default PNG).'),
+  scale: z
+    .number()
+    .positive()
+    .optional()
+    .describe(
+      'Raster scale factor (default 1; ignored for SVG/PDF).',
+    ),
+})

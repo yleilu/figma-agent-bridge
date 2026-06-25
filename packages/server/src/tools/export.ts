@@ -1,3 +1,4 @@
+import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { FigmaClient } from '../figma-client'
 import {
   requireConnected,
@@ -31,7 +32,7 @@ export const handleExport = async (
 
   try {
     const result = (await client.sendCommand(
-      'export_node',
+      COMMANDS.EXPORT,
       {
         nodeId: params.nodeId,
         format,

@@ -145,4 +145,90 @@ describe('handleGetVariables', () => {
     )
     expect(result.content[0].text).toContain('v:9')
   })
+
+  it('renders COLOR valuesByMode to hex atoms and surfaces scopes/codeSyntax/hiddenFromPublishing', async () => {
+    const result = await handleGetVariables(
+      {},
+      stubClient({
+        reply: {
+          results: [
+            {
+              id: 'col:1',
+              name: 'Brand',
+              modes: [{ modeId: 'm1', name: 'Light' }],
+              variables: [
+                {
+                  id: 'var:123',
+                  name: 'Brand/Primary',
+                  resolvedType: 'COLOR',
+                  valuesByMode: {
+                    m1: { r: 1, g: 0, b: 0, a: 1 },
+                  },
+                  aliases: [],
+                  scopes: ['ALL_SCOPES'],
+                  codeSyntax: { WEB: '--brand-primary' },
+                  hiddenFromPublishing: false,
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    )
+    const { text } = result.content[0]
+    // COLOR valuesByMode rendered to a hex atom (server-side).
+    expect(text).toContain('#FF0000')
+    expect(text).toContain('ALL_SCOPES')
+    expect(text).toContain('--brand-primary')
+    expect(text).toContain('hiddenFromPublishing')
+  })
+
+  it('passes through FLOAT/STRING values and alias refs unchanged', async () => {
+    const result = await handleGetVariables(
+      {},
+      stubClient({
+        reply: {
+          results: [
+            {
+              id: 'col:2',
+              name: 'Spacing',
+              modes: [{ modeId: 'm1', name: 'Default' }],
+              variables: [
+                {
+                  id: 'var:200',
+                  name: 'space/md',
+                  resolvedType: 'FLOAT',
+                  valuesByMode: { m1: 16 },
+                  aliases: [],
+                  scopes: ['GAP'],
+                },
+                {
+                  id: 'var:201',
+                  name: 'space/alias',
+                  resolvedType: 'FLOAT',
+                  valuesByMode: {
+                    m1: {
+                      type: 'VARIABLE_ALIAS',
+                      id: 'var:200',
+                    },
+                  },
+                  aliases: [
+                    {
+                      type: 'VARIABLE_ALIAS',
+                      id: 'var:200',
+                    },
+                  ],
+                  scopes: ['GAP'],
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    )
+    const { text } = result.content[0]
+    expect(text).toContain('16')
+    // alias ref preserved (not rendered to a hex atom).
+    expect(text).toContain('VARIABLE_ALIAS')
+  })
 })

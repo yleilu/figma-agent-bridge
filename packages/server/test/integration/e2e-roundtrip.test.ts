@@ -23,8 +23,8 @@ import {
   handleListPages,
 } from '@figma-agent-bridge/server/tools/read'
 import {
-  handleInspectStyles,
-  handleInspectComponents,
+  handleGetStyles,
+  handleGetComponents,
 } from '@figma-agent-bridge/server/tools/design-system'
 import { handleSearch } from '@figma-agent-bridge/server/tools/search'
 import { handleExport } from '@figma-agent-bridge/server/tools/export'
@@ -224,20 +224,22 @@ describe('M2 read tools e2e', () => {
     }
   })
 
-  it('inspect_styles returns design system YAML', async () => {
-    const result = await handleInspectStyles({}, client)
+  it('get_styles returns the Rule-A results list', async () => {
+    const result = await handleGetStyles({}, client)
 
     expect(result.content).toHaveLength(1)
     expect(result.content[0].type).toBe('text')
-    expect(result.content[0].text).toContain('styles')
+    expect(result.content[0].text).toContain('results')
+    expect(result.content[0].text).toContain('truncated')
   })
 
-  it('inspect_components returns component catalog', async () => {
-    const result = await handleInspectComponents({}, client)
+  it('get_components returns the component catalog', async () => {
+    const result = await handleGetComponents({}, client)
 
     expect(result.content).toHaveLength(1)
     expect(result.content[0].type).toBe('text')
-    expect(result.content[0].text).toContain('local')
+    expect(result.content[0].text).toContain('results')
+    expect(result.content[0].text).toContain('Button')
   })
 
   it('search finds nodes by name pattern (server-side match)', async () => {

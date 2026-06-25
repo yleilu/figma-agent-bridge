@@ -8,8 +8,6 @@ import type {
 } from '@figma-agent-bridge/shared/types'
 import cardFixture from '../fixtures/card-node-raw.json'
 import pageLayoutFixture from '../fixtures/page-layout-raw.json'
-import stylesFixture from '../fixtures/styles-raw.json'
-import componentsFixture from '../fixtures/components-raw.json'
 
 const MOCK_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect fill="red" width="100" height="100"/></svg>'
@@ -105,12 +103,147 @@ export const createMockPlugin = (
         }
         break
 
+      // get_styles: the NEW server-expected shape — each entry carries a raw
+      // figma VALUE the server renders to a view atom (paint→hex, text→font,
+      // effect→head). Real value shapes so the e2e can assert atom rendering.
       case 'get_styles':
-        result = stylesFixture
+        result = {
+          paint: [
+            {
+              id: 'S:1',
+              name: 'Brand/Primary',
+              value: {
+                type: 'SOLID',
+                color: { r: 0.231, g: 0.51, b: 0.965 },
+              },
+            },
+          ],
+          text: [
+            {
+              id: 'S:2',
+              name: 'Heading',
+              value: {
+                family: 'Inter',
+                style: 'Bold',
+                size: 32,
+                lineHeight: { value: 40, unit: 'PIXELS' },
+              },
+            },
+          ],
+          effect: [
+            {
+              id: 'S:3',
+              name: 'Card Shadow',
+              value: {
+                type: 'DROP_SHADOW',
+                color: { r: 0, g: 0, b: 0, a: 0.1 },
+                offset: { x: 0, y: 4 },
+                radius: 12,
+                spread: 0,
+              },
+            },
+          ],
+          grid: [],
+        }
         break
 
-      case 'get_local_components':
-        result = componentsFixture
+      // get_components: the NEW richer shape — key + variantAxes +
+      // propertyDefinitions + defaults per local entry, key + library +
+      // instancesCount per remote entry.
+      case 'get_components':
+        result = {
+          local: [
+            {
+              id: '1:10',
+              name: 'Button',
+              key: 'btn-key',
+              type: 'COMPONENT_SET',
+              page: 'Main',
+              propertyDefinitions: [
+                {
+                  name: 'Variant',
+                  type: 'VARIANT',
+                  defaultValue: 'Primary',
+                  variantOptions: ['Primary', 'Secondary'],
+                },
+                {
+                  name: 'Disabled',
+                  type: 'BOOLEAN',
+                  defaultValue: false,
+                },
+              ],
+              variantAxes: {
+                Variant: ['Primary', 'Secondary'],
+              },
+              defaults: {
+                Variant: 'Primary',
+                Disabled: false,
+              },
+            },
+          ],
+          remote: [
+            {
+              key: 'remote-key',
+              name: 'Icon',
+              library: 'Lib',
+              instancesCount: 3,
+            },
+          ],
+        }
+        break
+
+      // list_fonts: families grouped by the plugin ({ family, styles }).
+      case 'list_fonts':
+        result = {
+          results: [
+            {
+              family: 'Inter',
+              styles: ['Regular', 'Bold'],
+            },
+            { family: 'Roboto', styles: ['Regular'] },
+          ],
+        }
+        break
+
+      // get_reactions: a single ON_CLICK → NAVIGATE reaction.
+      case 'get_reactions':
+        result = {
+          nodeId: cmd.params?.nodeId as string,
+          reactions: [
+            {
+              trigger: { type: 'ON_CLICK' },
+              actions: [
+                {
+                  type: 'NODE',
+                  destinationId: '1:99',
+                  navigation: 'NAVIGATE',
+                },
+              ],
+            },
+          ],
+        }
+        break
+
+      // get_plugin_data: pluginData always; sharedPluginData only with a namespace.
+      case 'get_plugin_data':
+        result = {
+          nodeId: cmd.params?.nodeId as string,
+          pluginData: { foo: 'bar' },
+          sharedPluginData: cmd.params?.namespace
+            ? { baz: 'qux' }
+            : undefined,
+        }
+        break
+
+      // get_annotations: happy path (Rule A). The degrade path is covered by the
+      // metadata unit test with a stub client.
+      case 'get_annotations':
+        result = {
+          results: [
+            { label: 'Check spacing', categoryId: 'cat:1' },
+          ],
+          truncated: false,
+        }
         break
 
       // search (Rule A): the plugin returns RAW candidate nodes; the SERVER
@@ -148,7 +281,7 @@ export const createMockPlugin = (
         }
         break
 
-      case 'export_node': {
+      case 'export': {
         const fmt = (cmd.params?.format as string) || 'PNG'
         const scale = (cmd.params?.scale as number) || 1
         result = {
@@ -220,6 +353,10 @@ export const createMockPlugin = (
                   valuesByMode: {
                     m1: { r: 1, g: 0, b: 0, a: 1 },
                   },
+                  aliases: [],
+                  scopes: ['ALL_SCOPES'],
+                  codeSyntax: { WEB: '--brand-primary' },
+                  hiddenFromPublishing: false,
                 },
               ],
             },

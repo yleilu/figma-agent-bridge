@@ -6,9 +6,6 @@ import {
   DEFAULT_PORT,
   connectParamsSchema,
   inspectPageLayoutParamsSchema,
-  inspectStylesParamsSchema,
-  inspectComponentsParamsSchema,
-  exportParamsSchema,
   createTreeParamsSchema,
   createComponentParamsSchema,
   createFromSvgParamsSchema,
@@ -28,6 +25,13 @@ import {
   updateNodeParamsSchema,
   bindVariableParamsSchema,
   getVariablesParamsSchema,
+  getStylesParamsSchema,
+  getComponentsParamsSchema,
+  listFontsParamsSchema,
+  getReactionsParamsSchema,
+  getPluginDataParamsSchema,
+  getAnnotationsParamsSchema,
+  exportParamsSchema,
 } from '@figma-agent-bridge/shared/tool-params'
 import { createFigmaClient } from './figma-client'
 import {
@@ -42,11 +46,17 @@ import {
   handleListPages,
 } from './tools/read'
 import {
-  handleInspectStyles,
-  handleInspectComponents,
+  handleGetStyles,
+  handleGetComponents,
+  handleListFonts,
   handleBindVariable,
   handleGetVariables,
 } from './tools/design-system'
+import {
+  handleGetReactions,
+  handleGetPluginData,
+  handleGetAnnotations,
+} from './tools/metadata'
 import { handleUpdateNode } from './tools/update'
 import { handleSearch } from './tools/search'
 import { handleExport } from './tools/export'
@@ -98,16 +108,39 @@ server.tool(
 )
 
 server.tool(
-  'inspect_styles',
-  inspectStylesParamsSchema.shape,
-  async ({ type }) => handleInspectStyles({ type }, client),
+  'get_styles',
+  getStylesParamsSchema.shape,
+  async params => handleGetStyles(params, client),
 )
 
 server.tool(
-  'inspect_components',
-  inspectComponentsParamsSchema.shape,
-  async ({ query }) =>
-    handleInspectComponents({ query }, client),
+  'get_components',
+  getComponentsParamsSchema.shape,
+  async params => handleGetComponents(params, client),
+)
+
+server.tool(
+  'list_fonts',
+  listFontsParamsSchema.shape,
+  async params => handleListFonts(params, client),
+)
+
+server.tool(
+  'get_reactions',
+  getReactionsParamsSchema.shape,
+  async params => handleGetReactions(params, client),
+)
+
+server.tool(
+  'get_plugin_data',
+  getPluginDataParamsSchema.shape,
+  async params => handleGetPluginData(params, client),
+)
+
+server.tool(
+  'get_annotations',
+  getAnnotationsParamsSchema.shape,
+  async params => handleGetAnnotations(params, client),
 )
 
 server.tool(

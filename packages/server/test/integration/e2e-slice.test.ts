@@ -39,7 +39,11 @@ import {
 import {
   handleBindVariable,
   handleGetVariables,
+  handleGetStyles,
+  handleGetComponents,
+  handleListFonts,
 } from '@figma-agent-bridge/server/tools/design-system'
+import { handleExport } from '@figma-agent-bridge/server/tools/export'
 import { createMockPlugin } from '../mocks/mock-plugin'
 
 const TEST_PORT = 3101
@@ -403,5 +407,76 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(out.results.length).toBeGreaterThan(0)
     expect(out.results[0]).toHaveProperty('isCurrent')
     expect(out.truncated).toBe(false)
+  })
+
+  // ── chunk C — design-system + metadata reads ──────────────────────────────
+
+  // 15 — get_styles renders each style VALUE to a view atom over the relay.
+  it('get_styles renders paint→hex and text→font atoms over the relay', async () => {
+    const result = await handleGetStyles({}, client)
+    const out = YAML.parse(result.content[0].text) as {
+      results: { type: string; value: string }[]
+      truncated: boolean
+    }
+    expect(out.truncated).toBe(false)
+    const paint = out.results.find(r => r.type === 'paint')!
+    expect(paint.value).toBe('#3B82F6')
+    const text = out.results.find(r => r.type === 'text')!
+    expect(text.value).toContain('Inter')
+  })
+
+  // 16 — get_variables: modes present, COLOR valuesByMode → hex, scopes/codeSyntax.
+  it('get_variables surfaces modes + scopes/codeSyntax and renders COLOR to hex', async () => {
+    const result = await handleGetVariables({}, client)
+    const { text } = result.content[0]
+    expect(text).toContain('modes')
+    expect(text).toContain('#FF0000')
+    expect(text).toContain('ALL_SCOPES')
+    expect(text).toContain('--brand-primary')
+  })
+
+  // 17 — get_components: a result carries variant axes + key over the relay.
+  it('get_components carries variant axes and key over the relay', async () => {
+    const result = await handleGetComponents({}, client)
+    const out = YAML.parse(result.content[0].text) as {
+      results: {
+        name: string
+        key: string
+        variantAxes?: Record<string, string[]>
+      }[]
+    }
+    const button = out.results.find(
+      r => r.name === 'Button',
+    )!
+    expect(button.key).toBe('btn-key')
+    expect(button.variantAxes).toEqual({
+      Variant: ['Primary', 'Secondary'],
+    })
+  })
+
+  // 18 — list_fonts returns families grouped with styles over the relay.
+  it('list_fonts returns families with styles over the relay', async () => {
+    const result = await handleListFonts({}, client)
+    const out = YAML.parse(result.content[0].text) as {
+      results: { family: string; styles: string[] }[]
+      truncated: boolean
+    }
+    expect(out.truncated).toBe(false)
+    expect(out.results[0].family).toBe('Inter')
+    expect(out.results[0].styles).toContain('Bold')
+  })
+
+  // 19 — export SVG returns MCP text content with the SVG markup over the relay.
+  it('export SVG returns text content with <svg over the relay', async () => {
+    const result = await handleExport(
+      { nodeId: '1:42', format: 'SVG' },
+      client,
+    )
+    const item = result.content[0] as {
+      type: string
+      text: string
+    }
+    expect(item.type).toBe('text')
+    expect(item.text).toContain('<svg')
   })
 })
