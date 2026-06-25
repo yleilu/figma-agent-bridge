@@ -47,19 +47,21 @@ export type TextRun = {
   color?: Atom
 }
 
-/** Text properties (TEXT nodes). `font`/`color`/run leaves are atoms. */
+/**
+ * Text properties (TEXT nodes). `font`/`color`/run leaves are atoms.
+ *
+ * Line height and letter spacing are CANONICAL on the `font(...)` atom
+ * (`font(Inter,SemiBold,18){lh=24,ls=0.5}`) — there are no separate
+ * top-level `lh`/`ls` fields (review finding #3).
+ */
 export type TextSpec = {
   content: string
-  /** font(...) atom. */
+  /** font(...) atom; carries lh/ls in its `{…}` channel. */
   font: Atom
   /** color atom (hex / var()/style() wrapped). */
   color?: Atom
   align?: string
   valign?: string
-  /** Line height (e.g. "24" px or "150%"). */
-  lh?: string
-  /** Letter spacing (e.g. "0.5"). */
-  ls?: string
   decoration?: string
   case?: string
   paragraphSpacing?: number

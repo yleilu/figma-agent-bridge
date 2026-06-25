@@ -31,10 +31,12 @@
 //     grids, cssGrid, constraints,
 //     overrides, componentProperties, variantProperties, exportSettings,
 //     id (writer emits it; plugin ignores it on create)
-//     text.lh / text.ls  — writer emits raw atom strings under these keys, but
-//       the plugin reads text.lineHeight / text.letterSpacing as {value,unit};
-//       this mismatch is resolved when the slice wires the writer's text path
-//       through the plugin (lh/ls are canonical on the font(...) atom).
+//
+// ── lh/ls (review finding #3, RESOLVED) ──────────────────────────────────────
+// lh/ls are CANONICAL on the font(...) atom (`font(Inter,SemiBold,18){lh=24}`).
+// The writer's text path lifts atomToFont's lineHeight/letterSpacing into the
+// plugin's text.lineHeight / text.letterSpacing ({value,unit}) keys that
+// applyTextProperties reads. There is no redundant top-level text.lh / text.ls.
 
 import type {
   NodeSpec,
@@ -51,6 +53,34 @@ import {
 export type FigmaWritePayload = Record<string, unknown>
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Convert a font atom to the plugin's text-font payload.
+ *
+ * lh/ls are CANONICAL on the font(...) atom (`{lh=…,ls=…}`). atomToFont
+ * parses them into the font object's `lineHeight`/`letterSpacing`; the plugin's
+ * applyTextProperties reads them as the SIBLING text keys
+ * `text.lineHeight` / `text.letterSpacing` ({value,unit}). So we LIFT them out
+ * of the font object up to the text payload, leaving the font object as a bare
+ * { family, style, size } that applyTextProperties' loadFontAsync consumes.
+ */
+const convertFontInto = (
+  out: Record<string, unknown>,
+  fontAtom: string,
+): void => {
+  const f = atomToFont(fontAtom)
+  out.font = {
+    family: f.family,
+    style: f.style,
+    size: f.size,
+  }
+  if (f.lineHeight !== undefined) {
+    out.lineHeight = f.lineHeight
+  }
+  if (f.letterSpacing !== undefined) {
+    out.letterSpacing = f.letterSpacing
+  }
+}
 
 /** Parse the `radius` atom string to a number or [tl,tr,br,bl] tuple. */
 const parseRadius = (
@@ -209,8 +239,10 @@ export const specToFigma = (
     const t = spec.text
     const textOut: Record<string, unknown> = {
       content: t.content,
-      font: atomToFont(t.font),
     }
+    // lh/ls ride on the font atom and are lifted into
+    // text.lineHeight / text.letterSpacing for the plugin.
+    convertFontInto(textOut, t.font)
     if (t.color !== undefined) {
       textOut.color = atomToPaint(t.color)
     }
@@ -219,12 +251,6 @@ export const specToFigma = (
     }
     if (t.valign !== undefined) {
       textOut.valign = t.valign
-    }
-    if (t.lh !== undefined) {
-      textOut.lh = t.lh
-    }
-    if (t.ls !== undefined) {
-      textOut.ls = t.ls
     }
     if (t.decoration !== undefined) {
       textOut.decoration = t.decoration
@@ -239,7 +265,7 @@ export const specToFigma = (
       textOut.runs = t.runs.map(run => {
         const r: Record<string, unknown> = { at: run.at }
         if (run.font !== undefined) {
-          r.font = atomToFont(run.font)
+          convertFontInto(r, run.font)
         }
         if (run.color !== undefined) {
           r.color = atomToPaint(run.color)

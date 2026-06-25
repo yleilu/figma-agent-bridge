@@ -5,12 +5,10 @@ import {
   APP_VERSION,
   DEFAULT_PORT,
   connectParamsSchema,
-  inspectParamsSchema,
   inspectPageLayoutParamsSchema,
   inspectStylesParamsSchema,
   inspectComponentsParamsSchema,
   searchParamsSchema,
-  getNodeParamsSchema,
   getNodesParamsSchema,
   listPagesParamsSchema,
   exportParamsSchema,
@@ -20,6 +18,15 @@ import {
   createFromSvgParamsSchema,
 } from '@figma-agent-bridge/shared'
 import type { CreateTreeNodeSpec } from '@figma-agent-bridge/shared'
+// M2 slice param schemas live in tool-params (NOT the barrel — they shadow the
+// green-window schemas.ts versions still imported above for the old tools).
+import {
+  getNodeParamsSchema,
+  inspectParamsSchema,
+  updateNodeParamsSchema,
+  bindVariableParamsSchema,
+  getVariablesParamsSchema,
+} from '@figma-agent-bridge/shared/tool-params'
 import { createFigmaClient } from './figma-client'
 import {
   handleConnect,
@@ -35,7 +42,10 @@ import {
 import {
   handleInspectStyles,
   handleInspectComponents,
+  handleBindVariable,
+  handleGetVariables,
 } from './tools/design-system'
+import { handleUpdateNode } from './tools/update'
 import { handleSearch } from './tools/search'
 import { handleExport } from './tools/export'
 import {
@@ -74,7 +84,7 @@ server.tool('status', {}, async () => handleStatus(client))
 server.tool(
   'inspect',
   inspectParamsSchema.shape,
-  async ({ nodeId }) => handleInspect({ nodeId }, client),
+  async params => handleInspect(params, client),
 )
 
 server.tool(
@@ -105,8 +115,7 @@ server.tool(
 server.tool(
   'get_node',
   getNodeParamsSchema.shape,
-  async ({ nodeId, depth }) =>
-    handleGetNode({ nodeId, depth }, client),
+  async params => handleGetNode(params, client),
 )
 
 server.tool(
@@ -183,6 +192,24 @@ server.tool(
       },
       client,
     ),
+)
+
+server.tool(
+  'update_node',
+  updateNodeParamsSchema.shape,
+  async params => handleUpdateNode(params, client),
+)
+
+server.tool(
+  'bind_variable',
+  bindVariableParamsSchema.shape,
+  async params => handleBindVariable(params, client),
+)
+
+server.tool(
+  'get_variables',
+  getVariablesParamsSchema.shape,
+  async params => handleGetVariables(params, client),
 )
 
 const transport = new StdioServerTransport()

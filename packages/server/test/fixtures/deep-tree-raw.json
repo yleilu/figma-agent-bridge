@@ -1,0 +1,288 @@
+{
+  "id": "10:0",
+  "name": "Root",
+  "type": "FRAME",
+  "absoluteBoundingBox": {
+    "x": 0,
+    "y": 0,
+    "width": 1200,
+    "height": 800
+  },
+  "layoutMode": "VERTICAL",
+  "itemSpacing": 0,
+  "fills": [
+    {
+      "type": "SOLID",
+      "color": { "r": 1, "g": 1, "b": 1, "a": 1 }
+    }
+  ],
+  "children": [
+    {
+      "id": "10:1",
+      "name": "Wide",
+      "type": "FRAME",
+      "absoluteBoundingBox": {
+        "x": 0,
+        "y": 0,
+        "width": 1200,
+        "height": 400
+      },
+      "layoutMode": "HORIZONTAL",
+      "itemSpacing": 8,
+      "fills": [
+        {
+          "type": "SOLID",
+          "color": {
+            "r": 0.95,
+            "g": 0.95,
+            "b": 0.95,
+            "a": 1
+          }
+        }
+      ],
+      "children": [
+        {
+          "id": "10:10",
+          "name": "Col A",
+          "type": "FRAME",
+          "absoluteBoundingBox": {
+            "x": 0,
+            "y": 0,
+            "width": 300,
+            "height": 400
+          },
+          "fills": [
+            {
+              "type": "SOLID",
+              "color": {
+                "r": 0.9,
+                "g": 0.9,
+                "b": 0.9,
+                "a": 1
+              }
+            }
+          ],
+          "children": [
+            {
+              "id": "10:100",
+              "name": "Deep A1",
+              "type": "TEXT",
+              "absoluteBoundingBox": {
+                "x": 0,
+                "y": 0,
+                "width": 300,
+                "height": 24
+              },
+              "characters": "Alpha",
+              "style": {
+                "fontFamily": "Inter",
+                "fontStyle": "Regular",
+                "fontSize": 14,
+                "lineHeightPx": 20,
+                "lineHeightUnit": "PIXELS"
+              },
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0,
+                    "g": 0,
+                    "b": 0,
+                    "a": 1
+                  }
+                }
+              ],
+              "children": []
+            },
+            {
+              "id": "10:101",
+              "name": "Deep A2",
+              "type": "TEXT",
+              "absoluteBoundingBox": {
+                "x": 0,
+                "y": 30,
+                "width": 300,
+                "height": 24
+              },
+              "characters": "Beta",
+              "style": {
+                "fontFamily": "Inter",
+                "fontStyle": "Regular",
+                "fontSize": 14,
+                "lineHeightPx": 20,
+                "lineHeightUnit": "PIXELS"
+              },
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0,
+                    "g": 0,
+                    "b": 0,
+                    "a": 1
+                  }
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "10:11",
+          "name": "Col B",
+          "type": "FRAME",
+          "absoluteBoundingBox": {
+            "x": 308,
+            "y": 0,
+            "width": 300,
+            "height": 400
+          },
+          "fills": [
+            {
+              "type": "SOLID",
+              "color": {
+                "r": 0.9,
+                "g": 0.9,
+                "b": 0.9,
+                "a": 1
+              }
+            }
+          ],
+          "children": [
+            {
+              "id": "10:110",
+              "name": "Deep B1",
+              "type": "TEXT",
+              "absoluteBoundingBox": {
+                "x": 308,
+                "y": 0,
+                "width": 300,
+                "height": 24
+              },
+              "characters": "Gamma",
+              "style": {
+                "fontFamily": "Inter",
+                "fontStyle": "Regular",
+                "fontSize": 14,
+                "lineHeightPx": 20,
+                "lineHeightUnit": "PIXELS"
+              },
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0,
+                    "g": 0,
+                    "b": 0,
+                    "a": 1
+                  }
+                }
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "10:12",
+          "name": "Col C",
+          "type": "FRAME",
+          "absoluteBoundingBox": {
+            "x": 616,
+            "y": 0,
+            "width": 300,
+            "height": 400
+          },
+          "fills": [
+            {
+              "type": "SOLID",
+              "color": {
+                "r": 0.9,
+                "g": 0.9,
+                "b": 0.9,
+                "a": 1
+              }
+            }
+          ],
+          "children": [
+            {
+              "id": "10:120",
+              "name": "Deep C1",
+              "type": "TEXT",
+              "absoluteBoundingBox": {
+                "x": 616,
+                "y": 0,
+                "width": 300,
+                "height": 24
+              },
+              "characters": "Delta",
+              "style": {
+                "fontFamily": "Inter",
+                "fontStyle": "Regular",
+                "fontSize": 14,
+                "lineHeightPx": 20,
+                "lineHeightUnit": "PIXELS"
+              },
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0,
+                    "g": 0,
+                    "b": 0,
+                    "a": 1
+                  }
+                }
+              ],
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "10:2",
+      "name": "Footer",
+      "type": "FRAME",
+      "absoluteBoundingBox": {
+        "x": 0,
+        "y": 408,
+        "width": 1200,
+        "height": 80
+      },
+      "fills": [
+        {
+          "type": "SOLID",
+          "color": { "r": 0.2, "g": 0.2, "b": 0.2, "a": 1 }
+        }
+      ],
+      "children": [
+        {
+          "id": "10:20",
+          "name": "Footer Text",
+          "type": "TEXT",
+          "absoluteBoundingBox": {
+            "x": 16,
+            "y": 424,
+            "width": 200,
+            "height": 24
+          },
+          "characters": "Footer",
+          "style": {
+            "fontFamily": "Inter",
+            "fontStyle": "Regular",
+            "fontSize": 12,
+            "lineHeightPx": 16,
+            "lineHeightUnit": "PIXELS"
+          },
+          "fills": [
+            {
+              "type": "SOLID",
+              "color": { "r": 1, "g": 1, "b": 1, "a": 1 }
+            }
+          ],
+          "children": []
+        }
+      ]
+    }
+  ]
+}

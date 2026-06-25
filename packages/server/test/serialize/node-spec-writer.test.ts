@@ -167,6 +167,85 @@ describe('specToFigma — text', () => {
     const text = result.text as Record<string, unknown>
     expect(text.color).toMatchObject({ type: 'SOLID' })
   })
+
+  it('lifts lh/ls from the font atom into text.lineHeight/text.letterSpacing ({value,unit})', () => {
+    const result = specToFigma({
+      text: {
+        content: 'Hi',
+        font: 'font(Inter,SemiBold,18){lh=24,ls=0.5}',
+      },
+    })
+    const text = result.text as Record<string, unknown>
+    // Font object carries family/style/size only — lh/ls are lifted out.
+    expect(text.font).toEqual({
+      family: 'Inter',
+      style: 'SemiBold',
+      size: 18,
+    })
+    // Plugin reads text.lineHeight / text.letterSpacing as {value, unit}.
+    expect(text.lineHeight).toEqual({
+      value: 24,
+      unit: 'PIXELS',
+    })
+    expect(text.letterSpacing).toEqual({
+      value: 0.5,
+      unit: 'PIXELS',
+    })
+  })
+
+  it('lifts a percent line-height from the font atom', () => {
+    const result = specToFigma({
+      text: {
+        content: 'Hi',
+        font: 'font(Inter,Regular,16){lh=150%}',
+      },
+    })
+    const text = result.text as Record<string, unknown>
+    expect(text.lineHeight).toEqual({
+      value: 150,
+      unit: 'PERCENT',
+    })
+  })
+
+  it('omits lineHeight/letterSpacing when the font atom has none', () => {
+    const result = specToFigma({
+      text: {
+        content: 'Hi',
+        font: 'font(Inter,Regular,16)',
+      },
+    })
+    const text = result.text as Record<string, unknown>
+    expect(text.lineHeight).toBeUndefined()
+    expect(text.letterSpacing).toBeUndefined()
+    expect(text).not.toHaveProperty('lh')
+    expect(text).not.toHaveProperty('ls')
+  })
+
+  it('lifts lh/ls on per-range runs as well', () => {
+    const result = specToFigma({
+      text: {
+        content: 'Hi there',
+        font: 'font(Inter,Regular,16)',
+        runs: [
+          {
+            at: [0, 2],
+            font: 'font(Inter,Bold,16){lh=20}',
+          },
+        ],
+      },
+    })
+    const text = result.text as Record<string, unknown>
+    const runs = text.runs as Record<string, unknown>[]
+    expect(runs[0].font).toEqual({
+      family: 'Inter',
+      style: 'Bold',
+      size: 16,
+    })
+    expect(runs[0].lineHeight).toEqual({
+      value: 20,
+      unit: 'PIXELS',
+    })
+  })
 })
 
 describe('specToFigma — grids', () => {

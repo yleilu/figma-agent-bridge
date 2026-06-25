@@ -69,6 +69,12 @@ export const createMockPlugin = (
         result = cardFixture
         break
 
+      // inspect serializes the same raw export get_node consumes; the server's
+      // read model (truncate-tree + budget) decides what survives.
+      case 'inspect':
+        result = cardFixture
+        break
+
       case 'get_nodes':
         result = [cardFixture]
         break
@@ -120,6 +126,75 @@ export const createMockPlugin = (
           format: fmt,
           scale,
           data: fmt === 'SVG' ? MOCK_SVG : MOCK_PNG_BASE64,
+        }
+        break
+      }
+
+      // update_node: echo the CONVERTED spec (Figma objects, not atom strings)
+      // back so e2e/round-trip tests prove the server parsed and the plugin
+      // only assigned. Mirrors the real plugin's {id,name,type,warnings} reply.
+      case 'update_node': {
+        const spec = (cmd.params?.spec ?? {}) as Record<
+          string,
+          unknown
+        >
+        result = {
+          id: cmd.params?.nodeId as string,
+          name: (spec.name as string) ?? 'Card',
+          type: 'FRAME',
+          warnings: [],
+          // Echo the converted spec so the e2e can assert the parsed paint
+          // arrived intact.
+          spec,
+        }
+        break
+      }
+
+      // bind_variable: deterministic happy / degrade / error paths keyed off
+      // the variableId so the e2e can drive each contract. A degrade/unknown
+      // reply NEVER returns {error} — it returns {id,warnings} so the server's
+      // formatMutationResult reports success-with-warning, not failure.
+      case 'bind_variable': {
+        const variableId = cmd.params?.variableId as string
+        if (variableId.startsWith('err:')) {
+          error = `Variable not found: ${variableId}`
+        } else if (variableId.startsWith('degrade:')) {
+          result = {
+            id: cmd.params?.nodeId as string,
+            warnings: [
+              'setBoundVariable unavailable in this Figma version; binding skipped',
+            ],
+          }
+        } else {
+          result = {
+            id: cmd.params?.nodeId as string,
+            warnings: [],
+          }
+        }
+        break
+      }
+
+      // get_variables: a card-with-binding fixture so the round-trip can pick a
+      // variable id, bind it, and read it back as a var(...) wrapper atom.
+      case 'get_variables': {
+        result = {
+          results: [
+            {
+              id: 'col:1',
+              name: 'Brand',
+              modes: [{ modeId: 'm1', name: 'Light' }],
+              variables: [
+                {
+                  id: 'var:123',
+                  name: 'Brand/Primary',
+                  resolvedType: 'COLOR',
+                  valuesByMode: {
+                    m1: { r: 1, g: 0, b: 0, a: 1 },
+                  },
+                },
+              ],
+            },
+          ],
         }
         break
       }

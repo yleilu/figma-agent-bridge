@@ -1,3 +1,5 @@
+import { COMMANDS } from '@figma-agent-bridge/shared'
+
 figma.showUI(__html__, {
   width: 340,
   height: 280,
@@ -179,7 +181,8 @@ const applyCommonProperties = async (
       }
     }
     if ('fills' in node) {
-      ;(node as GeometryMixin & SceneNode).fills = paintArray
+      ;(node as GeometryMixin & SceneNode).fills =
+        paintArray
     }
   }
 
@@ -197,15 +200,24 @@ const applyCommonProperties = async (
   }
 
   // Stroke properties
-  if (spec.strokeWeight !== undefined && 'strokeWeight' in node) {
+  if (
+    spec.strokeWeight !== undefined &&
+    'strokeWeight' in node
+  ) {
     ;(node as GeometryMixin & SceneNode).strokeWeight =
       spec.strokeWeight as number
   }
-  if (spec.strokeAlign !== undefined && 'strokeAlign' in node) {
+  if (
+    spec.strokeAlign !== undefined &&
+    'strokeAlign' in node
+  ) {
     ;(node as GeometryMixin & SceneNode).strokeAlign =
       spec.strokeAlign as 'CENTER' | 'INSIDE' | 'OUTSIDE'
   }
-  if (spec.strokeDash !== undefined && 'dashPattern' in node) {
+  if (
+    spec.strokeDash !== undefined &&
+    'dashPattern' in node
+  ) {
     ;(node as GeometryMixin & SceneNode).dashPattern =
       spec.strokeDash as number[]
   }
@@ -337,11 +349,17 @@ const applyCommonProperties = async (
       | null
 
   // Apply resolved style IDs (server resolves style(name) → styleId)
-  if (spec.fillStyleId !== undefined && 'fillStyleId' in node) {
+  if (
+    spec.fillStyleId !== undefined &&
+    'fillStyleId' in node
+  ) {
     ;(node as GeometryMixin & SceneNode).fillStyleId =
       spec.fillStyleId as string
   }
-  if (spec.strokeStyleId !== undefined && 'strokeStyleId' in node) {
+  if (
+    spec.strokeStyleId !== undefined &&
+    'strokeStyleId' in node
+  ) {
     ;(node as GeometryMixin & SceneNode).strokeStyleId =
       spec.strokeStyleId as string
   }
@@ -815,7 +833,7 @@ const handleCommand = async (
         type: node.type,
       }))
 
-    case 'get_node': {
+    case COMMANDS.GET_NODE: {
       const node = await figma.getNodeByIdAsync(
         params.nodeId as string,
       )
@@ -823,6 +841,34 @@ const handleCommand = async (
         return { error: 'Node not found: ' + params.nodeId }
       }
       return exportNodeDocument(node)
+    }
+
+    // inspect returns the SAME raw export the reader consumes; the server's
+    // read model decides depth/budget. Resolves nodeId → pageId → current
+    // selection (first node) → current page.
+    case COMMANDS.INSPECT: {
+      let target: BaseNode | null = null
+      if (params.nodeId !== undefined) {
+        target = await figma.getNodeByIdAsync(
+          params.nodeId as string,
+        )
+      } else if (params.pageId !== undefined) {
+        target = await figma.getNodeByIdAsync(
+          params.pageId as string,
+        )
+      } else if (figma.currentPage.selection.length > 0) {
+        target = figma.currentPage.selection[0]
+      } else {
+        target = figma.currentPage
+      }
+      if (!target) {
+        return {
+          error:
+            'Node not found: ' +
+            ((params.nodeId ?? params.pageId) as string),
+        }
+      }
+      return exportNodeDocument(target)
     }
 
     case 'get_nodes': {
@@ -1335,6 +1381,136 @@ const handleCommand = async (
         type: svgFrame.type,
         childCount: svgFrame.children.length,
       }
+    }
+
+    case COMMANDS.UPDATE_NODE: {
+      const node = await figma.getNodeByIdAsync(
+        params.nodeId as string,
+      )
+      if (!node) {
+        return { error: 'Node not found: ' + params.nodeId }
+      }
+      const spec = params.spec as Record<string, unknown>
+      const warnings: string[] = []
+      const parent = node.parent as ParentNode | null
+
+      // warn-on-no-op: x/y on an auto-layout flow child is ignored by Figma.
+      if (
+        spec.position !== undefined &&
+        parent !== null &&
+        'layoutMode' in parent &&
+        (parent as FrameNode).layoutMode !== 'NONE' &&
+        (node as FrameNode).layoutPositioning !== 'ABSOLUTE'
+      ) {
+        warnings.push(
+          'x/y ignored on an auto-layout child (set layoutPositioning:ABSOLUTE first)',
+        )
+        delete spec.position
+      }
+
+      await applyCommonProperties(
+        node as SceneNode,
+        spec,
+        parent as ParentNode,
+      )
+      if (node.type === 'TEXT' && spec.text !== undefined) {
+        await applyTextProperties(node as TextNode, spec)
+      }
+      applyPostAppendProperties(node as SceneNode, spec)
+
+      return {
+        id: node.id,
+        name: node.name,
+        type: node.type,
+        warnings,
+      }
+    }
+
+    case COMMANDS.BIND_VARIABLE: {
+      const node = await figma.getNodeByIdAsync(
+        params.nodeId as string,
+      )
+      if (!node) {
+        return { error: 'Node not found: ' + params.nodeId }
+      }
+      const variable =
+        await figma.variables.getVariableByIdAsync(
+          params.variableId as string,
+        )
+      if (!variable) {
+        return {
+          error: 'Variable not found: ' + params.variableId,
+        }
+      }
+      const field = params.field as string
+      const warnings: string[] = []
+      const bindable = node as SceneNode & {
+        setBoundVariable?: (
+          f: VariableBindableNodeField,
+          v: Variable,
+        ) => void
+      }
+      // Feature-detect/warn (T7): degrade returns {id,warnings}, NEVER {error}.
+      if (typeof bindable.setBoundVariable !== 'function') {
+        warnings.push(
+          'setBoundVariable unavailable in this Figma version; binding skipped',
+        )
+        return { id: node.id, warnings }
+      }
+      try {
+        bindable.setBoundVariable(
+          field as VariableBindableNodeField,
+          variable,
+        )
+      } catch (e) {
+        warnings.push(
+          'field "' +
+            field +
+            '" is not bindable on ' +
+            node.type +
+            ': ' +
+            String(e),
+        )
+      }
+      return { id: node.id, warnings }
+    }
+
+    case COMMANDS.GET_VARIABLES: {
+      const collectionId = params.collectionId as
+        | string
+        | undefined
+      const collections =
+        await figma.variables.getLocalVariableCollectionsAsync()
+      const filtered =
+        collectionId !== undefined
+          ? collections.filter(c => c.id === collectionId)
+          : collections
+      const results = await Promise.all(
+        filtered.map(async c => ({
+          id: c.id,
+          name: c.name,
+          modes: c.modes,
+          variables: (
+            await Promise.all(
+              c.variableIds.map(async id => {
+                const v =
+                  await figma.variables.getVariableByIdAsync(
+                    id,
+                  )
+                return v
+                  ? {
+                      id: v.id,
+                      name: v.name,
+                      resolvedType: v.resolvedType,
+                      valuesByMode: v.valuesByMode,
+                    }
+                  : null
+              }),
+            )
+          ).filter(v => v !== null),
+        })),
+      )
+      return { results }
     }
 
     default:

@@ -39,14 +39,14 @@ export const textRunSchema = z.object({
   color: atomSchema.optional(),
 })
 
+// lh/ls are canonical on the font(...) atom — no top-level lh/ls keys
+// (review finding #3).
 export const textSpecSchema = z.object({
   content: z.string(),
   font: atomSchema,
   color: atomSchema.optional(),
   align: z.string().optional(),
   valign: z.string().optional(),
-  lh: z.string().optional(),
-  ls: z.string().optional(),
   decoration: z.string().optional(),
   case: z.string().optional(),
   paragraphSpacing: z.number().optional(),
