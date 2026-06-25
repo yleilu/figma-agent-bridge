@@ -46,14 +46,41 @@ export const createMockPlugin = (
 
   let ws: WebSocket | null = null
 
-  const handleBroadcast = (
-    socket: WebSocket,
-    cmd: CommandMessage,
-  ): void => {
+  // runCommand mirrors the real plugin's handleCommand: dispatch on the command
+  // string and return { result?, error? }. Pulled out of handleBroadcast so the
+  // BATCH case can re-dispatch each op through it (the same way the real plugin's
+  // BATCH case loops handleCommand) and so handleBroadcast just wraps the reply
+  // in the relay frame.
+  const runCommand = (
+    command: string,
+    params: Record<string, unknown> | undefined,
+  ): { result?: unknown; error?: string } => {
+    const cmd = { command, params } as CommandMessage
     let result: unknown = undefined
     let error: string | undefined = undefined
 
     switch (cmd.command) {
+      // batch (M3-D): loop the converted ops through runCommand in array order,
+      // collecting a per-op {ok,result|error} — partial success, one failure
+      // does not abort the rest. Mirrors the real plugin's BATCH case.
+      case 'batch': {
+        const batchOps =
+          (cmd.params?.ops as
+            | {
+                op: string
+                params: Record<string, unknown>
+              }[]
+            | undefined) ?? []
+        const results = batchOps.map(entry => {
+          const r = runCommand(entry.op, entry.params)
+          return r.error !== undefined
+            ? { ok: false, error: r.error }
+            : { ok: true, result: r.result }
+        })
+        result = { results }
+        break
+      }
+
       case 'get_document_info':
         result = {
           name: documentName,
@@ -432,14 +459,41 @@ export const createMockPlugin = (
         break
       }
 
+      // create_tree (M3 contract): params = { tree, parentId?, refs? }. The
+      // server has already CONVERTED every node to a FigmaWritePayload (atom
+      // leaves → Figma objects) and the ref-pool to converted form. The mock
+      // counts the realized node total by resolving `{ ref }` against refs and
+      // treating `{ id }` clones as a single node, and echoes the converted
+      // tree + refs back so e2e/round-trip tests can assert the nested
+      // structure (and ref/clone resolution) reached the plugin intact.
       case 'create_tree': {
-        const treeSpec = cmd.params?.node as
+        const treeSpec = cmd.params?.tree as
           | Record<string, unknown>
           | undefined
-        const treeParentId = cmd.params?.parentId as string
+        const treeParentId = cmd.params?.parentId as
+          | string
+          | undefined
+        const treeRefs = cmd.params?.refs as
+          | Record<string, Record<string, unknown>>
+          | undefined
         const countNodes = (
           node: Record<string, unknown>,
         ): number => {
+          // { ref }: rebuild refs[key] FRESH each reuse.
+          if (
+            node.ref !== undefined &&
+            node.type === undefined
+          ) {
+            const refSpec = treeRefs?.[node.ref as string]
+            return refSpec ? countNodes(refSpec) : 1
+          }
+          // { id } clone: a single realized node.
+          if (
+            node.id !== undefined &&
+            node.type === undefined
+          ) {
+            return 1
+          }
           let count = 1
           const children = node.children as
             | Record<string, unknown>[]
@@ -454,9 +508,6 @@ export const createMockPlugin = (
         const totalNodes = treeSpec
           ? countNodes(treeSpec)
           : 1
-        // Echo the received tree spec back (serialized fills/effects/
-        // layout, plus children) so e2e/round-trip tests can assert
-        // the converted spec reached the plugin intact.
         result = {
           ...(treeSpec ?? {}),
           id: `created:${Math.random().toString(36).slice(2, 8)}`,
@@ -465,52 +516,283 @@ export const createMockPlugin = (
             (treeSpec?.type as string),
           type: treeSpec?.type as string,
           parentId: treeParentId,
+          refs: treeRefs,
           totalNodes,
         }
         break
       }
 
-      case 'create_component': {
-        const compNodeId = cmd.params?.nodeId as
-          | string
-          | undefined
-        const compNodeIds = cmd.params?.nodeIds as
-          | string[]
-          | undefined
-        const combine = cmd.params?.combineAsVariants as
-          | boolean
-          | undefined
-        const slots = cmd.params?.slots as
-          | string[]
-          | undefined
-        if (combine && compNodeIds) {
-          result = {
-            id: `cs:${Math.random().toString(36).slice(2, 8)}`,
-            name: 'VariantSet',
-            type: 'COMPONENT_SET',
-            key: `key:${Math.random().toString(36).slice(2, 8)}`,
-          }
-        } else if (slots && slots.length > 0) {
-          // Mock: createSlot is not available in test environment
-          result = {
-            id:
-              compNodeId ??
-              `comp:${Math.random().toString(36).slice(2, 8)}`,
-            name: 'Component',
-            type: 'COMPONENT',
-            key: `key:${Math.random().toString(36).slice(2, 8)}`,
-            warning:
-              'createSlot is not available in this Figma version; requested slots were not created.',
-          }
+      // clone_node: echo one {id,name,type} per requested clone (count, default
+      // 1) so the count + index/parent forwarding is assertable.
+      case 'clone_node': {
+        const cloneCount =
+          (cmd.params?.count as number) ?? 1
+        const cloneArr: {
+          id: string
+          name: string
+          type: string
+        }[] = []
+        for (let i = 0; i < cloneCount; i++) {
+          cloneArr.push({
+            id: `clone:${i}:${Math.random().toString(36).slice(2, 8)}`,
+            name: 'Card',
+            type: 'FRAME',
+          })
+        }
+        result = cloneArr
+        break
+      }
+
+      // reparent_node: echo {id,…,parentId} so the new-parent move is assertable.
+      case 'reparent_node':
+        result = {
+          id: cmd.params?.nodeId as string,
+          name: 'Card',
+          type: 'FRAME',
+          parentId: cmd.params?.parentId as string,
+        }
+        break
+
+      // reorder_children: set-equality validate the requested ids against the
+      // mock parent's fixed child set ['1:1','1:2','1:3']. A mismatch WARNS
+      // (T7) and never errors; `order` echoes the requested ids that match.
+      case 'reorder_children': {
+        const parentId = cmd.params?.parentId as string
+        const requested =
+          (cmd.params?.nodeIds as string[]) ?? []
+        const actual = ['1:1', '1:2', '1:3']
+        const actualSet = new Set(actual)
+        const requestedSet = new Set(requested)
+        const warnings: string[] = []
+        const missing = requested.filter(
+          id => !actualSet.has(id),
+        )
+        const extra = actual.filter(
+          id => !requestedSet.has(id),
+        )
+        if (missing.length > 0 || extra.length > 0) {
+          warnings.push(
+            'reorder_children id set differs from the parent children: ' +
+              'not children=[' +
+              missing.join(',') +
+              '], omitted=[' +
+              extra.join(',') +
+              ']. Only matching ids were reordered.',
+          )
+        }
+        result = {
+          parentId,
+          order: requested.filter(id => actualSet.has(id)),
+          warnings,
+        }
+        break
+      }
+
+      // boolean_op: echo a BooleanOperationNode {id,name,type}; <2 nodes errors.
+      case 'boolean_op': {
+        const ids = (cmd.params?.nodeIds as string[]) ?? []
+        if (ids.length < 2) {
+          error =
+            'boolean_op requires at least 2 resolvable nodes.'
         } else {
           result = {
-            id:
-              compNodeId ??
-              `comp:${Math.random().toString(36).slice(2, 8)}`,
-            name: 'Component',
-            type: 'COMPONENT',
-            key: `key:${Math.random().toString(36).slice(2, 8)}`,
+            id: `bool:${Math.random().toString(36).slice(2, 8)}`,
+            name: 'Union',
+            type: 'BOOLEAN_OPERATION',
           }
+        }
+        break
+      }
+
+      // flatten: echo a VECTOR {id,name,type}; <1 node errors.
+      case 'flatten': {
+        const ids = (cmd.params?.nodeIds as string[]) ?? []
+        if (ids.length < 1) {
+          error =
+            'flatten requires at least 1 resolvable node.'
+        } else {
+          result = {
+            id: `vec:${Math.random().toString(36).slice(2, 8)}`,
+            name: 'Vector',
+            type: 'VECTOR',
+          }
+        }
+        break
+      }
+
+      // create_component: the M3-B rebuild promotes nodeId OR builds-from-spec
+      // then componentizes, echoing {id,key,name,type} + the converted spec so
+      // the e2e can assert the spec atoms were parsed server-side. (The legacy
+      // {combineAsVariants,nodeIds} / {slots} branches were retired in M3-E
+      // alongside the old tools/create-component.ts handler.)
+      case 'create_component': {
+        const ccSpec = cmd.params?.spec as
+          | Record<string, unknown>
+          | undefined
+        const ccNodeId = cmd.params?.nodeId as
+          | string
+          | undefined
+        const ccName = cmd.params?.name as
+          | string
+          | undefined
+        result = {
+          id: `comp:${Math.random().toString(36).slice(2, 8)}`,
+          key: `key:${Math.random().toString(36).slice(2, 8)}`,
+          name:
+            ccName ??
+            (ccSpec?.name as string) ??
+            'Component',
+          type: 'COMPONENT',
+          // echo the converted spec / source so tests can assert conversion + routing
+          spec: ccSpec,
+          sourceNodeId: ccNodeId,
+        }
+        break
+      }
+
+      // update_component: echo {id, propertyDefinitions, added, warnings}. An
+      // `expose` list degrades (warn, never error) — exposeNestedInstances is
+      // gated. addComponentProperty returns a CANONICAL id (`<name>#<suffix>`)
+      // that agents need for later setProperties, so the mock mirrors the real
+      // plugin by keying defs on that id and surfacing `added: [{name,id}]`.
+      case 'update_component': {
+        const ucId = cmd.params?.componentId as string
+        const ucAdd = cmd.params?.add as
+          | {
+              name: string
+              type: string
+              defaultValue: string | boolean
+            }[]
+          | undefined
+        const ucExpose = cmd.params?.expose as
+          | string[]
+          | undefined
+        const ucWarnings: string[] = []
+        const defs: Record<string, unknown> = {}
+        const added: { name: string; id: string }[] = []
+        if (ucAdd) {
+          for (const p of ucAdd) {
+            const propId = `${p.name}#1:0`
+            defs[propId] = {
+              type: p.type,
+              defaultValue: p.defaultValue,
+            }
+            added.push({ name: p.name, id: propId })
+          }
+        }
+        if (ucExpose && ucExpose.length > 0) {
+          ucWarnings.push(
+            'exposeNestedInstances unavailable in this Figma version; expose skipped',
+          )
+        }
+        result = {
+          id: ucId,
+          propertyDefinitions: defs,
+          added,
+          warnings: ucWarnings,
+        }
+        break
+      }
+
+      // combine_variants: ids that aren't valid COMPONENTs are DROPPED with a
+      // warning (honest partial success — never silently swallowed), mirroring
+      // the real plugin. ≥2 SURVIVORS → a COMPONENT_SET; <2 → error (guarded
+      // server-side too). The mock treats `bad:`-prefixed ids as not-a-component.
+      case 'combine_variants': {
+        const cvIds =
+          (cmd.params?.componentIds as string[]) ?? []
+        const cvWarnings: string[] = []
+        const cvDropped = cvIds.filter(id =>
+          id.startsWith('bad:'),
+        )
+        const cvKept = cvIds.filter(
+          id => !id.startsWith('bad:'),
+        )
+        if (cvDropped.length > 0) {
+          cvWarnings.push(
+            'combine_variants ignored ' +
+              cvDropped.length +
+              ' id(s) that are not a COMPONENT: ' +
+              cvDropped.join(', '),
+          )
+        }
+        if (cvKept.length < 2) {
+          error =
+            'Need at least 2 components for combine_variants'
+          break
+        }
+        // A `nogood:` parent can't bear children → fall back to the first
+        // component's parent, but REPORT it (no silent fallback), mirroring the
+        // real plugin.
+        const cvParentId = cmd.params?.parentId as
+          | string
+          | undefined
+        if (cvParentId?.startsWith('nogood:')) {
+          cvWarnings.push(
+            'Requested parent "' +
+              cvParentId +
+              '" cannot contain the variant set; used the first component\'s parent instead.',
+          )
+        }
+        result = {
+          id: `cs:${Math.random().toString(36).slice(2, 8)}`,
+          name:
+            (cmd.params?.name as string) ?? 'VariantSet',
+          type: 'COMPONENT_SET',
+          variantAxes: { Variant: { values: ['Default'] } },
+          warnings: cvWarnings,
+        }
+        break
+      }
+
+      // swap_component: echo {id, mainComponent, warnings}. instanceId
+      // `degrade:` → swap warns (T7), success not error. On a FAILED swap the
+      // real plugin re-reads getMainComponentAsync() → the ORIGINAL main (the
+      // swap never took), so the mock echoes the original main here too, NOT the
+      // requested target. We derive the original id from the instance id
+      // (`degrade:i9` → `orig:i9`) so it is deterministic and assertable.
+      case 'swap_component': {
+        const scId = cmd.params?.instanceId as string
+        const scMain = cmd.params?.mainComponentId as string
+        const scWarnings: string[] = []
+        const degraded = scId?.startsWith('degrade:')
+        if (degraded) {
+          scWarnings.push(
+            'swapComponent failed: feature unavailable',
+          )
+        }
+        result = {
+          id: scId,
+          mainComponent: degraded
+            ? 'orig:' + scId.slice('degrade:'.length)
+            : scMain,
+          warnings: scWarnings,
+        }
+        break
+      }
+
+      // set_instance: echo {id, componentProperties, warnings}. overrides → warn
+      // (not applied); properties echoed back as componentProperties.
+      case 'set_instance': {
+        const siId = cmd.params?.instanceId as string
+        const siProps = cmd.params?.properties as
+          | Record<string, string | boolean>
+          | undefined
+        const siOverrides = cmd.params?.overrides as
+          | unknown[]
+          | undefined
+        const siWarnings: string[] = []
+        if (siOverrides && siOverrides.length > 0) {
+          siWarnings.push(
+            'Per-node overrides are not yet applied; ' +
+              siOverrides.length +
+              ' override(s) skipped',
+          )
+        }
+        result = {
+          id: siId,
+          componentProperties: siProps ?? {},
+          warnings: siWarnings,
         }
         break
       }
@@ -628,10 +910,178 @@ export const createMockPlugin = (
         break
       }
 
+      // create_variables: the server has CONVERTED COLOR values to {r,g,b,a}
+      // (FLOAT/STRING/BOOLEAN pass through). Echo the converted variables back
+      // (as `echo`) so the e2e can assert the parse reached the plugin, and
+      // mirror the real reply { collectionId, modes, variables:[{id,name}] }.
+      // T7: a collection name prefixed `err:` models the collection-level
+      // factory THROWING — a genuine failure (nothing to return) → {error}, not
+      // a degrade. A variable name prefixed `degrade:` models a per-variable
+      // create / setValueForMode failure — it degrades to a warning and the rest
+      // of the batch continues (never a throw, never {error}).
+      case 'create_variables': {
+        const collectionName = cmd.params
+          ?.collection as string
+        if (collectionName.startsWith('err:')) {
+          error = `createVariableCollection failed for "${collectionName}"`
+          break
+        }
+        const inVars =
+          (cmd.params?.variables as
+            | {
+                name: string
+                type: string
+                valuesByMode: Record<string, unknown>
+              }[]
+            | undefined) ?? []
+        const reqModes =
+          (cmd.params?.modes as string[] | undefined) ?? []
+        // The default mode is renamed to reqModes[0] when given, else 'Mode 1'.
+        const modeNames =
+          reqModes.length > 0 ? reqModes : ['Mode 1']
+        const warnings: string[] = []
+        const created: { id: string; name: string }[] = []
+        inVars.forEach((v, i) => {
+          if (v.name.startsWith('degrade:')) {
+            warnings.push(
+              `setValueForMode failed for variable "${v.name}"; value not set`,
+            )
+            return
+          }
+          created.push({ id: `var:${i + 1}`, name: v.name })
+        })
+        result = {
+          collectionId: 'col:new',
+          modes: modeNames.map((name, i) => ({
+            modeId: `m${i + 1}`,
+            name,
+          })),
+          variables: created,
+          warnings,
+          echo: inVars,
+        }
+        break
+      }
+
+      // update_variables: a collectionId starting with `err:` → {error};
+      // `degrade:` → success-with-warning. Else echo the (converted) edits +
+      // mode lifecycle back so the e2e can assert the parse + forwarding. T7: a
+      // VARIABLE id prefixed `degrade:` models a setValueForMode REJECTION (e.g.
+      // a type-incompatible value reaching a COLOR variable) — it degrades to a
+      // warning-on-success, never a throw, never {error}.
+      case 'update_variables': {
+        const colId = cmd.params?.collectionId as string
+        if (colId.startsWith('err:')) {
+          error = `Collection not found: ${colId}`
+        } else if (colId.startsWith('degrade:')) {
+          result = {
+            collectionId: colId,
+            modes: [],
+            warnings: [
+              'addMode unavailable in this Figma version; mode not added',
+            ],
+          }
+        } else {
+          const editVars =
+            (cmd.params?.variables as
+              | { id: string }[]
+              | undefined) ?? []
+          const warnings: string[] = []
+          for (const edit of editVars) {
+            if (edit.id.startsWith('degrade:')) {
+              warnings.push(
+                `setValueForMode failed for variable ${edit.id}; value not set`,
+              )
+            }
+          }
+          result = {
+            collectionId: colId,
+            modes: [{ modeId: 'm1', name: 'Default' }],
+            warnings,
+            echo: {
+              addModes: cmd.params?.addModes,
+              removeModes: cmd.params?.removeModes,
+              renameModes: cmd.params?.renameModes,
+              variables: cmd.params?.variables,
+            },
+          }
+        }
+        break
+      }
+
+      // create_styles: the server has CONVERTED the value atom (paint→Paint,
+      // text→FontName, effect→Effect, grid→LayoutGrid). Echo it back + mirror
+      // the real reply { id, key, name, type }.
+      case 'create_styles': {
+        result = {
+          id: 'S:new',
+          key: 'style-key',
+          name: cmd.params?.name as string,
+          type: cmd.params?.type as string,
+          echo: cmd.params?.value,
+        }
+        break
+      }
+
+      // update_styles: a styleId starting with `err:` → {error}; `degrade:` →
+      // success-with-warning. Else echo {id,warnings:[]} + the converted value.
+      case 'update_styles': {
+        const sId = cmd.params?.styleId as string
+        if (sId.startsWith('err:')) {
+          error = `Style not found: ${sId}`
+        } else if (sId.startsWith('degrade:')) {
+          result = {
+            id: sId,
+            warnings: [
+              'value looks like a paint atom but the style is text; value not applied',
+            ],
+          }
+        } else {
+          result = {
+            id: sId,
+            warnings: [],
+            echo: cmd.params?.value,
+            valueType: cmd.params?.valueType,
+          }
+        }
+        break
+      }
+
+      // apply_style: a nodeId starting with `err:` → {error}; `degrade:` →
+      // success-with-warning ({id,warnings}, NEVER {error}); else {id,[]}.
+      case 'apply_style': {
+        const apNodeId = cmd.params?.nodeId as string
+        if (apNodeId.startsWith('err:')) {
+          error = `Node not found: ${apNodeId}`
+        } else if (apNodeId.startsWith('degrade:')) {
+          result = {
+            id: apNodeId,
+            warnings: [
+              'setTextStyleIdAsync unavailable on FRAME; style not applied',
+            ],
+          }
+        } else {
+          result = { id: apNodeId, warnings: [] }
+        }
+        break
+      }
+
       default:
         error = 'Unknown command'
         break
     }
+
+    return { result, error }
+  }
+
+  const handleBroadcast = (
+    socket: WebSocket,
+    cmd: CommandMessage,
+  ): void => {
+    const { result, error } = runCommand(
+      cmd.command,
+      cmd.params,
+    )
 
     // The real Figma plugin replies with { id, result|error } and NO command
     // (see figma-plugin/src/hooks/useRelay.ts). Mirror that here so the mock

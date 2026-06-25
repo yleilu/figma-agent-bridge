@@ -16,6 +16,7 @@ import {
   createTreeParamsSchema,
   bindVariableParamsSchema,
   getVariablesParamsSchema,
+  batchParamsSchema,
 } from '@figma-agent-bridge/shared/tool-params'
 
 // ---------------------------------------------------------------------------
@@ -451,5 +452,73 @@ describe('getVariablesParamsSchema', () => {
         collectionId: 'VariableCollectionId:1',
       }).success,
     ).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// batchParamsSchema — the one generic batch (D3): op? + ops[{op?, ...params}]
+// ---------------------------------------------------------------------------
+describe('batchParamsSchema', () => {
+  it('accepts a homogeneous batch (top-level op, entries omit op)', () => {
+    expect(
+      batchParamsSchema.safeParse({
+        op: 'delete_node',
+        ops: [{ nodeId: '1:1' }, { nodeId: '1:2' }],
+      }).success,
+    ).toBe(true)
+  })
+
+  it('accepts a heterogeneous batch (per-entry op)', () => {
+    expect(
+      batchParamsSchema.safeParse({
+        ops: [
+          { op: 'update_node', nodeId: '1:1', patch: {} },
+          { op: 'set_focus', nodeIds: ['1:2'] },
+        ],
+      }).success,
+    ).toBe(true)
+  })
+
+  it('passes through arbitrary per-op params (passthrough entry)', () => {
+    const parsed = batchParamsSchema.safeParse({
+      op: 'apply_style',
+      ops: [
+        { nodeId: '1:1', styleId: 'S:1', field: 'fill' },
+      ],
+    })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      const entry = parsed.data.ops[0] as Record<
+        string,
+        unknown
+      >
+      expect(entry.styleId).toBe('S:1')
+      expect(entry.field).toBe('fill')
+    }
+  })
+
+  it('rejects an empty ops array', () => {
+    expect(
+      batchParamsSchema.safeParse({
+        op: 'delete_node',
+        ops: [],
+      }).success,
+    ).toBe(false)
+  })
+
+  it('rejects an unknown op (not a WRITE command)', () => {
+    expect(
+      batchParamsSchema.safeParse({
+        op: 'inspect',
+        ops: [{ nodeId: '1:1' }],
+      }).success,
+    ).toBe(false)
+  })
+
+  it('rejects a missing ops array', () => {
+    expect(
+      batchParamsSchema.safeParse({ op: 'delete_node' })
+        .success,
+    ).toBe(false)
   })
 })

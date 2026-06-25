@@ -123,6 +123,24 @@ describe('handleCreateNode (rebuilt — single NodeSpec)', () => {
     expect(result.content[0].text).toContain('create_tree')
   })
 
+  it('surfaces a per-side stroke collapse warning on success (writer threads it)', async () => {
+    const result = await handleCreateNode(
+      {
+        spec: {
+          type: 'RECTANGLE',
+          stroke: 'stroke([2,0,2,0])',
+        },
+      },
+      stubClient({}),
+    )
+    // Success path (not an Error) carrying the writer's collapse warning.
+    expect(result.content[0].text).not.toStartWith('Error')
+    expect(result.content[0].text).toContain(
+      'Per-side stroke',
+    )
+    expect(result.content[0].text).toContain('collapsed')
+  })
+
   it('surfaces a plugin-side {error} as an error (not success)', async () => {
     const result = await handleCreateNode(
       { spec: { type: 'FRAME' } },

@@ -31,14 +31,29 @@ export const handleUpdateNode = async (
   }
 
   try {
-    const spec = specToFigma(patch)
+    // The writer pushes lossy-conversion notes (e.g. per-side stroke collapse)
+    // onto `warnings`.
+    const warnings: string[] = []
+    const spec = specToFigma(patch, warnings)
     const result = (await client.sendCommand(
       COMMANDS.UPDATE_NODE,
       { nodeId, spec },
     )) as { error?: string } | null
-    return formatMutationResult(
+    const mutation = formatMutationResult(
       result,
       `Failed to update node: ${nodeId}`,
+    )
+    if (
+      warnings.length === 0 ||
+      mutation.content[0].text.startsWith('Error')
+    ) {
+      return mutation
+    }
+    const warningText = warnings
+      .map(w => `Warning: ${w}`)
+      .join('\n')
+    return textResult(
+      `${mutation.content[0].text}\n\n${warningText}`,
     )
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)

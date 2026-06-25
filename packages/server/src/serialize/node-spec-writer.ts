@@ -124,9 +124,17 @@ const convertLayout = (
  * Convert a (partial) NodeSpec to a FigmaWritePayload.
  *
  * PURE — emits ONLY keys present in `spec`. Never injects defaults.
+ *
+ * `warnings` is an OPTIONAL sink: when supplied, lossy conversions (e.g. a
+ * per-side `stroke([t,r,b,l])` collapsing to a single weight — see below) push
+ * a human-readable note onto it. The M3 create/update/component handlers pass
+ * their own warnings array so the agent sees the loss; callers that only need
+ * the payload (and the ~40 `.toEqual()` converter tests) omit it and get the
+ * exact same return value.
  */
 export const specToFigma = (
   spec: Partial<NodeSpec>,
+  warnings?: string[],
 ): FigmaWritePayload => {
   const out: FigmaWritePayload = {}
 
@@ -188,16 +196,27 @@ export const specToFigma = (
       out.strokeWeight = geom.weight
     }
     if (geom.weights !== undefined) {
-      // Per-side weights [t,r,b,l]: the plugin has no per-side stroke key, so
-      // this collapses to a single strokeWeight (the top side), silently
-      // dropping the other 3 sides — a LOSSY write (T7).
-      // TODO(M3): surface a warning when the four sides differ. specToFigma is
-      // a PURE converter returning a bare FigmaWritePayload and ~40 tests pin
-      // its exact `.toEqual()` output, so threading a warning channel through
-      // the signature here is not clean; defer to the M3 create/update rebuild
-      // where the handler already carries a warnings array.
-      const [top] = geom.weights
+      // Per-side weights [t,r,b,l]. M3-E DECISION: warn (not apply). The
+      // plugin's apply-contract has no per-side stroke key today — applying
+      // real per-side weights would mean emitting strokeTopWeight/etc AND
+      // teaching the plugin to read+feature-detect them (T7), a write-contract
+      // change well beyond this polish sweep that would also break the round-
+      // trip honesty the header documents. So we still collapse to the top
+      // side, but no longer SILENTLY: when the four sides differ we push a
+      // warning onto the optional sink (the M3 handlers pass one). When the
+      // sides are equal the collapse is lossless, so we stay quiet.
+      const [top, right, bottom, left] = geom.weights
       out.strokeWeight = top
+      if (
+        warnings !== undefined &&
+        (right !== top || bottom !== top || left !== top)
+      ) {
+        warnings.push(
+          `Per-side stroke weights [${top}, ${right}, ${bottom}, ${left}] ` +
+            `collapsed to a single strokeWeight (${top}); the plugin has no ` +
+            `per-side stroke key, so the right/bottom/left weights were dropped.`,
+        )
+      }
     }
     if (geom.align !== undefined) {
       out.strokeAlign = geom.align
@@ -310,8 +329,9 @@ export const specToFigma = (
  */
 export const specToFigmaForCreate = (
   spec: NodeSpec,
+  warnings?: string[],
 ): FigmaWritePayload => ({
-  ...specToFigma(spec),
+  ...specToFigma(spec, warnings),
   type: spec.type,
   name: spec.name ?? spec.type,
 })

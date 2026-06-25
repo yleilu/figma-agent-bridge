@@ -79,6 +79,39 @@ describe('specToFigma — stroke geometry', () => {
       strokeDash: [4, 2],
     })
   })
+
+  it('per-side stroke weights collapse to the top side (strokeWeight)', () => {
+    const result = specToFigma({
+      stroke: 'stroke([2,0,2,0])',
+    })
+    expect(result).toMatchObject({ strokeWeight: 2 })
+  })
+
+  it('per-side stroke with DIFFERING sides pushes a collapse warning onto the sink', () => {
+    const warnings: string[] = []
+    specToFigma({ stroke: 'stroke([2,0,2,0])' }, warnings)
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('Per-side stroke')
+    expect(warnings[0]).toContain('collapsed')
+  })
+
+  it('per-side stroke with EQUAL sides is a lossless collapse — no warning', () => {
+    const warnings: string[] = []
+    const result = specToFigma(
+      { stroke: 'stroke([2,2,2,2])' },
+      warnings,
+    )
+    expect(result).toMatchObject({ strokeWeight: 2 })
+    expect(warnings).toHaveLength(0)
+  })
+
+  it('omitting the warnings sink keeps the exact same payload (pure converter)', () => {
+    expect(
+      specToFigma({ stroke: 'stroke([2,0,2,0])' }),
+    ).toEqual(
+      specToFigma({ stroke: 'stroke([2,0,2,0])' }, []),
+    )
+  })
 })
 
 describe('specToFigma — effects', () => {

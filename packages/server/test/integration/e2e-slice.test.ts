@@ -44,6 +44,12 @@ import {
   handleGetComponents,
   handleListFonts,
 } from '@figma-agent-bridge/server/tools/design-system'
+import {
+  handleCreateVariables,
+  handleUpdateVariables,
+  handleCreateStyles,
+  handleApplyStyle,
+} from '@figma-agent-bridge/server/tools/design-system-authoring'
 import { handleExport } from '@figma-agent-bridge/server/tools/export'
 import {
   handleGetReactions,
@@ -669,5 +675,259 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
       expect(typeof entry.id).toBe('string')
       expect(entry.id.length).toBeGreaterThan(0)
     }
+  })
+
+  // ── chunk C — design-system AUTHORING (writes over the relay) ──────────────
+
+  // 25 — create_variables: collection + modes + COLOR valuesByMode parsed from
+  // hex reaches the plugin as {r,g,b,a}; FLOAT passes through.
+  it('create_variables forwards modes + COLOR (parsed from hex) over the relay', async () => {
+    const result = await handleCreateVariables(
+      {
+        collection: 'Brand',
+        modes: ['Light', 'Dark'],
+        variables: [
+          {
+            name: 'Brand/Primary',
+            type: 'COLOR',
+            valuesByMode: {
+              Light: '#FF0000',
+              Dark: '#000000',
+            },
+          },
+          {
+            name: 'radius/md',
+            type: 'FLOAT',
+            valuesByMode: { Light: 8 },
+          },
+        ],
+      },
+      client,
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      collectionId: string
+      modes: { name: string }[]
+      variables: { id: string; name: string }[]
+      echo: {
+        type: string
+        valuesByMode: Record<string, unknown>
+      }[]
+    }
+    expect(out.collectionId).toBe('col:new')
+    expect(out.modes.map(m => m.name)).toEqual([
+      'Light',
+      'Dark',
+    ])
+    expect(out.variables[0].name).toBe('Brand/Primary')
+    // The COLOR hex was parsed server-side to {r,g,b,a} before the plugin saw it.
+    expect(out.echo[0].valuesByMode.Light).toEqual({
+      r: 1,
+      g: 0,
+      b: 0,
+      a: 1,
+    })
+    // FLOAT passed through unparsed.
+    expect(out.echo[1].valuesByMode.Light).toBe(8)
+  })
+
+  // 26 — update_variables: addMode + a COLOR value edit, parsed from hex.
+  it('update_variables forwards addModes + a parsed COLOR value edit over the relay', async () => {
+    const result = await handleUpdateVariables(
+      {
+        collectionId: 'col:1',
+        addModes: ['Dark'],
+        variables: [
+          {
+            id: 'var:1',
+            valuesByMode: { Default: '#00FF00' },
+          },
+        ],
+      },
+      client,
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      collectionId: string
+      echo: {
+        addModes: string[]
+        variables: {
+          id: string
+          valuesByMode: Record<string, unknown>
+        }[]
+      }
+    }
+    expect(out.collectionId).toBe('col:1')
+    expect(out.echo.addModes).toEqual(['Dark'])
+    // COLOR value edit parsed server-side.
+    expect(
+      out.echo.variables[0].valuesByMode.Default,
+    ).toEqual({ r: 0, g: 1, b: 0, a: 1 })
+  })
+
+  // 27 — update_variables degrade path reports success-with-warning (T7).
+  it('update_variables degrade path reports success-with-warning over the relay', async () => {
+    const result = await handleUpdateVariables(
+      { collectionId: 'degrade:col', addModes: ['X'] },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    expect(result.content[0].text).toContain(
+      'addMode unavailable',
+    )
+  })
+
+  // 27a — update_variables: a setValueForMode REJECTION (e.g. a type-incompatible
+  // value reaching a COLOR variable) degrades to a warning-on-success, never a
+  // throw / never {error} (T7). The mock keys this off a variable id prefixed
+  // `degrade:` on an otherwise-happy collection.
+  it('update_variables setValueForMode failure degrades to success-with-warning over the relay', async () => {
+    const result = await handleUpdateVariables(
+      {
+        collectionId: 'col:1',
+        variables: [
+          {
+            id: 'degrade:var',
+            valuesByMode: { Default: '#00FF00' },
+          },
+        ],
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    expect(result.content[0].text).toContain(
+      'setValueForMode failed',
+    )
+  })
+
+  // 27b — create_variables: a per-variable create / setValueForMode failure
+  // degrades the batch (warning), and the rest of the batch continues — never a
+  // throw, never {error}. The mock keys the failing variable off a name prefixed
+  // `degrade:`.
+  it('create_variables per-variable failure degrades while the batch continues over the relay', async () => {
+    const result = await handleCreateVariables(
+      {
+        collection: 'Brand',
+        variables: [
+          {
+            name: 'degrade:Bad',
+            type: 'COLOR',
+            valuesByMode: { Mode1: '#FF0000' },
+          },
+          {
+            name: 'Good',
+            type: 'COLOR',
+            valuesByMode: { Mode1: '#000000' },
+          },
+        ],
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const out = JSON.parse(result.content[0].text) as {
+      variables: { name: string }[]
+      warnings: string[]
+    }
+    // The good variable still made it into the batch.
+    expect(out.variables.map(v => v.name)).toContain('Good')
+    // The bad one degraded to a warning, not a throw / not {error}.
+    expect(
+      out.warnings.some(w => w.includes('degrade:Bad')),
+    ).toBe(true)
+  })
+
+  // 27c — create_variables: a collection-level factory failure is a genuine
+  // failure (nothing to return) and surfaces as {error}, NOT a degrade. The mock
+  // keys this off a collection name prefixed `err:`.
+  it('create_variables collection-factory failure surfaces as an error over the relay', async () => {
+    const result = await handleCreateVariables(
+      { collection: 'err:Brand', variables: [] },
+      client,
+    )
+    expect(result.content[0].text).toContain('Error')
+    expect(result.content[0].text).toContain(
+      'createVariableCollection',
+    )
+  })
+
+  // 28 — create_styles: a paint atom is parsed server-side to a SOLID Paint
+  // before the plugin creates the style.
+  it('create_styles parses a paint atom to a SOLID Paint over the relay', async () => {
+    const result = await handleCreateStyles(
+      {
+        type: 'paint',
+        name: 'Brand/Primary',
+        value: '#3B82F6',
+      },
+      client,
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      id: string
+      key: string
+      type: string
+      echo: { type: string; color: unknown }
+    }
+    expect(out.id).toBe('S:new')
+    expect(out.type).toBe('paint')
+    // The atom was parsed to a Figma Paint before the plugin saw it.
+    expect(out.echo.type).toBe('SOLID')
+    expect(out.echo.color).toEqual({
+      r: 0.231,
+      g: 0.51,
+      b: 0.965,
+    })
+  })
+
+  // 29 — create_styles: a font atom is parsed to a FontName over the relay.
+  it('create_styles parses a font atom to a FontName over the relay', async () => {
+    const result = await handleCreateStyles(
+      {
+        type: 'text',
+        name: 'Heading/H1',
+        value: 'font(Inter,Bold,32,{lh=40})',
+      },
+      client,
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      type: string
+      echo: {
+        family: string
+        size: number
+        lineHeight: { value: number; unit: string }
+      }
+    }
+    expect(out.type).toBe('text')
+    expect(out.echo.family).toBe('Inter')
+    expect(out.echo.size).toBe(32)
+    expect(out.echo.lineHeight).toEqual({
+      value: 40,
+      unit: 'PIXELS',
+    })
+  })
+
+  // 30 — apply_style happy path reports success (no error) over the relay.
+  it('apply_style reports success over the relay', async () => {
+    const result = await handleApplyStyle(
+      { nodeId: '1:42', styleId: 'S:1', field: 'fill' },
+      client,
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      id: string
+      warnings: string[]
+    }
+    expect(out.id).toBe('1:42')
+    expect(out.warnings).toEqual([])
+  })
+
+  // 31 — apply_style degrade path reports success-with-warning (T7).
+  it('apply_style degrade path reports success-with-warning over the relay', async () => {
+    const result = await handleApplyStyle(
+      {
+        nodeId: 'degrade:node',
+        styleId: 'S:1',
+        field: 'text',
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    expect(result.content[0].text).toContain('not applied')
   })
 })

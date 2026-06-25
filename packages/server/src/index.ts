@@ -5,11 +5,8 @@ import {
   APP_VERSION,
   DEFAULT_PORT,
   connectParamsSchema,
-  createTreeParamsSchema,
-  createComponentParamsSchema,
   createFromSvgParamsSchema,
 } from '@figma-agent-bridge/shared'
-import type { CreateTreeNodeSpec } from '@figma-agent-bridge/shared'
 // M2 param schemas live in tool-params (NOT the barrel — they shadow the
 // green-window schemas.ts versions still imported above for the old tools).
 import {
@@ -40,6 +37,23 @@ import {
   setPluginDataParamsSchema,
   setReactionsParamsSchema,
   setAnnotationsParamsSchema,
+  createTreeParamsSchema,
+  cloneNodeParamsSchema,
+  reparentNodeParamsSchema,
+  reorderChildrenParamsSchema,
+  booleanOpParamsSchema,
+  flattenParamsSchema,
+  createComponentParamsSchema,
+  updateComponentParamsSchema,
+  combineVariantsParamsSchema,
+  swapComponentParamsSchema,
+  setInstanceParamsSchema,
+  createVariablesParamsSchema,
+  updateVariablesParamsSchema,
+  createStylesParamsSchema,
+  updateStylesParamsSchema,
+  applyStyleParamsSchema,
+  batchParamsSchema,
 } from '@figma-agent-bridge/shared/tool-params'
 import { createFigmaClient } from './figma-client'
 import {
@@ -60,6 +74,13 @@ import {
   handleGetVariables,
 } from './tools/design-system'
 import {
+  handleCreateVariables,
+  handleUpdateVariables,
+  handleCreateStyles,
+  handleUpdateStyles,
+  handleApplyStyle,
+} from './tools/design-system-authoring'
+import {
   handleGetReactions,
   handleGetPluginData,
   handleGetAnnotations,
@@ -70,6 +91,11 @@ import {
 import {
   handleDeleteNode,
   handleSetFocus,
+  handleCloneNode,
+  handleReparentNode,
+  handleReorderChildren,
+  handleBooleanOp,
+  handleFlatten,
 } from './tools/structure'
 import {
   handleCreatePage,
@@ -85,9 +111,16 @@ import {
   handleGetSelection,
   handleSetSelection,
 } from './tools/selection'
-import { handleCreateTree } from './tools/create'
-import { handleCreateComponent } from './tools/create-component'
+import { handleCreateTree } from './tools/create-tree'
+import {
+  handleCreateComponent,
+  handleUpdateComponent,
+  handleCombineVariants,
+  handleSwapComponent,
+  handleSetInstance,
+} from './tools/components'
 import { handleCreateFromSvg } from './tools/create-svg'
+import { handleBatch } from './tools/batch'
 
 const server = new McpServer({
   name: APP_NAME,
@@ -223,8 +256,9 @@ server.tool(
   async params =>
     handleCreateTree(
       {
+        tree: params.tree,
         parentId: params.parentId,
-        node: params.node as CreateTreeNodeSpec,
+        refs: params.refs,
       },
       client,
     ),
@@ -237,13 +271,37 @@ server.tool(
     handleCreateComponent(
       {
         nodeId: params.nodeId,
-        nodeIds: params.nodeIds,
-        combineAsVariants: params.combineAsVariants,
-        slots: params.slots,
-        componentProperties: params.componentProperties,
+        spec: params.spec,
+        parentId: params.parentId,
+        name: params.name,
+        description: params.description,
       },
       client,
     ),
+)
+
+server.tool(
+  'update_component',
+  updateComponentParamsSchema.shape,
+  async params => handleUpdateComponent(params, client),
+)
+
+server.tool(
+  'combine_variants',
+  combineVariantsParamsSchema.shape,
+  async params => handleCombineVariants(params, client),
+)
+
+server.tool(
+  'swap_component',
+  swapComponentParamsSchema.shape,
+  async params => handleSwapComponent(params, client),
+)
+
+server.tool(
+  'set_instance',
+  setInstanceParamsSchema.shape,
+  async params => handleSetInstance(params, client),
 )
 
 server.tool(
@@ -292,6 +350,36 @@ server.tool(
 )
 
 server.tool(
+  'clone_node',
+  cloneNodeParamsSchema.shape,
+  async params => handleCloneNode(params, client),
+)
+
+server.tool(
+  'reparent_node',
+  reparentNodeParamsSchema.shape,
+  async params => handleReparentNode(params, client),
+)
+
+server.tool(
+  'reorder_children',
+  reorderChildrenParamsSchema.shape,
+  async params => handleReorderChildren(params, client),
+)
+
+server.tool(
+  'boolean_op',
+  booleanOpParamsSchema.shape,
+  async params => handleBooleanOp(params, client),
+)
+
+server.tool(
+  'flatten',
+  flattenParamsSchema.shape,
+  async params => handleFlatten(params, client),
+)
+
+server.tool(
   'create_page',
   createPageParamsSchema.shape,
   async params => handleCreatePage(params, client),
@@ -331,6 +419,42 @@ server.tool(
   'set_annotations',
   setAnnotationsParamsSchema.shape,
   async params => handleSetAnnotations(params, client),
+)
+
+server.tool(
+  'create_variables',
+  createVariablesParamsSchema.shape,
+  async params => handleCreateVariables(params, client),
+)
+
+server.tool(
+  'update_variables',
+  updateVariablesParamsSchema.shape,
+  async params => handleUpdateVariables(params, client),
+)
+
+server.tool(
+  'create_styles',
+  createStylesParamsSchema.shape,
+  async params => handleCreateStyles(params, client),
+)
+
+server.tool(
+  'update_styles',
+  updateStylesParamsSchema.shape,
+  async params => handleUpdateStyles(params, client),
+)
+
+server.tool(
+  'apply_style',
+  applyStyleParamsSchema.shape,
+  async params => handleApplyStyle(params, client),
+)
+
+server.tool(
+  'batch',
+  batchParamsSchema.shape,
+  async params => handleBatch(params, client),
 )
 
 const transport = new StdioServerTransport()

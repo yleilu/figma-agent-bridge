@@ -672,8 +672,20 @@ const createSingleNode = async (
 const createTreeNode = async (
   spec: Record<string, unknown>,
   parent: ParentNode,
+  refs?: Record<string, Record<string, unknown>>,
 ): Promise<SceneNode> => {
   const type = spec.type as string
+
+  // Ref-pool reference: { ref } — rebuild refs[key] FRESH on each reuse so N
+  // uses of one ref yield N independent subtrees, not N shared references.
+  if (spec.ref !== undefined && spec.type === undefined) {
+    const refKey = spec.ref as string
+    const refSpec = refs?.[refKey]
+    if (!refSpec) {
+      throw new Error('Ref not found in pool: ' + refKey)
+    }
+    return createTreeNode(refSpec, parent, refs)
+  }
 
   // Clone reference: { id } with no type
   if (spec.id !== undefined && spec.type === undefined) {
@@ -719,7 +731,11 @@ const createTreeNode = async (
     }
     const childNodes: SceneNode[] = []
     for (const childSpec of children) {
-      const child = await createTreeNode(childSpec, parent)
+      const child = await createTreeNode(
+        childSpec,
+        parent,
+        refs,
+      )
       childNodes.push(child)
     }
     const group = figma.group(childNodes, parent)
@@ -739,7 +755,11 @@ const createTreeNode = async (
     }
     const childNodes: SceneNode[] = []
     for (const childSpec of children) {
-      const child = await createTreeNode(childSpec, parent)
+      const child = await createTreeNode(
+        childSpec,
+        parent,
+        refs,
+      )
       childNodes.push(child)
     }
     const modifiers = spec.modifiers as
@@ -767,7 +787,11 @@ const createTreeNode = async (
     }
     const childNodes: SceneNode[] = []
     for (const childSpec of children) {
-      const child = await createTreeNode(childSpec, parent)
+      const child = await createTreeNode(
+        childSpec,
+        parent,
+        refs,
+      )
       childNodes.push(child)
     }
     const op = spec.booleanOperation as string
@@ -786,7 +810,11 @@ const createTreeNode = async (
         boolNode = figma.exclude(childNodes, parent)
         break
       default:
-        boolNode = figma.union(childNodes, parent)
+        // Consistent with the boolean_op tool's strict handling (which returns
+        // { error: 'Unknown boolean op' }): reject an unknown op rather than
+        // silently defaulting to union. createTreeNode's caller surfaces the
+        // throw as the create_tree {error}.
+        throw new Error('Unknown boolean op: ' + op)
     }
     if (spec.name) boolNode.name = spec.name as string
     return boolNode
@@ -805,7 +833,11 @@ const createTreeNode = async (
     'appendChild' in node
   ) {
     for (const childSpec of children) {
-      await createTreeNode(childSpec, node as ParentNode)
+      await createTreeNode(
+        childSpec,
+        node as ParentNode,
+        refs,
+      )
     }
   }
 
@@ -1316,28 +1348,41 @@ const handleCommand = async (
       }
     }
 
-    case 'create_tree': {
-      const treeParent = await figma.getNodeByIdAsync(
-        params.parentId as string,
-      )
-      if (!treeParent || !('appendChild' in treeParent)) {
+    // create_tree (M3 REBUILD): build a nested tree from a converted
+    // TreeNodeSpec. params = { tree, parentId?, refs? }. parentId omitted →
+    // current page. The recursive builder createTreeNode creates each node by
+    // type, appendChild, then applyPostAppendProperties (FILL/ABSOLUTE) per
+    // level and loadFontAsync before text. `{ ref }` rebuilds refs[key] fresh;
+    // `{ id }` clones the existing node.
+    case COMMANDS.CREATE_TREE: {
+      const treeParentNode =
+        params.parentId !== undefined
+          ? await figma.getNodeByIdAsync(
+              params.parentId as string,
+            )
+          : figma.currentPage
+      if (
+        !treeParentNode ||
+        !('appendChild' in treeParentNode)
+      ) {
         return {
           error:
             'Parent not found or cannot have children: ' +
             params.parentId,
         }
       }
-      const treeParentNode = treeParent as
-        | FrameNode
-        | PageNode
-        | SectionNode
-      const treeSpec = params.node as Record<
+      const treeParent = treeParentNode as ParentNode
+      const treeSpec = params.tree as Record<
         string,
         unknown
       >
+      const treeRefs = params.refs as
+        | Record<string, Record<string, unknown>>
+        | undefined
       const treeResult = await createTreeNode(
         treeSpec,
-        treeParentNode,
+        treeParent,
+        treeRefs,
       )
       return {
         id: treeResult.id,
@@ -1346,88 +1391,370 @@ const handleCommand = async (
       }
     }
 
-    case 'create_component': {
-      if (params.combineAsVariants && params.nodeIds) {
-        const compNodes: ComponentNode[] = []
-        for (const nid of params.nodeIds as string[]) {
-          const n = await figma.getNodeByIdAsync(nid)
-          if (n && n.type === 'COMPONENT') {
-            compNodes.push(n as ComponentNode)
-          }
-        }
-        if (compNodes.length < 2) {
-          return {
-            error:
-              'Need at least 2 components for combineAsVariants',
-          }
-        }
-        const compParent = compNodes[0].parent as BaseNode &
-          ChildrenMixin
-        const cs = figma.combineAsVariants(
-          compNodes,
-          compParent,
+    // create_component (M3-B rebuild): supply EXACTLY ONE source — `spec` (a
+    // NodeSpec built first via createSingleNode, then componentized) OR `nodeId`
+    // (promote an existing node via createComponentFromNode). The server has
+    // already validated the XOR and converted the spec on the grammar write
+    // face. Returns {id,key,name,type}.
+    case COMMANDS.CREATE_COMPONENT: {
+      const ccName = params.name as string | undefined
+      const ccDescription = params.description as
+        | string
+        | undefined
+      let sourceNode: SceneNode
+      const ccSpec = params.spec as
+        | Record<string, unknown>
+        | undefined
+      if (ccSpec !== undefined) {
+        // Build from NodeSpec first, then componentize. Resolve parentId if
+        // supplied and able to host children; else use the current page.
+        const ccParentNode =
+          params.parentId !== undefined
+            ? await figma.getNodeByIdAsync(
+                params.parentId as string,
+              )
+            : null
+        const ccParent =
+          ccParentNode && 'appendChild' in ccParentNode
+            ? (ccParentNode as ParentNode)
+            : figma.currentPage
+        sourceNode = await createSingleNode(
+          ccSpec,
+          ccParent,
         )
+      } else {
+        const found = await figma.getNodeByIdAsync(
+          params.nodeId as string,
+        )
+        if (!found) {
+          return {
+            error: 'Node not found: ' + params.nodeId,
+          }
+        }
+        sourceNode = found as SceneNode
+      }
+      const comp = figma.createComponentFromNode(sourceNode)
+      if (ccName !== undefined) comp.name = ccName
+      if (ccDescription !== undefined)
+        comp.description = ccDescription
+      return {
+        id: comp.id,
+        key: comp.key,
+        name: comp.name,
+        type: comp.type,
+      }
+    }
+
+    // update_component: add/edit/delete componentPropertyDefinitions, set the
+    // description, and (T7-gated) expose nested instances. Each step is wrapped
+    // so a single failure degrades into a warning rather than aborting the rest.
+    case COMMANDS.UPDATE_COMPONENT: {
+      const compNode = await figma.getNodeByIdAsync(
+        params.componentId as string,
+      )
+      if (!compNode) {
         return {
-          id: cs.id,
-          name: cs.name,
-          type: cs.type,
-          key: cs.key,
+          error:
+            'Component not found: ' + params.componentId,
         }
       }
-      const nodeToPromote = await figma.getNodeByIdAsync(
-        params.nodeId as string,
-      )
-      if (!nodeToPromote) {
-        return { error: 'Node not found: ' + params.nodeId }
+      if (
+        compNode.type !== 'COMPONENT' &&
+        compNode.type !== 'COMPONENT_SET'
+      ) {
+        return {
+          error:
+            'Node is not a component or component set: ' +
+            params.componentId,
+        }
       }
-      const comp = figma.createComponentFromNode(
-        nodeToPromote as SceneNode,
-      )
+      const comp = compNode as
+        | ComponentNode
+        | ComponentSetNode
+      const ucWarnings: string[] = []
+      // add. addComponentProperty returns the CANONICAL property id
+      // (e.g. "Label#1:0") that agents need for later setProperties — surface
+      // each {name,id} rather than discarding it.
+      const ucAdded: { name: string; id: string }[] = []
+      const addProps = params.add as
+        | {
+            name: string
+            type: string
+            defaultValue: string | boolean
+          }[]
+        | undefined
+      if (addProps) {
+        for (const p of addProps) {
+          try {
+            const propId = comp.addComponentProperty(
+              p.name,
+              p.type as ComponentPropertyType,
+              p.defaultValue,
+            )
+            ucAdded.push({ name: p.name, id: propId })
+          } catch (e) {
+            ucWarnings.push(
+              'Failed to add property "' +
+                p.name +
+                '": ' +
+                String(e),
+            )
+          }
+        }
+      }
+      // edit
+      const editProps = params.edit as
+        | {
+            name: string
+            newName?: string
+            defaultValue?: string | boolean
+          }[]
+        | undefined
+      if (editProps) {
+        for (const p of editProps) {
+          try {
+            const opts: {
+              name?: string
+              defaultValue?: string | boolean
+            } = {}
+            if (p.newName !== undefined)
+              opts.name = p.newName
+            if (p.defaultValue !== undefined)
+              opts.defaultValue = p.defaultValue
+            comp.editComponentProperty(p.name, opts)
+          } catch (e) {
+            ucWarnings.push(
+              'Failed to edit property "' +
+                p.name +
+                '": ' +
+                String(e),
+            )
+          }
+        }
+      }
+      // delete
+      const delProps = params.delete as string[] | undefined
+      if (delProps) {
+        for (const name of delProps) {
+          try {
+            comp.deleteComponentProperty(name)
+          } catch (e) {
+            ucWarnings.push(
+              'Failed to delete property "' +
+                name +
+                '": ' +
+                String(e),
+            )
+          }
+        }
+      }
+      // description
+      if (params.description !== undefined) {
+        comp.description = params.description as string
+      }
+      // expose nested instances (T7-gated)
+      const exposeIds = params.expose as
+        | string[]
+        | undefined
+      if (exposeIds && exposeIds.length > 0) {
+        for (const eid of exposeIds) {
+          const en = await figma.getNodeByIdAsync(eid)
+          const exposable = en as
+            | (InstanceNode & {
+                isExposedInstance?: boolean
+              })
+            | null
+          if (
+            exposable &&
+            'isExposedInstance' in exposable
+          ) {
+            try {
+              ;(
+                exposable as { isExposedInstance: boolean }
+              ).isExposedInstance = true
+            } catch (e) {
+              ucWarnings.push(
+                'Failed to expose instance "' +
+                  eid +
+                  '": ' +
+                  String(e),
+              )
+            }
+          } else {
+            ucWarnings.push(
+              'exposeNestedInstances unavailable for "' +
+                eid +
+                '"; expose skipped',
+            )
+          }
+        }
+      }
+      return {
+        id: comp.id,
+        propertyDefinitions:
+          comp.componentPropertyDefinitions,
+        added: ucAdded,
+        warnings: ucWarnings,
+      }
+    }
 
-      // Add component properties if specified (before slots, so they always run)
-      const componentProperties =
-        params.componentProperties as
-          | {
-              name: string
-              type: string
-              default: string | boolean
-            }[]
-          | undefined
-      if (componentProperties) {
-        for (const prop of componentProperties) {
-          comp.addComponentProperty(
-            prop.name,
-            prop.type as ComponentPropertyType,
-            prop.default,
+    // combine_variants: combine ≥2 components into a variant set. Resolves the
+    // parent (parentId else the first component's parent) and combines. Ids that
+    // aren't found / aren't a COMPONENT are DROPPED with a warning (honest
+    // partial success — never silently swallowed); a requested parent that can't
+    // bear children is also reported rather than silently ignored.
+    case COMMANDS.COMBINE_VARIANTS: {
+      const cvIds = (params.componentIds as string[]) ?? []
+      const cvComps: ComponentNode[] = []
+      const cvDropped: string[] = []
+      const cvWarnings: string[] = []
+      for (const cid of cvIds) {
+        const n = await figma.getNodeByIdAsync(cid)
+        if (n && n.type === 'COMPONENT') {
+          cvComps.push(n as ComponentNode)
+        } else {
+          cvDropped.push(cid)
+        }
+      }
+      if (cvDropped.length > 0) {
+        cvWarnings.push(
+          'combine_variants ignored ' +
+            cvDropped.length +
+            ' id(s) that are not a COMPONENT: ' +
+            cvDropped.join(', '),
+        )
+      }
+      if (cvComps.length < 2) {
+        return {
+          error:
+            'Need at least 2 components for combine_variants',
+        }
+      }
+      const cvParentNode =
+        params.parentId !== undefined
+          ? await figma.getNodeByIdAsync(
+              params.parentId as string,
+            )
+          : cvComps[0].parent
+      let cvParent: BaseNode & ChildrenMixin
+      if (cvParentNode && 'appendChild' in cvParentNode) {
+        cvParent = cvParentNode as BaseNode & ChildrenMixin
+      } else {
+        if (params.parentId !== undefined) {
+          cvWarnings.push(
+            'Requested parent "' +
+              String(params.parentId) +
+              '" cannot contain the variant set; used the first component\'s parent instead.',
+          )
+        }
+        cvParent = cvComps[0].parent as BaseNode &
+          ChildrenMixin
+      }
+      const cs = figma.combineAsVariants(cvComps, cvParent)
+      if (params.name !== undefined)
+        cs.name = params.name as string
+      return {
+        id: cs.id,
+        name: cs.name,
+        type: cs.type,
+        variantAxes: cs.variantGroupProperties,
+        warnings: cvWarnings,
+      }
+    }
+
+    // swap_component: point an instance at a different main component. swap
+    // failures degrade into a warning (T7) — never throw.
+    case COMMANDS.SWAP_COMPONENT: {
+      const scInst = await figma.getNodeByIdAsync(
+        params.instanceId as string,
+      )
+      if (!scInst) {
+        return {
+          error: 'Instance not found: ' + params.instanceId,
+        }
+      }
+      if (scInst.type !== 'INSTANCE') {
+        return {
+          error:
+            'Node is not an instance: ' + params.instanceId,
+        }
+      }
+      const scMain = await figma.getNodeByIdAsync(
+        params.mainComponentId as string,
+      )
+      if (!scMain || scMain.type !== 'COMPONENT') {
+        return {
+          error:
+            'Main component not found: ' +
+            params.mainComponentId,
+        }
+      }
+      const scWarnings: string[] = []
+      const inst = scInst as InstanceNode
+      try {
+        inst.swapComponent(scMain as ComponentNode)
+      } catch (e) {
+        scWarnings.push(
+          'swapComponent failed: ' + String(e),
+        )
+      }
+      const swapped = await inst
+        .getMainComponentAsync()
+        .catch(() => null)
+      return {
+        id: inst.id,
+        mainComponent: swapped ? swapped.id : scMain.id,
+        warnings: scWarnings,
+      }
+    }
+
+    // set_instance: set instance properties via setProperties and/or apply
+    // per-node overrides. setProperties failures degrade (T7); per-node override
+    // application is limited via the plugin API → warn rather than fail.
+    case COMMANDS.SET_INSTANCE: {
+      const siInst = await figma.getNodeByIdAsync(
+        params.instanceId as string,
+      )
+      if (!siInst) {
+        return {
+          error: 'Instance not found: ' + params.instanceId,
+        }
+      }
+      if (siInst.type !== 'INSTANCE') {
+        return {
+          error:
+            'Node is not an instance: ' + params.instanceId,
+        }
+      }
+      const inst2 = siInst as InstanceNode
+      const siWarnings: string[] = []
+      const siProps = params.properties as
+        | Record<string, string | boolean>
+        | undefined
+      if (siProps && Object.keys(siProps).length > 0) {
+        try {
+          inst2.setProperties(siProps)
+        } catch (e) {
+          siWarnings.push(
+            'setProperties failed: ' + String(e),
           )
         }
       }
-
-      // Create slots if specified
-      const slots = params.slots as string[] | undefined
-      let slotWarning: string | undefined
-      if (slots) {
-        const compWithSlot = comp as ComponentNode & {
-          createSlot?: (name: string) => void
-        }
-        if (compWithSlot.createSlot) {
-          for (const slotName of slots) {
-            compWithSlot.createSlot(slotName)
-          }
-        } else {
-          slotWarning =
-            'createSlot is not available in this Figma version; requested slots were not created.'
-        }
+      const siOverrides = params.overrides as
+        | { path: string; field: string; value: string }[]
+        | undefined
+      if (siOverrides && siOverrides.length > 0) {
+        siWarnings.push(
+          'Per-node overrides are not yet applied; ' +
+            siOverrides.length +
+            ' override(s) skipped',
+        )
       }
-
-      const result: Record<string, unknown> = {
-        id: comp.id,
-        name: comp.name,
-        type: comp.type,
-        key: comp.key,
+      return {
+        id: inst2.id,
+        componentProperties: inst2.componentProperties,
+        warnings: siWarnings,
       }
-      if (slotWarning) result.warning = slotWarning
-      return result
     }
 
     case COMMANDS.CREATE_FROM_SVG: {
@@ -1783,6 +2110,271 @@ const handleCommand = async (
       }
     }
 
+    // clone_node: node.clone() (count times), optionally reparented into
+    // parentId at index. Each clone is appended (or inserted) and reported as
+    // {id,name,type}. Missing source/parent → {error}.
+    case COMMANDS.CLONE_NODE: {
+      const srcId = params.nodeId as string
+      const source = await figma.getNodeByIdAsync(srcId)
+      if (!source || !('clone' in source)) {
+        return {
+          error:
+            'Node not found or not cloneable: ' + srcId,
+        }
+      }
+      const src = source as SceneNode
+      let dest: ParentNode | null =
+        src.parent as ParentNode | null
+      if (params.parentId !== undefined) {
+        const p = await figma.getNodeByIdAsync(
+          params.parentId as string,
+        )
+        if (!p || !('appendChild' in p)) {
+          return {
+            error:
+              'Parent not found or cannot have children: ' +
+              params.parentId,
+          }
+        }
+        dest = p as ParentNode
+      }
+      if (!dest) {
+        return {
+          error: 'No parent to place the clone under.',
+        }
+      }
+      const count = (params.count as number) ?? 1
+      const index = params.index as number | undefined
+      const clones: {
+        id: string
+        name: string
+        type: string
+      }[] = []
+      for (let i = 0; i < count; i++) {
+        const clone = src.clone()
+        if (index !== undefined) {
+          dest.insertChild(index + i, clone)
+        } else {
+          dest.appendChild(clone)
+        }
+        clones.push({
+          id: clone.id,
+          name: clone.name,
+          type: clone.type,
+        })
+      }
+      return clones
+    }
+
+    // reparent_node: move a node under a new parent (re-flows in the new
+    // parent's layout). insertChild at index when given, else appendChild.
+    // Missing node/parent → {error}.
+    case COMMANDS.REPARENT_NODE: {
+      const nodeId = params.nodeId as string
+      const node = await figma.getNodeByIdAsync(nodeId)
+      if (!node || !('parent' in node)) {
+        return { error: 'Node not found: ' + nodeId }
+      }
+      const newParent = await figma.getNodeByIdAsync(
+        params.parentId as string,
+      )
+      if (!newParent || !('appendChild' in newParent)) {
+        return {
+          error:
+            'Parent not found or cannot have children: ' +
+            params.parentId,
+        }
+      }
+      const parent = newParent as ParentNode
+      const child = node as SceneNode
+      const index = params.index as number | undefined
+      if (index !== undefined) {
+        parent.insertChild(index, child)
+      } else {
+        parent.appendChild(child)
+      }
+      return {
+        id: child.id,
+        name: child.name,
+        type: child.type,
+        parentId: parent.id,
+      }
+    }
+
+    // reorder_children: reorder a parent's children to match nodeIds. The id
+    // set is SET-EQUALITY validated against the actual children — a mismatch
+    // WARNS (T7) and only the ids present in both sets are reordered; we never
+    // throw. Reorder via insertChild (re-inserting at the target index moves
+    // an existing child). Missing parent → {error}.
+    case COMMANDS.REORDER_CHILDREN: {
+      const parentId = params.parentId as string
+      const parentNode =
+        await figma.getNodeByIdAsync(parentId)
+      if (!parentNode || !('children' in parentNode)) {
+        return {
+          error:
+            'Parent not found or has no children: ' +
+            parentId,
+        }
+      }
+      const parent = parentNode as ParentNode & {
+        children: readonly SceneNode[]
+      }
+      const requested = (params.nodeIds as string[]) ?? []
+      const actualIds = parent.children.map(c => c.id)
+      const actualSet = new Set(actualIds)
+      const requestedSet = new Set(requested)
+      const warnings: string[] = []
+
+      const missing = requested.filter(
+        id => !actualSet.has(id),
+      )
+      const extra = actualIds.filter(
+        id => !requestedSet.has(id),
+      )
+      if (missing.length > 0 || extra.length > 0) {
+        warnings.push(
+          'reorder_children id set differs from the parent children: ' +
+            'not children=[' +
+            missing.join(',') +
+            '], omitted=[' +
+            extra.join(',') +
+            ']. Only matching ids were reordered.',
+        )
+      }
+
+      // Reorder only the requested ids that are actually children. Insert each
+      // at its target index in turn (insertChild on an existing child moves it).
+      const ordered = requested.filter(id =>
+        actualSet.has(id),
+      )
+      let pos = 0
+      for (const id of ordered) {
+        const child = parent.children.find(c => c.id === id)
+        if (child) {
+          parent.insertChild(pos, child)
+          pos++
+        }
+      }
+      return {
+        parentId: parent.id,
+        order: parent.children.map(c => c.id),
+        warnings,
+      }
+    }
+
+    // boolean_op: combine ≥2 nodes into a BooleanOperationNode via
+    // figma.union/subtract/intersect/exclude. parentId omitted → first node's
+    // parent. Missing nodes/parent → {error}.
+    case COMMANDS.BOOLEAN_OP: {
+      const ids = (params.nodeIds as string[]) ?? []
+      const op = params.op as string
+      const nodes: SceneNode[] = []
+      for (const id of ids) {
+        const n = await figma.getNodeByIdAsync(id)
+        if (n && 'type' in n) {
+          nodes.push(n as SceneNode)
+        }
+      }
+      if (nodes.length < 2) {
+        return {
+          error:
+            'boolean_op requires at least 2 resolvable nodes.',
+        }
+      }
+      let boolParent: ParentNode | null
+      if (params.parentId !== undefined) {
+        const p = await figma.getNodeByIdAsync(
+          params.parentId as string,
+        )
+        if (!p || !('appendChild' in p)) {
+          return {
+            error:
+              'Parent not found or cannot have children: ' +
+              params.parentId,
+          }
+        }
+        boolParent = p as ParentNode
+      } else {
+        boolParent = nodes[0].parent as ParentNode | null
+      }
+      if (!boolParent) {
+        return {
+          error: 'No parent for the boolean result.',
+        }
+      }
+      let boolNode: BooleanOperationNode
+      switch (op) {
+        case 'UNION':
+          boolNode = figma.union(nodes, boolParent)
+          break
+        case 'SUBTRACT':
+          boolNode = figma.subtract(nodes, boolParent)
+          break
+        case 'INTERSECT':
+          boolNode = figma.intersect(nodes, boolParent)
+          break
+        case 'EXCLUDE':
+          boolNode = figma.exclude(nodes, boolParent)
+          break
+        default:
+          return {
+            error: 'Unknown boolean op: ' + op,
+          }
+      }
+      return {
+        id: boolNode.id,
+        name: boolNode.name,
+        type: boolNode.type,
+      }
+    }
+
+    // flatten: flatten ≥1 nodes into a single vector via figma.flatten.
+    // parentId omitted → first node's parent. Missing nodes/parent → {error}.
+    case COMMANDS.FLATTEN: {
+      const ids = (params.nodeIds as string[]) ?? []
+      const nodes: SceneNode[] = []
+      for (const id of ids) {
+        const n = await figma.getNodeByIdAsync(id)
+        if (n && 'type' in n) {
+          nodes.push(n as SceneNode)
+        }
+      }
+      if (nodes.length < 1) {
+        return {
+          error:
+            'flatten requires at least 1 resolvable node.',
+        }
+      }
+      let flatParent: ParentNode | null
+      if (params.parentId !== undefined) {
+        const p = await figma.getNodeByIdAsync(
+          params.parentId as string,
+        )
+        if (!p || !('appendChild' in p)) {
+          return {
+            error:
+              'Parent not found or cannot have children: ' +
+              params.parentId,
+          }
+        }
+        flatParent = p as ParentNode
+      } else {
+        flatParent = nodes[0].parent as ParentNode | null
+      }
+      if (!flatParent) {
+        return {
+          error: 'No parent for the flattened result.',
+        }
+      }
+      const vector = figma.flatten(nodes, flatParent)
+      return {
+        id: vector.id,
+        name: vector.name,
+        type: vector.type,
+      }
+    }
+
     // create_page: add a new page and name it.
     case COMMANDS.CREATE_PAGE: {
       const page = figma.createPage()
@@ -1956,6 +2548,708 @@ const handleCommand = async (
           ],
         }
       }
+    }
+
+    // create_variables: create a collection (+ optional extra modes), then its
+    // variables with per-mode values. The server has already CONVERTED COLOR
+    // values to {r,g,b,a}; FLOAT/STRING/BOOLEAN pass through. valuesByMode is
+    // keyed by mode NAME — resolved to mode ids against the collection's modes
+    // (an unknown mode name is reported as a warning, never throws). T7:
+    // feature-detect createVariableCollection / createVariable / setValueForMode.
+    case COMMANDS.CREATE_VARIABLES: {
+      const vars = figma.variables as VariablesAPI & {
+        createVariableCollection?: (
+          name: string,
+        ) => VariableCollection
+        createVariable?: (
+          name: string,
+          collection: VariableCollection,
+          type: VariableResolvedDataType,
+        ) => Variable
+      }
+      if (
+        typeof vars.createVariableCollection !== 'function'
+      ) {
+        return {
+          error:
+            'Variables API unavailable in this Figma version',
+        }
+      }
+      // T7: the collection-level factory failing is a genuine failure (nothing
+      // to return) → {error}, not a degrade.
+      let collection: VariableCollection
+      try {
+        collection = vars.createVariableCollection(
+          params.collection as string,
+        )
+      } catch (e) {
+        return {
+          error:
+            'createVariableCollection failed for "' +
+            String(params.collection) +
+            '": ' +
+            String(e),
+        }
+      }
+      const warnings: string[] = []
+
+      // Build the mode NAME → modeId map. The collection starts with one
+      // default mode; the first requested mode renames it, the rest are added.
+      const requestedModes =
+        (params.modes as string[] | undefined) ?? []
+      if (requestedModes.length > 0) {
+        if (typeof collection.renameMode === 'function') {
+          collection.renameMode(
+            collection.modes[0].modeId,
+            requestedModes[0],
+          )
+        }
+        for (const modeName of requestedModes.slice(1)) {
+          if (typeof collection.addMode === 'function') {
+            try {
+              collection.addMode(modeName)
+            } catch (e) {
+              warnings.push(
+                'addMode failed for "' +
+                  modeName +
+                  '": ' +
+                  String(e),
+              )
+            }
+          } else {
+            warnings.push(
+              'addMode unavailable in this Figma version; mode "' +
+                modeName +
+                '" not added',
+            )
+          }
+        }
+      }
+      const modeByName: Record<string, string> = {}
+      for (const m of collection.modes) {
+        modeByName[m.name] = m.modeId
+      }
+
+      const inVars =
+        (params.variables as
+          | {
+              name: string
+              type: VariableResolvedDataType
+              valuesByMode: Record<string, unknown>
+            }[]
+          | undefined) ?? []
+      const created: { id: string; name: string }[] = []
+      for (const spec of inVars) {
+        if (typeof vars.createVariable !== 'function') {
+          warnings.push(
+            'createVariable unavailable; variable "' +
+              spec.name +
+              '" not created',
+          )
+          continue
+        }
+        // T7: a single per-variable create FAILING degrades to a warning and the
+        // batch continues (never a throw, never {error} — that is reserved for
+        // the collection-level factory above).
+        let variable: Variable
+        try {
+          variable = vars.createVariable(
+            spec.name,
+            collection,
+            spec.type,
+          )
+        } catch (e) {
+          warnings.push(
+            'createVariable failed for variable "' +
+              spec.name +
+              '": ' +
+              String(e),
+          )
+          continue
+        }
+        for (const [modeName, value] of Object.entries(
+          spec.valuesByMode,
+        )) {
+          const modeId = modeByName[modeName]
+          if (modeId === undefined) {
+            warnings.push(
+              'unknown mode "' +
+                modeName +
+                '" for variable "' +
+                spec.name +
+                '"; value skipped',
+            )
+            continue
+          }
+          if (
+            typeof variable.setValueForMode === 'function'
+          ) {
+            // T7: a setValueForMode REJECTION (e.g. a type-incompatible value
+            // reaching a COLOR variable) degrades to a warning, never throws.
+            try {
+              variable.setValueForMode(
+                modeId,
+                value as VariableValue,
+              )
+            } catch (e) {
+              warnings.push(
+                'setValueForMode failed for variable "' +
+                  spec.name +
+                  '" mode "' +
+                  modeName +
+                  '": ' +
+                  String(e),
+              )
+            }
+          } else {
+            warnings.push(
+              'setValueForMode unavailable; value for "' +
+                spec.name +
+                '" not set',
+            )
+          }
+        }
+        created.push({
+          id: variable.id,
+          name: variable.name,
+        })
+      }
+
+      return {
+        collectionId: collection.id,
+        modes: collection.modes,
+        variables: created,
+        warnings,
+      }
+    }
+
+    // update_variables: mode lifecycle (addModes/removeModes/renameModes) +
+    // per-variable edits (values, scopes, codeSyntax, hiddenFromPublishing) on
+    // an existing collection. COLOR value edits arrive pre-converted from the
+    // server. Each gated member is feature-detected and degrades with a warning
+    // (T7); only a missing collection yields {error}.
+    case COMMANDS.UPDATE_VARIABLES: {
+      const collectionId = params.collectionId as string
+      const collection =
+        await figma.variables.getVariableCollectionByIdAsync(
+          collectionId,
+        )
+      if (!collection) {
+        return {
+          error: 'Collection not found: ' + collectionId,
+        }
+      }
+      const warnings: string[] = []
+
+      // renameModes / removeModes match a mode by NAME first, then by id.
+      const findModeId = (
+        ref: string,
+      ): string | undefined => {
+        const byName = collection.modes.find(
+          m => m.name === ref,
+        )
+        if (byName) {
+          return byName.modeId
+        }
+        const byId = collection.modes.find(
+          m => m.modeId === ref,
+        )
+        return byId?.modeId
+      }
+
+      for (const modeName of (params.addModes as
+        | string[]
+        | undefined) ?? []) {
+        if (typeof collection.addMode === 'function') {
+          try {
+            collection.addMode(modeName)
+          } catch (e) {
+            warnings.push(
+              'addMode failed for "' +
+                modeName +
+                '": ' +
+                String(e),
+            )
+          }
+        } else {
+          warnings.push(
+            'addMode unavailable in this Figma version; mode "' +
+              modeName +
+              '" not added',
+          )
+        }
+      }
+      for (const rename of (params.renameModes as
+        | { from: string; to: string }[]
+        | undefined) ?? []) {
+        const modeId = findModeId(rename.from)
+        if (modeId === undefined) {
+          warnings.push(
+            'mode "' +
+              rename.from +
+              '" not found; not renamed',
+          )
+        } else if (
+          typeof collection.renameMode === 'function'
+        ) {
+          collection.renameMode(modeId, rename.to)
+        } else {
+          warnings.push(
+            'renameMode unavailable; mode "' +
+              rename.from +
+              '" not renamed',
+          )
+        }
+      }
+      for (const modeRef of (params.removeModes as
+        | string[]
+        | undefined) ?? []) {
+        const modeId = findModeId(modeRef)
+        if (modeId === undefined) {
+          warnings.push(
+            'mode "' + modeRef + '" not found; not removed',
+          )
+        } else if (
+          typeof collection.removeMode === 'function'
+        ) {
+          try {
+            collection.removeMode(modeId)
+          } catch (e) {
+            warnings.push(
+              'removeMode failed for "' +
+                modeRef +
+                '": ' +
+                String(e),
+            )
+          }
+        } else {
+          warnings.push(
+            'removeMode unavailable; mode "' +
+              modeRef +
+              '" not removed',
+          )
+        }
+      }
+
+      // Re-read modes after lifecycle edits for value-by-name resolution.
+      const modeByName: Record<string, string> = {}
+      for (const m of collection.modes) {
+        modeByName[m.name] = m.modeId
+      }
+
+      for (const edit of (params.variables as
+        | {
+            id: string
+            valuesByMode?: Record<string, unknown>
+            scopes?: string[]
+            codeSyntax?: Record<string, string>
+            hiddenFromPublishing?: boolean
+          }[]
+        | undefined) ?? []) {
+        const variable =
+          await figma.variables.getVariableByIdAsync(
+            edit.id,
+          )
+        if (!variable) {
+          warnings.push('variable not found: ' + edit.id)
+          continue
+        }
+        if (edit.valuesByMode !== undefined) {
+          for (const [modeName, value] of Object.entries(
+            edit.valuesByMode,
+          )) {
+            const modeId =
+              modeByName[modeName] ?? findModeId(modeName)
+            if (modeId === undefined) {
+              warnings.push(
+                'unknown mode "' +
+                  modeName +
+                  '" for variable ' +
+                  edit.id +
+                  '; value skipped',
+              )
+              continue
+            }
+            if (
+              typeof variable.setValueForMode === 'function'
+            ) {
+              // T7: a setValueForMode REJECTION (e.g. a type-incompatible value
+              // reaching a COLOR variable) degrades to a warning, never throws.
+              try {
+                variable.setValueForMode(
+                  modeId,
+                  value as VariableValue,
+                )
+              } catch (e) {
+                warnings.push(
+                  'setValueForMode failed for variable ' +
+                    edit.id +
+                    ' mode "' +
+                    modeName +
+                    '": ' +
+                    String(e),
+                )
+              }
+            } else {
+              warnings.push(
+                'setValueForMode unavailable; value not set on ' +
+                  edit.id,
+              )
+            }
+          }
+        }
+        if (edit.scopes !== undefined) {
+          try {
+            variable.scopes = edit.scopes as VariableScope[]
+          } catch (e) {
+            warnings.push(
+              'scopes not settable on ' +
+                edit.id +
+                ': ' +
+                String(e),
+            )
+          }
+        }
+        if (edit.codeSyntax !== undefined) {
+          if (
+            typeof variable.setVariableCodeSyntax ===
+            'function'
+          ) {
+            for (const [platform, value] of Object.entries(
+              edit.codeSyntax,
+            )) {
+              try {
+                variable.setVariableCodeSyntax(
+                  platform as CodeSyntaxPlatform,
+                  value,
+                )
+              } catch (e) {
+                warnings.push(
+                  'codeSyntax not set (' +
+                    platform +
+                    ') on ' +
+                    edit.id +
+                    ': ' +
+                    String(e),
+                )
+              }
+            }
+          } else {
+            warnings.push(
+              'setVariableCodeSyntax unavailable; codeSyntax not set on ' +
+                edit.id,
+            )
+          }
+        }
+        if (edit.hiddenFromPublishing !== undefined) {
+          try {
+            variable.hiddenFromPublishing =
+              edit.hiddenFromPublishing
+          } catch (e) {
+            warnings.push(
+              'hiddenFromPublishing not settable on ' +
+                edit.id +
+                ': ' +
+                String(e),
+            )
+          }
+        }
+      }
+
+      return {
+        collectionId: collection.id,
+        modes: collection.modes,
+        warnings,
+      }
+    }
+
+    // create_styles: create one paint/text/effect/grid style from the
+    // server-CONVERTED value (paint→Paint, text→FontName, effect→Effect,
+    // grid→LayoutGrid). loadFontAsync first for text styles. T7: feature-detect
+    // the createXStyle factory.
+    case COMMANDS.CREATE_STYLES: {
+      const styleType = params.type as
+        | 'paint'
+        | 'text'
+        | 'effect'
+        | 'grid'
+      const styleName = params.name as string
+      const styleValue = params.value
+      const styleDesc = params.description as
+        | string
+        | undefined
+
+      if (styleType === 'paint') {
+        if (typeof figma.createPaintStyle !== 'function') {
+          return {
+            error: 'createPaintStyle unavailable',
+          }
+        }
+        const style = figma.createPaintStyle()
+        style.name = styleName
+        if (styleDesc !== undefined) {
+          style.description = styleDesc
+        }
+        style.paints = [styleValue as Paint]
+        return {
+          id: style.id,
+          key: style.key,
+          name: style.name,
+          type: 'paint',
+        }
+      }
+      if (styleType === 'text') {
+        if (typeof figma.createTextStyle !== 'function') {
+          return { error: 'createTextStyle unavailable' }
+        }
+        const font = styleValue as {
+          family: string
+          style: string
+          size: number
+          lineHeight?: LineHeight
+          letterSpacing?: LetterSpacing
+        }
+        await figma.loadFontAsync({
+          family: font.family,
+          style: font.style,
+        })
+        const style = figma.createTextStyle()
+        style.name = styleName
+        if (styleDesc !== undefined) {
+          style.description = styleDesc
+        }
+        style.fontName = {
+          family: font.family,
+          style: font.style,
+        }
+        style.fontSize = font.size
+        if (font.lineHeight !== undefined) {
+          style.lineHeight = font.lineHeight
+        }
+        if (font.letterSpacing !== undefined) {
+          style.letterSpacing = font.letterSpacing
+        }
+        return {
+          id: style.id,
+          key: style.key,
+          name: style.name,
+          type: 'text',
+        }
+      }
+      if (styleType === 'effect') {
+        if (typeof figma.createEffectStyle !== 'function') {
+          return { error: 'createEffectStyle unavailable' }
+        }
+        const style = figma.createEffectStyle()
+        style.name = styleName
+        if (styleDesc !== undefined) {
+          style.description = styleDesc
+        }
+        style.effects = [styleValue as Effect]
+        return {
+          id: style.id,
+          key: style.key,
+          name: style.name,
+          type: 'effect',
+        }
+      }
+      // grid
+      if (typeof figma.createGridStyle !== 'function') {
+        return { error: 'createGridStyle unavailable' }
+      }
+      const gridStyle = figma.createGridStyle()
+      gridStyle.name = styleName
+      if (styleDesc !== undefined) {
+        gridStyle.description = styleDesc
+      }
+      gridStyle.layoutGrids = [styleValue as LayoutGrid]
+      return {
+        id: gridStyle.id,
+        key: gridStyle.key,
+        name: gridStyle.name,
+        type: 'grid',
+      }
+    }
+
+    // update_styles: edit an existing style's value/name/description. The server
+    // sends the CONVERTED value + the inferred valueType; the plugin resolves the
+    // style, validates valueType against the style's actual type (warns on
+    // mismatch, T7), and assigns. Missing style → {error}.
+    case COMMANDS.UPDATE_STYLES: {
+      const styleId = params.styleId as string
+      const style = await figma.getStyleByIdAsync(styleId)
+      if (!style) {
+        return { error: 'Style not found: ' + styleId }
+      }
+      const warnings: string[] = []
+      if (params.name !== undefined) {
+        style.name = params.name as string
+      }
+      if (params.description !== undefined) {
+        style.description = params.description as string
+      }
+      if (params.value !== undefined) {
+        const valueType = params.valueType as
+          | 'paint'
+          | 'text'
+          | 'effect'
+          | 'grid'
+          | undefined
+        const actual = {
+          PAINT: 'paint',
+          TEXT: 'text',
+          EFFECT: 'effect',
+          GRID: 'grid',
+        }[style.type]
+        if (
+          valueType !== undefined &&
+          valueType !== actual
+        ) {
+          warnings.push(
+            'value looks like a ' +
+              valueType +
+              ' atom but the style is ' +
+              actual +
+              '; value not applied',
+          )
+        } else if (style.type === 'PAINT') {
+          ;(style as PaintStyle).paints = [
+            params.value as Paint,
+          ]
+        } else if (style.type === 'TEXT') {
+          const font = params.value as {
+            family: string
+            style: string
+            size: number
+            lineHeight?: LineHeight
+            letterSpacing?: LetterSpacing
+          }
+          await figma.loadFontAsync({
+            family: font.family,
+            style: font.style,
+          })
+          const ts = style as TextStyle
+          ts.fontName = {
+            family: font.family,
+            style: font.style,
+          }
+          ts.fontSize = font.size
+          if (font.lineHeight !== undefined) {
+            ts.lineHeight = font.lineHeight
+          }
+          if (font.letterSpacing !== undefined) {
+            ts.letterSpacing = font.letterSpacing
+          }
+        } else if (style.type === 'EFFECT') {
+          ;(style as EffectStyle).effects = [
+            params.value as Effect,
+          ]
+        } else if (style.type === 'GRID') {
+          ;(style as GridStyle).layoutGrids = [
+            params.value as LayoutGrid,
+          ]
+        }
+      }
+      return { id: style.id, warnings }
+    }
+
+    // apply_style: bind a style to a node field via the matching async setter.
+    // T7: feature-detect the setter on the node and degrade with a warning when
+    // it is unavailable (NEVER {error}); only a missing node yields {error}.
+    case COMMANDS.APPLY_STYLE: {
+      const nodeId = params.nodeId as string
+      const node = await figma.getNodeByIdAsync(nodeId)
+      if (!node) {
+        return { error: 'Node not found: ' + nodeId }
+      }
+      const styleId = params.styleId as string
+      const field = params.field as
+        | 'fill'
+        | 'stroke'
+        | 'text'
+        | 'effect'
+        | 'grid'
+      const setterName = {
+        fill: 'setFillStyleIdAsync',
+        stroke: 'setStrokeStyleIdAsync',
+        text: 'setTextStyleIdAsync',
+        effect: 'setEffectStyleIdAsync',
+        grid: 'setGridStyleIdAsync',
+      }[field]
+      const warnings: string[] = []
+      const styled = node as unknown as Record<
+        string,
+        (id: string) => Promise<void>
+      >
+      if (typeof styled[setterName] !== 'function') {
+        warnings.push(
+          setterName +
+            ' unavailable on ' +
+            node.type +
+            '; style not applied',
+        )
+        return { id: node.id, warnings }
+      }
+      try {
+        await styled[setterName](styleId)
+      } catch (e) {
+        warnings.push(
+          field +
+            ' style not applicable on ' +
+            node.type +
+            ': ' +
+            String(e),
+        )
+      }
+      return { id: node.id, warnings }
+    }
+
+    // batch (M3-D): N WRITE ops over existing targets, executed in ARRAY ORDER
+    // with PARTIAL SUCCESS. The server has already CONVERTED each op's params
+    // (atom leaves → Figma objects) and tagged each with its command, so the
+    // plugin simply re-dispatches each through handleCommand (the same switch)
+    // and collects a per-op {ok,result|error}. One failing op does NOT abort the
+    // rest: a handler returning {error} OR a thrown exception is isolated to that
+    // entry. Returns { results: [{ok,result|error}] } index-aligned with ops.
+    case COMMANDS.BATCH: {
+      const batchOps =
+        (params.ops as
+          | {
+              op: string
+              params: Record<string, unknown>
+            }[]
+          | undefined) ?? []
+      const results: {
+        ok: boolean
+        result?: unknown
+        error?: string
+      }[] = []
+      for (const entry of batchOps) {
+        try {
+          const opResult = await handleCommand(
+            entry.op,
+            entry.params ?? {},
+          )
+          // A handler that returns {error} (e.g. node not found) is a per-op
+          // failure, not a success — surface it as this entry's error.
+          if (
+            opResult !== null &&
+            typeof opResult === 'object' &&
+            (opResult as { error?: string }).error !==
+              undefined
+          ) {
+            results.push({
+              ok: false,
+              error: (opResult as { error: string }).error,
+            })
+          } else {
+            results.push({ ok: true, result: opResult })
+          }
+        } catch (e) {
+          results.push({ ok: false, error: String(e) })
+        }
+      }
+      return { results }
     }
 
     default:

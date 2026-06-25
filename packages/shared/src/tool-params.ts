@@ -5,17 +5,15 @@
 // `listReadParamsSchema.shape` (cursor/limit/fields/match). This ensures
 // that schema changes to the mixin propagate automatically.
 //
-// GREEN-WINDOW: this module is NOT barrel-exported from index.ts. Some of
-// its names (getNode/getNodes/inspect/search/createNode/createTree params)
-// deliberately shadow the legacy schemas.ts / create-schemas.ts versions
-// still imported by the live server. New tool code imports these via the
-// `@figma-agent-bridge/shared/tool-params` subpath; the legacy modules are
-// deleted (and these promoted to the barrel) at their last importer.
+// SUBPATH (not barrel-exported): this module is the canonical per-tool param
+// surface for the live server, imported via the
+// `@figma-agent-bridge/shared/tool-params` subpath. It is deliberately kept off
+// the barrel `export *` to avoid re-introducing a name clash with schemas.ts /
+// create-schemas.ts, both of which still export ONE barrel-exported schema each
+// (connectParamsSchema and createFromSvgParamsSchema). The former green-window
+// twins in those modules (the M2 read params + create_node/create_tree/
+// create_component) were retired in M3-E; their canonical shapes live here.
 //
-// Deferred to when their tool is built (params not needed by the slice or
-// the core-CRUD step yet): export, create_from_svg, create_image, clone_node,
-// delete_node, reparent_node, reorder_children, set_focus, the page tools,
-// the component/style tools, annotations, reactions, plugin-data, batch.
 // `connectParamsSchema` stays in schemas.ts (it has its own test + is barrel
 // exported); status/connect for the session is covered by statusParamsSchema
 // here + connectParamsSchema there.
@@ -164,6 +162,109 @@ export const setFocusParamsSchema = z.object({
     ),
 })
 
+/**
+ * Params for `clone_node`: duplicate a node, optionally into a parent at an
+ * index, optionally `count` times. Returns one entry per clone.
+ */
+export const cloneNodeParamsSchema = z.object({
+  nodeId: z.string().describe('ID of the node to clone.'),
+  parentId: z
+    .string()
+    .optional()
+    .describe(
+      "Parent to append the clone(s) under. Omit to keep the source's parent.",
+    ),
+  index: z
+    .number()
+    .int()
+    .optional()
+    .describe(
+      'Insertion index of the clone(s) within the parent. Omit to append last.',
+    ),
+  count: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      'How many clones to make (default 1). Each is a fresh copy.',
+    ),
+})
+
+/**
+ * Params for `reparent_node`: move a node under a new parent (re-flows under
+ * the new parent's layout), optionally at a specific index.
+ */
+export const reparentNodeParamsSchema = z.object({
+  nodeId: z
+    .string()
+    .describe('ID of the node to reparent.'),
+  parentId: z
+    .string()
+    .describe(
+      'ID of the new parent to move the node into.',
+    ),
+  index: z
+    .number()
+    .int()
+    .optional()
+    .describe(
+      'Insertion index within the new parent. Omit to append last.',
+    ),
+})
+
+/**
+ * Params for `reorder_children`: set the child order of a parent. `nodeIds` is
+ * the desired full order; the plugin set-equality validates it against the
+ * parent's actual children (warns on mismatch, never throws — T7).
+ */
+export const reorderChildrenParamsSchema = z.object({
+  parentId: z
+    .string()
+    .describe(
+      'ID of the parent whose children to reorder.',
+    ),
+  nodeIds: z
+    .array(z.string())
+    .describe(
+      "Child IDs in the desired order. Should be the parent's full child set; mismatches warn.",
+    ),
+})
+
+/**
+ * Params for `boolean_op`: combine ≥2 nodes into a BooleanOperationNode via
+ * union/subtract/intersect/exclude.
+ */
+export const booleanOpParamsSchema = z.object({
+  op: z
+    .enum(['UNION', 'SUBTRACT', 'INTERSECT', 'EXCLUDE'])
+    .describe('The boolean operation to apply.'),
+  nodeIds: z
+    .array(z.string())
+    .min(2)
+    .describe('Node IDs to combine (at least 2).'),
+  parentId: z
+    .string()
+    .optional()
+    .describe(
+      "Parent for the result. Omit to use the first node's parent.",
+    ),
+})
+
+/** Params for `flatten`: flatten one or more nodes into a single vector. */
+export const flattenParamsSchema = z.object({
+  nodeIds: z
+    .array(z.string())
+    .min(1)
+    .describe('Node IDs to flatten into one vector.'),
+  parentId: z
+    .string()
+    .optional()
+    .describe(
+      "Parent for the result. Omit to use the first node's parent.",
+    ),
+})
+
 // ---------------------------------------------------------------------------
 // Write tools — pages
 // ---------------------------------------------------------------------------
@@ -303,6 +404,195 @@ export const getVariablesParamsSchema = z.object({
     .optional()
     .describe(
       'Variable collection ID to filter by. Omit to return all collections.',
+    ),
+})
+
+/** The four resolved variable data types. */
+export const variableTypeSchema = z.enum([
+  'COLOR',
+  'FLOAT',
+  'STRING',
+  'BOOLEAN',
+])
+
+/**
+ * One variable to create inside the collection. `valuesByMode` maps a MODE NAME
+ * (matched against the collection's modes) to a value. COLOR values are hex
+ * atoms (parsed via the grammar paint face); FLOAT/STRING/BOOLEAN are literals.
+ */
+export const createVariableSpecSchema = z.object({
+  name: z
+    .string()
+    .describe('Variable name (e.g. "Brand/Primary").'),
+  type: variableTypeSchema.describe(
+    'Resolved variable type. COLOR values are hex atoms; others are literals.',
+  ),
+  valuesByMode: z
+    .record(z.union([z.string(), z.number(), z.boolean()]))
+    .describe(
+      'Map of mode NAME → value. COLOR values are hex atoms (e.g. "#3B82F6"); FLOAT/STRING/BOOLEAN are literals. Modes not present in the collection are reported as warnings.',
+    ),
+})
+
+/**
+ * Params for `create_variables`: create a collection (with optional extra
+ * modes), then its variables with per-mode values. Returns
+ * { collectionId, modes, variables:[{id,name}] }.
+ */
+export const createVariablesParamsSchema = z.object({
+  collection: z
+    .string()
+    .describe('Name for the new variable collection.'),
+  modes: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Additional mode names to add beyond the default mode. The default mode is renamed to the first entry when given.',
+    ),
+  variables: z
+    .array(createVariableSpecSchema)
+    .describe('Variables to create in the collection.'),
+})
+
+/** A single per-variable edit for `update_variables`. */
+export const updateVariableSpecSchema = z.object({
+  id: z.string().describe('ID of the variable to edit.'),
+  valuesByMode: z
+    .record(z.union([z.string(), z.number(), z.boolean()]))
+    .optional()
+    .describe(
+      'Map of mode NAME → new value (COLOR = hex atom; else literal).',
+    ),
+  scopes: z
+    .array(z.string())
+    .optional()
+    .describe('Variable scopes (e.g. ["ALL_SCOPES"]).'),
+  codeSyntax: z
+    .record(z.string())
+    .optional()
+    .describe(
+      'Code syntax per platform (keys: WEB | ANDROID | iOS).',
+    ),
+  hiddenFromPublishing: z
+    .boolean()
+    .optional()
+    .describe(
+      'Whether to hide the variable from publishing.',
+    ),
+})
+
+/**
+ * Params for `update_variables`: mode lifecycle on an existing collection
+ * (addModes / removeModes / renameModes) plus per-variable edits (values,
+ * scopes, codeSyntax, hiddenFromPublishing). Each gated member degrades with a
+ * warning (T7). Returns { collectionId, modes, warnings[] }.
+ */
+export const updateVariablesParamsSchema = z.object({
+  collectionId: z
+    .string()
+    .describe('ID of the variable collection to update.'),
+  addModes: z
+    .array(z.string())
+    .optional()
+    .describe('Mode names to add to the collection.'),
+  removeModes: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Mode names (or IDs) to remove from the collection.',
+    ),
+  renameModes: z
+    .array(
+      z.object({
+        from: z
+          .string()
+          .describe(
+            'Existing mode name (or ID) to rename.',
+          ),
+        to: z.string().describe('New mode name.'),
+      }),
+    )
+    .optional()
+    .describe('Modes to rename.'),
+  variables: z
+    .array(updateVariableSpecSchema)
+    .optional()
+    .describe('Per-variable edits.'),
+})
+
+// ---------------------------------------------------------------------------
+// Write tools — styles
+// ---------------------------------------------------------------------------
+
+/** The four style categories. */
+export const styleTypeSchema = z.enum([
+  'paint',
+  'text',
+  'effect',
+  'grid',
+])
+
+/**
+ * Params for `create_styles`: create one paint/text/effect/grid style from a
+ * grammar atom value. paint → atomToPaint, text → atomToFont (+loadFont in the
+ * plugin), effect → atomToEffect, grid → the grid head. Returns
+ * { id, key, name, type }.
+ */
+export const createStylesParamsSchema = z.object({
+  type: styleTypeSchema.describe(
+    'Style category: paint | text | effect | grid.',
+  ),
+  name: z.string().describe('Name for the style.'),
+  value: z
+    .string()
+    .describe(
+      'The style VALUE as a grammar atom (paint hex/gradient, font(...), shadow(...), columns(...)).',
+    ),
+  description: z
+    .string()
+    .optional()
+    .describe('Optional style description.'),
+})
+
+/**
+ * Params for `update_styles`: edit an existing style's parsed value, name,
+ * and/or description. The style's category is resolved plugin-side from its id.
+ * Returns { id, warnings[] }.
+ */
+export const updateStylesParamsSchema = z.object({
+  styleId: z
+    .string()
+    .describe('ID of the style to update.'),
+  value: z
+    .string()
+    .optional()
+    .describe(
+      'New style VALUE as a grammar atom (parsed per the style category).',
+    ),
+  name: z
+    .string()
+    .optional()
+    .describe('New name for the style.'),
+  description: z
+    .string()
+    .optional()
+    .describe('New description for the style.'),
+})
+
+/**
+ * Params for `apply_style`: bind a style to a node field via
+ * setFillStyleIdAsync / setStrokeStyleIdAsync / setTextStyleIdAsync /
+ * setEffectStyleIdAsync / setGridStyleIdAsync. Returns { id, warnings[] }.
+ */
+export const applyStyleParamsSchema = z.object({
+  nodeId: z
+    .string()
+    .describe('ID of the node to apply the style to.'),
+  styleId: z.string().describe('ID of the style to apply.'),
+  field: z
+    .enum(['fill', 'stroke', 'text', 'effect', 'grid'])
+    .describe(
+      'Which field to bind: fill | stroke | text | effect | grid.',
     ),
 })
 
@@ -455,5 +745,247 @@ export const exportParamsSchema = z.object({
     .optional()
     .describe(
       'Raster scale factor (default 1; ignored for SVG/PDF).',
+    ),
+})
+
+// ---------------------------------------------------------------------------
+// Write tools — components & instances
+// ---------------------------------------------------------------------------
+
+/**
+ * Params for `create_component`: promote a node and/or build from a NodeSpec,
+ * then componentize. Supply EXACTLY ONE source: `nodeId` (an existing node to
+ * promote) OR `spec` (a NodeSpec to create first, then promote). The handler
+ * validates that exactly one is present.
+ */
+export const createComponentParamsSchema = z.object({
+  nodeId: z
+    .string()
+    .optional()
+    .describe(
+      'Existing node to componentize via createComponentFromNode(). Provide this OR spec, not both.',
+    ),
+  spec: nodeSpecSchema
+    .optional()
+    .describe(
+      'A NodeSpec to create first (via the create path), then componentize. Provide this OR nodeId, not both.',
+    ),
+  parentId: z
+    .string()
+    .optional()
+    .describe(
+      'When building from spec, the parent to create under. Omit for the current page.',
+    ),
+  name: z
+    .string()
+    .optional()
+    .describe('Name for the resulting component.'),
+  description: z
+    .string()
+    .optional()
+    .describe('Description for the resulting component.'),
+})
+
+/** A single component-property definition to add (BOOLEAN/TEXT/INSTANCE_SWAP/SLOT). */
+export const componentPropertyDefSchema = z.object({
+  name: z.string().describe('Property name.'),
+  type: z
+    .enum(['BOOLEAN', 'TEXT', 'INSTANCE_SWAP', 'SLOT'])
+    .describe('Property type.'),
+  defaultValue: z
+    .union([z.string(), z.boolean()])
+    .describe(
+      'Default value (boolean for BOOLEAN, string for TEXT, component key for INSTANCE_SWAP, "" for SLOT).',
+    ),
+})
+
+/** A single component-property edit (rename / change default). */
+export const componentPropertyEditSchema = z.object({
+  name: z
+    .string()
+    .describe('Existing property name to edit.'),
+  newName: z
+    .string()
+    .optional()
+    .describe('Rename the property.'),
+  defaultValue: z
+    .union([z.string(), z.boolean()])
+    .optional()
+    .describe('New default value.'),
+})
+
+/**
+ * Params for `update_component`: add/edit/delete componentPropertyDefinitions,
+ * set the description, and (T7-gated) expose nested instances.
+ */
+export const updateComponentParamsSchema = z.object({
+  componentId: z
+    .string()
+    .describe(
+      'ID of the component (or component set) to update.',
+    ),
+  add: z
+    .array(componentPropertyDefSchema)
+    .optional()
+    .describe('Property definitions to add.'),
+  edit: z
+    .array(componentPropertyEditSchema)
+    .optional()
+    .describe(
+      'Property definitions to edit (rename / new default).',
+    ),
+  delete: z
+    .array(z.string())
+    .optional()
+    .describe('Property names to delete.'),
+  description: z
+    .string()
+    .optional()
+    .describe('New description for the component.'),
+  expose: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Nested instance node IDs to expose (T7-gated: degrades with a warning if unsupported).',
+    ),
+})
+
+/** Params for `combine_variants`: combine ≥2 components into a variant set. */
+export const combineVariantsParamsSchema = z.object({
+  componentIds: z
+    .array(z.string())
+    .min(2)
+    .describe('Component IDs to combine (at least 2).'),
+  parentId: z
+    .string()
+    .optional()
+    .describe(
+      "Parent for the resulting set. Omit to use the first component's parent.",
+    ),
+  name: z
+    .string()
+    .optional()
+    .describe('Name for the resulting component set.'),
+})
+
+/** Params for `swap_component`: point an instance at a different main component. */
+export const swapComponentParamsSchema = z.object({
+  instanceId: z
+    .string()
+    .describe('ID of the instance to swap.'),
+  mainComponentId: z
+    .string()
+    .describe('ID of the component to swap to.'),
+})
+
+/**
+ * Params for `set_instance`: set instance properties (variant + BOOLEAN / TEXT /
+ * INSTANCE_SWAP) and/or apply per-node overrides.
+ */
+export const setInstanceParamsSchema = z.object({
+  instanceId: z
+    .string()
+    .describe('ID of the instance to configure.'),
+  properties: z
+    .record(z.union([z.string(), z.boolean()]))
+    .optional()
+    .describe(
+      'Property values to set via setProperties (variant + BOOLEAN/TEXT/INSTANCE_SWAP).',
+    ),
+  overrides: z
+    .array(
+      z.object({
+        path: z
+          .string()
+          .describe('Override target node id / path.'),
+        field: z.string().describe('Field to override.'),
+        value: z
+          .string()
+          .describe('Override value (atom string).'),
+      }),
+    )
+    .optional()
+    .describe(
+      'Per-node overrides (NOT YET APPLIED — currently degrades with a warning).',
+    ),
+})
+
+// ---------------------------------------------------------------------------
+// The one generic batch (D3) — N WRITE ops over existing targets, in order
+// ---------------------------------------------------------------------------
+
+/**
+ * The WRITE commands `batch` can fan out over. These are the existing
+ * mutation tools (D3: "N ops over EXISTING targets"). New-node creation
+ * (create_node / create_tree / create_from_svg / create_image /
+ * create_component) is deliberately EXCLUDED — chaining new nodes stays
+ * create_tree's job (ref-pool). The strings match COMMANDS exactly so a
+ * heterogeneous entry's `op` dispatches straight through the plugin's
+ * command switch.
+ */
+export const batchOpSchema = z.enum([
+  'update_node',
+  'delete_node',
+  'set_selection',
+  'set_focus',
+  'reparent_node',
+  'reorder_children',
+  'clone_node',
+  'boolean_op',
+  'flatten',
+  'apply_style',
+  'update_component',
+  'combine_variants',
+  'swap_component',
+  'set_instance',
+  'bind_variable',
+  'create_styles',
+  'update_styles',
+  'create_variables',
+  'update_variables',
+  'set_plugin_data',
+  'set_reactions',
+  'set_annotations',
+  'create_page',
+  'set_current_page',
+  'duplicate_page',
+])
+
+/**
+ * One batch entry. `op` (optional) overrides the top-level default for THIS
+ * entry; if omitted it falls back to the top-level `op`. The remaining fields
+ * are that op's own params (`nodeId`/`instanceId`/`patch`/…), validated by the
+ * op's individual handler — so this schema is permissive (passthrough) and the
+ * per-op param shape is enforced where each command already enforces it.
+ */
+export const batchEntrySchema = z
+  .object({
+    op: batchOpSchema
+      .optional()
+      .describe(
+        'Op for this entry. Overrides the top-level op; falls back to it when omitted.',
+      ),
+  })
+  .passthrough()
+
+/**
+ * Params for `batch`: one or mixed WRITE ops over N existing targets, executed
+ * in array order with PARTIAL SUCCESS (D3). A top-level `op` sets the default
+ * op for every entry (homogeneous: same op, N targets); each entry may override
+ * it with its own `op` (heterogeneous). Returns
+ * `{ results: [{index, op, ok, result|error}], errors: [{index, op, error}] }`
+ * — one entry's failure does NOT abort the rest.
+ */
+export const batchParamsSchema = z.object({
+  op: batchOpSchema
+    .optional()
+    .describe(
+      'Default op applied to every entry that does not set its own `op` (homogeneous batch).',
+    ),
+  ops: z
+    .array(batchEntrySchema)
+    .min(1)
+    .describe(
+      "Entries to execute in order. Each is the op's params; set a per-entry `op` to override the default.",
     ),
 })

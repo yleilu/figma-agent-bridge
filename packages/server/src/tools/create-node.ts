@@ -8,10 +8,10 @@
 //
 // Children are OUT OF SCOPE for M2 (single-node). When spec.children is
 // present we strip it before converting (no recursion) and append a warning
-// pointing the agent at create_tree (M3). This REPLACES the legacy create_node
-// handler in tools/create.ts; that module stays intact because its sibling
-// handleCreateTree (and the create-component / DS tools) still import the
-// expression-parser path for M3.
+// pointing the agent at create_tree (M3). This is the canonical create_node
+// handler (the legacy tools/create.ts was retired in M3-E). Lossy conversions
+// in the writer (e.g. per-side stroke weights collapsing) push onto the same
+// warnings sink, so the agent sees them alongside the children note.
 
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { NodeSpec } from '@figma-agent-bridge/shared/node-spec'
@@ -41,12 +41,18 @@ export const handleCreateNode = async (
   try {
     // M2 single-node: never recurse. Strip children before converting and
     // surface a warning so the agent knows nested creation is create_tree.
+    const warnings: string[] = []
     const hasChildren =
       Array.isArray(spec.children) &&
       spec.children.length > 0
+    if (hasChildren) {
+      warnings.push(CHILDREN_WARNING)
+    }
     const flat: NodeSpec = { ...spec }
     delete flat.children
-    const payload = specToFigmaForCreate(flat)
+    // The writer pushes lossy-conversion notes (e.g. per-side stroke collapse)
+    // onto `warnings`.
+    const payload = specToFigmaForCreate(flat, warnings)
 
     const result = (await client.sendCommand(
       COMMANDS.CREATE_NODE,
@@ -57,17 +63,20 @@ export const handleCreateNode = async (
       result,
       'Failed to create node.',
     )
-    if (!hasChildren) {
+    if (warnings.length === 0) {
       return mutation
     }
-    // Append the children warning to a SUCCESSFUL mutation result. (If the
-    // mutation errored, formatMutationResult already returned an Error: text —
-    // do not muddy it with the children note.)
+    // Append the warnings to a SUCCESSFUL mutation result. (If the mutation
+    // errored, formatMutationResult already returned an Error: text — do not
+    // muddy it with the warning notes.)
     if (mutation.content[0].text.startsWith('Error')) {
       return mutation
     }
+    const warningText = warnings
+      .map(w => `Warning: ${w}`)
+      .join('\n')
     return textResult(
-      `${mutation.content[0].text}\n\nWarning: ${CHILDREN_WARNING}`,
+      `${mutation.content[0].text}\n\n${warningText}`,
     )
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
