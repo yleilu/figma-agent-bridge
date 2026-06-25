@@ -114,6 +114,17 @@ describe('ws-schemas relayIncomingSchema', () => {
     expect(r.success).toBe(true)
   })
 
+  it('accepts a plugin RESPONSE channel frame without command', () => {
+    // The real Figma plugin replies with { id, result } and NO command
+    // (correlation is by id). The relay must forward it, not drop it.
+    const r = relayIncomingSchema.safeParse({
+      type: 'message',
+      channel: 'abc123',
+      message: { id: 'cmd-1', result: { pages: [] } },
+    })
+    expect(r.success).toBe(true)
+  })
+
   it('rejects an empty channel', () => {
     const r = relayIncomingSchema.safeParse({
       type: 'join',
@@ -147,6 +158,16 @@ describe('ws-schemas relayOutgoingSchema', () => {
         command: 'inspect',
         result: { ok: true },
       },
+    })
+    expect(r.success).toBe(true)
+  })
+
+  it('accepts a broadcast of a plugin response without command', () => {
+    // The forwarded plugin response { id, result } reaches the server as a
+    // broadcast; figma-client must accept it (it correlates by id).
+    const r = relayOutgoingSchema.safeParse({
+      type: 'broadcast',
+      message: { id: 'cmd-1', result: { ok: true } },
     })
     expect(r.success).toBe(true)
   })

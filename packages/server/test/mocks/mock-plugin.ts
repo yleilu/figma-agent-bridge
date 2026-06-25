@@ -250,10 +250,13 @@ export const createMockPlugin = (
         break
     }
 
+    // The real Figma plugin replies with { id, result|error } and NO command
+    // (see figma-plugin/src/hooks/useRelay.ts). Mirror that here so the mock
+    // exercises the real response shape through the relay's frame validation.
     const resolved: CommandMessage =
       error !== undefined
-        ? { id: cmd.id, command: cmd.command, error }
-        : { id: cmd.id, command: cmd.command, result }
+        ? { id: cmd.id, error }
+        : { id: cmd.id, result }
 
     const reply: ChannelMessage = {
       type: 'message',

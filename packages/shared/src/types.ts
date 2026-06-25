@@ -40,7 +40,9 @@ export type RelayOutgoing = BroadcastMessage | SystemMessage
 
 export type CommandMessage = {
   id: string
-  command: string
+  // Present on a request (server -> plugin), omitted on a response
+  // (plugin -> server), which carries only { id, result|error }.
+  command?: string
   params?: Record<string, unknown>
   result?: unknown
   error?: string
