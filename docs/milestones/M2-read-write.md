@@ -13,7 +13,7 @@ related:
   - "[[figma-bridge/docs/reference/figma-task-checklist]]"
 ---
 
-# M2 — Parse, Read & Simple Write · **spec** (current)
+# M2 — Parse, Read & Simple Write · **done**
 
 The substrate plus everything an agent needs to **read any design and make simple
 single-target edits**, on the new clean-start spec. Greenfields the tool + value layers;
@@ -42,8 +42,15 @@ The agent can **read any design in the new grammar + read-model and make simple 
 
 ## Status
 
-**spec** — design + the P0/slice plan are locked (47 tools designed, 89/89 checklist coverage,
-adversarially reviewed). **P0 is the next build step.**
+**done** — built clean on `feat/m2-tool-surface` and merged to `dev` (merge `0cb85e1`): 9
+commits across P0 foundations → slice → reads → simple writes → legacy retirement →
+multi-selection inspect. **732 tests green**, 32 MCP tools registered. Each chunk ran
+build → code-review → green-gated commit; the bridge layer was untouched.
+
+**Carried to M3 / verification:** `create_tree`/`create_component` still old-format (M3
+rebuilds them); per-side-stroke write `TODO(M3)`; the Variables runtime re-introspection
+(gates M3 DS-authoring); package.json exports hardening; and the **live-Figma manual
+verification** (the suite is mock-plugin-over-real-relay / headless).
 
 ## Working docs (untracked — `docs/scratch/` is gitignored)
 

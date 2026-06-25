@@ -35,8 +35,8 @@ related:
 | # | Milestone | Goal (one line) | Status | Doc |
 |---|---|---|---|---|
 | M1 | Foundation | Three-layer architecture (server ↔ relay ↔ plugin) + test infra — **kept** by the clean start. | **done** | [[figma-bridge/docs/milestones/M1-foundation\|M1-foundation]] |
-| M2 | Parse, Read & Simple Write | Parsers + read-model + all reads + simple single-target writes + the round-trip-proof slice. | **spec** ← current | [[figma-bridge/docs/milestones/M2-read-write\|M2-read-write]] |
-| M3 | Compose, Edit & Batch | `create_tree`/clone/structure, `batch`, design-system authoring, components/instances. | **planned** | [[figma-bridge/docs/milestones/M3-compose-edit\|M3-compose-edit]] |
+| M2 | Parse, Read & Simple Write | Parsers + read-model + all reads + simple single-target writes + the round-trip-proof slice. | **done** | [[figma-bridge/docs/milestones/M2-read-write\|M2-read-write]] |
+| M3 | Compose, Edit & Batch | `create_tree`/clone/structure, `batch`, design-system authoring, components/instances. | **planned** ← next | [[figma-bridge/docs/milestones/M3-compose-edit\|M3-compose-edit]] |
 
 ## Superseded (old-spec lineage)
 
