@@ -17,6 +17,12 @@ import {
   atomToGrid,
 } from '../grammar'
 
+// Single source for the hex→RGBA write-face converter used by the DS authoring
+// tools AND the generic batch tool: re-export it here so neither imports it
+// directly from `../grammar` (M3-D Minor 1). Both already depend on this module
+// for the other value converters.
+export { hexToRgba }
+
 export type StyleCategory =
   | 'paint'
   | 'text'

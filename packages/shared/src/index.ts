@@ -1,18 +1,16 @@
 export * from './types'
 export * from './schemas'
 export * from './ws-schemas'
-export * from './create-types'
 export * from './create-schemas'
 export * from './constants'
 export * from './node-spec'
 export * from './node-spec-schema'
 export * from './commands'
 export * from './read-model'
-// NOTE: `tool-params` is intentionally NOT re-exported here. Several of its
-// schema names (getNodeParamsSchema, getNodesParamsSchema, inspectParamsSchema,
-// searchParamsSchema) deliberately shadow the green-window `schemas.ts`
-// versions still imported by the live server. A barrel `export *` would make
-// those names ambiguous and break the running tool surface. New tool code
-// imports the M2 schemas via the `@figma-agent-bridge/shared/tool-params`
-// subpath; `schemas.ts` is deleted (and tool-params barrel-exported) only when
-// its last importer is retired (the slice / core-CRUD step).
+// NOTE: `tool-params` is intentionally NOT re-exported here. It is the
+// canonical per-tool param surface and is imported via the
+// `@figma-agent-bridge/shared/tool-params` subpath. Keeping it off the barrel
+// avoids a name clash with the two schemas still barrel-exported here:
+// schemas.ts (connectParamsSchema) and create-schemas.ts
+// (createFromSvgParamsSchema). The former green-window twins of the
+// tool-params schemas in those two modules were retired in M3-E.

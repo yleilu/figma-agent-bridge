@@ -14,11 +14,14 @@ import { createFigmaClient } from '@figma-agent-bridge/server/figma-client'
 import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
 import { transformToAngle } from '@figma-agent-bridge/server/grammar'
 import { handleConnect } from '@figma-agent-bridge/server/tools/session'
-import { handleCreateNode } from '@figma-agent-bridge/server/tools/create'
-// create_tree is REBUILT on NodeSpec (M3 chunk A); the legacy handleCreateTree
-// in tools/create.ts stays orphaned-but-present until M3-E.
+// create_node and create_component were rebuilt on NodeSpec (M3 chunks A/B);
+// their handlers live in tools/create-node.ts and tools/components.ts and are
+// covered by create-node.test.ts / e2e-slice.test.ts and components.test.ts /
+// e2e-components.test.ts. The legacy tools/create.ts and tools/create-component.ts
+// were retired in M3-E. This file keeps the create_tree / create_from_svg e2e
+// (their handlers live in tools/create-tree.ts and tools/create-svg.ts).
+import { handleCreateNode } from '@figma-agent-bridge/server/tools/create-node'
 import { handleCreateTree } from '@figma-agent-bridge/server/tools/create-tree'
-import { handleCreateComponent } from '@figma-agent-bridge/server/tools/create-component'
 import { handleCreateFromSvg } from '@figma-agent-bridge/server/tools/create-svg'
 import {
   handleDeleteNode,
@@ -69,54 +72,6 @@ describe('M3 create tools e2e', () => {
     }
     client.disconnect()
     stopRelay(server)
-  })
-
-  it('create_node creates a RECTANGLE', async () => {
-    const result = await handleCreateNode(
-      {
-        parentId: 'page:1',
-        node: {
-          type: 'RECTANGLE',
-          name: 'Test Rect',
-          size: [200, 100],
-          fills: ['#3B82F6'],
-          radius: 8,
-        },
-      },
-      client,
-    )
-
-    expect(result.content).toHaveLength(1)
-    const data = JSON.parse(
-      result.content[0].text,
-    ) as Record<string, unknown>
-    expect(data.type).toBe('RECTANGLE')
-    expect(data.name).toBe('Test Rect')
-    expect(data.id).toBeDefined()
-  })
-
-  it('create_node creates a TEXT node', async () => {
-    const result = await handleCreateNode(
-      {
-        parentId: 'page:1',
-        node: {
-          type: 'TEXT',
-          name: 'Title',
-          size: [300, 32],
-          text: {
-            content: 'Hello World',
-            font: 'Inter/Bold/24',
-            color: '#000000',
-          },
-        },
-      },
-      client,
-    )
-
-    const data = JSON.parse(
-      result.content[0].text,
-    ) as Record<string, unknown>
-    expect(data.type).toBe('TEXT')
   })
 
   it('create_tree creates a frame with nested children (NodeSpec contract)', async () => {
@@ -179,34 +134,6 @@ describe('M3 create tools e2e', () => {
     expect(fills[0].type).toBe('SOLID')
     const layout = data.layout as { spacing: number }
     expect(layout.spacing).toBe(12)
-  })
-
-  it('create_component promotes a node', async () => {
-    const result = await handleCreateComponent(
-      { nodeId: '1:42' },
-      client,
-    )
-
-    const data = JSON.parse(
-      result.content[0].text,
-    ) as Record<string, unknown>
-    expect(data.type).toBe('COMPONENT')
-    expect(data.key).toBeDefined()
-  })
-
-  it('create_component combines as variants', async () => {
-    const result = await handleCreateComponent(
-      {
-        nodeIds: ['1:42', '1:43'],
-        combineAsVariants: true,
-      },
-      client,
-    )
-
-    const data = JSON.parse(
-      result.content[0].text,
-    ) as Record<string, unknown>
-    expect(data.type).toBe('COMPONENT_SET')
   })
 
   it('create_from_svg creates a frame from SVG', async () => {
@@ -285,58 +212,11 @@ describe('M3 create tools e2e', () => {
     ) // #C4 -> 0.769
   })
 
-  it('create_node echoes serialized effect (drop shadow) back from plugin', async () => {
-    const result = await handleCreateNode(
-      {
-        parentId: 'page:1',
-        node: {
-          type: 'FRAME',
-          name: 'Shadow Box',
-          size: [200, 200],
-          effects: ['shadow(0,4,8,#00000040)'],
-        },
-      },
-      client,
-    )
-
-    const data = JSON.parse(
-      result.content[0].text,
-    ) as Record<string, unknown>
-    expect(data.type).toBe('FRAME')
-
-    const effects = data.effects as {
-      type: string
-      offset: { x: number; y: number }
-      radius: number
-      color: { r: number; g: number; b: number; a: number }
-    }[]
-    expect(effects).toHaveLength(1)
-    expect(effects[0].type).toBe('DROP_SHADOW')
-    expect(effects[0].offset).toEqual({ x: 0, y: 4 })
-    expect(effects[0].radius).toBe(8)
-    expect(effects[0].color.a).toBeCloseTo(0.251, 2) // #40 -> 0.251
-  })
-
-  it('create_component returns warning when createSlot unavailable', async () => {
-    const result = await handleCreateComponent(
-      {
-        nodeId: '1:2',
-        slots: ['Content'],
-      },
-      client,
-    )
-    const parsed = JSON.parse(
-      result.content[0].text,
-    ) as Record<string, unknown>
-    expect(parsed.warning).toBeDefined()
-    expect(parsed.warning as string).toContain('createSlot')
-  })
-
-  it('creates SECTION node ignoring unsupported fills gracefully', async () => {
+  it('create_node creates a SECTION node ignoring unsupported fills gracefully', async () => {
     const result = await handleCreateNode(
       {
         parentId: '0:1',
-        node: {
+        spec: {
           type: 'SECTION',
           name: 'Test Section',
           size: [400, 300],
@@ -350,26 +230,6 @@ describe('M3 create tools e2e', () => {
     ) as Record<string, unknown>
     expect(parsed.type).toBe('SECTION')
     expect(parsed.name).toBe('Test Section')
-  })
-
-  it('create_node returns error when not connected', async () => {
-    client.disconnect()
-
-    const result = await handleCreateNode(
-      {
-        parentId: 'page:1',
-        node: {
-          type: 'FRAME',
-          name: 'Test',
-          size: [100, 100],
-        },
-      },
-      client,
-    )
-
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
   })
 })
 

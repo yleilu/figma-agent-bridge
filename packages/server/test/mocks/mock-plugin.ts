@@ -622,21 +622,10 @@ export const createMockPlugin = (
 
       // create_component: the M3-B rebuild promotes nodeId OR builds-from-spec
       // then componentizes, echoing {id,key,name,type} + the converted spec so
-      // the e2e can assert the spec atoms were parsed server-side. The LEGACY
-      // create-component path (green-window: tools/create-component.ts is
-      // orphaned-but-present) still sends the old {combineAsVariants,nodeIds} /
-      // {slots} shapes — keep those branches so its e2e suite stays green until
-      // the old importer is deleted.
+      // the e2e can assert the spec atoms were parsed server-side. (The legacy
+      // {combineAsVariants,nodeIds} / {slots} branches were retired in M3-E
+      // alongside the old tools/create-component.ts handler.)
       case 'create_component': {
-        const compNodeIds = cmd.params?.nodeIds as
-          | string[]
-          | undefined
-        const combine = cmd.params?.combineAsVariants as
-          | boolean
-          | undefined
-        const slots = cmd.params?.slots as
-          | string[]
-          | undefined
         const ccSpec = cmd.params?.spec as
           | Record<string, unknown>
           | undefined
@@ -646,40 +635,17 @@ export const createMockPlugin = (
         const ccName = cmd.params?.name as
           | string
           | undefined
-        if (combine && compNodeIds) {
-          // legacy combineAsVariants path
-          result = {
-            id: `cs:${Math.random().toString(36).slice(2, 8)}`,
-            name: 'VariantSet',
-            type: 'COMPONENT_SET',
-            key: `key:${Math.random().toString(36).slice(2, 8)}`,
-          }
-        } else if (slots && slots.length > 0) {
-          // legacy slots path: createSlot is not available in the mock
-          result = {
-            id:
-              ccNodeId ??
-              `comp:${Math.random().toString(36).slice(2, 8)}`,
-            name: 'Component',
-            type: 'COMPONENT',
-            key: `key:${Math.random().toString(36).slice(2, 8)}`,
-            warning:
-              'createSlot is not available in this Figma version; requested slots were not created.',
-          }
-        } else {
-          // M3-B rebuild path
-          result = {
-            id: `comp:${Math.random().toString(36).slice(2, 8)}`,
-            key: `key:${Math.random().toString(36).slice(2, 8)}`,
-            name:
-              ccName ??
-              (ccSpec?.name as string) ??
-              'Component',
-            type: 'COMPONENT',
-            // echo the converted spec / source so tests can assert conversion + routing
-            spec: ccSpec,
-            sourceNodeId: ccNodeId,
-          }
+        result = {
+          id: `comp:${Math.random().toString(36).slice(2, 8)}`,
+          key: `key:${Math.random().toString(36).slice(2, 8)}`,
+          name:
+            ccName ??
+            (ccSpec?.name as string) ??
+            'Component',
+          type: 'COMPONENT',
+          // echo the converted spec / source so tests can assert conversion + routing
+          spec: ccSpec,
+          sourceNodeId: ccNodeId,
         }
         break
       }

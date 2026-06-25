@@ -32,12 +32,11 @@ import {
   styleValueToFigma,
   inferStyleCategory,
   colorValueToRgba,
+  hexToRgba,
 } from '../serialize/value-convert'
-import { hexToRgba } from '../grammar'
 import {
   type ToolResult,
   requireConnected,
-  formatMutationResult,
   errorMessage,
   textResult,
 } from './shared'
@@ -82,6 +81,9 @@ const convertUpdateNode = (
     nodeId?: string
     patch?: Partial<NodeSpec>
   }
+  // NOTE: per-op warnings (e.g. per-side stroke collapse) are intentionally not
+  // surfaced here — the batch result shape ({results, errors}) has no per-op
+  // warnings channel (D3). A direct update_node surfaces them; a batched one does not.
   return { nodeId, spec: specToFigma(patch ?? {}) }
 }
 
@@ -326,15 +328,18 @@ export const handleBatch = async (
       []
 
     // Re-merge the plugin's per-op replies with the server-side pre-errors,
-    // restoring original array order.
+    // restoring original array order. Build the original-index → sent-position
+    // map ONCE (O(n)) instead of a findIndex scan per entry (O(n²)).
+    const sentPosByIndex = new Map<number, number>()
+    sendable.forEach((s, sentPos) => {
+      sentPosByIndex.set(s.index, sentPos)
+    })
     const results: EntryResult[] = ops.map(
       (_entry, index) => {
         if (preErrors[index] !== undefined) {
           return preErrors[index]
         }
-        const sentPos = sendable.findIndex(
-          s => s.index === index,
-        )
+        const sentPos = sentPosByIndex.get(index) ?? -1
         const reply = pluginResults[sentPos] as
           | {
               ok: boolean
@@ -365,9 +370,14 @@ export const handleBatch = async (
         error: r.error,
       }))
 
-    return formatMutationResult(
-      { results, errors } as { error?: string },
-      'Failed to run batch.',
+    // batch ALWAYS succeeds at the tool level (D3 partial success): a per-op
+    // failure lives inside `errors[]`, not as a top-level `error` key, so this
+    // is unconditionally the success path. Serialize it directly rather than
+    // routing through formatMutationResult (whose error-key branch can never
+    // fire here). The plugin-level {error} short-circuit was already handled
+    // above (the `'error' in pluginReply` guard).
+    return textResult(
+      JSON.stringify({ results, errors }, null, 2),
     )
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)

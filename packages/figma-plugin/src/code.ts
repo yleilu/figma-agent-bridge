@@ -810,7 +810,11 @@ const createTreeNode = async (
         boolNode = figma.exclude(childNodes, parent)
         break
       default:
-        boolNode = figma.union(childNodes, parent)
+        // Consistent with the boolean_op tool's strict handling (which returns
+        // { error: 'Unknown boolean op' }): reject an unknown op rather than
+        // silently defaulting to union. createTreeNode's caller surfaces the
+        // throw as the create_tree {error}.
+        throw new Error('Unknown boolean op: ' + op)
     }
     if (spec.name) boolNode.name = spec.name as string
     return boolNode

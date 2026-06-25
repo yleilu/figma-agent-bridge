@@ -5,17 +5,15 @@
 // `listReadParamsSchema.shape` (cursor/limit/fields/match). This ensures
 // that schema changes to the mixin propagate automatically.
 //
-// GREEN-WINDOW: this module is NOT barrel-exported from index.ts. Some of
-// its names (getNode/getNodes/inspect/search/createNode/createTree params)
-// deliberately shadow the legacy schemas.ts / create-schemas.ts versions
-// still imported by the live server. New tool code imports these via the
-// `@figma-agent-bridge/shared/tool-params` subpath; the legacy modules are
-// deleted (and these promoted to the barrel) at their last importer.
+// SUBPATH (not barrel-exported): this module is the canonical per-tool param
+// surface for the live server, imported via the
+// `@figma-agent-bridge/shared/tool-params` subpath. It is deliberately kept off
+// the barrel `export *` to avoid re-introducing a name clash with schemas.ts /
+// create-schemas.ts, both of which still export ONE barrel-exported schema each
+// (connectParamsSchema and createFromSvgParamsSchema). The former green-window
+// twins in those modules (the M2 read params + create_node/create_tree/
+// create_component) were retired in M3-E; their canonical shapes live here.
 //
-// Deferred to when their tool is built (params not needed by the slice or
-// the core-CRUD step yet): export, create_from_svg, create_image, clone_node,
-// delete_node, reparent_node, reorder_children, set_focus, the page tools,
-// the component/style tools, annotations, reactions, plugin-data, batch.
 // `connectParamsSchema` stays in schemas.ts (it has its own test + is barrel
 // exported); status/connect for the session is covered by statusParamsSchema
 // here + connectParamsSchema there.

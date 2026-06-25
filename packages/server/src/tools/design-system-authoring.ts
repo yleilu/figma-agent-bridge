@@ -12,7 +12,6 @@
 // throw and never a silent no-op.
 
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import { hexToRgba } from '../grammar'
 import type { FigmaClient } from '../figma-client'
 import {
   type StyleCategory,
@@ -20,6 +19,7 @@ import {
   styleValueToFigma,
   inferStyleCategory,
   colorValueToRgba,
+  hexToRgba,
 } from '../serialize/value-convert'
 import {
   type ToolResult,

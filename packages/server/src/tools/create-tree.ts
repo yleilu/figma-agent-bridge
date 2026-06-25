@@ -66,9 +66,13 @@ const isCloneNode = (
  *   them at build time — ref re-builds refs[key], id clones node x).
  * - a plain node is converted via specToFigmaForCreate, then its `children`
  *   are recursively converted and re-attached.
+ *
+ * `warnings` is an optional sink: lossy conversions anywhere in the tree (e.g.
+ * a per-side stroke collapse) push onto it so the handler can surface them.
  */
 export const convertTree = (
   spec: TreeNodeSpec,
+  warnings?: string[],
 ): FigmaWritePayload => {
   if (isRefNode(spec)) {
     return { ref: spec.ref }
@@ -82,9 +86,11 @@ export const convertTree = (
     children?: TreeNodeSpec[]
   }
   const { children, ...flat } = node
-  const converted = specToFigmaForCreate(flat)
+  const converted = specToFigmaForCreate(flat, warnings)
   if (children !== undefined && children.length > 0) {
-    converted.children = children.map(convertTree)
+    converted.children = children.map(child =>
+      convertTree(child, warnings),
+    )
   }
   return converted
 }
@@ -92,10 +98,11 @@ export const convertTree = (
 /** Convert every entry of the ref-pool to its converted payload form. */
 const convertRefs = (
   refs: RefPool,
+  warnings?: string[],
 ): Record<string, FigmaWritePayload> => {
   const out: Record<string, FigmaWritePayload> = {}
   for (const [key, value] of Object.entries(refs)) {
-    out[key] = convertTree(value)
+    out[key] = convertTree(value, warnings)
   }
   return out
 }
@@ -118,9 +125,12 @@ export const handleCreateTree = async (
   }
 
   try {
-    const convertedTree = convertTree(tree)
+    const warnings: string[] = []
+    const convertedTree = convertTree(tree, warnings)
     const convertedRefs =
-      refs !== undefined ? convertRefs(refs) : undefined
+      refs !== undefined
+        ? convertRefs(refs, warnings)
+        : undefined
 
     const result = (await client.sendCommand(
       COMMANDS.CREATE_TREE,
@@ -131,9 +141,23 @@ export const handleCreateTree = async (
       },
     )) as { error?: string } | null
 
-    return formatMutationResult(
+    const mutation = formatMutationResult(
       result,
       'Failed to create tree.',
+    )
+    // Append any lossy-conversion warnings to a SUCCESSFUL result. (On error,
+    // formatMutationResult already returned an Error: text — leave it clean.)
+    if (
+      warnings.length === 0 ||
+      mutation.content[0].text.startsWith('Error')
+    ) {
+      return mutation
+    }
+    const warningText = warnings
+      .map(w => `Warning: ${w}`)
+      .join('\n')
+    return textResult(
+      `${mutation.content[0].text}\n\n${warningText}`,
     )
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)

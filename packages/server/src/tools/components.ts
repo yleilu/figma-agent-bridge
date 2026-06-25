@@ -66,13 +66,19 @@ export const handleCreateComponent = async (
   }
 
   try {
+    const warnings: string[] = []
     let payload: Record<string, unknown>
     if (spec !== undefined) {
       // Build from a single NodeSpec, then componentize — strip children
       // (create path is single-node) and convert atom leaves on the write face.
+      // The writer pushes lossy-conversion notes (e.g. per-side stroke collapse)
+      // onto `warnings`.
       const flat: NodeSpec = { ...spec }
       delete flat.children
-      const convertedSpec = specToFigmaForCreate(flat)
+      const convertedSpec = specToFigmaForCreate(
+        flat,
+        warnings,
+      )
       payload = {
         spec: convertedSpec,
         nodeId,
@@ -88,9 +94,21 @@ export const handleCreateComponent = async (
       COMMANDS.CREATE_COMPONENT,
       payload,
     )) as { error?: string } | null
-    return formatMutationResult(
+    const mutation = formatMutationResult(
       result,
       'Failed to create component.',
+    )
+    if (
+      warnings.length === 0 ||
+      mutation.content[0].text.startsWith('Error')
+    ) {
+      return mutation
+    }
+    const warningText = warnings
+      .map(w => `Warning: ${w}`)
+      .join('\n')
+    return textResult(
+      `${mutation.content[0].text}\n\n${warningText}`,
     )
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
