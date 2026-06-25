@@ -1,0 +1,375 @@
+// tools/batch.ts — the one generic batch tool (D3, T5).
+//
+// `batch({ op?, ops: [ {op?, nodeId, ...params}, ... ] }) → { results, errors[] }`
+//
+// N WRITE ops over EXISTING targets, executed in ARRAY ORDER with PARTIAL
+// SUCCESS — one failing entry does NOT abort the rest. A top-level `op` sets the
+// default op for every entry (homogeneous: same op, N targets); each entry may
+// override it with its own `op` (heterogeneous). An entry's effective op is
+// `entry.op ?? topLevelOp`.
+//
+// EXECUTION MODEL — one round-trip (the PREFERRED model). The server converts
+// each op's params on the grammar WRITE FACE here (reusing the SAME pure
+// converters the individual handlers use — specToFigma + value-convert) and
+// sends ONE COMMANDS.BATCH carrying the converted ops. The plugin loops the ops
+// through its existing command switch (handleCommand acting as dispatchCommand),
+// collecting a per-op result/error. So N relay round-trips collapse to 1.
+//
+// PARTIAL-SUCCESS SHAPE (documented):
+//   results: [{ index, op, ok, result? , error? }]   — one entry per op, in order
+//   errors:  [{ index, op, error }]                   — the failures, summarized
+// A SERVER-side conversion failure (e.g. a malformed atom) or a missing op is
+// recorded as that entry's error WITHOUT being sent to the plugin, and the entry
+// is sent as a no-op marker so the plugin's results array stays index-aligned.
+
+import { COMMANDS } from '@figma-agent-bridge/shared'
+import type { NodeSpec } from '@figma-agent-bridge/shared/node-spec'
+import type { FigmaClient } from '../figma-client'
+import { specToFigma } from '../serialize/node-spec-writer'
+import {
+  type StyleCategory,
+  HEX_RE,
+  styleValueToFigma,
+  inferStyleCategory,
+  colorValueToRgba,
+} from '../serialize/value-convert'
+import { hexToRgba } from '../grammar'
+import {
+  type ToolResult,
+  requireConnected,
+  formatMutationResult,
+  errorMessage,
+  textResult,
+} from './shared'
+
+type BatchEntry = Record<string, unknown> & { op?: string }
+
+/** A converted op ready for the plugin: its command + the plugin-side params. */
+type ConvertedOp = {
+  op: string
+  params: Record<string, unknown>
+}
+
+/** The per-entry result the server returns to the agent. */
+type EntryResult = {
+  index: number
+  op: string | null
+  ok: boolean
+  result?: unknown
+  error?: string
+}
+
+// ─── per-op param conversion (grammar WRITE face) ──────────────────────────────
+//
+// Most write ops take their params straight through to the plugin (the same as
+// their individual handlers, which do no server-side conversion). The few that
+// consume grammar ATOMS convert them here with the SHARED pure converters so the
+// behavior is identical to update_node / create_styles / … called directly.
+
+/** Strip the routing `op` key; the rest are the op's own params. */
+const opParams = (
+  entry: BatchEntry,
+): Record<string, unknown> => {
+  const rest = { ...entry }
+  delete rest.op
+  return rest
+}
+
+const convertUpdateNode = (
+  params: Record<string, unknown>,
+): Record<string, unknown> => {
+  const { nodeId, patch } = params as {
+    nodeId?: string
+    patch?: Partial<NodeSpec>
+  }
+  return { nodeId, spec: specToFigma(patch ?? {}) }
+}
+
+const convertCreateStyles = (
+  params: Record<string, unknown>,
+): Record<string, unknown> => {
+  const { type, name, value, description } = params as {
+    type: StyleCategory
+    name: string
+    value: string
+    description?: string
+  }
+  return {
+    type,
+    name,
+    value: styleValueToFigma(type, value),
+    description,
+  }
+}
+
+const convertUpdateStyles = (
+  params: Record<string, unknown>,
+): Record<string, unknown> => {
+  const { styleId, value, name, description } = params as {
+    styleId: string
+    value?: string
+    name?: string
+    description?: string
+  }
+  let convertedValue: unknown
+  let valueType: StyleCategory | undefined
+  if (value !== undefined) {
+    valueType = inferStyleCategory(value)
+    convertedValue = styleValueToFigma(valueType, value)
+  }
+  return {
+    styleId,
+    value: convertedValue,
+    valueType,
+    name,
+    description,
+  }
+}
+
+const convertCreateVariables = (
+  params: Record<string, unknown>,
+): Record<string, unknown> => {
+  const { collection, modes, variables } = params as {
+    collection: string
+    modes?: string[]
+    variables: {
+      name: string
+      type: 'COLOR' | 'FLOAT' | 'STRING' | 'BOOLEAN'
+      valuesByMode: Record<
+        string,
+        string | number | boolean
+      >
+    }[]
+  }
+  const converted = variables.map(v => ({
+    name: v.name,
+    type: v.type,
+    valuesByMode: Object.fromEntries(
+      Object.entries(v.valuesByMode).map(([mode, val]) => [
+        mode,
+        v.type === 'COLOR' ? colorValueToRgba(val) : val,
+      ]),
+    ),
+  }))
+  return { collection, modes, variables: converted }
+}
+
+const convertUpdateVariables = (
+  params: Record<string, unknown>,
+): Record<string, unknown> => {
+  const {
+    collectionId,
+    addModes,
+    removeModes,
+    renameModes,
+    variables,
+  } = params as {
+    collectionId: string
+    addModes?: string[]
+    removeModes?: string[]
+    renameModes?: { from: string; to: string }[]
+    variables?: {
+      id: string
+      valuesByMode?: Record<
+        string,
+        string | number | boolean
+      >
+      scopes?: string[]
+      codeSyntax?: Record<string, string>
+      hiddenFromPublishing?: boolean
+    }[]
+  }
+  const convertedVars = variables?.map(v => ({
+    ...v,
+    valuesByMode:
+      v.valuesByMode === undefined
+        ? undefined
+        : Object.fromEntries(
+            Object.entries(v.valuesByMode).map(
+              ([mode, val]) => [
+                mode,
+                typeof val === 'string' && HEX_RE.test(val)
+                  ? hexToRgba(val)
+                  : val,
+              ],
+            ),
+          ),
+  }))
+  return {
+    collectionId,
+    addModes,
+    removeModes,
+    renameModes,
+    variables: convertedVars,
+  }
+}
+
+/** Ops that need grammar atom → Figma object conversion before the plugin runs. */
+const CONVERTERS: Record<
+  string,
+  (
+    params: Record<string, unknown>,
+  ) => Record<string, unknown>
+> = {
+  [COMMANDS.UPDATE_NODE]: convertUpdateNode,
+  [COMMANDS.CREATE_STYLES]: convertCreateStyles,
+  [COMMANDS.UPDATE_STYLES]: convertUpdateStyles,
+  [COMMANDS.CREATE_VARIABLES]: convertCreateVariables,
+  [COMMANDS.UPDATE_VARIABLES]: convertUpdateVariables,
+}
+
+/**
+ * Convert one entry's params for `op`. Pass-through for ops with no server-side
+ * grammar conversion; the CONVERTERS map handles the atom-consuming ones. Throws
+ * on a malformed atom (the caller records it as that entry's error).
+ */
+const convertOp = (
+  op: string,
+  entry: BatchEntry,
+): ConvertedOp => {
+  const params = opParams(entry)
+  const convert = CONVERTERS[op]
+  return { op, params: convert ? convert(params) : params }
+}
+
+// ─── handler ───────────────────────────────────────────────────────────────────
+
+export const handleBatch = async (
+  {
+    op: defaultOp,
+    ops,
+  }: { op?: string; ops: BatchEntry[] },
+  client: FigmaClient,
+): Promise<ToolResult> => {
+  const guard = requireConnected(client)
+  if (guard) {
+    return guard
+  }
+
+  // Resolve + convert each entry server-side, in array order. A missing op or a
+  // malformed atom is recorded as that entry's error and NOT sent to the plugin;
+  // a placeholder keeps the sent ops index-aligned with the plugin's replies.
+  const converted: (ConvertedOp | null)[] = []
+  const preErrors: Record<number, EntryResult> = {}
+  const effectiveOps: (string | null)[] = []
+
+  ops.forEach((entry, index) => {
+    const op = entry.op ?? defaultOp
+    effectiveOps[index] = op ?? null
+    if (op === undefined) {
+      preErrors[index] = {
+        index,
+        op: null,
+        ok: false,
+        error:
+          'No op for this entry: set a top-level `op` or a per-entry `op`.',
+      }
+      converted[index] = null
+      return
+    }
+    try {
+      converted[index] = convertOp(op, entry)
+    } catch (err) {
+      preErrors[index] = {
+        index,
+        op,
+        ok: false,
+        error: errorMessage(err),
+      }
+      converted[index] = null
+    }
+  })
+
+  try {
+    // Send ONE command carrying only the validly-converted ops; the plugin loops
+    // them through its command switch and returns a per-op {ok,result|error}.
+    const sendable = converted
+      .map((c, index) =>
+        c === null ? null : { index, ...c },
+      )
+      .filter(
+        (c): c is ConvertedOp & { index: number } =>
+          c !== null,
+      )
+
+    const pluginReply = (await client.sendCommand(
+      COMMANDS.BATCH,
+      {
+        ops: sendable.map(({ op, params }) => ({
+          op,
+          params,
+        })),
+      },
+    )) as
+      | {
+          results?: {
+            ok: boolean
+            result?: unknown
+            error?: string
+          }[]
+        }
+      | { error?: string }
+      | null
+
+    if (pluginReply === null) {
+      return textResult('Failed to run batch.')
+    }
+    if (
+      'error' in pluginReply &&
+      pluginReply.error !== undefined
+    ) {
+      return textResult(`Error: ${pluginReply.error}`)
+    }
+
+    const pluginResults =
+      ('results' in pluginReply && pluginReply.results) ||
+      []
+
+    // Re-merge the plugin's per-op replies with the server-side pre-errors,
+    // restoring original array order.
+    const results: EntryResult[] = ops.map(
+      (_entry, index) => {
+        if (preErrors[index] !== undefined) {
+          return preErrors[index]
+        }
+        const sentPos = sendable.findIndex(
+          s => s.index === index,
+        )
+        const reply = pluginResults[sentPos] as
+          | {
+              ok: boolean
+              result?: unknown
+              error?: string
+            }
+          | undefined
+        const op = effectiveOps[index] ?? null
+        if (reply === undefined) {
+          return {
+            index,
+            op,
+            ok: false,
+            error: 'No result returned for this op.',
+          }
+        }
+        return reply.ok
+          ? { index, op, ok: true, result: reply.result }
+          : { index, op, ok: false, error: reply.error }
+      },
+    )
+
+    const errors = results
+      .filter(r => !r.ok)
+      .map(r => ({
+        index: r.index,
+        op: r.op,
+        error: r.error,
+      }))
+
+    return formatMutationResult(
+      { results, errors } as { error?: string },
+      'Failed to run batch.',
+    )
+  } catch (err) {
+    return textResult(`Error: ${errorMessage(err)}`)
+  }
+}

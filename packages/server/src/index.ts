@@ -53,6 +53,7 @@ import {
   createStylesParamsSchema,
   updateStylesParamsSchema,
   applyStyleParamsSchema,
+  batchParamsSchema,
 } from '@figma-agent-bridge/shared/tool-params'
 import { createFigmaClient } from './figma-client'
 import {
@@ -119,6 +120,7 @@ import {
   handleSetInstance,
 } from './tools/components'
 import { handleCreateFromSvg } from './tools/create-svg'
+import { handleBatch } from './tools/batch'
 
 const server = new McpServer({
   name: APP_NAME,
@@ -447,6 +449,12 @@ server.tool(
   'apply_style',
   applyStyleParamsSchema.shape,
   async params => handleApplyStyle(params, client),
+)
+
+server.tool(
+  'batch',
+  batchParamsSchema.shape,
+  async params => handleBatch(params, client),
 )
 
 const transport = new StdioServerTransport()

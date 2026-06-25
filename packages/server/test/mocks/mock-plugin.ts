@@ -46,14 +46,41 @@ export const createMockPlugin = (
 
   let ws: WebSocket | null = null
 
-  const handleBroadcast = (
-    socket: WebSocket,
-    cmd: CommandMessage,
-  ): void => {
+  // runCommand mirrors the real plugin's handleCommand: dispatch on the command
+  // string and return { result?, error? }. Pulled out of handleBroadcast so the
+  // BATCH case can re-dispatch each op through it (the same way the real plugin's
+  // BATCH case loops handleCommand) and so handleBroadcast just wraps the reply
+  // in the relay frame.
+  const runCommand = (
+    command: string,
+    params: Record<string, unknown> | undefined,
+  ): { result?: unknown; error?: string } => {
+    const cmd = { command, params } as CommandMessage
     let result: unknown = undefined
     let error: string | undefined = undefined
 
     switch (cmd.command) {
+      // batch (M3-D): loop the converted ops through runCommand in array order,
+      // collecting a per-op {ok,result|error} — partial success, one failure
+      // does not abort the rest. Mirrors the real plugin's BATCH case.
+      case 'batch': {
+        const batchOps =
+          (cmd.params?.ops as
+            | {
+                op: string
+                params: Record<string, unknown>
+              }[]
+            | undefined) ?? []
+        const results = batchOps.map(entry => {
+          const r = runCommand(entry.op, entry.params)
+          return r.error !== undefined
+            ? { ok: false, error: r.error }
+            : { ok: true, result: r.result }
+        })
+        result = { results }
+        break
+      }
+
       case 'get_document_info':
         result = {
           name: documentName,
@@ -1077,6 +1104,18 @@ export const createMockPlugin = (
         error = 'Unknown command'
         break
     }
+
+    return { result, error }
+  }
+
+  const handleBroadcast = (
+    socket: WebSocket,
+    cmd: CommandMessage,
+  ): void => {
+    const { result, error } = runCommand(
+      cmd.command,
+      cmd.params,
+    )
 
     // The real Figma plugin replies with { id, result|error } and NO command
     // (see figma-plugin/src/hooks/useRelay.ts). Mirror that here so the mock

@@ -3200,6 +3200,54 @@ const handleCommand = async (
       return { id: node.id, warnings }
     }
 
+    // batch (M3-D): N WRITE ops over existing targets, executed in ARRAY ORDER
+    // with PARTIAL SUCCESS. The server has already CONVERTED each op's params
+    // (atom leaves → Figma objects) and tagged each with its command, so the
+    // plugin simply re-dispatches each through handleCommand (the same switch)
+    // and collects a per-op {ok,result|error}. One failing op does NOT abort the
+    // rest: a handler returning {error} OR a thrown exception is isolated to that
+    // entry. Returns { results: [{ok,result|error}] } index-aligned with ops.
+    case COMMANDS.BATCH: {
+      const batchOps =
+        (params.ops as
+          | {
+              op: string
+              params: Record<string, unknown>
+            }[]
+          | undefined) ?? []
+      const results: {
+        ok: boolean
+        result?: unknown
+        error?: string
+      }[] = []
+      for (const entry of batchOps) {
+        try {
+          const opResult = await handleCommand(
+            entry.op,
+            entry.params ?? {},
+          )
+          // A handler that returns {error} (e.g. node not found) is a per-op
+          // failure, not a success — surface it as this entry's error.
+          if (
+            opResult !== null &&
+            typeof opResult === 'object' &&
+            (opResult as { error?: string }).error !==
+              undefined
+          ) {
+            results.push({
+              ok: false,
+              error: (opResult as { error: string }).error,
+            })
+          } else {
+            results.push({ ok: true, result: opResult })
+          }
+        } catch (e) {
+          results.push({ ok: false, error: String(e) })
+        }
+      }
+      return { results }
+    }
+
     default:
       return { error: 'Unknown command: ' + command }
   }

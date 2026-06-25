@@ -12,14 +12,15 @@
 // throw and never a silent no-op.
 
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import {
-  atomToPaint,
-  atomToFont,
-  atomToEffect,
-  hexToRgba,
-  atomToGrid,
-} from '../grammar'
+import { hexToRgba } from '../grammar'
 import type { FigmaClient } from '../figma-client'
+import {
+  type StyleCategory,
+  HEX_RE,
+  styleValueToFigma,
+  inferStyleCategory,
+  colorValueToRgba,
+} from '../serialize/value-convert'
 import {
   type ToolResult,
   requireConnected,
@@ -27,87 +28,6 @@ import {
   errorMessage,
   textResult,
 } from './shared'
-
-type StyleCategory = 'paint' | 'text' | 'effect' | 'grid'
-
-// ─── value conversion (grammar WRITE face) ────────────────────────────────────
-
-/**
- * Convert a style VALUE atom to its Figma object for a KNOWN category. paint →
- * Paint, text → FontName, effect → Effect, grid → LayoutGrid. Throws on a
- * malformed atom (the caller catches and reports an error — never a throw out of
- * the handler).
- */
-const styleValueToFigma = (
-  category: StyleCategory,
-  value: string,
-): unknown => {
-  switch (category) {
-    case 'paint':
-      return atomToPaint(value)
-    case 'text':
-      return atomToFont(value)
-    case 'effect':
-      return atomToEffect(value)
-    case 'grid':
-      return atomToGrid(value)
-    default:
-      throw new Error(`Unknown style category: ${category}`)
-  }
-}
-
-/**
- * Infer the style category from an atom's syntactic shape. update_styles does
- * not carry a `type` (the style id determines it), so the server infers the
- * category from the head/literal: font(...) → text; shadow/inner-shadow/blur/
- * bg-blur → effect; columns/rows/grid → grid; anything else (bare hex, solid,
- * gradients, image/video/pattern) → paint. The inferred category rides alongside
- * the parsed value so the plugin can validate it against the resolved style's
- * actual type and warn on a mismatch (T7), never apply a wrong-typed value.
- */
-/** 6- or 8-char uppercase/lowercase hex (no shorthand) — the grammar's color form. */
-const HEX_RE = /^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/
-
-/**
- * Parse a COLOR variable value (a hex atom) to {r,g,b,a}. Validates the hex
- * shape first so a malformed atom throws a clear error (the handler catches it
- * and reports an error — never a throw out of the handler, never a NaN color).
- */
-const colorValueToRgba = (val: unknown): unknown => {
-  const s = String(val)
-  if (!HEX_RE.test(s)) {
-    throw new Error(
-      `COLOR variable value must be a 6/8-char hex (e.g. "#3B82F6"); got "${s}"`,
-    )
-  }
-  return hexToRgba(s)
-}
-
-const inferStyleCategory = (
-  value: string,
-): StyleCategory => {
-  const head = value.trim().match(/^([A-Za-z-]+)\s*\(/)
-  const kind = head?.[1]?.toLowerCase()
-  if (kind === 'font') {
-    return 'text'
-  }
-  if (
-    kind === 'shadow' ||
-    kind === 'inner-shadow' ||
-    kind === 'blur' ||
-    kind === 'bg-blur'
-  ) {
-    return 'effect'
-  }
-  if (
-    kind === 'columns' ||
-    kind === 'rows' ||
-    kind === 'grid'
-  ) {
-    return 'grid'
-  }
-  return 'paint'
-}
 
 // ─── create_variables ─────────────────────────────────────────────────────────
 

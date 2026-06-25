@@ -911,3 +911,83 @@ export const setInstanceParamsSchema = z.object({
       'Per-node overrides (NOT YET APPLIED — currently degrades with a warning).',
     ),
 })
+
+// ---------------------------------------------------------------------------
+// The one generic batch (D3) — N WRITE ops over existing targets, in order
+// ---------------------------------------------------------------------------
+
+/**
+ * The WRITE commands `batch` can fan out over. These are the existing
+ * mutation tools (D3: "N ops over EXISTING targets"). New-node creation
+ * (create_node / create_tree / create_from_svg / create_image /
+ * create_component) is deliberately EXCLUDED — chaining new nodes stays
+ * create_tree's job (ref-pool). The strings match COMMANDS exactly so a
+ * heterogeneous entry's `op` dispatches straight through the plugin's
+ * command switch.
+ */
+export const batchOpSchema = z.enum([
+  'update_node',
+  'delete_node',
+  'set_selection',
+  'set_focus',
+  'reparent_node',
+  'reorder_children',
+  'clone_node',
+  'boolean_op',
+  'flatten',
+  'apply_style',
+  'update_component',
+  'combine_variants',
+  'swap_component',
+  'set_instance',
+  'bind_variable',
+  'create_styles',
+  'update_styles',
+  'create_variables',
+  'update_variables',
+  'set_plugin_data',
+  'set_reactions',
+  'set_annotations',
+  'create_page',
+  'set_current_page',
+  'duplicate_page',
+])
+
+/**
+ * One batch entry. `op` (optional) overrides the top-level default for THIS
+ * entry; if omitted it falls back to the top-level `op`. The remaining fields
+ * are that op's own params (`nodeId`/`instanceId`/`patch`/…), validated by the
+ * op's individual handler — so this schema is permissive (passthrough) and the
+ * per-op param shape is enforced where each command already enforces it.
+ */
+export const batchEntrySchema = z
+  .object({
+    op: batchOpSchema
+      .optional()
+      .describe(
+        'Op for this entry. Overrides the top-level op; falls back to it when omitted.',
+      ),
+  })
+  .passthrough()
+
+/**
+ * Params for `batch`: one or mixed WRITE ops over N existing targets, executed
+ * in array order with PARTIAL SUCCESS (D3). A top-level `op` sets the default
+ * op for every entry (homogeneous: same op, N targets); each entry may override
+ * it with its own `op` (heterogeneous). Returns
+ * `{ results: [{index, op, ok, result|error}], errors: [{index, op, error}] }`
+ * — one entry's failure does NOT abort the rest.
+ */
+export const batchParamsSchema = z.object({
+  op: batchOpSchema
+    .optional()
+    .describe(
+      'Default op applied to every entry that does not set its own `op` (homogeneous batch).',
+    ),
+  ops: z
+    .array(batchEntrySchema)
+    .min(1)
+    .describe(
+      "Entries to execute in order. Each is the op's params; set a per-entry `op` to override the default.",
+    ),
+})
