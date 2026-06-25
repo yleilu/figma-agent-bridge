@@ -48,6 +48,11 @@ import {
   combineVariantsParamsSchema,
   swapComponentParamsSchema,
   setInstanceParamsSchema,
+  createVariablesParamsSchema,
+  updateVariablesParamsSchema,
+  createStylesParamsSchema,
+  updateStylesParamsSchema,
+  applyStyleParamsSchema,
 } from '@figma-agent-bridge/shared/tool-params'
 import { createFigmaClient } from './figma-client'
 import {
@@ -67,6 +72,13 @@ import {
   handleBindVariable,
   handleGetVariables,
 } from './tools/design-system'
+import {
+  handleCreateVariables,
+  handleUpdateVariables,
+  handleCreateStyles,
+  handleUpdateStyles,
+  handleApplyStyle,
+} from './tools/design-system-authoring'
 import {
   handleGetReactions,
   handleGetPluginData,
@@ -405,6 +417,36 @@ server.tool(
   'set_annotations',
   setAnnotationsParamsSchema.shape,
   async params => handleSetAnnotations(params, client),
+)
+
+server.tool(
+  'create_variables',
+  createVariablesParamsSchema.shape,
+  async params => handleCreateVariables(params, client),
+)
+
+server.tool(
+  'update_variables',
+  updateVariablesParamsSchema.shape,
+  async params => handleUpdateVariables(params, client),
+)
+
+server.tool(
+  'create_styles',
+  createStylesParamsSchema.shape,
+  async params => handleCreateStyles(params, client),
+)
+
+server.tool(
+  'update_styles',
+  updateStylesParamsSchema.shape,
+  async params => handleUpdateStyles(params, client),
+)
+
+server.tool(
+  'apply_style',
+  applyStyleParamsSchema.shape,
+  async params => handleApplyStyle(params, client),
 )
 
 const transport = new StdioServerTransport()

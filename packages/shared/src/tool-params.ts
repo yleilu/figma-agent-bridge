@@ -409,6 +409,195 @@ export const getVariablesParamsSchema = z.object({
     ),
 })
 
+/** The four resolved variable data types. */
+export const variableTypeSchema = z.enum([
+  'COLOR',
+  'FLOAT',
+  'STRING',
+  'BOOLEAN',
+])
+
+/**
+ * One variable to create inside the collection. `valuesByMode` maps a MODE NAME
+ * (matched against the collection's modes) to a value. COLOR values are hex
+ * atoms (parsed via the grammar paint face); FLOAT/STRING/BOOLEAN are literals.
+ */
+export const createVariableSpecSchema = z.object({
+  name: z
+    .string()
+    .describe('Variable name (e.g. "Brand/Primary").'),
+  type: variableTypeSchema.describe(
+    'Resolved variable type. COLOR values are hex atoms; others are literals.',
+  ),
+  valuesByMode: z
+    .record(z.union([z.string(), z.number(), z.boolean()]))
+    .describe(
+      'Map of mode NAME → value. COLOR values are hex atoms (e.g. "#3B82F6"); FLOAT/STRING/BOOLEAN are literals. Modes not present in the collection are reported as warnings.',
+    ),
+})
+
+/**
+ * Params for `create_variables`: create a collection (with optional extra
+ * modes), then its variables with per-mode values. Returns
+ * { collectionId, modes, variables:[{id,name}] }.
+ */
+export const createVariablesParamsSchema = z.object({
+  collection: z
+    .string()
+    .describe('Name for the new variable collection.'),
+  modes: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Additional mode names to add beyond the default mode. The default mode is renamed to the first entry when given.',
+    ),
+  variables: z
+    .array(createVariableSpecSchema)
+    .describe('Variables to create in the collection.'),
+})
+
+/** A single per-variable edit for `update_variables`. */
+export const updateVariableSpecSchema = z.object({
+  id: z.string().describe('ID of the variable to edit.'),
+  valuesByMode: z
+    .record(z.union([z.string(), z.number(), z.boolean()]))
+    .optional()
+    .describe(
+      'Map of mode NAME → new value (COLOR = hex atom; else literal).',
+    ),
+  scopes: z
+    .array(z.string())
+    .optional()
+    .describe('Variable scopes (e.g. ["ALL_SCOPES"]).'),
+  codeSyntax: z
+    .record(z.string())
+    .optional()
+    .describe(
+      'Code syntax per platform (keys: WEB | ANDROID | iOS).',
+    ),
+  hiddenFromPublishing: z
+    .boolean()
+    .optional()
+    .describe(
+      'Whether to hide the variable from publishing.',
+    ),
+})
+
+/**
+ * Params for `update_variables`: mode lifecycle on an existing collection
+ * (addModes / removeModes / renameModes) plus per-variable edits (values,
+ * scopes, codeSyntax, hiddenFromPublishing). Each gated member degrades with a
+ * warning (T7). Returns { collectionId, modes, warnings[] }.
+ */
+export const updateVariablesParamsSchema = z.object({
+  collectionId: z
+    .string()
+    .describe('ID of the variable collection to update.'),
+  addModes: z
+    .array(z.string())
+    .optional()
+    .describe('Mode names to add to the collection.'),
+  removeModes: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Mode names (or IDs) to remove from the collection.',
+    ),
+  renameModes: z
+    .array(
+      z.object({
+        from: z
+          .string()
+          .describe(
+            'Existing mode name (or ID) to rename.',
+          ),
+        to: z.string().describe('New mode name.'),
+      }),
+    )
+    .optional()
+    .describe('Modes to rename.'),
+  variables: z
+    .array(updateVariableSpecSchema)
+    .optional()
+    .describe('Per-variable edits.'),
+})
+
+// ---------------------------------------------------------------------------
+// Write tools — styles
+// ---------------------------------------------------------------------------
+
+/** The four style categories. */
+export const styleTypeSchema = z.enum([
+  'paint',
+  'text',
+  'effect',
+  'grid',
+])
+
+/**
+ * Params for `create_styles`: create one paint/text/effect/grid style from a
+ * grammar atom value. paint → atomToPaint, text → atomToFont (+loadFont in the
+ * plugin), effect → atomToEffect, grid → the grid head. Returns
+ * { id, key, name, type }.
+ */
+export const createStylesParamsSchema = z.object({
+  type: styleTypeSchema.describe(
+    'Style category: paint | text | effect | grid.',
+  ),
+  name: z.string().describe('Name for the style.'),
+  value: z
+    .string()
+    .describe(
+      'The style VALUE as a grammar atom (paint hex/gradient, font(...), shadow(...), columns(...)).',
+    ),
+  description: z
+    .string()
+    .optional()
+    .describe('Optional style description.'),
+})
+
+/**
+ * Params for `update_styles`: edit an existing style's parsed value, name,
+ * and/or description. The style's category is resolved plugin-side from its id.
+ * Returns { id, warnings[] }.
+ */
+export const updateStylesParamsSchema = z.object({
+  styleId: z
+    .string()
+    .describe('ID of the style to update.'),
+  value: z
+    .string()
+    .optional()
+    .describe(
+      'New style VALUE as a grammar atom (parsed per the style category).',
+    ),
+  name: z
+    .string()
+    .optional()
+    .describe('New name for the style.'),
+  description: z
+    .string()
+    .optional()
+    .describe('New description for the style.'),
+})
+
+/**
+ * Params for `apply_style`: bind a style to a node field via
+ * setFillStyleIdAsync / setStrokeStyleIdAsync / setTextStyleIdAsync /
+ * setEffectStyleIdAsync / setGridStyleIdAsync. Returns { id, warnings[] }.
+ */
+export const applyStyleParamsSchema = z.object({
+  nodeId: z
+    .string()
+    .describe('ID of the node to apply the style to.'),
+  styleId: z.string().describe('ID of the style to apply.'),
+  field: z
+    .enum(['fill', 'stroke', 'text', 'effect', 'grid'])
+    .describe(
+      'Which field to bind: fill | stroke | text | effect | grid.',
+    ),
+})
+
 // ---------------------------------------------------------------------------
 // Read tools — design system (styles / components / fonts)
 // ---------------------------------------------------------------------------

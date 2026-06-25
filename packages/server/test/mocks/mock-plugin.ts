@@ -917,6 +917,162 @@ export const createMockPlugin = (
         break
       }
 
+      // create_variables: the server has CONVERTED COLOR values to {r,g,b,a}
+      // (FLOAT/STRING/BOOLEAN pass through). Echo the converted variables back
+      // (as `echo`) so the e2e can assert the parse reached the plugin, and
+      // mirror the real reply { collectionId, modes, variables:[{id,name}] }.
+      // T7: a collection name prefixed `err:` models the collection-level
+      // factory THROWING — a genuine failure (nothing to return) → {error}, not
+      // a degrade. A variable name prefixed `degrade:` models a per-variable
+      // create / setValueForMode failure — it degrades to a warning and the rest
+      // of the batch continues (never a throw, never {error}).
+      case 'create_variables': {
+        const collectionName = cmd.params
+          ?.collection as string
+        if (collectionName.startsWith('err:')) {
+          error = `createVariableCollection failed for "${collectionName}"`
+          break
+        }
+        const inVars =
+          (cmd.params?.variables as
+            | {
+                name: string
+                type: string
+                valuesByMode: Record<string, unknown>
+              }[]
+            | undefined) ?? []
+        const reqModes =
+          (cmd.params?.modes as string[] | undefined) ?? []
+        // The default mode is renamed to reqModes[0] when given, else 'Mode 1'.
+        const modeNames =
+          reqModes.length > 0 ? reqModes : ['Mode 1']
+        const warnings: string[] = []
+        const created: { id: string; name: string }[] = []
+        inVars.forEach((v, i) => {
+          if (v.name.startsWith('degrade:')) {
+            warnings.push(
+              `setValueForMode failed for variable "${v.name}"; value not set`,
+            )
+            return
+          }
+          created.push({ id: `var:${i + 1}`, name: v.name })
+        })
+        result = {
+          collectionId: 'col:new',
+          modes: modeNames.map((name, i) => ({
+            modeId: `m${i + 1}`,
+            name,
+          })),
+          variables: created,
+          warnings,
+          echo: inVars,
+        }
+        break
+      }
+
+      // update_variables: a collectionId starting with `err:` → {error};
+      // `degrade:` → success-with-warning. Else echo the (converted) edits +
+      // mode lifecycle back so the e2e can assert the parse + forwarding. T7: a
+      // VARIABLE id prefixed `degrade:` models a setValueForMode REJECTION (e.g.
+      // a type-incompatible value reaching a COLOR variable) — it degrades to a
+      // warning-on-success, never a throw, never {error}.
+      case 'update_variables': {
+        const colId = cmd.params?.collectionId as string
+        if (colId.startsWith('err:')) {
+          error = `Collection not found: ${colId}`
+        } else if (colId.startsWith('degrade:')) {
+          result = {
+            collectionId: colId,
+            modes: [],
+            warnings: [
+              'addMode unavailable in this Figma version; mode not added',
+            ],
+          }
+        } else {
+          const editVars =
+            (cmd.params?.variables as
+              | { id: string }[]
+              | undefined) ?? []
+          const warnings: string[] = []
+          for (const edit of editVars) {
+            if (edit.id.startsWith('degrade:')) {
+              warnings.push(
+                `setValueForMode failed for variable ${edit.id}; value not set`,
+              )
+            }
+          }
+          result = {
+            collectionId: colId,
+            modes: [{ modeId: 'm1', name: 'Default' }],
+            warnings,
+            echo: {
+              addModes: cmd.params?.addModes,
+              removeModes: cmd.params?.removeModes,
+              renameModes: cmd.params?.renameModes,
+              variables: cmd.params?.variables,
+            },
+          }
+        }
+        break
+      }
+
+      // create_styles: the server has CONVERTED the value atom (paint→Paint,
+      // text→FontName, effect→Effect, grid→LayoutGrid). Echo it back + mirror
+      // the real reply { id, key, name, type }.
+      case 'create_styles': {
+        result = {
+          id: 'S:new',
+          key: 'style-key',
+          name: cmd.params?.name as string,
+          type: cmd.params?.type as string,
+          echo: cmd.params?.value,
+        }
+        break
+      }
+
+      // update_styles: a styleId starting with `err:` → {error}; `degrade:` →
+      // success-with-warning. Else echo {id,warnings:[]} + the converted value.
+      case 'update_styles': {
+        const sId = cmd.params?.styleId as string
+        if (sId.startsWith('err:')) {
+          error = `Style not found: ${sId}`
+        } else if (sId.startsWith('degrade:')) {
+          result = {
+            id: sId,
+            warnings: [
+              'value looks like a paint atom but the style is text; value not applied',
+            ],
+          }
+        } else {
+          result = {
+            id: sId,
+            warnings: [],
+            echo: cmd.params?.value,
+            valueType: cmd.params?.valueType,
+          }
+        }
+        break
+      }
+
+      // apply_style: a nodeId starting with `err:` → {error}; `degrade:` →
+      // success-with-warning ({id,warnings}, NEVER {error}); else {id,[]}.
+      case 'apply_style': {
+        const apNodeId = cmd.params?.nodeId as string
+        if (apNodeId.startsWith('err:')) {
+          error = `Node not found: ${apNodeId}`
+        } else if (apNodeId.startsWith('degrade:')) {
+          result = {
+            id: apNodeId,
+            warnings: [
+              'setTextStyleIdAsync unavailable on FRAME; style not applied',
+            ],
+          }
+        } else {
+          result = { id: apNodeId, warnings: [] }
+        }
+        break
+      }
+
       default:
         error = 'Unknown command'
         break

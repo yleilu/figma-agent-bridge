@@ -2546,6 +2546,660 @@ const handleCommand = async (
       }
     }
 
+    // create_variables: create a collection (+ optional extra modes), then its
+    // variables with per-mode values. The server has already CONVERTED COLOR
+    // values to {r,g,b,a}; FLOAT/STRING/BOOLEAN pass through. valuesByMode is
+    // keyed by mode NAME — resolved to mode ids against the collection's modes
+    // (an unknown mode name is reported as a warning, never throws). T7:
+    // feature-detect createVariableCollection / createVariable / setValueForMode.
+    case COMMANDS.CREATE_VARIABLES: {
+      const vars = figma.variables as VariablesAPI & {
+        createVariableCollection?: (
+          name: string,
+        ) => VariableCollection
+        createVariable?: (
+          name: string,
+          collection: VariableCollection,
+          type: VariableResolvedDataType,
+        ) => Variable
+      }
+      if (
+        typeof vars.createVariableCollection !== 'function'
+      ) {
+        return {
+          error:
+            'Variables API unavailable in this Figma version',
+        }
+      }
+      // T7: the collection-level factory failing is a genuine failure (nothing
+      // to return) → {error}, not a degrade.
+      let collection: VariableCollection
+      try {
+        collection = vars.createVariableCollection(
+          params.collection as string,
+        )
+      } catch (e) {
+        return {
+          error:
+            'createVariableCollection failed for "' +
+            String(params.collection) +
+            '": ' +
+            String(e),
+        }
+      }
+      const warnings: string[] = []
+
+      // Build the mode NAME → modeId map. The collection starts with one
+      // default mode; the first requested mode renames it, the rest are added.
+      const requestedModes =
+        (params.modes as string[] | undefined) ?? []
+      if (requestedModes.length > 0) {
+        if (typeof collection.renameMode === 'function') {
+          collection.renameMode(
+            collection.modes[0].modeId,
+            requestedModes[0],
+          )
+        }
+        for (const modeName of requestedModes.slice(1)) {
+          if (typeof collection.addMode === 'function') {
+            try {
+              collection.addMode(modeName)
+            } catch (e) {
+              warnings.push(
+                'addMode failed for "' +
+                  modeName +
+                  '": ' +
+                  String(e),
+              )
+            }
+          } else {
+            warnings.push(
+              'addMode unavailable in this Figma version; mode "' +
+                modeName +
+                '" not added',
+            )
+          }
+        }
+      }
+      const modeByName: Record<string, string> = {}
+      for (const m of collection.modes) {
+        modeByName[m.name] = m.modeId
+      }
+
+      const inVars =
+        (params.variables as
+          | {
+              name: string
+              type: VariableResolvedDataType
+              valuesByMode: Record<string, unknown>
+            }[]
+          | undefined) ?? []
+      const created: { id: string; name: string }[] = []
+      for (const spec of inVars) {
+        if (typeof vars.createVariable !== 'function') {
+          warnings.push(
+            'createVariable unavailable; variable "' +
+              spec.name +
+              '" not created',
+          )
+          continue
+        }
+        // T7: a single per-variable create FAILING degrades to a warning and the
+        // batch continues (never a throw, never {error} — that is reserved for
+        // the collection-level factory above).
+        let variable: Variable
+        try {
+          variable = vars.createVariable(
+            spec.name,
+            collection,
+            spec.type,
+          )
+        } catch (e) {
+          warnings.push(
+            'createVariable failed for variable "' +
+              spec.name +
+              '": ' +
+              String(e),
+          )
+          continue
+        }
+        for (const [modeName, value] of Object.entries(
+          spec.valuesByMode,
+        )) {
+          const modeId = modeByName[modeName]
+          if (modeId === undefined) {
+            warnings.push(
+              'unknown mode "' +
+                modeName +
+                '" for variable "' +
+                spec.name +
+                '"; value skipped',
+            )
+            continue
+          }
+          if (
+            typeof variable.setValueForMode === 'function'
+          ) {
+            // T7: a setValueForMode REJECTION (e.g. a type-incompatible value
+            // reaching a COLOR variable) degrades to a warning, never throws.
+            try {
+              variable.setValueForMode(
+                modeId,
+                value as VariableValue,
+              )
+            } catch (e) {
+              warnings.push(
+                'setValueForMode failed for variable "' +
+                  spec.name +
+                  '" mode "' +
+                  modeName +
+                  '": ' +
+                  String(e),
+              )
+            }
+          } else {
+            warnings.push(
+              'setValueForMode unavailable; value for "' +
+                spec.name +
+                '" not set',
+            )
+          }
+        }
+        created.push({
+          id: variable.id,
+          name: variable.name,
+        })
+      }
+
+      return {
+        collectionId: collection.id,
+        modes: collection.modes,
+        variables: created,
+        warnings,
+      }
+    }
+
+    // update_variables: mode lifecycle (addModes/removeModes/renameModes) +
+    // per-variable edits (values, scopes, codeSyntax, hiddenFromPublishing) on
+    // an existing collection. COLOR value edits arrive pre-converted from the
+    // server. Each gated member is feature-detected and degrades with a warning
+    // (T7); only a missing collection yields {error}.
+    case COMMANDS.UPDATE_VARIABLES: {
+      const collectionId = params.collectionId as string
+      const collection =
+        await figma.variables.getVariableCollectionByIdAsync(
+          collectionId,
+        )
+      if (!collection) {
+        return {
+          error: 'Collection not found: ' + collectionId,
+        }
+      }
+      const warnings: string[] = []
+
+      // renameModes / removeModes match a mode by NAME first, then by id.
+      const findModeId = (
+        ref: string,
+      ): string | undefined => {
+        const byName = collection.modes.find(
+          m => m.name === ref,
+        )
+        if (byName) {
+          return byName.modeId
+        }
+        const byId = collection.modes.find(
+          m => m.modeId === ref,
+        )
+        return byId?.modeId
+      }
+
+      for (const modeName of (params.addModes as
+        | string[]
+        | undefined) ?? []) {
+        if (typeof collection.addMode === 'function') {
+          try {
+            collection.addMode(modeName)
+          } catch (e) {
+            warnings.push(
+              'addMode failed for "' +
+                modeName +
+                '": ' +
+                String(e),
+            )
+          }
+        } else {
+          warnings.push(
+            'addMode unavailable in this Figma version; mode "' +
+              modeName +
+              '" not added',
+          )
+        }
+      }
+      for (const rename of (params.renameModes as
+        | { from: string; to: string }[]
+        | undefined) ?? []) {
+        const modeId = findModeId(rename.from)
+        if (modeId === undefined) {
+          warnings.push(
+            'mode "' +
+              rename.from +
+              '" not found; not renamed',
+          )
+        } else if (
+          typeof collection.renameMode === 'function'
+        ) {
+          collection.renameMode(modeId, rename.to)
+        } else {
+          warnings.push(
+            'renameMode unavailable; mode "' +
+              rename.from +
+              '" not renamed',
+          )
+        }
+      }
+      for (const modeRef of (params.removeModes as
+        | string[]
+        | undefined) ?? []) {
+        const modeId = findModeId(modeRef)
+        if (modeId === undefined) {
+          warnings.push(
+            'mode "' + modeRef + '" not found; not removed',
+          )
+        } else if (
+          typeof collection.removeMode === 'function'
+        ) {
+          try {
+            collection.removeMode(modeId)
+          } catch (e) {
+            warnings.push(
+              'removeMode failed for "' +
+                modeRef +
+                '": ' +
+                String(e),
+            )
+          }
+        } else {
+          warnings.push(
+            'removeMode unavailable; mode "' +
+              modeRef +
+              '" not removed',
+          )
+        }
+      }
+
+      // Re-read modes after lifecycle edits for value-by-name resolution.
+      const modeByName: Record<string, string> = {}
+      for (const m of collection.modes) {
+        modeByName[m.name] = m.modeId
+      }
+
+      for (const edit of (params.variables as
+        | {
+            id: string
+            valuesByMode?: Record<string, unknown>
+            scopes?: string[]
+            codeSyntax?: Record<string, string>
+            hiddenFromPublishing?: boolean
+          }[]
+        | undefined) ?? []) {
+        const variable =
+          await figma.variables.getVariableByIdAsync(
+            edit.id,
+          )
+        if (!variable) {
+          warnings.push('variable not found: ' + edit.id)
+          continue
+        }
+        if (edit.valuesByMode !== undefined) {
+          for (const [modeName, value] of Object.entries(
+            edit.valuesByMode,
+          )) {
+            const modeId =
+              modeByName[modeName] ?? findModeId(modeName)
+            if (modeId === undefined) {
+              warnings.push(
+                'unknown mode "' +
+                  modeName +
+                  '" for variable ' +
+                  edit.id +
+                  '; value skipped',
+              )
+              continue
+            }
+            if (
+              typeof variable.setValueForMode === 'function'
+            ) {
+              // T7: a setValueForMode REJECTION (e.g. a type-incompatible value
+              // reaching a COLOR variable) degrades to a warning, never throws.
+              try {
+                variable.setValueForMode(
+                  modeId,
+                  value as VariableValue,
+                )
+              } catch (e) {
+                warnings.push(
+                  'setValueForMode failed for variable ' +
+                    edit.id +
+                    ' mode "' +
+                    modeName +
+                    '": ' +
+                    String(e),
+                )
+              }
+            } else {
+              warnings.push(
+                'setValueForMode unavailable; value not set on ' +
+                  edit.id,
+              )
+            }
+          }
+        }
+        if (edit.scopes !== undefined) {
+          try {
+            variable.scopes = edit.scopes as VariableScope[]
+          } catch (e) {
+            warnings.push(
+              'scopes not settable on ' +
+                edit.id +
+                ': ' +
+                String(e),
+            )
+          }
+        }
+        if (edit.codeSyntax !== undefined) {
+          if (
+            typeof variable.setVariableCodeSyntax ===
+            'function'
+          ) {
+            for (const [platform, value] of Object.entries(
+              edit.codeSyntax,
+            )) {
+              try {
+                variable.setVariableCodeSyntax(
+                  platform as CodeSyntaxPlatform,
+                  value,
+                )
+              } catch (e) {
+                warnings.push(
+                  'codeSyntax not set (' +
+                    platform +
+                    ') on ' +
+                    edit.id +
+                    ': ' +
+                    String(e),
+                )
+              }
+            }
+          } else {
+            warnings.push(
+              'setVariableCodeSyntax unavailable; codeSyntax not set on ' +
+                edit.id,
+            )
+          }
+        }
+        if (edit.hiddenFromPublishing !== undefined) {
+          try {
+            variable.hiddenFromPublishing =
+              edit.hiddenFromPublishing
+          } catch (e) {
+            warnings.push(
+              'hiddenFromPublishing not settable on ' +
+                edit.id +
+                ': ' +
+                String(e),
+            )
+          }
+        }
+      }
+
+      return {
+        collectionId: collection.id,
+        modes: collection.modes,
+        warnings,
+      }
+    }
+
+    // create_styles: create one paint/text/effect/grid style from the
+    // server-CONVERTED value (paint→Paint, text→FontName, effect→Effect,
+    // grid→LayoutGrid). loadFontAsync first for text styles. T7: feature-detect
+    // the createXStyle factory.
+    case COMMANDS.CREATE_STYLES: {
+      const styleType = params.type as
+        | 'paint'
+        | 'text'
+        | 'effect'
+        | 'grid'
+      const styleName = params.name as string
+      const styleValue = params.value
+      const styleDesc = params.description as
+        | string
+        | undefined
+
+      if (styleType === 'paint') {
+        if (typeof figma.createPaintStyle !== 'function') {
+          return {
+            error: 'createPaintStyle unavailable',
+          }
+        }
+        const style = figma.createPaintStyle()
+        style.name = styleName
+        if (styleDesc !== undefined) {
+          style.description = styleDesc
+        }
+        style.paints = [styleValue as Paint]
+        return {
+          id: style.id,
+          key: style.key,
+          name: style.name,
+          type: 'paint',
+        }
+      }
+      if (styleType === 'text') {
+        if (typeof figma.createTextStyle !== 'function') {
+          return { error: 'createTextStyle unavailable' }
+        }
+        const font = styleValue as {
+          family: string
+          style: string
+          size: number
+          lineHeight?: LineHeight
+          letterSpacing?: LetterSpacing
+        }
+        await figma.loadFontAsync({
+          family: font.family,
+          style: font.style,
+        })
+        const style = figma.createTextStyle()
+        style.name = styleName
+        if (styleDesc !== undefined) {
+          style.description = styleDesc
+        }
+        style.fontName = {
+          family: font.family,
+          style: font.style,
+        }
+        style.fontSize = font.size
+        if (font.lineHeight !== undefined) {
+          style.lineHeight = font.lineHeight
+        }
+        if (font.letterSpacing !== undefined) {
+          style.letterSpacing = font.letterSpacing
+        }
+        return {
+          id: style.id,
+          key: style.key,
+          name: style.name,
+          type: 'text',
+        }
+      }
+      if (styleType === 'effect') {
+        if (typeof figma.createEffectStyle !== 'function') {
+          return { error: 'createEffectStyle unavailable' }
+        }
+        const style = figma.createEffectStyle()
+        style.name = styleName
+        if (styleDesc !== undefined) {
+          style.description = styleDesc
+        }
+        style.effects = [styleValue as Effect]
+        return {
+          id: style.id,
+          key: style.key,
+          name: style.name,
+          type: 'effect',
+        }
+      }
+      // grid
+      if (typeof figma.createGridStyle !== 'function') {
+        return { error: 'createGridStyle unavailable' }
+      }
+      const gridStyle = figma.createGridStyle()
+      gridStyle.name = styleName
+      if (styleDesc !== undefined) {
+        gridStyle.description = styleDesc
+      }
+      gridStyle.layoutGrids = [styleValue as LayoutGrid]
+      return {
+        id: gridStyle.id,
+        key: gridStyle.key,
+        name: gridStyle.name,
+        type: 'grid',
+      }
+    }
+
+    // update_styles: edit an existing style's value/name/description. The server
+    // sends the CONVERTED value + the inferred valueType; the plugin resolves the
+    // style, validates valueType against the style's actual type (warns on
+    // mismatch, T7), and assigns. Missing style → {error}.
+    case COMMANDS.UPDATE_STYLES: {
+      const styleId = params.styleId as string
+      const style = await figma.getStyleByIdAsync(styleId)
+      if (!style) {
+        return { error: 'Style not found: ' + styleId }
+      }
+      const warnings: string[] = []
+      if (params.name !== undefined) {
+        style.name = params.name as string
+      }
+      if (params.description !== undefined) {
+        style.description = params.description as string
+      }
+      if (params.value !== undefined) {
+        const valueType = params.valueType as
+          | 'paint'
+          | 'text'
+          | 'effect'
+          | 'grid'
+          | undefined
+        const actual = {
+          PAINT: 'paint',
+          TEXT: 'text',
+          EFFECT: 'effect',
+          GRID: 'grid',
+        }[style.type]
+        if (
+          valueType !== undefined &&
+          valueType !== actual
+        ) {
+          warnings.push(
+            'value looks like a ' +
+              valueType +
+              ' atom but the style is ' +
+              actual +
+              '; value not applied',
+          )
+        } else if (style.type === 'PAINT') {
+          ;(style as PaintStyle).paints = [
+            params.value as Paint,
+          ]
+        } else if (style.type === 'TEXT') {
+          const font = params.value as {
+            family: string
+            style: string
+            size: number
+            lineHeight?: LineHeight
+            letterSpacing?: LetterSpacing
+          }
+          await figma.loadFontAsync({
+            family: font.family,
+            style: font.style,
+          })
+          const ts = style as TextStyle
+          ts.fontName = {
+            family: font.family,
+            style: font.style,
+          }
+          ts.fontSize = font.size
+          if (font.lineHeight !== undefined) {
+            ts.lineHeight = font.lineHeight
+          }
+          if (font.letterSpacing !== undefined) {
+            ts.letterSpacing = font.letterSpacing
+          }
+        } else if (style.type === 'EFFECT') {
+          ;(style as EffectStyle).effects = [
+            params.value as Effect,
+          ]
+        } else if (style.type === 'GRID') {
+          ;(style as GridStyle).layoutGrids = [
+            params.value as LayoutGrid,
+          ]
+        }
+      }
+      return { id: style.id, warnings }
+    }
+
+    // apply_style: bind a style to a node field via the matching async setter.
+    // T7: feature-detect the setter on the node and degrade with a warning when
+    // it is unavailable (NEVER {error}); only a missing node yields {error}.
+    case COMMANDS.APPLY_STYLE: {
+      const nodeId = params.nodeId as string
+      const node = await figma.getNodeByIdAsync(nodeId)
+      if (!node) {
+        return { error: 'Node not found: ' + nodeId }
+      }
+      const styleId = params.styleId as string
+      const field = params.field as
+        | 'fill'
+        | 'stroke'
+        | 'text'
+        | 'effect'
+        | 'grid'
+      const setterName = {
+        fill: 'setFillStyleIdAsync',
+        stroke: 'setStrokeStyleIdAsync',
+        text: 'setTextStyleIdAsync',
+        effect: 'setEffectStyleIdAsync',
+        grid: 'setGridStyleIdAsync',
+      }[field]
+      const warnings: string[] = []
+      const styled = node as unknown as Record<
+        string,
+        (id: string) => Promise<void>
+      >
+      if (typeof styled[setterName] !== 'function') {
+        warnings.push(
+          setterName +
+            ' unavailable on ' +
+            node.type +
+            '; style not applied',
+        )
+        return { id: node.id, warnings }
+      }
+      try {
+        await styled[setterName](styleId)
+      } catch (e) {
+        warnings.push(
+          field +
+            ' style not applicable on ' +
+            node.type +
+            ': ' +
+            String(e),
+        )
+      }
+      return { id: node.id, warnings }
+    }
+
     default:
       return { error: 'Unknown command: ' + command }
   }
