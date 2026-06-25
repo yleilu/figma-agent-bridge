@@ -346,6 +346,13 @@ describe('specToFigma — pass-through fields', () => {
 // ─── specToFigmaForCreate ─────────────────────────────────────────────────────
 
 describe('specToFigmaForCreate', () => {
+  it('carries the type discriminator through (plugin createSingleNode switches on it)', () => {
+    // specToFigma is a property-patch converter and never emits `type`; the
+    // CREATE wrapper must add it back or the plugin cannot pick the node kind.
+    const result = specToFigmaForCreate({ type: 'ELLIPSE' })
+    expect(result.type).toBe('ELLIPSE')
+  })
+
   it('uses type as name fallback when name is absent', () => {
     const result = specToFigmaForCreate({ type: 'FRAME' })
     expect(result.name).toBe('FRAME')

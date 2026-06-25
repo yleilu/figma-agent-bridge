@@ -296,12 +296,16 @@ export const specToFigma = (
 // ─── specToFigmaForCreate ─────────────────────────────────────────────────────
 
 /**
- * CREATE wrapper. Adds `name ?? type` fallback plus any create-only
- * scaffolding. Keep defaulting minimal — name fallback is the one firm rule.
+ * CREATE wrapper. Carries the discriminator `type` through (the plugin's
+ * createSingleNode switches on it to pick the Figma node kind — specToFigma
+ * itself never emits `type`, being a property-patch converter), and adds the
+ * `name ?? type` fallback. Keep defaulting minimal — type pass-through and the
+ * name fallback are the only firm create-only rules.
  */
 export const specToFigmaForCreate = (
   spec: NodeSpec,
 ): FigmaWritePayload => ({
   ...specToFigma(spec),
+  type: spec.type,
   name: spec.name ?? spec.type,
 })

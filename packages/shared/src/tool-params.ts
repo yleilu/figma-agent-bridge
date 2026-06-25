@@ -74,15 +74,41 @@ export const inspectParamsSchema = z.object({
 // ---------------------------------------------------------------------------
 
 /**
- * Params for `search`: flat, paginated node search.
- * Filtering is via the `match` field from the list mixin plus an optional
- * `pageId` to restrict the search to one page.
+ * Search scope: where the scan runs.
+ *   document  — every page (default)
+ *   page      — a single page (requires `pageId`)
+ *   node      — a node subtree (requires `nodeId`)
+ *   selection — the current selection's subtrees
+ */
+export const searchScopeSchema = z.enum([
+  'document',
+  'page',
+  'node',
+  'selection',
+])
+
+/**
+ * Params for `search`: flat, paginated node search (Rule A).
+ * `scope` selects where the plugin scans; the SERVER applies `match`
+ * (the list mixin), `fields` projection, and the opaque cursor + `limit`.
+ * `pageId` / `nodeId` qualify the page / node scopes respectively.
  */
 export const searchParamsSchema = z.object({
+  scope: searchScopeSchema
+    .optional()
+    .describe(
+      'Where to scan: document (default) | page | node | selection.',
+    ),
   pageId: z
     .string()
     .optional()
-    .describe('Restrict search to a specific page by ID.'),
+    .describe(
+      'Page to scan when scope=page (also restricts a document scan).',
+    ),
+  nodeId: z
+    .string()
+    .optional()
+    .describe('Node subtree to scan when scope=node.'),
   ...listReadParamsSchema.shape,
 })
 
@@ -92,6 +118,24 @@ export const searchParamsSchema = z.object({
 
 /** Params for `status`: no params — reads connection/document state. */
 export const statusParamsSchema = z.object({})
+
+/** Params for `get_selection`: no params — reads the current selection. */
+export const getSelectionParamsSchema = z.object({})
+
+/**
+ * Params for `list_pages`: document + page enumeration (Rule A; bounded).
+ * Only `cursor` from the list mixin is meaningful (no match/fields/limit
+ * filtering — the page set is naturally small and bounded).
+ */
+export const listPagesParamsSchema = z.object({
+  cursor: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Opaque resume token from a prior list_pages call.',
+    ),
+})
 
 /** Params for `set_selection`: replace the current Figma selection. */
 export const setSelectionParamsSchema = z.object({

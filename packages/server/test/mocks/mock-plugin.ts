@@ -65,6 +65,13 @@ export const createMockPlugin = (
         ]
         break
 
+      // set_selection: echo {selectedCount} = the number of ids passed.
+      case 'set_selection': {
+        const ids = (cmd.params?.nodeIds as string[]) ?? []
+        result = { selectedCount: ids.length }
+        break
+      }
+
       case 'get_node':
         result = cardFixture
         break
@@ -83,15 +90,19 @@ export const createMockPlugin = (
         result = pageLayoutFixture
         break
 
-      case 'get_pages':
-        result = [
-          {
-            id: 'page:1',
-            name: pageName,
-            isCurrent: true,
-            childCount: 3,
-          },
-        ]
+      // list_pages: Rule A document + page enumeration ({docName, results}).
+      case 'list_pages':
+        result = {
+          docName: documentName,
+          results: [
+            {
+              id: 'page:1',
+              name: pageName,
+              isCurrent: true,
+              childCount: 3,
+            },
+          ],
+        }
         break
 
       case 'get_styles':
@@ -102,20 +113,38 @@ export const createMockPlugin = (
         result = componentsFixture
         break
 
-      case 'search_nodes':
+      // search (Rule A): the plugin returns RAW candidate nodes; the SERVER
+      // applies match + fields + limit + cursor. We echo a small mixed-type
+      // candidate set so e2e can exercise the server-side match (incl. type
+      // array) and pagination.
+      case 'search':
         result = {
           results: [
             {
               id: '1:42',
               name: 'Card',
               type: 'FRAME',
-              page: pageName,
-              parent: 'Root [0:1]',
-              width: 320,
-              height: 200,
+              size: [320, 200],
+            },
+            {
+              id: '1:43',
+              name: 'Title',
+              type: 'TEXT',
+              size: [288, 24],
+            },
+            {
+              id: '1:44',
+              name: 'Body',
+              type: 'TEXT',
+              size: [288, 48],
+            },
+            {
+              id: '1:45',
+              name: 'Action Button',
+              type: 'INSTANCE',
+              size: [100, 40],
             },
           ],
-          truncated: false,
         }
         break
 
@@ -199,18 +228,21 @@ export const createMockPlugin = (
         break
       }
 
+      // create_node: the M2 handler sends {spec, parentId} (CONVERTED
+      // FigmaWritePayload — atom leaves parsed, name ?? type applied); the
+      // legacy M3-adjacent handler (tools/create.ts) still sends {node,…}.
+      // Accept either key so both create paths round-trip, echo the converted
+      // spec back for serialization assertions, and mirror the real plugin's
+      // {id,name,type,warnings} reply.
       case 'create_node': {
-        const nodeSpec = cmd.params?.node as
+        const nodeSpec = (cmd.params?.spec ??
+          cmd.params?.node) as
           | Record<string, unknown>
           | undefined
-        const parentId = cmd.params?.parentId as string
+        const parentId = cmd.params?.parentId as
+          | string
+          | undefined
         const nodeType = nodeSpec?.type as string
-        // Echo the received node spec back (serialized fills/
-        // effects/layout/strokes) so e2e tests can assert that the
-        // converted spec reached the plugin intact. SECTION nodes use
-        // MinimalFillsMixin (read-only fills); the real plugin guards
-        // before assigning, but echoing the spec is sufficient for
-        // serialization-regression coverage.
         const echo: Record<string, unknown> = {
           ...(nodeSpec ?? {}),
         }
@@ -221,6 +253,7 @@ export const createMockPlugin = (
           name: (nodeSpec?.name as string) ?? nodeType,
           type: nodeType,
           parentId,
+          warnings: [],
         }
         break
       }

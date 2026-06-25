@@ -826,12 +826,30 @@ const handleCommand = async (
         },
       }
 
-    case 'get_selection':
+    case COMMANDS.GET_SELECTION:
       return figma.currentPage.selection.map(node => ({
         id: node.id,
         name: node.name,
         type: node.type,
       }))
+
+    // set_selection: SELECTION ONLY (does not scroll — pair with set_focus).
+    // Resolves the ids to scene nodes on the current page; ids that don't
+    // resolve to a selectable scene node are skipped. Returns {selectedCount}.
+    case COMMANDS.SET_SELECTION: {
+      const ids = (params.nodeIds as string[]) ?? []
+      const nodes: SceneNode[] = []
+      for (const id of ids) {
+        const n = await figma.getNodeByIdAsync(id)
+        // Only scene nodes are selectable; `visible` is present on every
+        // SceneNode and absent on PAGE/DOCUMENT, so it's a sound guard.
+        if (n && 'visible' in n) {
+          nodes.push(n as SceneNode)
+        }
+      }
+      figma.currentPage.selection = nodes
+      return { selectedCount: nodes.length }
+    }
 
     case COMMANDS.GET_NODE: {
       const node = await figma.getNodeByIdAsync(
@@ -871,7 +889,10 @@ const handleCommand = async (
       return exportNodeDocument(target)
     }
 
-    case 'get_nodes': {
+    // get_nodes: one entry per id — a raw export (the same shape get_node /
+    // inspect return, which the server's toNodeSpec consumes) or {id, error}
+    // for a miss. The server splits them into {results, errors[]}.
+    case COMMANDS.GET_NODES: {
       const nodeIds = (params.nodeIds as string[]) || []
       return Promise.all(
         nodeIds.map(async nodeId => {
@@ -904,15 +925,20 @@ const handleCommand = async (
       }
     }
 
-    case 'get_pages':
-      return figma.root.children.map(page => ({
-        id: page.id,
-        name: page.name,
-        isCurrent: page.id === figma.currentPage.id,
-        childCount: page.children
-          ? page.children.length
-          : 0,
-      }))
+    // list_pages: document + page enumeration (Rule A; bounded). The server
+    // wraps this in { docName, results, truncated:false }.
+    case COMMANDS.LIST_PAGES:
+      return {
+        docName: figma.root.name,
+        results: figma.root.children.map(page => ({
+          id: page.id,
+          name: page.name,
+          isCurrent: page.id === figma.currentPage.id,
+          childCount: page.children
+            ? page.children.length
+            : 0,
+        })),
+      }
 
     case 'export_node': {
       const exportNode = (await figma.getNodeByIdAsync(
@@ -1144,83 +1170,112 @@ const handleCommand = async (
       return { local: localAll, remote: remoteAll }
     }
 
-    case 'search_nodes': {
-      const searchName = (params.name as string) || ''
-      const searchType = (params.type as string) || null
-      const searchPageId = (params.pageId as string) || null
-      const searchLimit = (params.limit as number) || 50
+    // search (Rule A): the plugin SCANS the requested scope and returns the RAW
+    // candidate nodes — it does NOT filter, project, or paginate. The SERVER
+    // owns match + fields + limit + cursor. We emit { results: [candidate…] }
+    // where each candidate carries the fields the server's matcher / projection
+    // read (id, name, type, size).
+    case COMMANDS.SEARCH: {
+      const scope = (params.scope as string) || 'document'
 
-      const searchPages: PageNode[] = []
-      if (searchPageId) {
-        const pageNode =
-          await figma.getNodeByIdAsync(searchPageId)
+      // Collect the root subtrees to scan based on scope. (selection scope
+      // builds its candidates directly below — no shared root.)
+      const roots: (BaseNode & ChildrenMixin)[] = []
+      if (scope === 'node') {
+        const target = await figma.getNodeByIdAsync(
+          params.nodeId as string,
+        )
+        if (target && 'findAll' in target) {
+          roots.push(target as BaseNode & ChildrenMixin)
+        }
+      } else if (scope === 'page') {
+        const pageNode = await figma.getNodeByIdAsync(
+          params.pageId as string,
+        )
         if (pageNode && pageNode.type === 'PAGE') {
-          searchPages.push(pageNode as PageNode)
+          roots.push(pageNode as PageNode)
         }
       } else {
-        for (const page of figma.root.children) {
-          searchPages.push(page)
+        // document (default): a page may be restricted via pageId.
+        const pageId = params.pageId as string | undefined
+        if (pageId) {
+          const pageNode =
+            await figma.getNodeByIdAsync(pageId)
+          if (pageNode && pageNode.type === 'PAGE') {
+            roots.push(pageNode as PageNode)
+          }
+        } else {
+          for (const page of figma.root.children) {
+            roots.push(page)
+          }
         }
       }
 
-      const globPattern = searchName
-        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-        .replace(/\*/g, '.*')
-      const nameRegex = searchName
-        ? new RegExp(globPattern, 'i')
-        : null
+      const toCandidate = (
+        fn: SceneNode,
+      ): Record<string, unknown> => ({
+        id: fn.id,
+        name: fn.name,
+        type: fn.type,
+        size:
+          'width' in fn && 'height' in fn
+            ? [
+                (fn as SceneNode & { width: number }).width,
+                (fn as SceneNode & { height: number })
+                  .height,
+              ]
+            : undefined,
+      })
 
-      const matches: unknown[] = []
-      for (const sp of searchPages) {
-        const found = sp.findAll(node => {
-          if (nameRegex && !nameRegex.test(node.name)) {
-            return false
+      const seen = new Set<string>()
+      const candidates: Record<string, unknown>[] = []
+
+      // selection scope: the selected nodes plus their subtrees.
+      if (scope === 'selection') {
+        for (const sel of figma.currentPage.selection) {
+          if (!seen.has(sel.id)) {
+            seen.add(sel.id)
+            candidates.push(toCandidate(sel))
           }
-          if (searchType && node.type !== searchType) {
-            return false
+          if ('findAll' in sel) {
+            for (const fn of (
+              sel as SceneNode & ChildrenMixin
+            ).findAll(() => true)) {
+              if (!seen.has(fn.id)) {
+                seen.add(fn.id)
+                candidates.push(toCandidate(fn))
+              }
+            }
           }
-          return true
-        })
-        for (const fn of found) {
-          if (matches.length >= searchLimit) {
-            break
-          }
-          matches.push({
-            id: fn.id,
-            name: fn.name,
-            type: fn.type,
-            page: sp.name,
-            parent: fn.parent
-              ? fn.parent.name + ' [' + fn.parent.id + ']'
-              : null,
-            width:
-              'width' in fn
-                ? (fn as SceneNode & { width: number })
-                    .width
-                : null,
-            height:
-              'height' in fn
-                ? (fn as SceneNode & { height: number })
-                    .height
-                : null,
-          })
         }
-        if (matches.length >= searchLimit) {
-          break
+      } else {
+        for (const root of roots) {
+          for (const fn of root.findAll(() => true)) {
+            if (!seen.has(fn.id)) {
+              seen.add(fn.id)
+              candidates.push(toCandidate(fn))
+            }
+          }
         }
       }
 
-      const truncated = matches.length >= searchLimit
-      return {
-        results: matches.slice(0, searchLimit),
-        truncated,
-      }
+      return { results: candidates }
     }
 
-    case 'create_node': {
-      const parentNode = await figma.getNodeByIdAsync(
-        params.parentId as string,
-      )
+    // create_node (M2 single-node): the spec is a FigmaWritePayload already
+    // converted on the server's grammar write face (atom leaves parsed; name
+    // fallback applied). Resolve parent (parentId, else the current page),
+    // create the node by type, apply via applyCommonProperties / (TEXT)
+    // applyTextProperties, append, then applyPostAppendProperties (FILL/ABSOLUTE
+    // ordering). Children are out of scope (the server strips them) — guard and
+    // warn if any slip through; never recurse. Returns {id,name,type,warnings}.
+    case COMMANDS.CREATE_NODE: {
+      const parentNode =
+        params.parentId !== undefined
+          ? await figma.getNodeByIdAsync(
+              params.parentId as string,
+            )
+          : figma.currentPage
       if (!parentNode || !('appendChild' in parentNode)) {
         return {
           error:
@@ -1228,16 +1283,24 @@ const handleCommand = async (
             params.parentId,
         }
       }
-      const parent = parentNode as
-        | FrameNode
-        | PageNode
-        | SectionNode
-      const spec = params.node as Record<string, unknown>
+      const parent = parentNode as ParentNode
+      const spec = params.spec as Record<string, unknown>
+      const warnings: string[] = []
+      if (
+        spec.children !== undefined &&
+        Array.isArray(spec.children) &&
+        (spec.children as unknown[]).length > 0
+      ) {
+        warnings.push(
+          'children ignored — create_node creates a single node; use create_tree (M3) for nested creation',
+        )
+      }
       const created = await createSingleNode(spec, parent)
       return {
         id: created.id,
         name: created.name,
         type: created.type,
+        warnings,
       }
     }
 

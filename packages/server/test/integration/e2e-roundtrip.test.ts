@@ -240,9 +240,9 @@ describe('M2 read tools e2e', () => {
     expect(result.content[0].text).toContain('local')
   })
 
-  it('search finds nodes by name pattern', async () => {
+  it('search finds nodes by name pattern (server-side match)', async () => {
     const result = await handleSearch(
-      { name: 'Card' },
+      { match: { name: 'Card' } },
       client,
     )
 
@@ -251,12 +251,14 @@ describe('M2 read tools e2e', () => {
     expect(result.content[0].text).toContain('Card')
   })
 
-  it('list_pages returns all pages in YAML', async () => {
+  it('list_pages returns the document + pages in YAML (Rule A)', async () => {
     const result = await handleListPages(client)
 
     expect(result.content).toHaveLength(1)
     expect(result.content[0].type).toBe('text')
-    expect(result.content[0].text).toContain('Homepage')
+    // The mock's page name is whatever pageName was passed to createMockPlugin.
+    expect(result.content[0].text).toContain('results')
+    expect(result.content[0].text).toContain('docName')
   })
 
   it('export PNG returns image with valid base64', async () => {

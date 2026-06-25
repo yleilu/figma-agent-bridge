@@ -8,21 +8,23 @@ import {
   inspectPageLayoutParamsSchema,
   inspectStylesParamsSchema,
   inspectComponentsParamsSchema,
-  searchParamsSchema,
-  getNodesParamsSchema,
-  listPagesParamsSchema,
   exportParamsSchema,
-  createNodeParamsSchema,
   createTreeParamsSchema,
   createComponentParamsSchema,
   createFromSvgParamsSchema,
 } from '@figma-agent-bridge/shared'
 import type { CreateTreeNodeSpec } from '@figma-agent-bridge/shared'
-// M2 slice param schemas live in tool-params (NOT the barrel — they shadow the
+// M2 param schemas live in tool-params (NOT the barrel — they shadow the
 // green-window schemas.ts versions still imported above for the old tools).
 import {
   getNodeParamsSchema,
+  getNodesParamsSchema,
   inspectParamsSchema,
+  searchParamsSchema,
+  listPagesParamsSchema,
+  getSelectionParamsSchema,
+  setSelectionParamsSchema,
+  createNodeParamsSchema,
   updateNodeParamsSchema,
   bindVariableParamsSchema,
   getVariablesParamsSchema,
@@ -48,10 +50,12 @@ import {
 import { handleUpdateNode } from './tools/update'
 import { handleSearch } from './tools/search'
 import { handleExport } from './tools/export'
+import { handleCreateNode } from './tools/create-node'
 import {
-  handleCreateNode,
-  handleCreateTree,
-} from './tools/create'
+  handleGetSelection,
+  handleSetSelection,
+} from './tools/selection'
+import { handleCreateTree } from './tools/create'
 import { handleCreateComponent } from './tools/create-component'
 import { handleCreateFromSvg } from './tools/create-svg'
 
@@ -121,14 +125,30 @@ server.tool(
 server.tool(
   'get_nodes',
   getNodesParamsSchema.shape,
-  async ({ nodeIds, depth }) =>
-    handleGetNodes({ nodeIds, depth }, client),
+  async ({ nodeIds, depth, fields, profile }) =>
+    handleGetNodes(
+      { nodeIds, depth, fields, profile },
+      client,
+    ),
 )
 
 server.tool(
   'list_pages',
   listPagesParamsSchema.shape,
   async () => handleListPages(client),
+)
+
+server.tool(
+  'get_selection',
+  getSelectionParamsSchema.shape,
+  async () => handleGetSelection(client),
+)
+
+server.tool(
+  'set_selection',
+  setSelectionParamsSchema.shape,
+  async ({ nodeIds }) =>
+    handleSetSelection({ nodeIds }, client),
 )
 
 server.tool(
@@ -143,8 +163,8 @@ server.tool(
   async params =>
     handleCreateNode(
       {
+        spec: params.spec,
         parentId: params.parentId,
-        node: params.node,
       },
       client,
     ),
