@@ -5,7 +5,6 @@ import {
   APP_VERSION,
   DEFAULT_PORT,
   connectParamsSchema,
-  createComponentParamsSchema,
   createFromSvgParamsSchema,
 } from '@figma-agent-bridge/shared'
 // M2 param schemas live in tool-params (NOT the barrel — they shadow the
@@ -44,6 +43,11 @@ import {
   reorderChildrenParamsSchema,
   booleanOpParamsSchema,
   flattenParamsSchema,
+  createComponentParamsSchema,
+  updateComponentParamsSchema,
+  combineVariantsParamsSchema,
+  swapComponentParamsSchema,
+  setInstanceParamsSchema,
 } from '@figma-agent-bridge/shared/tool-params'
 import { createFigmaClient } from './figma-client'
 import {
@@ -95,7 +99,13 @@ import {
   handleSetSelection,
 } from './tools/selection'
 import { handleCreateTree } from './tools/create-tree'
-import { handleCreateComponent } from './tools/create-component'
+import {
+  handleCreateComponent,
+  handleUpdateComponent,
+  handleCombineVariants,
+  handleSwapComponent,
+  handleSetInstance,
+} from './tools/components'
 import { handleCreateFromSvg } from './tools/create-svg'
 
 const server = new McpServer({
@@ -247,13 +257,37 @@ server.tool(
     handleCreateComponent(
       {
         nodeId: params.nodeId,
-        nodeIds: params.nodeIds,
-        combineAsVariants: params.combineAsVariants,
-        slots: params.slots,
-        componentProperties: params.componentProperties,
+        spec: params.spec,
+        parentId: params.parentId,
+        name: params.name,
+        description: params.description,
       },
       client,
     ),
+)
+
+server.tool(
+  'update_component',
+  updateComponentParamsSchema.shape,
+  async params => handleUpdateComponent(params, client),
+)
+
+server.tool(
+  'combine_variants',
+  combineVariantsParamsSchema.shape,
+  async params => handleCombineVariants(params, client),
+)
+
+server.tool(
+  'swap_component',
+  swapComponentParamsSchema.shape,
+  async params => handleSwapComponent(params, client),
+)
+
+server.tool(
+  'set_instance',
+  setInstanceParamsSchema.shape,
+  async params => handleSetInstance(params, client),
 )
 
 server.tool(

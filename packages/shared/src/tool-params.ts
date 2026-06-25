@@ -560,3 +560,165 @@ export const exportParamsSchema = z.object({
       'Raster scale factor (default 1; ignored for SVG/PDF).',
     ),
 })
+
+// ---------------------------------------------------------------------------
+// Write tools — components & instances
+// ---------------------------------------------------------------------------
+
+/**
+ * Params for `create_component`: promote a node and/or build from a NodeSpec,
+ * then componentize. Supply EXACTLY ONE source: `nodeId` (an existing node to
+ * promote) OR `spec` (a NodeSpec to create first, then promote). The handler
+ * validates that exactly one is present.
+ */
+export const createComponentParamsSchema = z.object({
+  nodeId: z
+    .string()
+    .optional()
+    .describe(
+      'Existing node to componentize via createComponentFromNode(). Provide this OR spec, not both.',
+    ),
+  spec: nodeSpecSchema
+    .optional()
+    .describe(
+      'A NodeSpec to create first (via the create path), then componentize. Provide this OR nodeId, not both.',
+    ),
+  parentId: z
+    .string()
+    .optional()
+    .describe(
+      'When building from spec, the parent to create under. Omit for the current page.',
+    ),
+  name: z
+    .string()
+    .optional()
+    .describe('Name for the resulting component.'),
+  description: z
+    .string()
+    .optional()
+    .describe('Description for the resulting component.'),
+})
+
+/** A single component-property definition to add (BOOLEAN/TEXT/INSTANCE_SWAP/SLOT). */
+export const componentPropertyDefSchema = z.object({
+  name: z.string().describe('Property name.'),
+  type: z
+    .enum(['BOOLEAN', 'TEXT', 'INSTANCE_SWAP', 'SLOT'])
+    .describe('Property type.'),
+  defaultValue: z
+    .union([z.string(), z.boolean()])
+    .describe(
+      'Default value (boolean for BOOLEAN, string for TEXT, component key for INSTANCE_SWAP, "" for SLOT).',
+    ),
+})
+
+/** A single component-property edit (rename / change default). */
+export const componentPropertyEditSchema = z.object({
+  name: z
+    .string()
+    .describe('Existing property name to edit.'),
+  newName: z
+    .string()
+    .optional()
+    .describe('Rename the property.'),
+  defaultValue: z
+    .union([z.string(), z.boolean()])
+    .optional()
+    .describe('New default value.'),
+})
+
+/**
+ * Params for `update_component`: add/edit/delete componentPropertyDefinitions,
+ * set the description, and (T7-gated) expose nested instances.
+ */
+export const updateComponentParamsSchema = z.object({
+  componentId: z
+    .string()
+    .describe(
+      'ID of the component (or component set) to update.',
+    ),
+  add: z
+    .array(componentPropertyDefSchema)
+    .optional()
+    .describe('Property definitions to add.'),
+  edit: z
+    .array(componentPropertyEditSchema)
+    .optional()
+    .describe(
+      'Property definitions to edit (rename / new default).',
+    ),
+  delete: z
+    .array(z.string())
+    .optional()
+    .describe('Property names to delete.'),
+  description: z
+    .string()
+    .optional()
+    .describe('New description for the component.'),
+  expose: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Nested instance node IDs to expose (T7-gated: degrades with a warning if unsupported).',
+    ),
+})
+
+/** Params for `combine_variants`: combine ≥2 components into a variant set. */
+export const combineVariantsParamsSchema = z.object({
+  componentIds: z
+    .array(z.string())
+    .min(2)
+    .describe('Component IDs to combine (at least 2).'),
+  parentId: z
+    .string()
+    .optional()
+    .describe(
+      "Parent for the resulting set. Omit to use the first component's parent.",
+    ),
+  name: z
+    .string()
+    .optional()
+    .describe('Name for the resulting component set.'),
+})
+
+/** Params for `swap_component`: point an instance at a different main component. */
+export const swapComponentParamsSchema = z.object({
+  instanceId: z
+    .string()
+    .describe('ID of the instance to swap.'),
+  mainComponentId: z
+    .string()
+    .describe('ID of the component to swap to.'),
+})
+
+/**
+ * Params for `set_instance`: set instance properties (variant + BOOLEAN / TEXT /
+ * INSTANCE_SWAP) and/or apply per-node overrides.
+ */
+export const setInstanceParamsSchema = z.object({
+  instanceId: z
+    .string()
+    .describe('ID of the instance to configure.'),
+  properties: z
+    .record(z.union([z.string(), z.boolean()]))
+    .optional()
+    .describe(
+      'Property values to set via setProperties (variant + BOOLEAN/TEXT/INSTANCE_SWAP).',
+    ),
+  overrides: z
+    .array(
+      z.object({
+        path: z
+          .string()
+          .describe('Override target node id / path.'),
+        field: z.string().describe('Field to override.'),
+        value: z
+          .string()
+          .describe('Override value (atom string).'),
+      }),
+    )
+    .optional()
+    .describe(
+      'Per-node overrides (NOT YET APPLIED — currently degrades with a warning).',
+    ),
+})

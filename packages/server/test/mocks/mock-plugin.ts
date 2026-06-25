@@ -593,10 +593,14 @@ export const createMockPlugin = (
         break
       }
 
+      // create_component: the M3-B rebuild promotes nodeId OR builds-from-spec
+      // then componentizes, echoing {id,key,name,type} + the converted spec so
+      // the e2e can assert the spec atoms were parsed server-side. The LEGACY
+      // create-component path (green-window: tools/create-component.ts is
+      // orphaned-but-present) still sends the old {combineAsVariants,nodeIds} /
+      // {slots} shapes — keep those branches so its e2e suite stays green until
+      // the old importer is deleted.
       case 'create_component': {
-        const compNodeId = cmd.params?.nodeId as
-          | string
-          | undefined
         const compNodeIds = cmd.params?.nodeIds as
           | string[]
           | undefined
@@ -606,7 +610,17 @@ export const createMockPlugin = (
         const slots = cmd.params?.slots as
           | string[]
           | undefined
+        const ccSpec = cmd.params?.spec as
+          | Record<string, unknown>
+          | undefined
+        const ccNodeId = cmd.params?.nodeId as
+          | string
+          | undefined
+        const ccName = cmd.params?.name as
+          | string
+          | undefined
         if (combine && compNodeIds) {
+          // legacy combineAsVariants path
           result = {
             id: `cs:${Math.random().toString(36).slice(2, 8)}`,
             name: 'VariantSet',
@@ -614,10 +628,10 @@ export const createMockPlugin = (
             key: `key:${Math.random().toString(36).slice(2, 8)}`,
           }
         } else if (slots && slots.length > 0) {
-          // Mock: createSlot is not available in test environment
+          // legacy slots path: createSlot is not available in the mock
           result = {
             id:
-              compNodeId ??
+              ccNodeId ??
               `comp:${Math.random().toString(36).slice(2, 8)}`,
             name: 'Component',
             type: 'COMPONENT',
@@ -626,14 +640,166 @@ export const createMockPlugin = (
               'createSlot is not available in this Figma version; requested slots were not created.',
           }
         } else {
+          // M3-B rebuild path
           result = {
-            id:
-              compNodeId ??
-              `comp:${Math.random().toString(36).slice(2, 8)}`,
-            name: 'Component',
-            type: 'COMPONENT',
+            id: `comp:${Math.random().toString(36).slice(2, 8)}`,
             key: `key:${Math.random().toString(36).slice(2, 8)}`,
+            name:
+              ccName ??
+              (ccSpec?.name as string) ??
+              'Component',
+            type: 'COMPONENT',
+            // echo the converted spec / source so tests can assert conversion + routing
+            spec: ccSpec,
+            sourceNodeId: ccNodeId,
           }
+        }
+        break
+      }
+
+      // update_component: echo {id, propertyDefinitions, added, warnings}. An
+      // `expose` list degrades (warn, never error) — exposeNestedInstances is
+      // gated. addComponentProperty returns a CANONICAL id (`<name>#<suffix>`)
+      // that agents need for later setProperties, so the mock mirrors the real
+      // plugin by keying defs on that id and surfacing `added: [{name,id}]`.
+      case 'update_component': {
+        const ucId = cmd.params?.componentId as string
+        const ucAdd = cmd.params?.add as
+          | {
+              name: string
+              type: string
+              defaultValue: string | boolean
+            }[]
+          | undefined
+        const ucExpose = cmd.params?.expose as
+          | string[]
+          | undefined
+        const ucWarnings: string[] = []
+        const defs: Record<string, unknown> = {}
+        const added: { name: string; id: string }[] = []
+        if (ucAdd) {
+          for (const p of ucAdd) {
+            const propId = `${p.name}#1:0`
+            defs[propId] = {
+              type: p.type,
+              defaultValue: p.defaultValue,
+            }
+            added.push({ name: p.name, id: propId })
+          }
+        }
+        if (ucExpose && ucExpose.length > 0) {
+          ucWarnings.push(
+            'exposeNestedInstances unavailable in this Figma version; expose skipped',
+          )
+        }
+        result = {
+          id: ucId,
+          propertyDefinitions: defs,
+          added,
+          warnings: ucWarnings,
+        }
+        break
+      }
+
+      // combine_variants: ids that aren't valid COMPONENTs are DROPPED with a
+      // warning (honest partial success — never silently swallowed), mirroring
+      // the real plugin. ≥2 SURVIVORS → a COMPONENT_SET; <2 → error (guarded
+      // server-side too). The mock treats `bad:`-prefixed ids as not-a-component.
+      case 'combine_variants': {
+        const cvIds =
+          (cmd.params?.componentIds as string[]) ?? []
+        const cvWarnings: string[] = []
+        const cvDropped = cvIds.filter(id =>
+          id.startsWith('bad:'),
+        )
+        const cvKept = cvIds.filter(
+          id => !id.startsWith('bad:'),
+        )
+        if (cvDropped.length > 0) {
+          cvWarnings.push(
+            'combine_variants ignored ' +
+              cvDropped.length +
+              ' id(s) that are not a COMPONENT: ' +
+              cvDropped.join(', '),
+          )
+        }
+        if (cvKept.length < 2) {
+          error =
+            'Need at least 2 components for combine_variants'
+          break
+        }
+        // A `nogood:` parent can't bear children → fall back to the first
+        // component's parent, but REPORT it (no silent fallback), mirroring the
+        // real plugin.
+        const cvParentId = cmd.params?.parentId as
+          | string
+          | undefined
+        if (cvParentId?.startsWith('nogood:')) {
+          cvWarnings.push(
+            'Requested parent "' +
+              cvParentId +
+              '" cannot contain the variant set; used the first component\'s parent instead.',
+          )
+        }
+        result = {
+          id: `cs:${Math.random().toString(36).slice(2, 8)}`,
+          name:
+            (cmd.params?.name as string) ?? 'VariantSet',
+          type: 'COMPONENT_SET',
+          variantAxes: { Variant: { values: ['Default'] } },
+          warnings: cvWarnings,
+        }
+        break
+      }
+
+      // swap_component: echo {id, mainComponent, warnings}. instanceId
+      // `degrade:` → swap warns (T7), success not error. On a FAILED swap the
+      // real plugin re-reads getMainComponentAsync() → the ORIGINAL main (the
+      // swap never took), so the mock echoes the original main here too, NOT the
+      // requested target. We derive the original id from the instance id
+      // (`degrade:i9` → `orig:i9`) so it is deterministic and assertable.
+      case 'swap_component': {
+        const scId = cmd.params?.instanceId as string
+        const scMain = cmd.params?.mainComponentId as string
+        const scWarnings: string[] = []
+        const degraded = scId?.startsWith('degrade:')
+        if (degraded) {
+          scWarnings.push(
+            'swapComponent failed: feature unavailable',
+          )
+        }
+        result = {
+          id: scId,
+          mainComponent: degraded
+            ? 'orig:' + scId.slice('degrade:'.length)
+            : scMain,
+          warnings: scWarnings,
+        }
+        break
+      }
+
+      // set_instance: echo {id, componentProperties, warnings}. overrides → warn
+      // (not applied); properties echoed back as componentProperties.
+      case 'set_instance': {
+        const siId = cmd.params?.instanceId as string
+        const siProps = cmd.params?.properties as
+          | Record<string, string | boolean>
+          | undefined
+        const siOverrides = cmd.params?.overrides as
+          | unknown[]
+          | undefined
+        const siWarnings: string[] = []
+        if (siOverrides && siOverrides.length > 0) {
+          siWarnings.push(
+            'Per-node overrides are not yet applied; ' +
+              siOverrides.length +
+              ' override(s) skipped',
+          )
+        }
+        result = {
+          id: siId,
+          componentProperties: siProps ?? {},
+          warnings: siWarnings,
         }
         break
       }

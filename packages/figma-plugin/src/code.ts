@@ -1387,88 +1387,370 @@ const handleCommand = async (
       }
     }
 
-    case 'create_component': {
-      if (params.combineAsVariants && params.nodeIds) {
-        const compNodes: ComponentNode[] = []
-        for (const nid of params.nodeIds as string[]) {
-          const n = await figma.getNodeByIdAsync(nid)
-          if (n && n.type === 'COMPONENT') {
-            compNodes.push(n as ComponentNode)
-          }
-        }
-        if (compNodes.length < 2) {
-          return {
-            error:
-              'Need at least 2 components for combineAsVariants',
-          }
-        }
-        const compParent = compNodes[0].parent as BaseNode &
-          ChildrenMixin
-        const cs = figma.combineAsVariants(
-          compNodes,
-          compParent,
+    // create_component (M3-B rebuild): supply EXACTLY ONE source — `spec` (a
+    // NodeSpec built first via createSingleNode, then componentized) OR `nodeId`
+    // (promote an existing node via createComponentFromNode). The server has
+    // already validated the XOR and converted the spec on the grammar write
+    // face. Returns {id,key,name,type}.
+    case COMMANDS.CREATE_COMPONENT: {
+      const ccName = params.name as string | undefined
+      const ccDescription = params.description as
+        | string
+        | undefined
+      let sourceNode: SceneNode
+      const ccSpec = params.spec as
+        | Record<string, unknown>
+        | undefined
+      if (ccSpec !== undefined) {
+        // Build from NodeSpec first, then componentize. Resolve parentId if
+        // supplied and able to host children; else use the current page.
+        const ccParentNode =
+          params.parentId !== undefined
+            ? await figma.getNodeByIdAsync(
+                params.parentId as string,
+              )
+            : null
+        const ccParent =
+          ccParentNode && 'appendChild' in ccParentNode
+            ? (ccParentNode as ParentNode)
+            : figma.currentPage
+        sourceNode = await createSingleNode(
+          ccSpec,
+          ccParent,
         )
+      } else {
+        const found = await figma.getNodeByIdAsync(
+          params.nodeId as string,
+        )
+        if (!found) {
+          return {
+            error: 'Node not found: ' + params.nodeId,
+          }
+        }
+        sourceNode = found as SceneNode
+      }
+      const comp = figma.createComponentFromNode(sourceNode)
+      if (ccName !== undefined) comp.name = ccName
+      if (ccDescription !== undefined)
+        comp.description = ccDescription
+      return {
+        id: comp.id,
+        key: comp.key,
+        name: comp.name,
+        type: comp.type,
+      }
+    }
+
+    // update_component: add/edit/delete componentPropertyDefinitions, set the
+    // description, and (T7-gated) expose nested instances. Each step is wrapped
+    // so a single failure degrades into a warning rather than aborting the rest.
+    case COMMANDS.UPDATE_COMPONENT: {
+      const compNode = await figma.getNodeByIdAsync(
+        params.componentId as string,
+      )
+      if (!compNode) {
         return {
-          id: cs.id,
-          name: cs.name,
-          type: cs.type,
-          key: cs.key,
+          error:
+            'Component not found: ' + params.componentId,
         }
       }
-      const nodeToPromote = await figma.getNodeByIdAsync(
-        params.nodeId as string,
-      )
-      if (!nodeToPromote) {
-        return { error: 'Node not found: ' + params.nodeId }
+      if (
+        compNode.type !== 'COMPONENT' &&
+        compNode.type !== 'COMPONENT_SET'
+      ) {
+        return {
+          error:
+            'Node is not a component or component set: ' +
+            params.componentId,
+        }
       }
-      const comp = figma.createComponentFromNode(
-        nodeToPromote as SceneNode,
-      )
+      const comp = compNode as
+        | ComponentNode
+        | ComponentSetNode
+      const ucWarnings: string[] = []
+      // add. addComponentProperty returns the CANONICAL property id
+      // (e.g. "Label#1:0") that agents need for later setProperties — surface
+      // each {name,id} rather than discarding it.
+      const ucAdded: { name: string; id: string }[] = []
+      const addProps = params.add as
+        | {
+            name: string
+            type: string
+            defaultValue: string | boolean
+          }[]
+        | undefined
+      if (addProps) {
+        for (const p of addProps) {
+          try {
+            const propId = comp.addComponentProperty(
+              p.name,
+              p.type as ComponentPropertyType,
+              p.defaultValue,
+            )
+            ucAdded.push({ name: p.name, id: propId })
+          } catch (e) {
+            ucWarnings.push(
+              'Failed to add property "' +
+                p.name +
+                '": ' +
+                String(e),
+            )
+          }
+        }
+      }
+      // edit
+      const editProps = params.edit as
+        | {
+            name: string
+            newName?: string
+            defaultValue?: string | boolean
+          }[]
+        | undefined
+      if (editProps) {
+        for (const p of editProps) {
+          try {
+            const opts: {
+              name?: string
+              defaultValue?: string | boolean
+            } = {}
+            if (p.newName !== undefined)
+              opts.name = p.newName
+            if (p.defaultValue !== undefined)
+              opts.defaultValue = p.defaultValue
+            comp.editComponentProperty(p.name, opts)
+          } catch (e) {
+            ucWarnings.push(
+              'Failed to edit property "' +
+                p.name +
+                '": ' +
+                String(e),
+            )
+          }
+        }
+      }
+      // delete
+      const delProps = params.delete as string[] | undefined
+      if (delProps) {
+        for (const name of delProps) {
+          try {
+            comp.deleteComponentProperty(name)
+          } catch (e) {
+            ucWarnings.push(
+              'Failed to delete property "' +
+                name +
+                '": ' +
+                String(e),
+            )
+          }
+        }
+      }
+      // description
+      if (params.description !== undefined) {
+        comp.description = params.description as string
+      }
+      // expose nested instances (T7-gated)
+      const exposeIds = params.expose as
+        | string[]
+        | undefined
+      if (exposeIds && exposeIds.length > 0) {
+        for (const eid of exposeIds) {
+          const en = await figma.getNodeByIdAsync(eid)
+          const exposable = en as
+            | (InstanceNode & {
+                isExposedInstance?: boolean
+              })
+            | null
+          if (
+            exposable &&
+            'isExposedInstance' in exposable
+          ) {
+            try {
+              ;(
+                exposable as { isExposedInstance: boolean }
+              ).isExposedInstance = true
+            } catch (e) {
+              ucWarnings.push(
+                'Failed to expose instance "' +
+                  eid +
+                  '": ' +
+                  String(e),
+              )
+            }
+          } else {
+            ucWarnings.push(
+              'exposeNestedInstances unavailable for "' +
+                eid +
+                '"; expose skipped',
+            )
+          }
+        }
+      }
+      return {
+        id: comp.id,
+        propertyDefinitions:
+          comp.componentPropertyDefinitions,
+        added: ucAdded,
+        warnings: ucWarnings,
+      }
+    }
 
-      // Add component properties if specified (before slots, so they always run)
-      const componentProperties =
-        params.componentProperties as
-          | {
-              name: string
-              type: string
-              default: string | boolean
-            }[]
-          | undefined
-      if (componentProperties) {
-        for (const prop of componentProperties) {
-          comp.addComponentProperty(
-            prop.name,
-            prop.type as ComponentPropertyType,
-            prop.default,
+    // combine_variants: combine ≥2 components into a variant set. Resolves the
+    // parent (parentId else the first component's parent) and combines. Ids that
+    // aren't found / aren't a COMPONENT are DROPPED with a warning (honest
+    // partial success — never silently swallowed); a requested parent that can't
+    // bear children is also reported rather than silently ignored.
+    case COMMANDS.COMBINE_VARIANTS: {
+      const cvIds = (params.componentIds as string[]) ?? []
+      const cvComps: ComponentNode[] = []
+      const cvDropped: string[] = []
+      const cvWarnings: string[] = []
+      for (const cid of cvIds) {
+        const n = await figma.getNodeByIdAsync(cid)
+        if (n && n.type === 'COMPONENT') {
+          cvComps.push(n as ComponentNode)
+        } else {
+          cvDropped.push(cid)
+        }
+      }
+      if (cvDropped.length > 0) {
+        cvWarnings.push(
+          'combine_variants ignored ' +
+            cvDropped.length +
+            ' id(s) that are not a COMPONENT: ' +
+            cvDropped.join(', '),
+        )
+      }
+      if (cvComps.length < 2) {
+        return {
+          error:
+            'Need at least 2 components for combine_variants',
+        }
+      }
+      const cvParentNode =
+        params.parentId !== undefined
+          ? await figma.getNodeByIdAsync(
+              params.parentId as string,
+            )
+          : cvComps[0].parent
+      let cvParent: BaseNode & ChildrenMixin
+      if (cvParentNode && 'appendChild' in cvParentNode) {
+        cvParent = cvParentNode as BaseNode & ChildrenMixin
+      } else {
+        if (params.parentId !== undefined) {
+          cvWarnings.push(
+            'Requested parent "' +
+              String(params.parentId) +
+              '" cannot contain the variant set; used the first component\'s parent instead.',
+          )
+        }
+        cvParent = cvComps[0].parent as BaseNode &
+          ChildrenMixin
+      }
+      const cs = figma.combineAsVariants(cvComps, cvParent)
+      if (params.name !== undefined)
+        cs.name = params.name as string
+      return {
+        id: cs.id,
+        name: cs.name,
+        type: cs.type,
+        variantAxes: cs.variantGroupProperties,
+        warnings: cvWarnings,
+      }
+    }
+
+    // swap_component: point an instance at a different main component. swap
+    // failures degrade into a warning (T7) — never throw.
+    case COMMANDS.SWAP_COMPONENT: {
+      const scInst = await figma.getNodeByIdAsync(
+        params.instanceId as string,
+      )
+      if (!scInst) {
+        return {
+          error: 'Instance not found: ' + params.instanceId,
+        }
+      }
+      if (scInst.type !== 'INSTANCE') {
+        return {
+          error:
+            'Node is not an instance: ' + params.instanceId,
+        }
+      }
+      const scMain = await figma.getNodeByIdAsync(
+        params.mainComponentId as string,
+      )
+      if (!scMain || scMain.type !== 'COMPONENT') {
+        return {
+          error:
+            'Main component not found: ' +
+            params.mainComponentId,
+        }
+      }
+      const scWarnings: string[] = []
+      const inst = scInst as InstanceNode
+      try {
+        inst.swapComponent(scMain as ComponentNode)
+      } catch (e) {
+        scWarnings.push(
+          'swapComponent failed: ' + String(e),
+        )
+      }
+      const swapped = await inst
+        .getMainComponentAsync()
+        .catch(() => null)
+      return {
+        id: inst.id,
+        mainComponent: swapped ? swapped.id : scMain.id,
+        warnings: scWarnings,
+      }
+    }
+
+    // set_instance: set instance properties via setProperties and/or apply
+    // per-node overrides. setProperties failures degrade (T7); per-node override
+    // application is limited via the plugin API → warn rather than fail.
+    case COMMANDS.SET_INSTANCE: {
+      const siInst = await figma.getNodeByIdAsync(
+        params.instanceId as string,
+      )
+      if (!siInst) {
+        return {
+          error: 'Instance not found: ' + params.instanceId,
+        }
+      }
+      if (siInst.type !== 'INSTANCE') {
+        return {
+          error:
+            'Node is not an instance: ' + params.instanceId,
+        }
+      }
+      const inst2 = siInst as InstanceNode
+      const siWarnings: string[] = []
+      const siProps = params.properties as
+        | Record<string, string | boolean>
+        | undefined
+      if (siProps && Object.keys(siProps).length > 0) {
+        try {
+          inst2.setProperties(siProps)
+        } catch (e) {
+          siWarnings.push(
+            'setProperties failed: ' + String(e),
           )
         }
       }
-
-      // Create slots if specified
-      const slots = params.slots as string[] | undefined
-      let slotWarning: string | undefined
-      if (slots) {
-        const compWithSlot = comp as ComponentNode & {
-          createSlot?: (name: string) => void
-        }
-        if (compWithSlot.createSlot) {
-          for (const slotName of slots) {
-            compWithSlot.createSlot(slotName)
-          }
-        } else {
-          slotWarning =
-            'createSlot is not available in this Figma version; requested slots were not created.'
-        }
+      const siOverrides = params.overrides as
+        | { path: string; field: string; value: string }[]
+        | undefined
+      if (siOverrides && siOverrides.length > 0) {
+        siWarnings.push(
+          'Per-node overrides are not yet applied; ' +
+            siOverrides.length +
+            ' override(s) skipped',
+        )
       }
-
-      const result: Record<string, unknown> = {
-        id: comp.id,
-        name: comp.name,
-        type: comp.type,
-        key: comp.key,
+      return {
+        id: inst2.id,
+        componentProperties: inst2.componentProperties,
+        warnings: siWarnings,
       }
-      if (slotWarning) result.warning = slotWarning
-      return result
     }
 
     case COMMANDS.CREATE_FROM_SVG: {
