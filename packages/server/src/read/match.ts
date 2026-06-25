@@ -1,0 +1,111 @@
+// match.ts — predicate builder for NodeSpec filtering.
+//
+// All predicates compose with AND semantics (every present field must match).
+// An empty match {} matches everything.
+//
+// For componentKey, styleId, variableId, instancesOf: these fields are NOT
+// present on NodeSpec directly. The read layer must populate them as augmented
+// fields before filtering. The MatchableNode type (NodeSpec + extra fields)
+// is used internally; callers pass NodeSpec and the guards read the extras
+// via `(n as any).field`. This is documented so P1 wiring can populate them.
+
+import type { NodeSpec } from '@figma-agent-bridge/shared/node-spec'
+import type { Match } from '@figma-agent-bridge/shared/read-model'
+
+/**
+ * Augmented NodeSpec with optional extra fields the matcher can test.
+ * The read layer must populate these before calling the matcher.
+ *   componentKey — the component definition key (from Figma API)
+ *   styleId      — a style reference id (from Figma API)
+ *   variableId   — a variable id (from Figma API)
+ *   instancesOf  — the component name this INSTANCE is an instance of
+ */
+type MatchableNode = NodeSpec & {
+  componentKey?: string
+  styleId?: string
+  variableId?: string
+  instancesOf?: string
+}
+
+/** Convert a glob pattern (supports * wildcard) to an anchored RegExp. */
+const globToRegex = (glob: string): RegExp => {
+  const escaped = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+  const pattern = escaped.replace(/\*/g, '.*')
+  return new RegExp(`^${pattern}$`)
+}
+
+/**
+ * Build a composed AND predicate from a Match spec.
+ * Returns a function that tests a NodeSpec (cast to MatchableNode internally).
+ *
+ * The returned predicate never throws on any node shape.
+ */
+export const buildMatcher = (
+  m: Match,
+): ((n: NodeSpec) => boolean) => {
+  const predicates: ((n: MatchableNode) => boolean)[] = []
+
+  if (m.name !== undefined) {
+    const re = globToRegex(m.name)
+    predicates.push(n => re.test(n.name ?? ''))
+  }
+
+  if (m.regex !== undefined) {
+    // Build the RegExp defensively. matchSchema.regex compile-checks the
+    // pattern at parse time, but buildMatcher can be reached by callers that
+    // bypass the schema, so we guard here too. On a bad pattern we throw a
+    // typed validation error — NOT a silent match-all (which would over-return
+    // and quietly hide the agent's mistake) and NOT a raw SyntaxError.
+    let re: RegExp
+    try {
+      re = new RegExp(m.regex)
+    } catch (err) {
+      const detail =
+        err instanceof Error ? `: ${err.message}` : ''
+      throw new Error(
+        `match.regex: invalid regex pattern ${JSON.stringify(m.regex)}${detail}`,
+      )
+    }
+    predicates.push(n => re.test(n.name ?? ''))
+  }
+
+  if (m.type !== undefined) {
+    if (Array.isArray(m.type)) {
+      const types = new Set(m.type)
+      predicates.push(n => types.has(n.type))
+    } else {
+      const t = m.type
+      predicates.push(n => n.type === t)
+    }
+  }
+
+  if (m.componentKey !== undefined) {
+    const ck = m.componentKey
+    predicates.push(n => n.componentKey === ck)
+  }
+
+  if (m.styleId !== undefined) {
+    const sid = m.styleId
+    predicates.push(n => n.styleId === sid)
+  }
+
+  if (m.variableId !== undefined) {
+    const vid = m.variableId
+    predicates.push(n => n.variableId === vid)
+  }
+
+  if (m.instancesOf !== undefined) {
+    const compName = m.instancesOf
+    predicates.push(
+      n =>
+        n.type === 'INSTANCE' && n.instancesOf === compName,
+    )
+  }
+
+  // Compose all predicates with AND semantics.
+  // Empty predicates list (empty match {}) → always true.
+  return (n: NodeSpec): boolean => {
+    const mn = n as MatchableNode
+    return predicates.every(pred => pred(mn))
+  }
+}

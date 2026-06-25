@@ -14,6 +14,7 @@
 // the Equal<> guard (`bun run typecheck` is the gate).
 
 import { z } from 'zod'
+import type { NodeSpecOrStub } from './node-spec'
 
 // An opaque, self-contained resume token. The agent receives it from a
 // read response and passes it back verbatim; the server decodes it (the
@@ -38,7 +39,25 @@ export const profileSchema = z.enum([
 // everything. `type` accepts a single string or an array (any-of).
 export const matchSchema = z.object({
   name: z.string().optional(),
-  regex: z.string().optional(),
+  // `regex` is compile-checked here so a malformed pattern is rejected as a
+  // typed validation error at parse time (not later as a raw SyntaxError, and
+  // never silently degraded to match-all). The runtime matcher
+  // (read/match.ts) also guards defensively for callers that bypass the schema.
+  regex: z
+    .string()
+    .refine(
+      pattern => {
+        try {
+          // Compile-check only — the value is discarded.
+          void new RegExp(pattern)
+          return true
+        } catch {
+          return false
+        }
+      },
+      { message: 'invalid regex pattern' },
+    )
+    .optional(),
   type: z
     .union([z.string(), z.array(z.string())])
     .optional(),
@@ -87,3 +106,18 @@ export type TreeReadParams = z.infer<
 export type ListReadParams = z.infer<
   typeof listReadParamsSchema
 >
+
+// The result of a truncated-tree read: the view (root with stubs at
+// the depth/budget boundary) plus the receipt of what was cut.
+export type TreeResult = {
+  view: NodeSpecOrStub
+  truncated: TruncationReceipt
+}
+
+// The result of a flat, paginated list read. `cursor` is present only
+// when there are more results after this page.
+export type ListResult<T> = {
+  results: T[]
+  truncated: boolean
+  cursor?: string
+}

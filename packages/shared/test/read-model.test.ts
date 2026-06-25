@@ -81,6 +81,20 @@ describe('matchSchema', () => {
       matchSchema.safeParse({ type: 42 }).success,
     ).toBe(false)
   })
+
+  it('accepts a valid regex pattern', () => {
+    expect(
+      matchSchema.safeParse({ regex: '^Card\\d+$' })
+        .success,
+    ).toBe(true)
+  })
+
+  it('rejects a malformed regex pattern', () => {
+    expect(
+      matchSchema.safeParse({ regex: '[unterminated' })
+        .success,
+    ).toBe(false)
+  })
 })
 
 describe('fieldsSchema', () => {
