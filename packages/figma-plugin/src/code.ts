@@ -905,26 +905,6 @@ const handleCommand = async (
       )
     }
 
-    case 'get_page_layout': {
-      return {
-        pageName: figma.currentPage.name,
-        frames: figma.currentPage.children.map(frame => ({
-          id: frame.id,
-          name: frame.name,
-          type: frame.type,
-          x: frame.x,
-          y: frame.y,
-          width: frame.width,
-          height: frame.height,
-          childCount:
-            'children' in frame
-              ? (frame as SceneNode & ChildrenMixin)
-                  .children.length
-              : 0,
-        })),
-      }
-    }
-
     // list_pages: document + page enumeration (Rule A; bounded). The server
     // wraps this in { docName, results, truncated:false }.
     case COMMANDS.LIST_PAGES:

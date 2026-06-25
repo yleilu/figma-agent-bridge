@@ -9,7 +9,6 @@ import type {
   NodeSpecOrStub,
 } from '@figma-agent-bridge/shared/node-spec'
 import type { FigmaClient } from '../figma-client'
-import { toPageLayoutTree } from '../parser'
 import { toNodeSpec } from '../serialize/node-spec-reader'
 import { truncateTree, isStub } from '../read/truncate-tree'
 import { buildMatcher } from '../read/match'
@@ -122,36 +121,6 @@ export const handleInspect = async (
     return textResult(
       YAML.stringify({ view: projected, truncated }),
     )
-  } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
-  }
-}
-
-export const handleInspectPageLayout = async (
-  client: FigmaClient,
-): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
-  try {
-    const raw = (await client.sendCommand(
-      'get_page_layout',
-      {},
-    )) as {
-      pageName: string
-      frames: Record<string, unknown>[]
-    } | null
-    if (raw === null) {
-      return textResult(
-        'Failed to get page layout from plugin.',
-      )
-    }
-
-    const tree = toPageLayoutTree(raw)
-
-    return textResult(tree)
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }

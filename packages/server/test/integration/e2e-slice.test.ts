@@ -44,6 +44,12 @@ import {
   handleListFonts,
 } from '@figma-agent-bridge/server/tools/design-system'
 import { handleExport } from '@figma-agent-bridge/server/tools/export'
+import {
+  handleGetReactions,
+  handleGetPluginData,
+  handleGetAnnotations,
+  handleSetAnnotations,
+} from '@figma-agent-bridge/server/tools/metadata'
 import { createMockPlugin } from '../mocks/mock-plugin'
 
 const TEST_PORT = 3101
@@ -411,8 +417,9 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
 
   // ── chunk C — design-system + metadata reads ──────────────────────────────
 
-  // 15 — get_styles renders each style VALUE to a view atom over the relay.
-  it('get_styles renders paint→hex and text→font atoms over the relay', async () => {
+  // 15 — get_styles renders each style VALUE to a view atom over the relay,
+  // including the grid render path (gridToAtom).
+  it('get_styles renders paint→hex, text→font and grid→columns atoms over the relay', async () => {
     const result = await handleGetStyles({}, client)
     const out = YAML.parse(result.content[0].text) as {
       results: { type: string; value: string }[]
@@ -423,6 +430,9 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(paint.value).toBe('#3B82F6')
     const text = out.results.find(r => r.type === 'text')!
     expect(text.value).toContain('Inter')
+    // grid render path: gridToAtom emits a columns(...) atom.
+    const grid = out.results.find(r => r.type === 'grid')!
+    expect(grid.value).toContain('columns')
   })
 
   // 16 — get_variables: modes present, COLOR valuesByMode → hex, scopes/codeSyntax.
@@ -478,5 +488,74 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     }
     expect(item.type).toBe('text')
     expect(item.text).toContain('<svg')
+  })
+
+  // ── chunk C — node-metadata & handoff reads/writes (e2e parity) ────────────
+
+  // 20 — get_reactions returns the Rule-A shape with the node's reactions.
+  it('get_reactions returns { results, truncated } over the relay', async () => {
+    const result = await handleGetReactions(
+      { nodeId: '1:42' },
+      client,
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { trigger: { type: string } }[]
+      truncated: boolean
+    }
+    expect(out.truncated).toBe(false)
+    expect(out.results).toHaveLength(1)
+    expect(out.results[0].trigger.type).toBe('ON_CLICK')
+  })
+
+  // 21 — get_plugin_data reads pluginData; namespace surfaces sharedPluginData.
+  it('get_plugin_data reads pluginData and (with namespace) sharedPluginData over the relay', async () => {
+    const own = await handleGetPluginData(
+      { nodeId: '1:42' },
+      client,
+    )
+    const ownOut = YAML.parse(own.content[0].text) as {
+      pluginData: Record<string, string>
+      sharedPluginData?: Record<string, string>
+    }
+    expect(ownOut.pluginData.foo).toBe('bar')
+    // No namespace ⇒ no sharedPluginData surfaced.
+    expect(ownOut.sharedPluginData).toBeUndefined()
+
+    const shared = await handleGetPluginData(
+      { nodeId: '1:42', namespace: 'ns' },
+      client,
+    )
+    const sharedOut = YAML.parse(
+      shared.content[0].text,
+    ) as {
+      sharedPluginData?: Record<string, string>
+    }
+    expect(sharedOut.sharedPluginData?.baz).toBe('qux')
+  })
+
+  // 22 — get_annotations returns the Rule-A handoff shape over the relay.
+  it('get_annotations returns { results, truncated } over the relay', async () => {
+    const result = await handleGetAnnotations(
+      { nodeId: '1:42' },
+      client,
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { label: string; categoryId: string }[]
+      truncated: boolean
+    }
+    expect(out.truncated).toBe(false)
+    expect(out.results[0].label).toBe('Check spacing')
+  })
+
+  // 23 — set_annotations happy path reports success (no error) over the relay.
+  it('set_annotations happy path reports success over the relay', async () => {
+    const result = await handleSetAnnotations(
+      {
+        nodeId: '1:42',
+        annotations: [{ label: 'Review', categoryId: 'c' }],
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error')
   })
 })

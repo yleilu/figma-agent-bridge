@@ -188,8 +188,14 @@ export const specToFigma = (
       out.strokeWeight = geom.weight
     }
     if (geom.weights !== undefined) {
-      // Per-side weights: the plugin may not have a direct key for this;
-      // emit what we can (use top weight as strokeWeight fallback).
+      // Per-side weights [t,r,b,l]: the plugin has no per-side stroke key, so
+      // this collapses to a single strokeWeight (the top side), silently
+      // dropping the other 3 sides — a LOSSY write (T7).
+      // TODO(M3): surface a warning when the four sides differ. specToFigma is
+      // a PURE converter returning a bare FigmaWritePayload and ~40 tests pin
+      // its exact `.toEqual()` output, so threading a warning channel through
+      // the signature here is not clean; defer to the M3 create/update rebuild
+      // where the handler already carries a warnings array.
       const [top] = geom.weights
       out.strokeWeight = top
     }

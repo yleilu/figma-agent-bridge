@@ -7,7 +7,6 @@ import type {
   SystemMessage,
 } from '@figma-agent-bridge/shared/types'
 import cardFixture from '../fixtures/card-node-raw.json'
-import pageLayoutFixture from '../fixtures/page-layout-raw.json'
 
 const MOCK_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect fill="red" width="100" height="100"/></svg>'
@@ -84,10 +83,6 @@ export const createMockPlugin = (
         result = [cardFixture]
         break
 
-      case 'get_page_layout':
-        result = pageLayoutFixture
-        break
-
       // list_pages: Rule A document + page enumeration ({docName, results}).
       case 'list_pages':
         result = {
@@ -143,7 +138,19 @@ export const createMockPlugin = (
               },
             },
           ],
-          grid: [],
+          grid: [
+            {
+              id: 'S:4',
+              name: 'Layout/Columns',
+              value: {
+                pattern: 'COLUMNS',
+                count: 12,
+                gutterSize: 16,
+                sectionSize: 64,
+                alignment: 'STRETCH',
+              },
+            },
+          ],
         }
         break
 

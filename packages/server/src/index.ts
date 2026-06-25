@@ -5,7 +5,6 @@ import {
   APP_VERSION,
   DEFAULT_PORT,
   connectParamsSchema,
-  inspectPageLayoutParamsSchema,
   createTreeParamsSchema,
   createComponentParamsSchema,
   createFromSvgParamsSchema,
@@ -49,7 +48,6 @@ import {
 } from './tools/session'
 import {
   handleInspect,
-  handleInspectPageLayout,
   handleGetNode,
   handleGetNodes,
   handleListPages,
@@ -121,12 +119,6 @@ server.tool(
   'inspect',
   inspectParamsSchema.shape,
   async params => handleInspect(params, client),
-)
-
-server.tool(
-  'inspect_page_layout',
-  inspectPageLayoutParamsSchema.shape,
-  async () => handleInspectPageLayout(client),
 )
 
 server.tool(

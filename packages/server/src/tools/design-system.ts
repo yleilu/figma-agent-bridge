@@ -83,11 +83,7 @@ const asEntries = (raw: unknown): StyleEntry[] =>
  * `type` / `id` filters are applied server-side; the read is bounded (no cursor).
  */
 export const handleGetStyles = async (
-  {
-    type,
-    id,
-    cursor,
-  }: { type?: string; id?: string; cursor?: string },
+  { type, id }: { type?: string; id?: string },
   client: FigmaClient,
 ): Promise<ToolResult> => {
   const guard = requireConnected(client)
@@ -101,7 +97,6 @@ export const handleGetStyles = async (
       {
         type,
         id,
-        cursor,
       },
     )) as StylesReply | null
 
@@ -162,7 +157,7 @@ type ComponentEntry = {
  * flattens local ⧺ remote into the Rule-A list shape, and emits YAML.
  */
 export const handleGetComponents = async (
-  { query }: { query?: string; cursor?: string },
+  { query }: { query?: string },
   client: FigmaClient,
 ): Promise<ToolResult> => {
   const guard = requireConnected(client)

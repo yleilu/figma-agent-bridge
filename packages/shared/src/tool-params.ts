@@ -124,18 +124,10 @@ export const getSelectionParamsSchema = z.object({})
 
 /**
  * Params for `list_pages`: document + page enumeration (Rule A; bounded).
- * Only `cursor` from the list mixin is meaningful (no match/fields/limit
- * filtering — the page set is naturally small and bounded).
+ * The page set is naturally small and bounded, so this reader takes no
+ * params — it never paginates (it always returns { truncated:false }).
  */
-export const listPagesParamsSchema = z.object({
-  cursor: z
-    .string()
-    .min(1)
-    .optional()
-    .describe(
-      'Opaque resume token from a prior list_pages call.',
-    ),
-})
+export const listPagesParamsSchema = z.object({})
 
 /** Params for `set_selection`: replace the current Figma selection. */
 export const setSelectionParamsSchema = z.object({
@@ -316,8 +308,8 @@ export const getVariablesParamsSchema = z.object({
 
 /**
  * Params for `get_styles`: list local styles, optionally narrowed to one
- * category or a single style ID. Bounded read; `cursor` reserved for a
- * later Rule-A resume.
+ * category or a single style ID. Bounded read — it never paginates (always
+ * returns { truncated:false }), so it takes no cursor.
  */
 export const getStylesParamsSchema = z.object({
   type: z
@@ -330,18 +322,12 @@ export const getStylesParamsSchema = z.object({
     .string()
     .optional()
     .describe('A specific style ID to fetch.'),
-  cursor: z
-    .string()
-    .min(1)
-    .optional()
-    .describe(
-      'Opaque resume token from a prior get_styles call.',
-    ),
 })
 
 /**
  * Params for `get_components`: list local + remote components,
- * optionally filtered by a name substring.
+ * optionally filtered by a name substring. Bounded read — it never
+ * paginates (always returns { truncated:false }), so it takes no cursor.
  */
 export const getComponentsParamsSchema = z.object({
   query: z
@@ -349,13 +335,6 @@ export const getComponentsParamsSchema = z.object({
     .optional()
     .describe(
       'Case-insensitive substring filter on component/set name.',
-    ),
-  cursor: z
-    .string()
-    .min(1)
-    .optional()
-    .describe(
-      'Opaque resume token from a prior get_components call.',
     ),
 })
 

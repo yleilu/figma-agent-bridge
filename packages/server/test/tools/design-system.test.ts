@@ -98,7 +98,7 @@ describe('handleGetStyles', () => {
     )
   })
 
-  it('forwards COMMANDS.GET_STYLES with {type,id,cursor}', async () => {
+  it('forwards COMMANDS.GET_STYLES with {type,id}', async () => {
     const sent: Sent[] = []
     await handleGetStyles(
       { type: 'paint', id: 'S:1' },
@@ -108,7 +108,6 @@ describe('handleGetStyles', () => {
     expect(sent[0].params).toEqual({
       type: 'paint',
       id: 'S:1',
-      cursor: undefined,
     })
   })
 
