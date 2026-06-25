@@ -9,7 +9,7 @@ type: spec
 related:
   - "[[figma-bridge/docs/architecture]]"
   - "[[figma-bridge/docs/specs/overview]]"
-  - "[[figma-bridge/docs/specs/tool-surface]]"
+  - "[[figma-bridge/docs/milestones/README]]"
   - "[[figma-bridge/docs/specs/expression-formats]]"
   - "[[figma-bridge/docs/reference/figma-professional-practice]]"
 ---

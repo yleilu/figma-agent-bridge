@@ -7,6 +7,10 @@ type: spec
 
 # figma-agent-bridge — MCP Tool Surface (Recommended / Unified)
 
+> ⚠️ **SUPERSEDED — old-spec (M4 "harvest", 45 tools).** Replaced by the clean-start **47-tool**
+> surface: see [[figma-bridge/docs/milestones/README|the milestones index]] (M2 / M3) and the
+> active design at `docs/scratch/tool-surface-design.md`. Kept for history; **not** the build target.
+
 > Governed by [[figma-bridge/docs/principles|the principles]].
 
 The implementation-ready tool surface for figma-agent-bridge: the trimmed + feasibility-fixed harvest of the autoresearch R36 spec (94 tools → **45 tools**). This unifies the three lens proposals: **coherence** as the base (round-trip symmetry as the organizing law, aggressive field-name standardization, the granular setters kept as aliases), with two grafts from **coverage** (annotations included; text ranges as a dedicated tool) and the naming discipline of **ergonomics**.

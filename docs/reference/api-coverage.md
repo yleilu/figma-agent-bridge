@@ -9,7 +9,7 @@ type: reference
 related:
   - "[[figma-bridge/docs/reference/figma-plugin-api]]"
   - "[[figma-bridge/docs/specs/tool-surface]]"
-  - "[[figma-bridge/docs/milestones]]"
+  - "[[figma-bridge/docs/milestones/README]]"
   - "[[figma-bridge/docs/principles]]"
   - "[[figma-bridge/docs/specs/expression-formats]]"
 ---
@@ -21,7 +21,7 @@ related:
 > **STATUS — M3-era inventory, SUPERSEDED for tool mapping.** This is the M3-era
 > API-capability inventory. For the **current tool ↔ capability mapping and milestone
 > status** it is SUPERSEDED by [[figma-bridge/docs/specs/tool-surface]] (M4) and
-> [[figma-bridge/docs/milestones]]. The canonical **raw Figma API capability reference**
+> [[figma-bridge/docs/milestones/README]]. The canonical **raw Figma API capability reference**
 > (with property counts) is [[figma-bridge/docs/reference/figma-plugin-api]]. This doc is
 > retained for the M3 capability inventory + runtime-introspection findings.
 

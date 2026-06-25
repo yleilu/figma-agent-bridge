@@ -11,7 +11,7 @@ related:
   - "[[figma-bridge/docs/specs/overview]]"
   - "[[figma-bridge/docs/specs/tool-surface]]"
   - "[[figma-bridge/docs/specs/expression-formats]]"
-  - "[[figma-bridge/docs/milestones]]"
+  - "[[figma-bridge/docs/milestones/README]]"
 ---
 
 # figma-agent-bridge — Architecture
