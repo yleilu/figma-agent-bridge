@@ -74,6 +74,16 @@ Three parts, the same for every atom:
 
 A field that holds many atoms (e.g. `fills`) is a YAML array of atoms.
 
+> **Canonical rendering (what the view emits) vs. what the parser accepts.** The view
+> renders `{…}` as a **trailing** block (`font(...){lh=24}`), head args **unspaced**
+> (`font(Inter,SemiBold,18)`, `shadow(0,4,8,#00000040)`) **except gradients**, whose stops are
+> **spaced** (`linear(135, #FF0000@0, #00FF00@100)`), and `{…}` keys comma-space separated. The
+> parser additionally **accepts and normalizes** the inner-arg form (`font(Inter,SemiBold,18,{lh=24})`),
+> arbitrary whitespace, and write-only sugar (`rgb()`/`rgba()`/`solid()`/`image(url)`) — but reads
+> always emit the canonical form, so `renderAtom(parseAtom(s))` is stable. (The examples in the
+> sections below mix the spaced inner-arg form for readability; the canonical/round-tripping form
+> is as stated here.)
+
 ## Atom reference
 
 Every variant of every family below is the same `kind(...){…}` shape (or a bare
