@@ -29,6 +29,7 @@ import {
   handleInspect,
   handleListPages,
 } from '@figma-agent-bridge/server/tools/read'
+import { estimateTokens } from '@figma-agent-bridge/server/read/budget'
 import { handleUpdateNode } from '@figma-agent-bridge/server/tools/update'
 import { handleCreateNode } from '@figma-agent-bridge/server/tools/create-node'
 import { handleSearch } from '@figma-agent-bridge/server/tools/search'
@@ -557,5 +558,116 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
       client,
     )
     expect(result.content[0].text).not.toContain('Error')
+  })
+
+  // 24 — multi-selection inspect (M2 chunk F): with a ≥2-node selection and no
+  // args, inspect() returns a SELECTION forest containing every selected node;
+  // a tight budget over the whole forest produces a receipt of real cut ids.
+  it('inspect() with no args returns a forest of the current multi-selection over the relay', async () => {
+    // Swap the shared plugin for one whose selection holds TWO real nodes.
+    plugin!.stop()
+    plugin = createMockPlugin({
+      relayUrl: RELAY_URL,
+      channel: TEST_CHANNEL,
+      documentName: 'Slice Doc',
+      pageName: 'Main',
+      selection: [
+        {
+          id: '1:42',
+          name: 'Card',
+          type: 'FRAME',
+          absoluteBoundingBox: {
+            x: 0,
+            y: 0,
+            width: 320,
+            height: 200,
+          },
+          children: [
+            {
+              id: '1:43',
+              name: 'Title',
+              type: 'TEXT',
+              absoluteBoundingBox: {
+                x: 0,
+                y: 0,
+                width: 288,
+                height: 24,
+              },
+              characters: 'Card Title',
+              style: {
+                fontFamily: 'Inter',
+                fontStyle: 'Bold',
+                fontSize: 18,
+              },
+              children: [],
+            },
+          ],
+        },
+        {
+          id: '2:10',
+          name: 'Banner',
+          type: 'FRAME',
+          absoluteBoundingBox: {
+            x: 0,
+            y: 0,
+            width: 600,
+            height: 120,
+          },
+          children: [
+            {
+              id: '2:11',
+              name: 'Logo',
+              type: 'RECTANGLE',
+              absoluteBoundingBox: {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 40,
+              },
+              children: [],
+            },
+          ],
+        },
+      ],
+    })
+    await plugin.start()
+    await handleConnect({ channel: TEST_CHANNEL }, client)
+
+    // No nodeId/pageId → inspect the current selection. depth=-1 keeps the
+    // whole forest so we can assert both selected nodes are present.
+    const result = await handleInspect(
+      { depth: -1 },
+      client,
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      view: {
+        type: string
+        children: { id: string; name: string }[]
+      }
+      truncated: { id: string; childCount: number }[]
+    }
+    expect(out.view.type).toBe('SELECTION')
+    const ids = out.view.children.map(c => c.id)
+    expect(ids).toContain('1:42')
+    expect(ids).toContain('2:10')
+
+    // A tight budget over the whole forest must cut something, and every
+    // receipt id must be a real, drillable node id.
+    const budget = 70
+    const tight = await handleInspect({ budget }, client)
+    const tightOut = YAML.parse(tight.content[0].text) as {
+      view: { type: string }
+      truncated: { id: string; childCount: number }[]
+    }
+    expect(tightOut.view.type).toBe('SELECTION')
+    // The forest view is HARD-bounded by the budget across the whole selection.
+    expect(
+      estimateTokens(tightOut.view as never),
+    ).toBeLessThanOrEqual(budget)
+    expect(tightOut.truncated.length).toBeGreaterThan(0)
+    for (const entry of tightOut.truncated) {
+      expect(typeof entry.id).toBe('string')
+      expect(entry.id.length).toBeGreaterThan(0)
+    }
   })
 })

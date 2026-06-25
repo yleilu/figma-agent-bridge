@@ -19,6 +19,13 @@ type MockPluginOptions = {
   channel: string
   documentName?: string
   pageName?: string
+  /**
+   * Raw exports of the current selection. INSPECT with no nodeId/pageId honors
+   * this the way the real plugin does: >1 entry → return the ARRAY (forest);
+   * exactly 1 → return that single export; empty/undefined → fall back to the
+   * default single-node export (representing the current page).
+   */
+  selection?: Record<string, unknown>[]
 }
 
 type MockPlugin = {
@@ -34,6 +41,7 @@ export const createMockPlugin = (
     channel,
     documentName = 'Mock Document',
     pageName = 'Page 1',
+    selection,
   } = options
 
   let ws: WebSocket | null = null
@@ -74,10 +82,32 @@ export const createMockPlugin = (
         break
 
       // inspect serializes the same raw export get_node consumes; the server's
-      // read model (truncate-tree + budget) decides what survives.
-      case 'inspect':
-        result = cardFixture
+      // read model (truncate-tree + budget) decides what survives. With no
+      // nodeId/pageId it targets the current selection the way the real plugin
+      // does: >1 selected → an ARRAY of raw exports (the server wraps them in a
+      // SELECTION forest); exactly 1 → that single export; empty → the default
+      // single-node export (representing the current page).
+      case 'inspect': {
+        const targeted =
+          cmd.params?.nodeId !== undefined ||
+          cmd.params?.pageId !== undefined
+        if (
+          !targeted &&
+          selection &&
+          selection.length > 1
+        ) {
+          result = selection
+        } else if (
+          !targeted &&
+          selection &&
+          selection.length === 1
+        ) {
+          ;[result] = selection
+        } else {
+          result = cardFixture
+        }
         break
+      }
 
       case 'get_nodes':
         result = [cardFixture]

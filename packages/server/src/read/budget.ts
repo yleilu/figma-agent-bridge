@@ -68,12 +68,17 @@ export const fillToBudget = (
   const rootCost = estimateTokens(rootNoChildren)
 
   if (rootCost > budget) {
-    // Even root alone exceeds budget — return stub for root
+    // Even root alone exceeds budget — return stub for root. Only record a
+    // receipt entry when the stub has a real id: the synthetic SELECTION
+    // forest root carries no id, and a `{id:''}` entry is non-drillable,
+    // contradicting the "every receipt id is real" invariant.
     const stub = toStub(root)
-    truncated.push({
-      id: stub.id,
-      childCount: stub.childCount,
-    })
+    if (stub.id) {
+      truncated.push({
+        id: stub.id,
+        childCount: stub.childCount,
+      })
+    }
     return { view: stub, truncated }
   }
 

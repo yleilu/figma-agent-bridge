@@ -863,7 +863,11 @@ const handleCommand = async (
 
     // inspect returns the SAME raw export the reader consumes; the server's
     // read model decides depth/budget. Resolves nodeId → pageId → current
-    // selection (first node) → current page.
+    // selection → current page. With no nodeId/pageId and a MULTI-node
+    // selection it returns an ARRAY of raw exports (one per selected node); the
+    // server wraps those in a SELECTION forest so depth/budget/receipt bound the
+    // whole set. A single selected node returns that node's export; an empty
+    // selection falls back to the current page.
     case COMMANDS.INSPECT: {
       let target: BaseNode | null = null
       if (params.nodeId !== undefined) {
@@ -874,10 +878,17 @@ const handleCommand = async (
         target = await figma.getNodeByIdAsync(
           params.pageId as string,
         )
-      } else if (figma.currentPage.selection.length > 0) {
-        target = figma.currentPage.selection[0]
       } else {
-        target = figma.currentPage
+        const sel = figma.currentPage.selection
+        if (sel.length > 1) {
+          // Multi-selection → forest of all selected nodes. Resolve every
+          // export before returning (each exportNodeDocument is async).
+          return Promise.all(
+            sel.map(node => exportNodeDocument(node)),
+          )
+        }
+        target =
+          sel.length === 1 ? sel[0] : figma.currentPage
       }
       if (!target) {
         return {

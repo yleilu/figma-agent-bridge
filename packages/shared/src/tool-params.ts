@@ -51,14 +51,18 @@ export const getNodesParamsSchema = z.object({
 
 /**
  * Params for `inspect`: deep-inspect a node or page.
- * Omitting both `nodeId` and `pageId` inspects the current selection/page.
+ * Omitting both `nodeId` and `pageId` inspects the current selection: a
+ * multi-node selection returns a FOREST under a synthetic
+ * { type: 'SELECTION', children: [<node>, …] } root, with depth/budget and the
+ * truncation receipt applied across the whole set; a single selected node
+ * returns that node's view; an empty selection falls back to the current page.
  */
 export const inspectParamsSchema = z.object({
   nodeId: z
     .string()
     .optional()
     .describe(
-      'Node ID to inspect. Omit to inspect current selection.',
+      'Node ID to inspect. Omit to inspect the current selection (a multi-node selection returns a SELECTION forest of all selected nodes).',
     ),
   pageId: z
     .string()

@@ -62,6 +62,14 @@ const projectView = (
  * nodes to IdStubs and accumulating the truncation receipt. match + project
  * then narrow the surviving view. Returns { view, truncated:[{id,childCount}] }
  * as YAML.
+ *
+ * Multi-selection (M2 chunk F): with no nodeId/pageId, inspect() targets the
+ * current selection. When >1 node is selected the plugin returns an ARRAY of
+ * raw exports; the handler assembles a FOREST under a synthetic
+ * { type: 'SELECTION', children: [<nodeSpec>, …] } root. That root carries no
+ * real id, so depth/budget/receipt run across the WHOLE set naturally and every
+ * receipt id stays a real, drillable node id. Single-select (1 export) and the
+ * id/page targets keep the bare { view: <nodeSpec>, truncated } shape.
  */
 export const handleInspect = async (
   {
@@ -96,27 +104,66 @@ export const handleInspect = async (
         pageId,
         depth,
       },
-    )) as Record<string, unknown> | null
+    )) as
+      | Record<string, unknown>
+      | Record<string, unknown>[]
+      | null
     if (raw === null) {
       return textResult(
         `Node not found: ${nodeId ?? pageId ?? 'selection'}`,
       )
     }
 
-    // Serialize the full tree first; the read model decides what survives.
-    const full = toNodeSpec(raw, { depth: -1 })
+    // Multi-selection → assemble a forest under a synthetic SELECTION root so
+    // depth/budget/receipt bound the WHOLE set at once. Single export (array or
+    // not) keeps the bare single-node view. Serialize each child deep; the read
+    // model then decides what survives across the forest.
+    const isForest = Array.isArray(raw)
+    const full: NodeSpec = isForest
+      ? {
+          type: 'SELECTION',
+          children: raw.map(n =>
+            toNodeSpec(n, { depth: -1 }),
+          ),
+        }
+      : toNodeSpec(raw, { depth: -1 })
+    // The synthetic SELECTION root is transparent to `depth`: a forest depth of
+    // N must keep N levels below each SELECTED node, not below the wrapper. So
+    // a non-negative depth (including the depth=0 default applied when neither
+    // depth nor budget is given) is bumped by one level to account for the extra
+    // root. depth=-1 (return-all) and the budget path are unaffected (budget
+    // ignores depth in truncateTree).
+    const forestDepth =
+      depth === undefined
+        ? 1
+        : depth >= 0
+          ? depth + 1
+          : depth
+    const effectiveDepth = isForest ? forestDepth : depth
     const { view, truncated } = truncateTree(full, {
-      depth,
+      depth: effectiveDepth,
       budget,
     })
 
     const matcher =
       match !== undefined ? buildMatcher(match) : null
-    const projected = projectView(
-      view,
-      { fields, profile },
-      matcher,
-    )
+    // For the forest, the synthetic SELECTION root's ONLY payload is its
+    // children — the selected nodes themselves. A non-`full` projection drops
+    // the root's `children`, which would erase the whole forest. So instead of
+    // projecting the wrapper away, pass the SELECTION root through untouched and
+    // project each selected child against the selector. Single-node inspect
+    // keeps the original whole-view projection (descendants drop gracefully).
+    const projected =
+      isForest &&
+      !isStub(view) &&
+      Array.isArray(view.children)
+        ? {
+            ...view,
+            children: view.children.map(c =>
+              projectView(c, { fields, profile }, matcher),
+            ),
+          }
+        : projectView(view, { fields, profile }, matcher)
 
     return textResult(
       YAML.stringify({ view: projected, truncated }),
