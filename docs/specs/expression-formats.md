@@ -74,6 +74,16 @@ Three parts, the same for every atom:
 
 A field that holds many atoms (e.g. `fills`) is a YAML array of atoms.
 
+> **Canonical rendering (what the view emits) vs. what the parser accepts.** The view
+> renders `{…}` as a **trailing** block (`font(...){lh=24}`), head args **unspaced**
+> (`font(Inter,SemiBold,18)`, `shadow(0,4,8,#00000040)`) **except gradients**, whose stops are
+> **spaced** (`linear(135, #FF0000@0, #00FF00@100)`), and `{…}` keys comma-space separated. The
+> parser additionally **accepts and normalizes** the inner-arg form (`font(Inter,SemiBold,18,{lh=24})`),
+> arbitrary whitespace, and write-only sugar (`rgb()`/`rgba()`/`solid()`/`image(url)`) — but reads
+> always emit the canonical form, so `renderAtom(parseAtom(s))` is stable. (The examples in the
+> sections below mix the spaced inner-arg form for readability; the canonical/round-tripping form
+> is as stated here.)
+
 ## Atom reference
 
 Every variant of every family below is the same `kind(...){…}` shape (or a bare
@@ -174,7 +184,7 @@ exposes:
 - **node** — `type, name, id, size, position, layoutPositioning, fills[], strokes[], stroke, effects[], radius, opacity, rotation, blend, visible, clipsContent, exportSettings[], layout, sizing, constraints, text, componentProperties, variantProperties, overrides, children[]` (children are nested node structs).
 - **layout** — `{mode: H|V|NONE, gap, pad: [t,r,b,l], align: [primary, counter], wrap}`. `mode: NONE` turns auto-layout off.
 - **css-grid** — `{rows, cols, rowGap, colGap}` (when `layoutMode` is GRID).
-- **text** — `{content, font, color, align, valign, lh, ls, decoration, case, paragraphSpacing, runs}`. `font`/`color` are atoms; `runs` carries per-range overrides (see below).
+- **text** — `{content, font, color, align, valign, decoration, case, paragraphSpacing, runs}`. `font`/`color` are atoms; `runs` carries per-range overrides (see below). Line height and letter spacing are canonical on the `font(...)` atom (`font(...){lh=24, ls=0.5}`) — there are no separate top-level `lh`/`ls` text keys.
 - **exportSettings** — array of persistent export presets, each `{format: PNG|JPG|SVG|PDF, suffix?, constraint?: [SCALE|WIDTH|HEIGHT, value]}`. Round-trips via `get_node`/`update_node` (the persistent-presets path; the `export` tool itself is one-off render/asset output).
 - **layoutPositioning** — `AUTO` | `ABSOLUTE` (a child's flow vs absolute participation). Paired with the parent's `layout.mode` it is what distinguishes a true absolute child from a flow child (the §7 absolute-positioning audit reads this — `position` alone can't, since flow children still carry x/y).
 - **componentProperties / variantProperties** *(on INSTANCE / variant nodes)* — the instance's current property values and variant selection. The `componentPropertyDefinitions` (the schema) live on the component/set and are read via `get_components`.

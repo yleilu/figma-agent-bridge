@@ -2,7 +2,16 @@
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "lib": ["ESNext"],
-    "types": ["@figma/plugin-typings"]
+    "types": ["@figma/plugin-typings"],
+    "baseUrl": "../..",
+    "paths": {
+      "@figma-agent-bridge/shared": [
+        "./packages/shared/src/index.ts"
+      ],
+      "@figma-agent-bridge/shared/*": [
+        "./packages/shared/src/*"
+      ]
+    }
   },
   "include": ["src/code.ts"]
 }

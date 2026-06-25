@@ -1,3 +1,5 @@
+import { COMMANDS } from '@figma-agent-bridge/shared'
+
 figma.showUI(__html__, {
   width: 340,
   height: 280,
@@ -179,7 +181,8 @@ const applyCommonProperties = async (
       }
     }
     if ('fills' in node) {
-      ;(node as GeometryMixin & SceneNode).fills = paintArray
+      ;(node as GeometryMixin & SceneNode).fills =
+        paintArray
     }
   }
 
@@ -197,15 +200,24 @@ const applyCommonProperties = async (
   }
 
   // Stroke properties
-  if (spec.strokeWeight !== undefined && 'strokeWeight' in node) {
+  if (
+    spec.strokeWeight !== undefined &&
+    'strokeWeight' in node
+  ) {
     ;(node as GeometryMixin & SceneNode).strokeWeight =
       spec.strokeWeight as number
   }
-  if (spec.strokeAlign !== undefined && 'strokeAlign' in node) {
+  if (
+    spec.strokeAlign !== undefined &&
+    'strokeAlign' in node
+  ) {
     ;(node as GeometryMixin & SceneNode).strokeAlign =
       spec.strokeAlign as 'CENTER' | 'INSIDE' | 'OUTSIDE'
   }
-  if (spec.strokeDash !== undefined && 'dashPattern' in node) {
+  if (
+    spec.strokeDash !== undefined &&
+    'dashPattern' in node
+  ) {
     ;(node as GeometryMixin & SceneNode).dashPattern =
       spec.strokeDash as number[]
   }
@@ -337,11 +349,17 @@ const applyCommonProperties = async (
       | null
 
   // Apply resolved style IDs (server resolves style(name) → styleId)
-  if (spec.fillStyleId !== undefined && 'fillStyleId' in node) {
+  if (
+    spec.fillStyleId !== undefined &&
+    'fillStyleId' in node
+  ) {
     ;(node as GeometryMixin & SceneNode).fillStyleId =
       spec.fillStyleId as string
   }
-  if (spec.strokeStyleId !== undefined && 'strokeStyleId' in node) {
+  if (
+    spec.strokeStyleId !== undefined &&
+    'strokeStyleId' in node
+  ) {
     ;(node as GeometryMixin & SceneNode).strokeStyleId =
       spec.strokeStyleId as string
   }
@@ -808,14 +826,32 @@ const handleCommand = async (
         },
       }
 
-    case 'get_selection':
+    case COMMANDS.GET_SELECTION:
       return figma.currentPage.selection.map(node => ({
         id: node.id,
         name: node.name,
         type: node.type,
       }))
 
-    case 'get_node': {
+    // set_selection: SELECTION ONLY (does not scroll — pair with set_focus).
+    // Resolves the ids to scene nodes on the current page; ids that don't
+    // resolve to a selectable scene node are skipped. Returns {selectedCount}.
+    case COMMANDS.SET_SELECTION: {
+      const ids = (params.nodeIds as string[]) ?? []
+      const nodes: SceneNode[] = []
+      for (const id of ids) {
+        const n = await figma.getNodeByIdAsync(id)
+        // Only scene nodes are selectable; `visible` is present on every
+        // SceneNode and absent on PAGE/DOCUMENT, so it's a sound guard.
+        if (n && 'visible' in n) {
+          nodes.push(n as SceneNode)
+        }
+      }
+      figma.currentPage.selection = nodes
+      return { selectedCount: nodes.length }
+    }
+
+    case COMMANDS.GET_NODE: {
       const node = await figma.getNodeByIdAsync(
         params.nodeId as string,
       )
@@ -825,7 +861,49 @@ const handleCommand = async (
       return exportNodeDocument(node)
     }
 
-    case 'get_nodes': {
+    // inspect returns the SAME raw export the reader consumes; the server's
+    // read model decides depth/budget. Resolves nodeId → pageId → current
+    // selection → current page. With no nodeId/pageId and a MULTI-node
+    // selection it returns an ARRAY of raw exports (one per selected node); the
+    // server wraps those in a SELECTION forest so depth/budget/receipt bound the
+    // whole set. A single selected node returns that node's export; an empty
+    // selection falls back to the current page.
+    case COMMANDS.INSPECT: {
+      let target: BaseNode | null = null
+      if (params.nodeId !== undefined) {
+        target = await figma.getNodeByIdAsync(
+          params.nodeId as string,
+        )
+      } else if (params.pageId !== undefined) {
+        target = await figma.getNodeByIdAsync(
+          params.pageId as string,
+        )
+      } else {
+        const sel = figma.currentPage.selection
+        if (sel.length > 1) {
+          // Multi-selection → forest of all selected nodes. Resolve every
+          // export before returning (each exportNodeDocument is async).
+          return Promise.all(
+            sel.map(node => exportNodeDocument(node)),
+          )
+        }
+        target =
+          sel.length === 1 ? sel[0] : figma.currentPage
+      }
+      if (!target) {
+        return {
+          error:
+            'Node not found: ' +
+            ((params.nodeId ?? params.pageId) as string),
+        }
+      }
+      return exportNodeDocument(target)
+    }
+
+    // get_nodes: one entry per id — a raw export (the same shape get_node /
+    // inspect return, which the server's toNodeSpec consumes) or {id, error}
+    // for a miss. The server splits them into {results, errors[]}.
+    case COMMANDS.GET_NODES: {
       const nodeIds = (params.nodeIds as string[]) || []
       return Promise.all(
         nodeIds.map(async nodeId => {
@@ -838,37 +916,22 @@ const handleCommand = async (
       )
     }
 
-    case 'get_page_layout': {
+    // list_pages: document + page enumeration (Rule A; bounded). The server
+    // wraps this in { docName, results, truncated:false }.
+    case COMMANDS.LIST_PAGES:
       return {
-        pageName: figma.currentPage.name,
-        frames: figma.currentPage.children.map(frame => ({
-          id: frame.id,
-          name: frame.name,
-          type: frame.type,
-          x: frame.x,
-          y: frame.y,
-          width: frame.width,
-          height: frame.height,
-          childCount:
-            'children' in frame
-              ? (frame as SceneNode & ChildrenMixin)
-                  .children.length
-              : 0,
+        docName: figma.root.name,
+        results: figma.root.children.map(page => ({
+          id: page.id,
+          name: page.name,
+          isCurrent: page.id === figma.currentPage.id,
+          childCount: page.children
+            ? page.children.length
+            : 0,
         })),
       }
-    }
 
-    case 'get_pages':
-      return figma.root.children.map(page => ({
-        id: page.id,
-        name: page.name,
-        isCurrent: page.id === figma.currentPage.id,
-        childCount: page.children
-          ? page.children.length
-          : 0,
-      }))
-
-    case 'export_node': {
+    case COMMANDS.EXPORT: {
       const exportNode = (await figma.getNodeByIdAsync(
         params.nodeId as string,
       )) as SceneNode | null
@@ -894,93 +957,82 @@ const handleCommand = async (
       }
     }
 
-    case 'get_styles': {
-      const paintStyles = figma
-        .getLocalPaintStyles()
-        .map(s => ({
+    // get_styles: each entry carries the raw figma VALUE the server renders to
+    // a view atom (paint→hex, text→font, effect/grid→head). Uses the ASYNC
+    // style getters; the server applies the type/id filters.
+    case COMMANDS.GET_STYLES: {
+      const paintStylesRaw =
+        await figma.getLocalPaintStylesAsync()
+      const paint = paintStylesRaw.map(s => ({
+        id: s.id,
+        name: s.name,
+        value: s.paints[0],
+      }))
+      const textStylesRaw =
+        await figma.getLocalTextStylesAsync()
+      const text = textStylesRaw.map(s => ({
+        id: s.id,
+        name: s.name,
+        value: {
+          family: s.fontName.family,
+          style: s.fontName.style,
+          size: s.fontSize,
+          lineHeight: s.lineHeight,
+          letterSpacing: s.letterSpacing,
+        },
+      }))
+      const effectStylesRaw =
+        await figma.getLocalEffectStylesAsync()
+      const effect = effectStylesRaw.map(s => ({
+        id: s.id,
+        name: s.name,
+        value: s.effects[0],
+      }))
+      const gridStylesRaw =
+        await figma.getLocalGridStylesAsync()
+      const grid = gridStylesRaw.map(s => {
+        const g = s.layoutGrids?.[0] as
+          | LayoutGrid
+          | undefined
+        return {
           id: s.id,
           name: s.name,
-          paints: s.paints.map(p => ({
-            type: p.type,
-            color:
-              p.type === 'SOLID'
-                ? (p as SolidPaint).color
-                : undefined,
-            opacity: p.opacity,
-          })),
-        }))
-      const textStyles = figma
-        .getLocalTextStyles()
-        .map(s => ({
-          id: s.id,
-          name: s.name,
-          fontFamily: s.fontName.family,
-          fontStyle: s.fontName.style,
-          fontSize: s.fontSize,
-          lineHeight:
-            s.lineHeight.unit === 'PIXELS'
-              ? (
-                  s.lineHeight as {
-                    unit: 'PIXELS'
-                    value: number
-                  }
-                ).value
-              : null,
-        }))
-      const effectStyles = figma
-        .getLocalEffectStyles()
-        .map(s => ({
-          id: s.id,
-          name: s.name,
-          effects: s.effects.map(e => ({
-            type: e.type,
-            color:
-              'color' in e
-                ? (
-                    e as
-                      | DropShadowEffect
-                      | InnerShadowEffect
-                  ).color
-                : undefined,
-            offset:
-              'offset' in e
-                ? (
-                    e as
-                      | DropShadowEffect
-                      | InnerShadowEffect
-                  ).offset
-                : undefined,
-            radius:
-              'radius' in e
-                ? (
-                    e as
-                      | DropShadowEffect
-                      | InnerShadowEffect
-                      | BlurEffectNormal
-                  ).radius
-                : undefined,
-            spread:
-              'spread' in e
-                ? (
-                    e as
-                      | DropShadowEffect
-                      | InnerShadowEffect
-                  ).spread
-                : undefined,
-          })),
-        }))
-      const gridStyles = figma
-        .getLocalGridStyles()
-        .map(s => ({ id: s.id, name: s.name }))
-      return {
-        paint: paintStyles,
-        text: textStyles,
-        effect: effectStyles,
-        grid: gridStyles,
-      }
+          value: g
+            ? {
+                pattern: g.pattern,
+                alignment:
+                  'alignment' in g
+                    ? (g as RowsColsLayoutGrid).alignment
+                    : undefined,
+                count:
+                  'count' in g
+                    ? (g as RowsColsLayoutGrid).count
+                    : undefined,
+                sectionSize:
+                  'sectionSize' in g
+                    ? (g as RowsColsLayoutGrid).sectionSize
+                    : undefined,
+                gutterSize:
+                  'gutterSize' in g
+                    ? (g as RowsColsLayoutGrid).gutterSize
+                    : undefined,
+                offset:
+                  'offset' in g
+                    ? (g as RowsColsLayoutGrid).offset
+                    : undefined,
+                visible: g.visible,
+              }
+            : undefined,
+        }
+      })
+      return { paint, text, effect, grid }
     }
 
-    case 'get_local_components': {
+    // get_components: rich per-entry shape — key, type, page, the full
+    // componentPropertyDefinitions (incl. variantOptions for VARIANT), the
+    // variant axes, and the per-property defaults. The server applies the
+    // name query filter.
+    case COMMANDS.GET_COMPONENTS: {
       const componentSets = figma.root.findAllWithCriteria({
         types: ['COMPONENT_SET'],
       })
@@ -988,45 +1040,82 @@ const handleCommand = async (
         types: ['COMPONENT'],
       })
 
+      const projectDefs = (
+        defs: ComponentPropertyDefinitions,
+      ): {
+        name: string
+        type: string
+        defaultValue: string | boolean
+        variantOptions?: string[]
+      }[] =>
+        Object.keys(defs).map(key => {
+          const def = defs[key]
+          const entry: {
+            name: string
+            type: string
+            defaultValue: string | boolean
+            variantOptions?: string[]
+          } = {
+            name: key,
+            type: def.type,
+            defaultValue: def.defaultValue,
+          }
+          if (
+            def.type === 'VARIANT' &&
+            def.variantOptions
+          ) {
+            entry.variantOptions = def.variantOptions
+          }
+          return entry
+        })
+
+      const defaultsOf = (
+        defs: ComponentPropertyDefinitions,
+      ): Record<string, unknown> =>
+        Object.fromEntries(
+          Object.entries(defs).map(([k, d]) => [
+            k,
+            d.defaultValue,
+          ]),
+        )
+
       const setMap: Record<string, unknown> = {}
       for (const cs of componentSets) {
-        const variantKeys: Record<string, string[]> = {}
+        const variantAxes: Record<string, string[]> = {}
         if (cs.children) {
           for (const variant of cs.children) {
             const props = (variant as ComponentNode)
               .variantProperties
             if (props) {
               for (const pkey of Object.keys(props)) {
-                if (!variantKeys[pkey]) {
-                  variantKeys[pkey] = []
+                if (!variantAxes[pkey]) {
+                  variantAxes[pkey] = []
                 }
                 if (
-                  !variantKeys[pkey].includes(props[pkey])
+                  !variantAxes[pkey].includes(props[pkey])
                 ) {
-                  variantKeys[pkey].push(props[pkey])
+                  variantAxes[pkey].push(props[pkey])
                 }
               }
             }
           }
         }
         const csDefs = cs.componentPropertyDefinitions || {}
-        const csProps = Object.keys(csDefs).map(key => ({
-          name: key,
-          type: csDefs[key].type,
-          default: csDefs[key].defaultValue,
-        }))
         setMap[cs.id] = {
           id: cs.id,
           name: cs.name,
+          key: cs.key,
+          type: cs.type,
           page:
             cs.parent && cs.parent.type === 'PAGE'
               ? cs.parent.name
               : null,
-          variants:
-            Object.keys(variantKeys).length > 0
-              ? variantKeys
-              : null,
-          properties: csProps,
+          propertyDefinitions: projectDefs(csDefs),
+          variantAxes:
+            Object.keys(variantAxes).length > 0
+              ? variantAxes
+              : undefined,
+          defaults: defaultsOf(csDefs),
         }
       }
 
@@ -1040,22 +1129,17 @@ const handleCommand = async (
         }
         const compDefs =
           comp.componentPropertyDefinitions || {}
-        const compProps = Object.keys(compDefs).map(
-          key => ({
-            name: key,
-            type: compDefs[key].type,
-            default: compDefs[key].defaultValue,
-          }),
-        )
         standaloneComponents.push({
           id: comp.id,
           name: comp.name,
+          key: comp.key,
+          type: comp.type,
           page:
             comp.parent && comp.parent.type === 'PAGE'
               ? comp.parent.name
               : null,
-          variants: null,
-          properties: compProps,
+          propertyDefinitions: projectDefs(compDefs),
+          defaults: defaultsOf(compDefs),
         })
       }
 
@@ -1098,83 +1182,112 @@ const handleCommand = async (
       return { local: localAll, remote: remoteAll }
     }
 
-    case 'search_nodes': {
-      const searchName = (params.name as string) || ''
-      const searchType = (params.type as string) || null
-      const searchPageId = (params.pageId as string) || null
-      const searchLimit = (params.limit as number) || 50
+    // search (Rule A): the plugin SCANS the requested scope and returns the RAW
+    // candidate nodes — it does NOT filter, project, or paginate. The SERVER
+    // owns match + fields + limit + cursor. We emit { results: [candidate…] }
+    // where each candidate carries the fields the server's matcher / projection
+    // read (id, name, type, size).
+    case COMMANDS.SEARCH: {
+      const scope = (params.scope as string) || 'document'
 
-      const searchPages: PageNode[] = []
-      if (searchPageId) {
-        const pageNode =
-          await figma.getNodeByIdAsync(searchPageId)
+      // Collect the root subtrees to scan based on scope. (selection scope
+      // builds its candidates directly below — no shared root.)
+      const roots: (BaseNode & ChildrenMixin)[] = []
+      if (scope === 'node') {
+        const target = await figma.getNodeByIdAsync(
+          params.nodeId as string,
+        )
+        if (target && 'findAll' in target) {
+          roots.push(target as BaseNode & ChildrenMixin)
+        }
+      } else if (scope === 'page') {
+        const pageNode = await figma.getNodeByIdAsync(
+          params.pageId as string,
+        )
         if (pageNode && pageNode.type === 'PAGE') {
-          searchPages.push(pageNode as PageNode)
+          roots.push(pageNode as PageNode)
         }
       } else {
-        for (const page of figma.root.children) {
-          searchPages.push(page)
+        // document (default): a page may be restricted via pageId.
+        const pageId = params.pageId as string | undefined
+        if (pageId) {
+          const pageNode =
+            await figma.getNodeByIdAsync(pageId)
+          if (pageNode && pageNode.type === 'PAGE') {
+            roots.push(pageNode as PageNode)
+          }
+        } else {
+          for (const page of figma.root.children) {
+            roots.push(page)
+          }
         }
       }
 
-      const globPattern = searchName
-        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-        .replace(/\*/g, '.*')
-      const nameRegex = searchName
-        ? new RegExp(globPattern, 'i')
-        : null
+      const toCandidate = (
+        fn: SceneNode,
+      ): Record<string, unknown> => ({
+        id: fn.id,
+        name: fn.name,
+        type: fn.type,
+        size:
+          'width' in fn && 'height' in fn
+            ? [
+                (fn as SceneNode & { width: number }).width,
+                (fn as SceneNode & { height: number })
+                  .height,
+              ]
+            : undefined,
+      })
 
-      const matches: unknown[] = []
-      for (const sp of searchPages) {
-        const found = sp.findAll(node => {
-          if (nameRegex && !nameRegex.test(node.name)) {
-            return false
+      const seen = new Set<string>()
+      const candidates: Record<string, unknown>[] = []
+
+      // selection scope: the selected nodes plus their subtrees.
+      if (scope === 'selection') {
+        for (const sel of figma.currentPage.selection) {
+          if (!seen.has(sel.id)) {
+            seen.add(sel.id)
+            candidates.push(toCandidate(sel))
           }
-          if (searchType && node.type !== searchType) {
-            return false
+          if ('findAll' in sel) {
+            for (const fn of (
+              sel as SceneNode & ChildrenMixin
+            ).findAll(() => true)) {
+              if (!seen.has(fn.id)) {
+                seen.add(fn.id)
+                candidates.push(toCandidate(fn))
+              }
+            }
           }
-          return true
-        })
-        for (const fn of found) {
-          if (matches.length >= searchLimit) {
-            break
-          }
-          matches.push({
-            id: fn.id,
-            name: fn.name,
-            type: fn.type,
-            page: sp.name,
-            parent: fn.parent
-              ? fn.parent.name + ' [' + fn.parent.id + ']'
-              : null,
-            width:
-              'width' in fn
-                ? (fn as SceneNode & { width: number })
-                    .width
-                : null,
-            height:
-              'height' in fn
-                ? (fn as SceneNode & { height: number })
-                    .height
-                : null,
-          })
         }
-        if (matches.length >= searchLimit) {
-          break
+      } else {
+        for (const root of roots) {
+          for (const fn of root.findAll(() => true)) {
+            if (!seen.has(fn.id)) {
+              seen.add(fn.id)
+              candidates.push(toCandidate(fn))
+            }
+          }
         }
       }
 
-      const truncated = matches.length >= searchLimit
-      return {
-        results: matches.slice(0, searchLimit),
-        truncated,
-      }
+      return { results: candidates }
     }
 
-    case 'create_node': {
-      const parentNode = await figma.getNodeByIdAsync(
-        params.parentId as string,
-      )
+    // create_node (M2 single-node): the spec is a FigmaWritePayload already
+    // converted on the server's grammar write face (atom leaves parsed; name
+    // fallback applied). Resolve parent (parentId, else the current page),
+    // create the node by type, apply via applyCommonProperties / (TEXT)
+    // applyTextProperties, append, then applyPostAppendProperties (FILL/ABSOLUTE
+    // ordering). Children are out of scope (the server strips them) — guard and
+    // warn if any slip through; never recurse. Returns {id,name,type,warnings}.
+    case COMMANDS.CREATE_NODE: {
+      const parentNode =
+        params.parentId !== undefined
+          ? await figma.getNodeByIdAsync(
+              params.parentId as string,
+            )
+          : figma.currentPage
       if (!parentNode || !('appendChild' in parentNode)) {
         return {
           error:
@@ -1182,16 +1295,24 @@ const handleCommand = async (
             params.parentId,
         }
       }
-      const parent = parentNode as
-        | FrameNode
-        | PageNode
-        | SectionNode
-      const spec = params.node as Record<string, unknown>
+      const parent = parentNode as ParentNode
+      const spec = params.spec as Record<string, unknown>
+      const warnings: string[] = []
+      if (
+        spec.children !== undefined &&
+        Array.isArray(spec.children) &&
+        (spec.children as unknown[]).length > 0
+      ) {
+        warnings.push(
+          'children ignored — create_node creates a single node; use create_tree (M3) for nested creation',
+        )
+      }
       const created = await createSingleNode(spec, parent)
       return {
         id: created.id,
         name: created.name,
         type: created.type,
+        warnings,
       }
     }
 
@@ -1309,7 +1430,7 @@ const handleCommand = async (
       return result
     }
 
-    case 'create_from_svg': {
+    case COMMANDS.CREATE_FROM_SVG: {
       const svgParent = await figma.getNodeByIdAsync(
         params.parentId as string,
       )
@@ -1334,6 +1455,506 @@ const handleCommand = async (
         name: svgFrame.name,
         type: svgFrame.type,
         childCount: svgFrame.children.length,
+      }
+    }
+
+    case COMMANDS.UPDATE_NODE: {
+      const node = await figma.getNodeByIdAsync(
+        params.nodeId as string,
+      )
+      if (!node) {
+        return { error: 'Node not found: ' + params.nodeId }
+      }
+      const spec = params.spec as Record<string, unknown>
+      const warnings: string[] = []
+      const parent = node.parent as ParentNode | null
+
+      // warn-on-no-op: x/y on an auto-layout flow child is ignored by Figma.
+      if (
+        spec.position !== undefined &&
+        parent !== null &&
+        'layoutMode' in parent &&
+        (parent as FrameNode).layoutMode !== 'NONE' &&
+        (node as FrameNode).layoutPositioning !== 'ABSOLUTE'
+      ) {
+        warnings.push(
+          'x/y ignored on an auto-layout child (set layoutPositioning:ABSOLUTE first)',
+        )
+        delete spec.position
+      }
+
+      await applyCommonProperties(
+        node as SceneNode,
+        spec,
+        parent as ParentNode,
+      )
+      if (node.type === 'TEXT' && spec.text !== undefined) {
+        await applyTextProperties(node as TextNode, spec)
+      }
+      applyPostAppendProperties(node as SceneNode, spec)
+
+      return {
+        id: node.id,
+        name: node.name,
+        type: node.type,
+        warnings,
+      }
+    }
+
+    case COMMANDS.BIND_VARIABLE: {
+      const node = await figma.getNodeByIdAsync(
+        params.nodeId as string,
+      )
+      if (!node) {
+        return { error: 'Node not found: ' + params.nodeId }
+      }
+      const variable =
+        await figma.variables.getVariableByIdAsync(
+          params.variableId as string,
+        )
+      if (!variable) {
+        return {
+          error: 'Variable not found: ' + params.variableId,
+        }
+      }
+      const field = params.field as string
+      const warnings: string[] = []
+      const bindable = node as SceneNode & {
+        setBoundVariable?: (
+          f: VariableBindableNodeField,
+          v: Variable,
+        ) => void
+      }
+      // Feature-detect/warn (T7): degrade returns {id,warnings}, NEVER {error}.
+      if (typeof bindable.setBoundVariable !== 'function') {
+        warnings.push(
+          'setBoundVariable unavailable in this Figma version; binding skipped',
+        )
+        return { id: node.id, warnings }
+      }
+      try {
+        bindable.setBoundVariable(
+          field as VariableBindableNodeField,
+          variable,
+        )
+      } catch (e) {
+        warnings.push(
+          'field "' +
+            field +
+            '" is not bindable on ' +
+            node.type +
+            ': ' +
+            String(e),
+        )
+      }
+      return { id: node.id, warnings }
+    }
+
+    case COMMANDS.GET_VARIABLES: {
+      const collectionId = params.collectionId as
+        | string
+        | undefined
+      const collections =
+        await figma.variables.getLocalVariableCollectionsAsync()
+      const filtered =
+        collectionId !== undefined
+          ? collections.filter(c => c.id === collectionId)
+          : collections
+      const results = await Promise.all(
+        filtered.map(async c => ({
+          id: c.id,
+          name: c.name,
+          modes: c.modes,
+          variables: (
+            await Promise.all(
+              c.variableIds.map(async id => {
+                const v =
+                  await figma.variables.getVariableByIdAsync(
+                    id,
+                  )
+                if (!v) {
+                  return null
+                }
+                // aliases: scan valuesByMode for VARIABLE_ALIAS refs.
+                const aliases = Object.values(
+                  v.valuesByMode,
+                ).filter(
+                  val =>
+                    typeof val === 'object' &&
+                    val !== null &&
+                    (val as { type?: string }).type ===
+                      'VARIABLE_ALIAS',
+                )
+                return {
+                  id: v.id,
+                  name: v.name,
+                  resolvedType: v.resolvedType,
+                  valuesByMode: v.valuesByMode,
+                  aliases,
+                  scopes: v.scopes,
+                  codeSyntax: v.codeSyntax,
+                  hiddenFromPublishing:
+                    v.hiddenFromPublishing,
+                }
+              }),
+            )
+          ).filter(v => v !== null),
+        })),
+      )
+      return { results }
+    }
+
+    // list_fonts: group listAvailableFontsAsync() by family, optionally
+    // filtered by a case-insensitive family substring.
+    case COMMANDS.LIST_FONTS: {
+      const fonts = await figma.listAvailableFontsAsync()
+      const byFamily: Record<string, string[]> = {}
+      for (const f of fonts) {
+        const fam = f.fontName.family
+        if (!byFamily[fam]) {
+          byFamily[fam] = []
+        }
+        if (!byFamily[fam].includes(f.fontName.style)) {
+          byFamily[fam].push(f.fontName.style)
+        }
+      }
+      let results = Object.keys(byFamily).map(family => ({
+        family,
+        styles: byFamily[family],
+      }))
+      const fontQuery = params.query as string | undefined
+      if (fontQuery !== undefined) {
+        const needle = fontQuery.toLowerCase()
+        results = results.filter(r =>
+          r.family.toLowerCase().includes(needle),
+        )
+      }
+      return { results }
+    }
+
+    // get_reactions: prototype reactions on a node. Degrade (NEVER throw) when
+    // the node is missing or has no reactions API.
+    case COMMANDS.GET_REACTIONS: {
+      const nodeId = params.nodeId as string
+      const node = await figma.getNodeByIdAsync(nodeId)
+      if (!node) {
+        return {
+          nodeId,
+          reactions: [],
+          warnings: ['Node not found: ' + nodeId],
+        }
+      }
+      if ('reactions' in node) {
+        return {
+          nodeId,
+          reactions:
+            (node as SceneNode & { reactions: unknown[] })
+              .reactions ?? [],
+        }
+      }
+      return {
+        nodeId,
+        reactions: [],
+        warnings: ['Node has no reactions'],
+      }
+    }
+
+    // get_plugin_data: this plugin's data on a node; shared data when a
+    // namespace is given. Degrade (NEVER throw) when the node is missing.
+    case COMMANDS.GET_PLUGIN_DATA: {
+      const nodeId = params.nodeId as string
+      const node = await figma.getNodeByIdAsync(nodeId)
+      if (!node || !('getPluginDataKeys' in node)) {
+        return {
+          nodeId,
+          pluginData: {},
+          warnings: ['Node not found: ' + nodeId],
+        }
+      }
+      const dataNode = node as BaseNode & PluginDataMixin
+      const pluginData = Object.fromEntries(
+        dataNode
+          .getPluginDataKeys()
+          .map(k => [k, dataNode.getPluginData(k)]),
+      )
+      const namespace = params.namespace as
+        | string
+        | undefined
+      if (namespace !== undefined) {
+        const sharedPluginData = Object.fromEntries(
+          dataNode
+            .getSharedPluginDataKeys(namespace)
+            .map(k => [
+              k,
+              dataNode.getSharedPluginData(namespace, k),
+            ]),
+        )
+        return { nodeId, pluginData, sharedPluginData }
+      }
+      return { nodeId, pluginData }
+    }
+
+    // get_annotations: editorType-gated → degrade (NEVER throw) to an empty
+    // Rule-A result with a warning when annotations are unavailable. Annotations
+    // live on the NODE (node.annotations), so feature-detect 'annotations' in node.
+    case COMMANDS.GET_ANNOTATIONS: {
+      const degrade = {
+        results: [] as unknown[],
+        truncated: false,
+        warnings: [
+          'Annotations API unavailable in this editor; returning empty.',
+        ],
+      }
+      try {
+        const targets: BaseNode[] = []
+        if (params.nodeId !== undefined) {
+          const node = await figma.getNodeByIdAsync(
+            params.nodeId as string,
+          )
+          if (node) {
+            targets.push(node)
+          }
+        } else {
+          for (const sel of figma.currentPage.selection) {
+            targets.push(sel)
+          }
+        }
+        const collected: unknown[] = []
+        let supported = false
+        for (const node of targets) {
+          if ('annotations' in node) {
+            supported = true
+            const anns =
+              (
+                node as SceneNode & {
+                  annotations?: unknown[]
+                }
+              ).annotations ?? []
+            for (const a of anns) {
+              collected.push(a)
+            }
+          }
+        }
+        if (targets.length > 0 && !supported) {
+          return degrade
+        }
+        return { results: collected, truncated: false }
+      } catch {
+        return degrade
+      }
+    }
+
+    // delete_node: capture {id,name,type} BEFORE removing so the reply still
+    // describes the now-gone node. Missing node → {error}.
+    case COMMANDS.DELETE_NODE: {
+      const nodeId = params.nodeId as string
+      const node = await figma.getNodeByIdAsync(nodeId)
+      if (!node) {
+        return { error: 'Node not found: ' + nodeId }
+      }
+      const info = {
+        id: node.id,
+        name: node.name,
+        type: node.type,
+      }
+      node.remove()
+      return info
+    }
+
+    // set_focus: scroll + zoom the viewport so the resolved nodes are in view.
+    // CANVAS only — does not change selection (pair with set_selection). Ids
+    // that don't resolve to a scene node are skipped (same guard as
+    // set_selection: 'visible' is on every SceneNode, absent on PAGE/DOCUMENT).
+    case COMMANDS.SET_FOCUS: {
+      const ids = (params.nodeIds as string[]) ?? []
+      const nodes: SceneNode[] = []
+      for (const id of ids) {
+        const n = await figma.getNodeByIdAsync(id)
+        if (n && 'visible' in n) {
+          nodes.push(n as SceneNode)
+        }
+      }
+      figma.viewport.scrollAndZoomIntoView(nodes)
+      return {
+        viewport: {
+          center: figma.viewport.center,
+          zoom: figma.viewport.zoom,
+        },
+      }
+    }
+
+    // create_page: add a new page and name it.
+    case COMMANDS.CREATE_PAGE: {
+      const page = figma.createPage()
+      page.name = params.name as string
+      return { id: page.id, name: page.name }
+    }
+
+    // set_current_page: switch the active page. Missing/non-PAGE → {error}.
+    case COMMANDS.SET_CURRENT_PAGE: {
+      const pageId = params.pageId as string
+      const page = await figma.getNodeByIdAsync(pageId)
+      if (!page || page.type !== 'PAGE') {
+        return { error: 'Page not found: ' + pageId }
+      }
+      await figma.setCurrentPageAsync(page as PageNode)
+      return {
+        currentPage: { id: page.id, name: page.name },
+      }
+    }
+
+    // duplicate_page: clone an existing page, optionally renaming the clone.
+    // Missing/non-PAGE → {error}.
+    case COMMANDS.DUPLICATE_PAGE: {
+      const pageId = params.pageId as string
+      const page = await figma.getNodeByIdAsync(pageId)
+      if (!page || page.type !== 'PAGE') {
+        return { error: 'Page not found: ' + pageId }
+      }
+      const dup = (page as PageNode).clone()
+      if (params.name !== undefined) {
+        dup.name = params.name as string
+      }
+      return { id: dup.id, name: dup.name }
+    }
+
+    // create_image: register an image and return its hash. T7 degrade — when
+    // createImageAsync is unavailable or fetching/decoding fails, return
+    // {warnings} (NO hash, NO error) so the server reports success-with-warning.
+    // Supply EXACTLY ONE of url (fetched via createImageAsync) or bytes
+    // (raw bytes via createImage).
+    case COMMANDS.CREATE_IMAGE: {
+      const url = params.url as string | undefined
+      const bytes = params.bytes as number[] | undefined
+      if (url !== undefined) {
+        if (typeof figma.createImageAsync !== 'function') {
+          return {
+            warnings: [
+              'createImageAsync unavailable in this Figma version; image not created',
+            ],
+          }
+        }
+        try {
+          const image = await figma.createImageAsync(url)
+          return { hash: image.hash }
+        } catch (e) {
+          return {
+            warnings: [
+              'createImageAsync failed (network/feature unavailable): ' +
+                String(e),
+            ],
+          }
+        }
+      }
+      if (bytes !== undefined) {
+        try {
+          const image = figma.createImage(
+            new Uint8Array(bytes),
+          )
+          return { hash: image.hash }
+        } catch (e) {
+          return {
+            warnings: [
+              'createImage failed (invalid bytes/feature unavailable): ' +
+                String(e),
+            ],
+          }
+        }
+      }
+      return { error: 'create_image requires url or bytes' }
+    }
+
+    // set_plugin_data: write a single plugin-data key (shared when a namespace
+    // is given). Missing/incapable node → {error}. Twin of get_plugin_data.
+    case COMMANDS.SET_PLUGIN_DATA: {
+      const nodeId = params.nodeId as string
+      const node = await figma.getNodeByIdAsync(nodeId)
+      if (!node || !('setPluginData' in node)) {
+        return { error: 'Node not found: ' + nodeId }
+      }
+      const dataNode = node as BaseNode & PluginDataMixin
+      const key = params.key as string
+      const value = params.value as string
+      const namespace = params.namespace as
+        | string
+        | undefined
+      if (namespace !== undefined) {
+        dataNode.setSharedPluginData(namespace, key, value)
+      } else {
+        dataNode.setPluginData(key, value)
+      }
+      return { id: node.id }
+    }
+
+    // set_reactions: replace a node's prototype reactions. T7 — feature-detect
+    // setReactionsAsync and degrade to {id,warnings} (NEVER {error}) on a
+    // missing API or a failed assignment; only a missing node yields {error}.
+    case COMMANDS.SET_REACTIONS: {
+      const nodeId = params.nodeId as string
+      const node = await figma.getNodeByIdAsync(nodeId)
+      if (!node) {
+        return { error: 'Node not found: ' + nodeId }
+      }
+      const r = node as SceneNode & {
+        setReactionsAsync?: (
+          reactions: unknown[],
+        ) => Promise<void>
+      }
+      if (typeof r.setReactionsAsync !== 'function') {
+        return {
+          id: node.id,
+          warnings: [
+            'setReactionsAsync unavailable in this Figma version; reactions not set',
+          ],
+        }
+      }
+      try {
+        await r.setReactionsAsync(
+          params.reactions as unknown as Reaction[],
+        )
+        return { id: node.id, warnings: [] }
+      } catch (e) {
+        return {
+          id: node.id,
+          warnings: [
+            'Failed to set reactions: ' + String(e),
+          ],
+        }
+      }
+    }
+
+    // set_annotations: replace a node's annotations. T7 editorType-gated —
+    // feature-detect 'annotations' on the node and degrade to {id,warnings}
+    // (NEVER {error}/throw) when absent; only a missing node yields {error}.
+    case COMMANDS.SET_ANNOTATIONS: {
+      const nodeId = params.nodeId as string
+      const node = await figma.getNodeByIdAsync(nodeId)
+      if (!node) {
+        return { error: 'Node not found: ' + nodeId }
+      }
+      if (!('annotations' in node)) {
+        return {
+          id: node.id,
+          warnings: [
+            'Annotations API unavailable in this editor; annotations not set',
+          ],
+        }
+      }
+      try {
+        ;(
+          node as SceneNode & {
+            annotations?: unknown[]
+          }
+        ).annotations =
+          params.annotations as unknown as Annotation[]
+        return { id: node.id, warnings: [] }
+      } catch (e) {
+        return {
+          id: node.id,
+          warnings: [
+            'Failed to set annotations: ' + String(e),
+          ],
+        }
       }
     }
 

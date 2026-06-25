@@ -5,6 +5,7 @@ import {
   expect,
   it,
 } from 'bun:test'
+import YAML from 'yaml'
 import type { Server } from 'bun'
 import {
   startRelay,
@@ -22,8 +23,8 @@ import {
   handleListPages,
 } from '@figma-agent-bridge/server/tools/read'
 import {
-  handleInspectStyles,
-  handleInspectComponents,
+  handleGetStyles,
+  handleGetComponents,
 } from '@figma-agent-bridge/server/tools/design-system'
 import { handleSearch } from '@figma-agent-bridge/server/tools/search'
 import { handleExport } from '@figma-agent-bridge/server/tools/export'
@@ -183,21 +184,23 @@ describe('M2 read tools e2e', () => {
     stopRelay(server)
   })
 
-  it('inspect returns YAML for mock document', async () => {
+  it('inspect returns {view, truncated} YAML for mock document', async () => {
     const result = await handleInspect(
-      { nodeId: '1:42' },
+      { nodeId: '1:42', depth: -1 },
       client,
     )
 
     expect(result.content).toHaveLength(1)
     expect(result.content[0].type).toBe('text')
-    expect(result.content[0].text).toContain('# Card')
-    expect(result.content[0].text).toContain(
-      'auto-layout: V',
-    )
+    const out = YAML.parse(result.content[0].text) as {
+      view: { name: string }
+      truncated: unknown[]
+    }
+    expect(out.view.name).toBe('Card')
+    expect(Array.isArray(out.truncated)).toBe(true)
   })
 
-  it('get_node returns JSON with depth control', async () => {
+  it('get_node returns a NodeSpec (YAML) with depth control', async () => {
     const result = await handleGetNode(
       { nodeId: '1:42', depth: 0 },
       client,
@@ -205,48 +208,43 @@ describe('M2 read tools e2e', () => {
 
     expect(result.content).toHaveLength(1)
     expect(result.content[0].type).toBe('text')
-    const parsed = JSON.parse(
+    const parsed = YAML.parse(
       result.content[0].text,
     ) as Record<string, unknown>
     expect(parsed.id).toBe('1:42')
     expect(parsed.name).toBe('Card')
-    // depth 0 means children shown as stubs
-    if (parsed.children !== undefined) {
-      const children = parsed.children as {
-        id?: string
-        name?: string
-        type?: string
-        _stub?: boolean
-      }[]
-      for (const child of children) {
-        expect(
-          child._stub === true ||
-            (child.id !== undefined &&
-              child.name !== undefined),
-        ).toBe(true)
-      }
+    // depth 0 means children shown as id-stubs (drill-by-id).
+    const children = parsed.children as {
+      id?: string
+      childCount?: number
+    }[]
+    for (const child of children) {
+      expect(child.id).toBeDefined()
+      expect(child.childCount).toBeDefined()
     }
   })
 
-  it('inspect_styles returns design system YAML', async () => {
-    const result = await handleInspectStyles({}, client)
+  it('get_styles returns the Rule-A results list', async () => {
+    const result = await handleGetStyles({}, client)
 
     expect(result.content).toHaveLength(1)
     expect(result.content[0].type).toBe('text')
-    expect(result.content[0].text).toContain('styles')
+    expect(result.content[0].text).toContain('results')
+    expect(result.content[0].text).toContain('truncated')
   })
 
-  it('inspect_components returns component catalog', async () => {
-    const result = await handleInspectComponents({}, client)
+  it('get_components returns the component catalog', async () => {
+    const result = await handleGetComponents({}, client)
 
     expect(result.content).toHaveLength(1)
     expect(result.content[0].type).toBe('text')
-    expect(result.content[0].text).toContain('local')
+    expect(result.content[0].text).toContain('results')
+    expect(result.content[0].text).toContain('Button')
   })
 
-  it('search finds nodes by name pattern', async () => {
+  it('search finds nodes by name pattern (server-side match)', async () => {
     const result = await handleSearch(
-      { name: 'Card' },
+      { match: { name: 'Card' } },
       client,
     )
 
@@ -255,12 +253,14 @@ describe('M2 read tools e2e', () => {
     expect(result.content[0].text).toContain('Card')
   })
 
-  it('list_pages returns all pages in YAML', async () => {
+  it('list_pages returns the document + pages in YAML (Rule A)', async () => {
     const result = await handleListPages(client)
 
     expect(result.content).toHaveLength(1)
     expect(result.content[0].type).toBe('text')
-    expect(result.content[0].text).toContain('Homepage')
+    // The mock's page name is whatever pageName was passed to createMockPlugin.
+    expect(result.content[0].text).toContain('results')
+    expect(result.content[0].text).toContain('docName')
   })
 
   it('export PNG returns image with valid base64', async () => {

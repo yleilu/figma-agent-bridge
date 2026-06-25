@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'bun:test'
+import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
 import { handleExport } from '@figma-agent-bridge/server/tools/export'
 
 describe('handleExport', () => {
-  it('sends export_node and returns MCP image content for PNG', async () => {
+  it('sends COMMANDS.EXPORT and returns MCP image content for PNG', async () => {
+    let sent = ''
     const mockClient: FigmaClient = {
       joinChannel: () => Promise.resolve(''),
       sendCommand: cmd => {
-        if (cmd === 'export_node') {
+        sent = cmd
+        if (cmd === COMMANDS.EXPORT) {
           return Promise.resolve({
             format: 'PNG',
             scale: 1,
@@ -32,6 +35,7 @@ describe('handleExport', () => {
       mimeType: string
     }
 
+    expect(sent).toBe(COMMANDS.EXPORT)
     expect(item.type).toBe('image')
     expect(item.data).toBe('iVBORw0KGgoAAAANS')
     expect(item.mimeType).toBe('image/png')
@@ -41,7 +45,7 @@ describe('handleExport', () => {
     const mockClient: FigmaClient = {
       joinChannel: () => Promise.resolve(''),
       sendCommand: cmd => {
-        if (cmd === 'export_node') {
+        if (cmd === COMMANDS.EXPORT) {
           return Promise.resolve({
             format: 'JPG',
             scale: 2,
@@ -77,7 +81,7 @@ describe('handleExport', () => {
     const mockClient: FigmaClient = {
       joinChannel: () => Promise.resolve(''),
       sendCommand: cmd => {
-        if (cmd === 'export_node') {
+        if (cmd === COMMANDS.EXPORT) {
           return Promise.resolve({
             format: 'SVG',
             scale: 1,
@@ -110,7 +114,7 @@ describe('handleExport', () => {
     const mockClient: FigmaClient = {
       joinChannel: () => Promise.resolve(''),
       sendCommand: (cmd, params) => {
-        if (cmd === 'export_node') {
+        if (cmd === COMMANDS.EXPORT) {
           sentParams.push(params as Record<string, unknown>)
 
           return Promise.resolve({

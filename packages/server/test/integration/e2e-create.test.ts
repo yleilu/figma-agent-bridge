@@ -19,6 +19,21 @@ import {
 } from '@figma-agent-bridge/server/tools/create'
 import { handleCreateComponent } from '@figma-agent-bridge/server/tools/create-component'
 import { handleCreateFromSvg } from '@figma-agent-bridge/server/tools/create-svg'
+import {
+  handleDeleteNode,
+  handleSetFocus,
+} from '@figma-agent-bridge/server/tools/structure'
+import {
+  handleCreatePage,
+  handleSetCurrentPage,
+  handleDuplicatePage,
+} from '@figma-agent-bridge/server/tools/pages'
+import { handleCreateImage } from '@figma-agent-bridge/server/tools/create-image'
+import {
+  handleSetPluginData,
+  handleSetReactions,
+  handleSetAnnotations,
+} from '@figma-agent-bridge/server/tools/metadata'
 import { createMockPlugin } from '../mocks/mock-plugin'
 
 const TEST_PORT = 3099
@@ -333,5 +348,174 @@ describe('M3 create tools e2e', () => {
     expect(result.content[0].text).toContain(
       'Not connected',
     )
+  })
+})
+
+// M2 chunk D — simple single-target writes over the REAL relay + mock plugin.
+const D_TEST_PORT = 3102
+const D_RELAY_URL = `ws://localhost:${D_TEST_PORT}`
+const D_TEST_CHANNEL = 'e2e-chunk-d-test'
+
+describe('M2 chunk D writes e2e', () => {
+  let server: Server<{ id: string }>
+  let client: FigmaClient
+  let plugin: ReturnType<typeof createMockPlugin> | null =
+    null
+
+  beforeEach(async () => {
+    server = startRelay(D_TEST_PORT)
+    client = createFigmaClient(D_RELAY_URL)
+
+    plugin = createMockPlugin({
+      relayUrl: D_RELAY_URL,
+      channel: D_TEST_CHANNEL,
+      documentName: 'Chunk D Doc',
+      pageName: 'Main Page',
+    })
+
+    await plugin.start()
+    await handleConnect({ channel: D_TEST_CHANNEL }, client)
+  })
+
+  afterEach(() => {
+    if (plugin !== null) {
+      plugin.stop()
+      plugin = null
+    }
+    client.disconnect()
+    stopRelay(server)
+  })
+
+  it('delete_node echoes the deleted {id,name,type}', async () => {
+    const result = await handleDeleteNode(
+      { nodeId: '1:42' },
+      client,
+    )
+    const data = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(data.id).toBe('1:42')
+    expect(data.type).toBe('FRAME')
+  })
+
+  it('set_focus echoes a viewport snapshot', async () => {
+    const result = await handleSetFocus(
+      { nodeIds: ['1:42'] },
+      client,
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      viewport: { zoom: number }
+    }
+    expect(data.viewport.zoom).toBe(1)
+  })
+
+  it('create_page echoes the new page id + name', async () => {
+    const result = await handleCreatePage(
+      { name: 'Specs' },
+      client,
+    )
+    const data = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(data.id).toBe('page:new')
+    expect(data.name).toBe('Specs')
+  })
+
+  it('set_current_page echoes the switched page', async () => {
+    const result = await handleSetCurrentPage(
+      { pageId: 'page:2' },
+      client,
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      currentPage: { id: string }
+    }
+    expect(data.currentPage.id).toBe('page:2')
+  })
+
+  it('duplicate_page echoes the clone with rename', async () => {
+    const result = await handleDuplicatePage(
+      { pageId: 'page:1', name: 'Copy A' },
+      client,
+    )
+    const data = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(data.id).toBe('page:dup')
+    expect(data.name).toBe('Copy A')
+  })
+
+  it('create_image (url) returns a hash', async () => {
+    const result = await handleCreateImage(
+      { url: 'https://x/y.png' },
+      client,
+    )
+    const data = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(data.hash).toBe('img:abc123')
+  })
+
+  it('create_image T7 degrade (degrade: url) → warnings, success NOT error', async () => {
+    const result = await handleCreateImage(
+      { url: 'degrade:nope' },
+      client,
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      hash?: string
+      warnings?: string[]
+    }
+    expect(data.hash).toBeUndefined()
+    expect(data.warnings).toBeDefined()
+    expect(result.content[0].text).not.toContain('Error:')
+  })
+
+  it('set_plugin_data echoes {id}', async () => {
+    const result = await handleSetPluginData(
+      { nodeId: '1:42', key: 'k', value: 'v' },
+      client,
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      id: string
+    }
+    expect(data.id).toBe('1:42')
+  })
+
+  it('set_reactions echoes {id,warnings:[]} on the happy path', async () => {
+    const result = await handleSetReactions(
+      { nodeId: '1:42', reactions: [] },
+      client,
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      id: string
+      warnings: string[]
+    }
+    expect(data.id).toBe('1:42')
+    expect(data.warnings).toEqual([])
+  })
+
+  it('set_reactions T7 degrade (degrade: nodeId) → warnings, success NOT error', async () => {
+    const result = await handleSetReactions(
+      { nodeId: 'degrade:1', reactions: [] },
+      client,
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      id: string
+      warnings: string[]
+    }
+    expect(data.warnings).toHaveLength(1)
+    expect(result.content[0].text).not.toContain('Error:')
+  })
+
+  it('set_annotations T7 degrade (degrade: nodeId) → warnings, success NOT error', async () => {
+    const result = await handleSetAnnotations(
+      { nodeId: 'degrade:1', annotations: [] },
+      client,
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      id: string
+      warnings: string[]
+    }
+    expect(data.warnings).toHaveLength(1)
+    expect(result.content[0].text).not.toContain('Error:')
   })
 })

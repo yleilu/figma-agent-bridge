@@ -1,0 +1,378 @@
+// node-spec-writer.test.ts — specToFigma / specToFigmaForCreate
+//
+// Tests the NodeSpec → FigmaWritePayload converter. This is a PURE
+// converter: it emits ONLY keys present in `spec`, never injecting
+// defaults. The plugin's applyCommonProperties/applyTextProperties/
+// applyPostAppendProperties read the flat payload keys.
+
+import { describe, expect, it } from 'bun:test'
+import {
+  specToFigma,
+  specToFigmaForCreate,
+} from '@figma-agent-bridge/server/serialize/node-spec-writer'
+
+// ─── omit-untouched (pure) ───────────────────────────────────────────────────
+
+describe('specToFigma — pure, no defaults', () => {
+  it('empty spec produces empty payload', () => {
+    expect(specToFigma({})).toEqual({})
+  })
+
+  it('single scalar field is the only key emitted', () => {
+    expect(specToFigma({ opacity: 0.5 })).toEqual({
+      opacity: 0.5,
+    })
+  })
+})
+
+// ─── atom leaf conversions ────────────────────────────────────────────────────
+
+describe('specToFigma — fills', () => {
+  it('hex fill atom converts to SOLID paint', () => {
+    const result = specToFigma({ fills: ['#FF0000'] })
+    expect(result).toEqual({
+      fills: [
+        { type: 'SOLID', color: { r: 1, g: 0, b: 0 } },
+      ],
+    })
+  })
+
+  it('var() wrapper is auto-dropped to the resolved literal', () => {
+    const result = specToFigma({
+      fills: ['var(Brand/Primary)#FF0000'],
+    })
+    expect(result).toEqual({
+      fills: [
+        { type: 'SOLID', color: { r: 1, g: 0, b: 0 } },
+      ],
+    })
+  })
+})
+
+describe('specToFigma — strokes (fill paints)', () => {
+  it('hex stroke atom converts to SOLID paint', () => {
+    const result = specToFigma({ strokes: ['#000000'] })
+    expect(result).toHaveProperty('strokes')
+    const strokes = result.strokes as unknown[]
+    expect(strokes[0]).toMatchObject({ type: 'SOLID' })
+  })
+})
+
+describe('specToFigma — stroke geometry', () => {
+  it('stroke atom emits strokeWeight and strokeAlign', () => {
+    const result = specToFigma({
+      stroke: 'stroke(2){align=INSIDE}',
+    })
+    expect(result).toMatchObject({
+      strokeWeight: 2,
+      strokeAlign: 'INSIDE',
+    })
+  })
+
+  it('stroke atom with dash emits strokeDash', () => {
+    const result = specToFigma({
+      stroke: 'stroke(2){align=INSIDE,dash=[4,2]}',
+    })
+    expect(result).toMatchObject({
+      strokeWeight: 2,
+      strokeAlign: 'INSIDE',
+      strokeDash: [4, 2],
+    })
+  })
+})
+
+describe('specToFigma — effects', () => {
+  it('shadow effect atom converts to DROP_SHADOW', () => {
+    const result = specToFigma({
+      effects: ['shadow(0,2,4,#000000)'],
+    })
+    expect(result).toHaveProperty('effects')
+    const effects = result.effects as { type: string }[]
+    expect(effects[0].type).toBe('DROP_SHADOW')
+  })
+})
+
+describe('specToFigma — radius', () => {
+  it('uniform radius string converts to number', () => {
+    expect(specToFigma({ radius: '8' })).toEqual({
+      radius: 8,
+    })
+  })
+
+  it('corner-tuple radius string converts to number array', () => {
+    expect(specToFigma({ radius: '[8,8,0,0]' })).toEqual({
+      radius: [8, 8, 0, 0],
+    })
+  })
+})
+
+describe('specToFigma — blend', () => {
+  it('blend renames to blendMode', () => {
+    expect(specToFigma({ blend: 'MULTIPLY' })).toEqual({
+      blendMode: 'MULTIPLY',
+    })
+  })
+})
+
+describe('specToFigma — layout', () => {
+  it('layout spec maps gap→spacing, pad→padding, mode/align pass-through', () => {
+    const result = specToFigma({
+      layout: {
+        mode: 'V',
+        gap: 8,
+        pad: [4, 4, 4, 4],
+        align: ['MIN', 'MIN'],
+      },
+    })
+    expect(result).toHaveProperty('layout')
+    const layout = result.layout as Record<string, unknown>
+    expect(layout.mode).toBe('V')
+    expect(layout.spacing).toBe(8)
+    expect(layout.padding).toEqual([4, 4, 4, 4])
+    expect(layout.align).toEqual(['MIN', 'MIN'])
+  })
+
+  it('layout with wrap passes wrap through', () => {
+    const result = specToFigma({
+      layout: { mode: 'H', wrap: true },
+    })
+    const layout = result.layout as Record<string, unknown>
+    expect(layout.wrap).toBe(true)
+  })
+})
+
+describe('specToFigma — text', () => {
+  it('text.font atom converts to parsed font object', () => {
+    const result = specToFigma({
+      text: { content: 'Hi', font: 'font(Inter,Bold,32)' },
+    })
+    expect(result).toHaveProperty('text')
+    const text = result.text as Record<string, unknown>
+    expect(text.font).toEqual({
+      family: 'Inter',
+      style: 'Bold',
+      size: 32,
+    })
+    expect(text.content).toBe('Hi')
+  })
+
+  it('text.color atom converts to paint', () => {
+    const result = specToFigma({
+      text: {
+        content: 'Hi',
+        font: 'font(Inter,Regular,16)',
+        color: '#000000',
+      },
+    })
+    const text = result.text as Record<string, unknown>
+    expect(text.color).toMatchObject({ type: 'SOLID' })
+  })
+
+  it('lifts lh/ls from the font atom into text.lineHeight/text.letterSpacing ({value,unit})', () => {
+    const result = specToFigma({
+      text: {
+        content: 'Hi',
+        font: 'font(Inter,SemiBold,18){lh=24,ls=0.5}',
+      },
+    })
+    const text = result.text as Record<string, unknown>
+    // Font object carries family/style/size only — lh/ls are lifted out.
+    expect(text.font).toEqual({
+      family: 'Inter',
+      style: 'SemiBold',
+      size: 18,
+    })
+    // Plugin reads text.lineHeight / text.letterSpacing as {value, unit}.
+    expect(text.lineHeight).toEqual({
+      value: 24,
+      unit: 'PIXELS',
+    })
+    expect(text.letterSpacing).toEqual({
+      value: 0.5,
+      unit: 'PIXELS',
+    })
+  })
+
+  it('lifts a percent line-height from the font atom', () => {
+    const result = specToFigma({
+      text: {
+        content: 'Hi',
+        font: 'font(Inter,Regular,16){lh=150%}',
+      },
+    })
+    const text = result.text as Record<string, unknown>
+    expect(text.lineHeight).toEqual({
+      value: 150,
+      unit: 'PERCENT',
+    })
+  })
+
+  it('omits lineHeight/letterSpacing when the font atom has none', () => {
+    const result = specToFigma({
+      text: {
+        content: 'Hi',
+        font: 'font(Inter,Regular,16)',
+      },
+    })
+    const text = result.text as Record<string, unknown>
+    expect(text.lineHeight).toBeUndefined()
+    expect(text.letterSpacing).toBeUndefined()
+    expect(text).not.toHaveProperty('lh')
+    expect(text).not.toHaveProperty('ls')
+  })
+
+  it('lifts lh/ls on per-range runs as well', () => {
+    const result = specToFigma({
+      text: {
+        content: 'Hi there',
+        font: 'font(Inter,Regular,16)',
+        runs: [
+          {
+            at: [0, 2],
+            font: 'font(Inter,Bold,16){lh=20}',
+          },
+        ],
+      },
+    })
+    const text = result.text as Record<string, unknown>
+    const runs = text.runs as Record<string, unknown>[]
+    expect(runs[0].font).toEqual({
+      family: 'Inter',
+      style: 'Bold',
+      size: 16,
+    })
+    expect(runs[0].lineHeight).toEqual({
+      value: 20,
+      unit: 'PIXELS',
+    })
+  })
+})
+
+describe('specToFigma — grids', () => {
+  it('grid atoms convert via atomToGrid', () => {
+    const result = specToFigma({
+      grids: ['columns(12,60,16)'],
+    })
+    expect(result).toHaveProperty('grids')
+    const grids = result.grids as { pattern: string }[]
+    expect(grids[0].pattern).toBe('COLUMNS')
+  })
+})
+
+// ─── pass-through fields ──────────────────────────────────────────────────────
+
+describe('specToFigma — pass-through fields', () => {
+  it('name passes through', () => {
+    expect(specToFigma({ name: 'Card' })).toEqual({
+      name: 'Card',
+    })
+  })
+
+  it('size passes through', () => {
+    expect(specToFigma({ size: [200, 100] })).toEqual({
+      size: [200, 100],
+    })
+  })
+
+  it('position passes through', () => {
+    expect(specToFigma({ position: [10, 20] })).toEqual({
+      position: [10, 20],
+    })
+  })
+
+  it('opacity passes through', () => {
+    expect(specToFigma({ opacity: 0.8 })).toEqual({
+      opacity: 0.8,
+    })
+  })
+
+  it('rotation passes through', () => {
+    expect(specToFigma({ rotation: 45 })).toEqual({
+      rotation: 45,
+    })
+  })
+
+  it('visible passes through', () => {
+    expect(specToFigma({ visible: false })).toEqual({
+      visible: false,
+    })
+  })
+
+  it('clipsContent passes through', () => {
+    expect(specToFigma({ clipsContent: true })).toEqual({
+      clipsContent: true,
+    })
+  })
+
+  it('sizing passes through', () => {
+    expect(
+      specToFigma({ sizing: ['HUG', 'FIXED'] }),
+    ).toEqual({
+      sizing: ['HUG', 'FIXED'],
+    })
+  })
+
+  it('layoutPositioning passes through', () => {
+    expect(
+      specToFigma({ layoutPositioning: 'ABSOLUTE' }),
+    ).toEqual({
+      layoutPositioning: 'ABSOLUTE',
+    })
+  })
+
+  it('minWidth/maxWidth/minHeight/maxHeight pass through', () => {
+    expect(
+      specToFigma({
+        minWidth: 100,
+        maxWidth: 400,
+        minHeight: 50,
+        maxHeight: null,
+      }),
+    ).toEqual({
+      minWidth: 100,
+      maxWidth: 400,
+      minHeight: 50,
+      maxHeight: null,
+    })
+  })
+
+  it('constraints passes through', () => {
+    expect(
+      specToFigma({ constraints: ['MIN', 'CENTER'] }),
+    ).toEqual({ constraints: ['MIN', 'CENTER'] })
+  })
+})
+
+// ─── specToFigmaForCreate ─────────────────────────────────────────────────────
+
+describe('specToFigmaForCreate', () => {
+  it('carries the type discriminator through (plugin createSingleNode switches on it)', () => {
+    // specToFigma is a property-patch converter and never emits `type`; the
+    // CREATE wrapper must add it back or the plugin cannot pick the node kind.
+    const result = specToFigmaForCreate({ type: 'ELLIPSE' })
+    expect(result.type).toBe('ELLIPSE')
+  })
+
+  it('uses type as name fallback when name is absent', () => {
+    const result = specToFigmaForCreate({ type: 'FRAME' })
+    expect(result.name).toBe('FRAME')
+  })
+
+  it('preserves explicit name when present', () => {
+    const result = specToFigmaForCreate({
+      type: 'FRAME',
+      name: 'Card',
+    })
+    expect(result.name).toBe('Card')
+  })
+
+  it('still converts atoms (e.g. fills)', () => {
+    const result = specToFigmaForCreate({
+      type: 'RECTANGLE',
+      fills: ['#FF0000'],
+    })
+    expect(result).toHaveProperty('fills')
+    const fills = result.fills as { type: string }[]
+    expect(fills[0].type).toBe('SOLID')
+  })
+})

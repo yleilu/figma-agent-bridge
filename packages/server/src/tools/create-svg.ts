@@ -1,3 +1,4 @@
+import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { FigmaClient } from '../figma-client'
 import {
   type ToolResult,
@@ -23,7 +24,7 @@ export const handleCreateFromSvg = async (
 
   try {
     const result = (await client.sendCommand(
-      'create_from_svg',
+      COMMANDS.CREATE_FROM_SVG,
       {
         parentId: params.parentId,
         svg: params.svg,

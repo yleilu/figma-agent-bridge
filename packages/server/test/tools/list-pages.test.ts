@@ -1,0 +1,112 @@
+// list-pages.test.ts — the rebuilt handleListPages (Rule A list read).
+//
+// list_pages sends COMMANDS.LIST_PAGES; the plugin returns
+// { docName, results:[{id,name,isCurrent,childCount}] }. The server emits the
+// Rule A shape { docName, results, truncated, cursor? } as YAML. The page set
+// is naturally bounded, so truncated is false and no cursor is emitted.
+
+import { describe, expect, it } from 'bun:test'
+import YAML from 'yaml'
+import { handleListPages } from '@figma-agent-bridge/server/tools/read'
+import { COMMANDS } from '@figma-agent-bridge/shared'
+import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+
+type Sent = {
+  command: string
+  params?: Record<string, unknown>
+}
+
+const stubClient = (opts: {
+  connected?: boolean
+  reply?: unknown
+  sent?: Sent[]
+}): FigmaClient => ({
+  joinChannel: async () => 'ch',
+  sendCommand: async (
+    command: string,
+    params?: Record<string, unknown>,
+  ) => {
+    opts.sent?.push({ command, params })
+    return opts.reply ?? null
+  },
+  disconnect: () => {},
+  isConnected: () => opts.connected ?? true,
+  currentChannel: () => 'ch',
+})
+
+const reply = {
+  docName: 'My Doc',
+  results: [
+    {
+      id: '0:1',
+      name: 'Homepage',
+      isCurrent: true,
+      childCount: 3,
+    },
+    {
+      id: '0:2',
+      name: 'Components',
+      isCurrent: false,
+      childCount: 15,
+    },
+  ],
+}
+
+describe('handleListPages (rebuilt — Rule A)', () => {
+  it('returns the not-connected guard when disconnected', async () => {
+    const result = await handleListPages(
+      stubClient({ connected: false }),
+    )
+    expect(result.content[0].text).toContain(
+      'Not connected',
+    )
+  })
+
+  it('sends COMMANDS.LIST_PAGES', async () => {
+    const sent: Sent[] = []
+    await handleListPages(stubClient({ sent, reply }))
+    expect(sent[0].command).toBe(COMMANDS.LIST_PAGES)
+  })
+
+  it('emits { docName, results, truncated } with the page shape', async () => {
+    const result = await handleListPages(
+      stubClient({ reply }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      docName: string
+      results: {
+        id: string
+        name: string
+        isCurrent: boolean
+        childCount: number
+      }[]
+      truncated: boolean
+    }
+    expect(out.docName).toBe('My Doc')
+    expect(out.results).toHaveLength(2)
+    expect(out.results[0]).toEqual({
+      id: '0:1',
+      name: 'Homepage',
+      isCurrent: true,
+      childCount: 3,
+    })
+    expect(out.truncated).toBe(false)
+  })
+
+  it('does not emit a cursor for the bounded page set', async () => {
+    const result = await handleListPages(
+      stubClient({ reply }),
+    )
+    const out = YAML.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(out).not.toHaveProperty('cursor')
+  })
+
+  it('returns a failure message when the plugin returns null', async () => {
+    const result = await handleListPages(
+      stubClient({ reply: null }),
+    )
+    expect(result.content[0].text).toContain('Failed')
+  })
+})

@@ -7,9 +7,6 @@ import type {
   SystemMessage,
 } from '@figma-agent-bridge/shared/types'
 import cardFixture from '../fixtures/card-node-raw.json'
-import pageLayoutFixture from '../fixtures/page-layout-raw.json'
-import stylesFixture from '../fixtures/styles-raw.json'
-import componentsFixture from '../fixtures/components-raw.json'
 
 const MOCK_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect fill="red" width="100" height="100"/></svg>'
@@ -22,6 +19,13 @@ type MockPluginOptions = {
   channel: string
   documentName?: string
   pageName?: string
+  /**
+   * Raw exports of the current selection. INSPECT with no nodeId/pageId honors
+   * this the way the real plugin does: >1 entry → return the ARRAY (forest);
+   * exactly 1 → return that single export; empty/undefined → fall back to the
+   * default single-node export (representing the current page).
+   */
+  selection?: Record<string, unknown>[]
 }
 
 type MockPlugin = {
@@ -37,6 +41,7 @@ export const createMockPlugin = (
     channel,
     documentName = 'Mock Document',
     pageName = 'Page 1',
+    selection,
   } = options
 
   let ws: WebSocket | null = null
@@ -65,55 +70,255 @@ export const createMockPlugin = (
         ]
         break
 
+      // set_selection: echo {selectedCount} = the number of ids passed.
+      case 'set_selection': {
+        const ids = (cmd.params?.nodeIds as string[]) ?? []
+        result = { selectedCount: ids.length }
+        break
+      }
+
       case 'get_node':
         result = cardFixture
         break
+
+      // inspect serializes the same raw export get_node consumes; the server's
+      // read model (truncate-tree + budget) decides what survives. With no
+      // nodeId/pageId it targets the current selection the way the real plugin
+      // does: >1 selected → an ARRAY of raw exports (the server wraps them in a
+      // SELECTION forest); exactly 1 → that single export; empty → the default
+      // single-node export (representing the current page).
+      case 'inspect': {
+        const targeted =
+          cmd.params?.nodeId !== undefined ||
+          cmd.params?.pageId !== undefined
+        if (
+          !targeted &&
+          selection &&
+          selection.length > 1
+        ) {
+          result = selection
+        } else if (
+          !targeted &&
+          selection &&
+          selection.length === 1
+        ) {
+          ;[result] = selection
+        } else {
+          result = cardFixture
+        }
+        break
+      }
 
       case 'get_nodes':
         result = [cardFixture]
         break
 
-      case 'get_page_layout':
-        result = pageLayoutFixture
+      // list_pages: Rule A document + page enumeration ({docName, results}).
+      case 'list_pages':
+        result = {
+          docName: documentName,
+          results: [
+            {
+              id: 'page:1',
+              name: pageName,
+              isCurrent: true,
+              childCount: 3,
+            },
+          ],
+        }
         break
 
-      case 'get_pages':
-        result = [
-          {
-            id: 'page:1',
-            name: pageName,
-            isCurrent: true,
-            childCount: 3,
-          },
-        ]
-        break
-
+      // get_styles: the NEW server-expected shape — each entry carries a raw
+      // figma VALUE the server renders to a view atom (paint→hex, text→font,
+      // effect→head). Real value shapes so the e2e can assert atom rendering.
       case 'get_styles':
-        result = stylesFixture
+        result = {
+          paint: [
+            {
+              id: 'S:1',
+              name: 'Brand/Primary',
+              value: {
+                type: 'SOLID',
+                color: { r: 0.231, g: 0.51, b: 0.965 },
+              },
+            },
+          ],
+          text: [
+            {
+              id: 'S:2',
+              name: 'Heading',
+              value: {
+                family: 'Inter',
+                style: 'Bold',
+                size: 32,
+                lineHeight: { value: 40, unit: 'PIXELS' },
+              },
+            },
+          ],
+          effect: [
+            {
+              id: 'S:3',
+              name: 'Card Shadow',
+              value: {
+                type: 'DROP_SHADOW',
+                color: { r: 0, g: 0, b: 0, a: 0.1 },
+                offset: { x: 0, y: 4 },
+                radius: 12,
+                spread: 0,
+              },
+            },
+          ],
+          grid: [
+            {
+              id: 'S:4',
+              name: 'Layout/Columns',
+              value: {
+                pattern: 'COLUMNS',
+                count: 12,
+                gutterSize: 16,
+                sectionSize: 64,
+                alignment: 'STRETCH',
+              },
+            },
+          ],
+        }
         break
 
-      case 'get_local_components':
-        result = componentsFixture
+      // get_components: the NEW richer shape — key + variantAxes +
+      // propertyDefinitions + defaults per local entry, key + library +
+      // instancesCount per remote entry.
+      case 'get_components':
+        result = {
+          local: [
+            {
+              id: '1:10',
+              name: 'Button',
+              key: 'btn-key',
+              type: 'COMPONENT_SET',
+              page: 'Main',
+              propertyDefinitions: [
+                {
+                  name: 'Variant',
+                  type: 'VARIANT',
+                  defaultValue: 'Primary',
+                  variantOptions: ['Primary', 'Secondary'],
+                },
+                {
+                  name: 'Disabled',
+                  type: 'BOOLEAN',
+                  defaultValue: false,
+                },
+              ],
+              variantAxes: {
+                Variant: ['Primary', 'Secondary'],
+              },
+              defaults: {
+                Variant: 'Primary',
+                Disabled: false,
+              },
+            },
+          ],
+          remote: [
+            {
+              key: 'remote-key',
+              name: 'Icon',
+              library: 'Lib',
+              instancesCount: 3,
+            },
+          ],
+        }
         break
 
-      case 'search_nodes':
+      // list_fonts: families grouped by the plugin ({ family, styles }).
+      case 'list_fonts':
+        result = {
+          results: [
+            {
+              family: 'Inter',
+              styles: ['Regular', 'Bold'],
+            },
+            { family: 'Roboto', styles: ['Regular'] },
+          ],
+        }
+        break
+
+      // get_reactions: a single ON_CLICK → NAVIGATE reaction.
+      case 'get_reactions':
+        result = {
+          nodeId: cmd.params?.nodeId as string,
+          reactions: [
+            {
+              trigger: { type: 'ON_CLICK' },
+              actions: [
+                {
+                  type: 'NODE',
+                  destinationId: '1:99',
+                  navigation: 'NAVIGATE',
+                },
+              ],
+            },
+          ],
+        }
+        break
+
+      // get_plugin_data: pluginData always; sharedPluginData only with a namespace.
+      case 'get_plugin_data':
+        result = {
+          nodeId: cmd.params?.nodeId as string,
+          pluginData: { foo: 'bar' },
+          sharedPluginData: cmd.params?.namespace
+            ? { baz: 'qux' }
+            : undefined,
+        }
+        break
+
+      // get_annotations: happy path (Rule A). The degrade path is covered by the
+      // metadata unit test with a stub client.
+      case 'get_annotations':
+        result = {
+          results: [
+            { label: 'Check spacing', categoryId: 'cat:1' },
+          ],
+          truncated: false,
+        }
+        break
+
+      // search (Rule A): the plugin returns RAW candidate nodes; the SERVER
+      // applies match + fields + limit + cursor. We echo a small mixed-type
+      // candidate set so e2e can exercise the server-side match (incl. type
+      // array) and pagination.
+      case 'search':
         result = {
           results: [
             {
               id: '1:42',
               name: 'Card',
               type: 'FRAME',
-              page: pageName,
-              parent: 'Root [0:1]',
-              width: 320,
-              height: 200,
+              size: [320, 200],
+            },
+            {
+              id: '1:43',
+              name: 'Title',
+              type: 'TEXT',
+              size: [288, 24],
+            },
+            {
+              id: '1:44',
+              name: 'Body',
+              type: 'TEXT',
+              size: [288, 48],
+            },
+            {
+              id: '1:45',
+              name: 'Action Button',
+              type: 'INSTANCE',
+              size: [100, 40],
             },
           ],
-          truncated: false,
         }
         break
 
-      case 'export_node': {
+      case 'export': {
         const fmt = (cmd.params?.format as string) || 'PNG'
         const scale = (cmd.params?.scale as number) || 1
         result = {
@@ -124,18 +329,94 @@ export const createMockPlugin = (
         break
       }
 
+      // update_node: echo the CONVERTED spec (Figma objects, not atom strings)
+      // back so e2e/round-trip tests prove the server parsed and the plugin
+      // only assigned. Mirrors the real plugin's {id,name,type,warnings} reply.
+      case 'update_node': {
+        const spec = (cmd.params?.spec ?? {}) as Record<
+          string,
+          unknown
+        >
+        result = {
+          id: cmd.params?.nodeId as string,
+          name: (spec.name as string) ?? 'Card',
+          type: 'FRAME',
+          warnings: [],
+          // Echo the converted spec so the e2e can assert the parsed paint
+          // arrived intact.
+          spec,
+        }
+        break
+      }
+
+      // bind_variable: deterministic happy / degrade / error paths keyed off
+      // the variableId so the e2e can drive each contract. A degrade/unknown
+      // reply NEVER returns {error} — it returns {id,warnings} so the server's
+      // formatMutationResult reports success-with-warning, not failure.
+      case 'bind_variable': {
+        const variableId = cmd.params?.variableId as string
+        if (variableId.startsWith('err:')) {
+          error = `Variable not found: ${variableId}`
+        } else if (variableId.startsWith('degrade:')) {
+          result = {
+            id: cmd.params?.nodeId as string,
+            warnings: [
+              'setBoundVariable unavailable in this Figma version; binding skipped',
+            ],
+          }
+        } else {
+          result = {
+            id: cmd.params?.nodeId as string,
+            warnings: [],
+          }
+        }
+        break
+      }
+
+      // get_variables: a card-with-binding fixture so the round-trip can pick a
+      // variable id, bind it, and read it back as a var(...) wrapper atom.
+      case 'get_variables': {
+        result = {
+          results: [
+            {
+              id: 'col:1',
+              name: 'Brand',
+              modes: [{ modeId: 'm1', name: 'Light' }],
+              variables: [
+                {
+                  id: 'var:123',
+                  name: 'Brand/Primary',
+                  resolvedType: 'COLOR',
+                  valuesByMode: {
+                    m1: { r: 1, g: 0, b: 0, a: 1 },
+                  },
+                  aliases: [],
+                  scopes: ['ALL_SCOPES'],
+                  codeSyntax: { WEB: '--brand-primary' },
+                  hiddenFromPublishing: false,
+                },
+              ],
+            },
+          ],
+        }
+        break
+      }
+
+      // create_node: the M2 handler sends {spec, parentId} (CONVERTED
+      // FigmaWritePayload — atom leaves parsed, name ?? type applied); the
+      // legacy M3-adjacent handler (tools/create.ts) still sends {node,…}.
+      // Accept either key so both create paths round-trip, echo the converted
+      // spec back for serialization assertions, and mirror the real plugin's
+      // {id,name,type,warnings} reply.
       case 'create_node': {
-        const nodeSpec = cmd.params?.node as
+        const nodeSpec = (cmd.params?.spec ??
+          cmd.params?.node) as
           | Record<string, unknown>
           | undefined
-        const parentId = cmd.params?.parentId as string
+        const parentId = cmd.params?.parentId as
+          | string
+          | undefined
         const nodeType = nodeSpec?.type as string
-        // Echo the received node spec back (serialized fills/
-        // effects/layout/strokes) so e2e tests can assert that the
-        // converted spec reached the plugin intact. SECTION nodes use
-        // MinimalFillsMixin (read-only fills); the real plugin guards
-        // before assigning, but echoing the spec is sufficient for
-        // serialization-regression coverage.
         const echo: Record<string, unknown> = {
           ...(nodeSpec ?? {}),
         }
@@ -146,6 +427,7 @@ export const createMockPlugin = (
           name: (nodeSpec?.name as string) ?? nodeType,
           type: nodeType,
           parentId,
+          warnings: [],
         }
         break
       }
@@ -242,6 +524,107 @@ export const createMockPlugin = (
           type: 'FRAME',
           childCount: 3,
         }
+        break
+      }
+
+      // delete_node: echo the deleted {id,name,type} (captured before removal).
+      case 'delete_node':
+        result = {
+          id: cmd.params?.nodeId as string,
+          name: 'Card',
+          type: 'FRAME',
+        }
+        break
+
+      // set_focus: CANVAS only — echo a viewport snapshot.
+      case 'set_focus':
+        result = {
+          viewport: { center: { x: 0, y: 0 }, zoom: 1 },
+        }
+        break
+
+      // create_page: echo the new page id + the requested name.
+      case 'create_page':
+        result = {
+          id: 'page:new',
+          name: cmd.params?.name as string,
+        }
+        break
+
+      // set_current_page: echo the switched-to page.
+      case 'set_current_page':
+        result = {
+          currentPage: {
+            id: cmd.params?.pageId as string,
+            name: 'Switched',
+          },
+        }
+        break
+
+      // duplicate_page: echo the clone id + the (optional) rename.
+      case 'duplicate_page':
+        result = {
+          id: 'page:dup',
+          name: (cmd.params?.name as string) ?? 'Copy',
+        }
+        break
+
+      // create_image: a url starting with `degrade:` exercises the T7 degrade
+      // (warnings, NO hash, NO error → success-with-warning); else a hash.
+      case 'create_image': {
+        const imgUrl = cmd.params?.url as string | undefined
+        const imgBytes = cmd.params?.bytes as
+          | number[]
+          | undefined
+        if (imgUrl?.startsWith('degrade:')) {
+          result = {
+            warnings: [
+              'createImageAsync failed (network/feature unavailable): degrade requested',
+            ],
+          }
+        } else if (
+          imgUrl !== undefined ||
+          imgBytes !== undefined
+        ) {
+          result = { hash: 'img:abc123' }
+        } else {
+          error = 'create_image requires url or bytes'
+        }
+        break
+      }
+
+      // set_plugin_data: echo {id}.
+      case 'set_plugin_data':
+        result = { id: cmd.params?.nodeId as string }
+        break
+
+      // set_reactions: a nodeId starting with `degrade:` exercises the T7
+      // unavailable-API degrade ({id,warnings}, NEVER {error}); else {id,[]}.
+      case 'set_reactions': {
+        const rNodeId = cmd.params?.nodeId as string
+        result = rNodeId.startsWith('degrade:')
+          ? {
+              id: rNodeId,
+              warnings: [
+                'setReactionsAsync unavailable in this Figma version; reactions not set',
+              ],
+            }
+          : { id: rNodeId, warnings: [] }
+        break
+      }
+
+      // set_annotations: a nodeId starting with `degrade:` exercises the T7
+      // editor-gated degrade ({id,warnings}, NEVER {error}); else {id,[]}.
+      case 'set_annotations': {
+        const aNodeId = cmd.params?.nodeId as string
+        result = aNodeId.startsWith('degrade:')
+          ? {
+              id: aNodeId,
+              warnings: [
+                'Annotations API unavailable in this editor; annotations not set',
+              ],
+            }
+          : { id: aNodeId, warnings: [] }
         break
       }
 

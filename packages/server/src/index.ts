@@ -5,21 +5,42 @@ import {
   APP_VERSION,
   DEFAULT_PORT,
   connectParamsSchema,
-  inspectParamsSchema,
-  inspectPageLayoutParamsSchema,
-  inspectStylesParamsSchema,
-  inspectComponentsParamsSchema,
-  searchParamsSchema,
-  getNodeParamsSchema,
-  getNodesParamsSchema,
-  listPagesParamsSchema,
-  exportParamsSchema,
-  createNodeParamsSchema,
   createTreeParamsSchema,
   createComponentParamsSchema,
   createFromSvgParamsSchema,
 } from '@figma-agent-bridge/shared'
 import type { CreateTreeNodeSpec } from '@figma-agent-bridge/shared'
+// M2 param schemas live in tool-params (NOT the barrel — they shadow the
+// green-window schemas.ts versions still imported above for the old tools).
+import {
+  getNodeParamsSchema,
+  getNodesParamsSchema,
+  inspectParamsSchema,
+  searchParamsSchema,
+  listPagesParamsSchema,
+  getSelectionParamsSchema,
+  setSelectionParamsSchema,
+  createNodeParamsSchema,
+  updateNodeParamsSchema,
+  bindVariableParamsSchema,
+  getVariablesParamsSchema,
+  getStylesParamsSchema,
+  getComponentsParamsSchema,
+  listFontsParamsSchema,
+  getReactionsParamsSchema,
+  getPluginDataParamsSchema,
+  getAnnotationsParamsSchema,
+  exportParamsSchema,
+  deleteNodeParamsSchema,
+  setFocusParamsSchema,
+  createPageParamsSchema,
+  setCurrentPageParamsSchema,
+  duplicatePageParamsSchema,
+  createImageParamsSchema,
+  setPluginDataParamsSchema,
+  setReactionsParamsSchema,
+  setAnnotationsParamsSchema,
+} from '@figma-agent-bridge/shared/tool-params'
 import { createFigmaClient } from './figma-client'
 import {
   handleConnect,
@@ -27,21 +48,44 @@ import {
 } from './tools/session'
 import {
   handleInspect,
-  handleInspectPageLayout,
   handleGetNode,
   handleGetNodes,
   handleListPages,
 } from './tools/read'
 import {
-  handleInspectStyles,
-  handleInspectComponents,
+  handleGetStyles,
+  handleGetComponents,
+  handleListFonts,
+  handleBindVariable,
+  handleGetVariables,
 } from './tools/design-system'
+import {
+  handleGetReactions,
+  handleGetPluginData,
+  handleGetAnnotations,
+  handleSetPluginData,
+  handleSetReactions,
+  handleSetAnnotations,
+} from './tools/metadata'
+import {
+  handleDeleteNode,
+  handleSetFocus,
+} from './tools/structure'
+import {
+  handleCreatePage,
+  handleSetCurrentPage,
+  handleDuplicatePage,
+} from './tools/pages'
+import { handleCreateImage } from './tools/create-image'
+import { handleUpdateNode } from './tools/update'
 import { handleSearch } from './tools/search'
 import { handleExport } from './tools/export'
+import { handleCreateNode } from './tools/create-node'
 import {
-  handleCreateNode,
-  handleCreateTree,
-} from './tools/create'
+  handleGetSelection,
+  handleSetSelection,
+} from './tools/selection'
+import { handleCreateTree } from './tools/create'
 import { handleCreateComponent } from './tools/create-component'
 import { handleCreateFromSvg } from './tools/create-svg'
 
@@ -74,26 +118,43 @@ server.tool('status', {}, async () => handleStatus(client))
 server.tool(
   'inspect',
   inspectParamsSchema.shape,
-  async ({ nodeId }) => handleInspect({ nodeId }, client),
+  async params => handleInspect(params, client),
 )
 
 server.tool(
-  'inspect_page_layout',
-  inspectPageLayoutParamsSchema.shape,
-  async () => handleInspectPageLayout(client),
+  'get_styles',
+  getStylesParamsSchema.shape,
+  async params => handleGetStyles(params, client),
 )
 
 server.tool(
-  'inspect_styles',
-  inspectStylesParamsSchema.shape,
-  async ({ type }) => handleInspectStyles({ type }, client),
+  'get_components',
+  getComponentsParamsSchema.shape,
+  async params => handleGetComponents(params, client),
 )
 
 server.tool(
-  'inspect_components',
-  inspectComponentsParamsSchema.shape,
-  async ({ query }) =>
-    handleInspectComponents({ query }, client),
+  'list_fonts',
+  listFontsParamsSchema.shape,
+  async params => handleListFonts(params, client),
+)
+
+server.tool(
+  'get_reactions',
+  getReactionsParamsSchema.shape,
+  async params => handleGetReactions(params, client),
+)
+
+server.tool(
+  'get_plugin_data',
+  getPluginDataParamsSchema.shape,
+  async params => handleGetPluginData(params, client),
+)
+
+server.tool(
+  'get_annotations',
+  getAnnotationsParamsSchema.shape,
+  async params => handleGetAnnotations(params, client),
 )
 
 server.tool(
@@ -105,21 +166,36 @@ server.tool(
 server.tool(
   'get_node',
   getNodeParamsSchema.shape,
-  async ({ nodeId, depth }) =>
-    handleGetNode({ nodeId, depth }, client),
+  async params => handleGetNode(params, client),
 )
 
 server.tool(
   'get_nodes',
   getNodesParamsSchema.shape,
-  async ({ nodeIds, depth }) =>
-    handleGetNodes({ nodeIds, depth }, client),
+  async ({ nodeIds, depth, fields, profile }) =>
+    handleGetNodes(
+      { nodeIds, depth, fields, profile },
+      client,
+    ),
 )
 
 server.tool(
   'list_pages',
   listPagesParamsSchema.shape,
   async () => handleListPages(client),
+)
+
+server.tool(
+  'get_selection',
+  getSelectionParamsSchema.shape,
+  async () => handleGetSelection(client),
+)
+
+server.tool(
+  'set_selection',
+  setSelectionParamsSchema.shape,
+  async ({ nodeIds }) =>
+    handleSetSelection({ nodeIds }, client),
 )
 
 server.tool(
@@ -134,8 +210,8 @@ server.tool(
   async params =>
     handleCreateNode(
       {
+        spec: params.spec,
         parentId: params.parentId,
-        node: params.node,
       },
       client,
     ),
@@ -183,6 +259,78 @@ server.tool(
       },
       client,
     ),
+)
+
+server.tool(
+  'update_node',
+  updateNodeParamsSchema.shape,
+  async params => handleUpdateNode(params, client),
+)
+
+server.tool(
+  'bind_variable',
+  bindVariableParamsSchema.shape,
+  async params => handleBindVariable(params, client),
+)
+
+server.tool(
+  'get_variables',
+  getVariablesParamsSchema.shape,
+  async params => handleGetVariables(params, client),
+)
+
+server.tool(
+  'delete_node',
+  deleteNodeParamsSchema.shape,
+  async params => handleDeleteNode(params, client),
+)
+
+server.tool(
+  'set_focus',
+  setFocusParamsSchema.shape,
+  async params => handleSetFocus(params, client),
+)
+
+server.tool(
+  'create_page',
+  createPageParamsSchema.shape,
+  async params => handleCreatePage(params, client),
+)
+
+server.tool(
+  'set_current_page',
+  setCurrentPageParamsSchema.shape,
+  async params => handleSetCurrentPage(params, client),
+)
+
+server.tool(
+  'duplicate_page',
+  duplicatePageParamsSchema.shape,
+  async params => handleDuplicatePage(params, client),
+)
+
+server.tool(
+  'create_image',
+  createImageParamsSchema.shape,
+  async params => handleCreateImage(params, client),
+)
+
+server.tool(
+  'set_plugin_data',
+  setPluginDataParamsSchema.shape,
+  async params => handleSetPluginData(params, client),
+)
+
+server.tool(
+  'set_reactions',
+  setReactionsParamsSchema.shape,
+  async params => handleSetReactions(params, client),
+)
+
+server.tool(
+  'set_annotations',
+  setAnnotationsParamsSchema.shape,
+  async params => handleSetAnnotations(params, client),
 )
 
 const transport = new StdioServerTransport()

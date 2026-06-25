@@ -21,26 +21,6 @@ export const inspectParamsSchema = z.object({
     ),
 })
 
-export const inspectPageLayoutParamsSchema = z.object({})
-
-export const inspectStylesParamsSchema = z.object({
-  type: z
-    .enum(['paint', 'text', 'effect', 'grid'])
-    .optional()
-    .describe(
-      'Filter styles by type. If omitted, returns all styles.',
-    ),
-})
-
-export const inspectComponentsParamsSchema = z.object({
-  query: z
-    .string()
-    .optional()
-    .describe(
-      'Filter components by name (case-insensitive substring match).',
-    ),
-})
-
 export const searchParamsSchema = z.object({
   name: z
     .string()
