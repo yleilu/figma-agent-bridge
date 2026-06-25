@@ -12,7 +12,7 @@ related:
   - "[[figma-bridge/docs/principles]]"
 ---
 
-# M3 — Compose, Edit & Batch · **planned**
+# M3 — Compose, Edit & Batch · **done**
 
 The powerful layer on top of M2: composable construction, bulk edit, design-system authoring,
 and components/instances. Builds on M2's foundations + the proven round-trip; completes the
@@ -39,7 +39,18 @@ components — the full 47-tool surface complete.
 
 ## Status
 
-**planned** — sketched in the build plan (P3–P6 + the Track-X write-face); detailed when M2 lands.
+**done** — built clean on `feat/m3-compose-edit` and merged to `dev` (merge `e5f84b5`): 5
+chunks (A composable construction · B components & instances · C design-system authoring ·
+D the generic `batch` · E retire-legacy + polish). The full **47-tool** surface ships; the
+legacy per-type-parser create stack (`expression-parser`/old `create.ts`/`create-component`/
+`create-types`) is retired — the surface is now 100% the clean grammar/NodeSpec stack.
+**763 tests green.** Each chunk ran build → code-review → green-gated commit.
+
+**Carried to verification:** live-Figma manual verification (the suite is
+mock-plugin-over-real-relay / headless) — incl. the `create_tree` boolean strict-default
+guard and the Variables authoring members (addMode/setValueForMode/scopes/codeSyntax),
+which build against the typings + mock but want a real-sandbox re-introspection; per-op
+warnings are not surfaced through `batch`'s result shape (documented boundary).
 
 ## Absorbs
 
