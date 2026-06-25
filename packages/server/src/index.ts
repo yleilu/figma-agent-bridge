@@ -32,6 +32,15 @@ import {
   getPluginDataParamsSchema,
   getAnnotationsParamsSchema,
   exportParamsSchema,
+  deleteNodeParamsSchema,
+  setFocusParamsSchema,
+  createPageParamsSchema,
+  setCurrentPageParamsSchema,
+  duplicatePageParamsSchema,
+  createImageParamsSchema,
+  setPluginDataParamsSchema,
+  setReactionsParamsSchema,
+  setAnnotationsParamsSchema,
 } from '@figma-agent-bridge/shared/tool-params'
 import { createFigmaClient } from './figma-client'
 import {
@@ -56,7 +65,20 @@ import {
   handleGetReactions,
   handleGetPluginData,
   handleGetAnnotations,
+  handleSetPluginData,
+  handleSetReactions,
+  handleSetAnnotations,
 } from './tools/metadata'
+import {
+  handleDeleteNode,
+  handleSetFocus,
+} from './tools/structure'
+import {
+  handleCreatePage,
+  handleSetCurrentPage,
+  handleDuplicatePage,
+} from './tools/pages'
+import { handleCreateImage } from './tools/create-image'
 import { handleUpdateNode } from './tools/update'
 import { handleSearch } from './tools/search'
 import { handleExport } from './tools/export'
@@ -263,6 +285,60 @@ server.tool(
   'get_variables',
   getVariablesParamsSchema.shape,
   async params => handleGetVariables(params, client),
+)
+
+server.tool(
+  'delete_node',
+  deleteNodeParamsSchema.shape,
+  async params => handleDeleteNode(params, client),
+)
+
+server.tool(
+  'set_focus',
+  setFocusParamsSchema.shape,
+  async params => handleSetFocus(params, client),
+)
+
+server.tool(
+  'create_page',
+  createPageParamsSchema.shape,
+  async params => handleCreatePage(params, client),
+)
+
+server.tool(
+  'set_current_page',
+  setCurrentPageParamsSchema.shape,
+  async params => handleSetCurrentPage(params, client),
+)
+
+server.tool(
+  'duplicate_page',
+  duplicatePageParamsSchema.shape,
+  async params => handleDuplicatePage(params, client),
+)
+
+server.tool(
+  'create_image',
+  createImageParamsSchema.shape,
+  async params => handleCreateImage(params, client),
+)
+
+server.tool(
+  'set_plugin_data',
+  setPluginDataParamsSchema.shape,
+  async params => handleSetPluginData(params, client),
+)
+
+server.tool(
+  'set_reactions',
+  setReactionsParamsSchema.shape,
+  async params => handleSetReactions(params, client),
+)
+
+server.tool(
+  'set_annotations',
+  setAnnotationsParamsSchema.shape,
+  async params => handleSetAnnotations(params, client),
 )
 
 const transport = new StdioServerTransport()

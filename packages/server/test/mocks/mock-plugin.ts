@@ -490,6 +490,107 @@ export const createMockPlugin = (
         break
       }
 
+      // delete_node: echo the deleted {id,name,type} (captured before removal).
+      case 'delete_node':
+        result = {
+          id: cmd.params?.nodeId as string,
+          name: 'Card',
+          type: 'FRAME',
+        }
+        break
+
+      // set_focus: CANVAS only — echo a viewport snapshot.
+      case 'set_focus':
+        result = {
+          viewport: { center: { x: 0, y: 0 }, zoom: 1 },
+        }
+        break
+
+      // create_page: echo the new page id + the requested name.
+      case 'create_page':
+        result = {
+          id: 'page:new',
+          name: cmd.params?.name as string,
+        }
+        break
+
+      // set_current_page: echo the switched-to page.
+      case 'set_current_page':
+        result = {
+          currentPage: {
+            id: cmd.params?.pageId as string,
+            name: 'Switched',
+          },
+        }
+        break
+
+      // duplicate_page: echo the clone id + the (optional) rename.
+      case 'duplicate_page':
+        result = {
+          id: 'page:dup',
+          name: (cmd.params?.name as string) ?? 'Copy',
+        }
+        break
+
+      // create_image: a url starting with `degrade:` exercises the T7 degrade
+      // (warnings, NO hash, NO error → success-with-warning); else a hash.
+      case 'create_image': {
+        const imgUrl = cmd.params?.url as string | undefined
+        const imgBytes = cmd.params?.bytes as
+          | number[]
+          | undefined
+        if (imgUrl?.startsWith('degrade:')) {
+          result = {
+            warnings: [
+              'createImageAsync failed (network/feature unavailable): degrade requested',
+            ],
+          }
+        } else if (
+          imgUrl !== undefined ||
+          imgBytes !== undefined
+        ) {
+          result = { hash: 'img:abc123' }
+        } else {
+          error = 'create_image requires url or bytes'
+        }
+        break
+      }
+
+      // set_plugin_data: echo {id}.
+      case 'set_plugin_data':
+        result = { id: cmd.params?.nodeId as string }
+        break
+
+      // set_reactions: a nodeId starting with `degrade:` exercises the T7
+      // unavailable-API degrade ({id,warnings}, NEVER {error}); else {id,[]}.
+      case 'set_reactions': {
+        const rNodeId = cmd.params?.nodeId as string
+        result = rNodeId.startsWith('degrade:')
+          ? {
+              id: rNodeId,
+              warnings: [
+                'setReactionsAsync unavailable in this Figma version; reactions not set',
+              ],
+            }
+          : { id: rNodeId, warnings: [] }
+        break
+      }
+
+      // set_annotations: a nodeId starting with `degrade:` exercises the T7
+      // editor-gated degrade ({id,warnings}, NEVER {error}); else {id,[]}.
+      case 'set_annotations': {
+        const aNodeId = cmd.params?.nodeId as string
+        result = aNodeId.startsWith('degrade:')
+          ? {
+              id: aNodeId,
+              warnings: [
+                'Annotations API unavailable in this editor; annotations not set',
+              ],
+            }
+          : { id: aNodeId, warnings: [] }
+        break
+      }
+
       default:
         error = 'Unknown command'
         break

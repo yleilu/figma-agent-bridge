@@ -147,6 +147,57 @@ export const setSelectionParamsSchema = z.object({
 })
 
 // ---------------------------------------------------------------------------
+// Write tools — structure (delete / focus)
+// ---------------------------------------------------------------------------
+
+/** Params for `delete_node`: remove a node from the document. */
+export const deleteNodeParamsSchema = z.object({
+  nodeId: z.string().describe('ID of the node to delete.'),
+})
+
+/**
+ * Params for `set_focus`: scroll and zoom the viewport so the given nodes are
+ * in view. This moves the CANVAS only — it does not change the selection
+ * (pair with set_selection for that).
+ */
+export const setFocusParamsSchema = z.object({
+  nodeIds: z
+    .array(z.string())
+    .describe(
+      'Node IDs to scroll and zoom into view. Ids that do not resolve are skipped.',
+    ),
+})
+
+// ---------------------------------------------------------------------------
+// Write tools — pages
+// ---------------------------------------------------------------------------
+
+/** Params for `create_page`: add a new page to the document. */
+export const createPageParamsSchema = z.object({
+  name: z.string().describe('Name for the new page.'),
+})
+
+/** Params for `set_current_page`: switch the active page. */
+export const setCurrentPageParamsSchema = z.object({
+  pageId: z
+    .string()
+    .describe('ID of the page to make current.'),
+})
+
+/** Params for `duplicate_page`: clone an existing page, optionally renaming it. */
+export const duplicatePageParamsSchema = z.object({
+  pageId: z
+    .string()
+    .describe('ID of the page to duplicate.'),
+  name: z
+    .string()
+    .optional()
+    .describe(
+      'Name for the duplicated page. Defaults to the clone name Figma assigns.',
+    ),
+})
+
+// ---------------------------------------------------------------------------
 // Write tools — node mutation
 // ---------------------------------------------------------------------------
 
@@ -203,6 +254,27 @@ export const createTreeParamsSchema = z.object({
     .optional()
     .describe(
       'Ref-pool: named TreeNodeSpecs that { ref } children resolve against.',
+    ),
+})
+
+/**
+ * Params for `create_image`: register an image and return its hash. Supply
+ * EXACTLY ONE of `url` (fetched by the plugin via createImageAsync) or `bytes`
+ * (raw image bytes as a number array, passed to createImage). The handler
+ * validates that exactly one is present.
+ */
+export const createImageParamsSchema = z.object({
+  url: z
+    .string()
+    .optional()
+    .describe(
+      'Image URL to fetch (plugin uses createImageAsync). Provide this OR bytes, not both.',
+    ),
+  bytes: z
+    .array(z.number())
+    .optional()
+    .describe(
+      'Raw image bytes as a number array (plugin uses createImage). Provide this OR url, not both.',
     ),
 })
 
@@ -326,6 +398,37 @@ export const getPluginDataParamsSchema = z.object({
     ),
 })
 
+/** Params for `set_plugin_data`: write a single plugin-data key on a node. */
+export const setPluginDataParamsSchema = z.object({
+  nodeId: z
+    .string()
+    .describe('The node to write plugin data to.'),
+  key: z.string().describe('The plugin-data key to set.'),
+  value: z
+    .string()
+    .describe(
+      'The value to store. Pass an empty string to clear the key.',
+    ),
+  namespace: z
+    .string()
+    .optional()
+    .describe(
+      "Shared plugin-data namespace. Omit to write this plugin's own data.",
+    ),
+})
+
+/** Params for `set_reactions`: replace a node's prototype reactions. */
+export const setReactionsParamsSchema = z.object({
+  nodeId: z
+    .string()
+    .describe('The node whose prototype reactions to set.'),
+  reactions: z
+    .array(z.any())
+    .describe(
+      'Prototype reactions to set: opaque reaction objects matching the get_reactions output shape.',
+    ),
+})
+
 // ---------------------------------------------------------------------------
 // Handoff — annotations
 // ---------------------------------------------------------------------------
@@ -337,6 +440,18 @@ export const getAnnotationsParamsSchema = z.object({
     .optional()
     .describe(
       "Node whose annotations to read. Omit to read the current selection's annotations.",
+    ),
+})
+
+/** Params for `set_annotations`: replace a node's annotations. */
+export const setAnnotationsParamsSchema = z.object({
+  nodeId: z
+    .string()
+    .describe('The node whose annotations to set.'),
+  annotations: z
+    .array(z.any())
+    .describe(
+      'Annotations to set: objects matching the get_annotations output shape.',
     ),
 })
 

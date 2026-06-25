@@ -1011,9 +1011,7 @@ const handleCommand = async (
                 pattern: g.pattern,
                 alignment:
                   'alignment' in g
-                    ? (
-                        g as RowsColsLayoutGrid
-                      ).alignment
+                    ? (g as RowsColsLayoutGrid).alignment
                     : undefined,
                 count:
                   'count' in g
@@ -1071,7 +1069,10 @@ const handleCommand = async (
             type: def.type,
             defaultValue: def.defaultValue,
           }
-          if (def.type === 'VARIANT' && def.variantOptions) {
+          if (
+            def.type === 'VARIANT' &&
+            def.variantOptions
+          ) {
             entry.variantOptions = def.variantOptions
           }
           return entry
@@ -1438,7 +1439,7 @@ const handleCommand = async (
       return result
     }
 
-    case 'create_from_svg': {
+    case COMMANDS.CREATE_FROM_SVG: {
       const svgParent = await figma.getNodeByIdAsync(
         params.parentId as string,
       )
@@ -1749,6 +1750,220 @@ const handleCommand = async (
         return { results: collected, truncated: false }
       } catch {
         return degrade
+      }
+    }
+
+    // delete_node: capture {id,name,type} BEFORE removing so the reply still
+    // describes the now-gone node. Missing node → {error}.
+    case COMMANDS.DELETE_NODE: {
+      const nodeId = params.nodeId as string
+      const node = await figma.getNodeByIdAsync(nodeId)
+      if (!node) {
+        return { error: 'Node not found: ' + nodeId }
+      }
+      const info = {
+        id: node.id,
+        name: node.name,
+        type: node.type,
+      }
+      node.remove()
+      return info
+    }
+
+    // set_focus: scroll + zoom the viewport so the resolved nodes are in view.
+    // CANVAS only — does not change selection (pair with set_selection). Ids
+    // that don't resolve to a scene node are skipped (same guard as
+    // set_selection: 'visible' is on every SceneNode, absent on PAGE/DOCUMENT).
+    case COMMANDS.SET_FOCUS: {
+      const ids = (params.nodeIds as string[]) ?? []
+      const nodes: SceneNode[] = []
+      for (const id of ids) {
+        const n = await figma.getNodeByIdAsync(id)
+        if (n && 'visible' in n) {
+          nodes.push(n as SceneNode)
+        }
+      }
+      figma.viewport.scrollAndZoomIntoView(nodes)
+      return {
+        viewport: {
+          center: figma.viewport.center,
+          zoom: figma.viewport.zoom,
+        },
+      }
+    }
+
+    // create_page: add a new page and name it.
+    case COMMANDS.CREATE_PAGE: {
+      const page = figma.createPage()
+      page.name = params.name as string
+      return { id: page.id, name: page.name }
+    }
+
+    // set_current_page: switch the active page. Missing/non-PAGE → {error}.
+    case COMMANDS.SET_CURRENT_PAGE: {
+      const pageId = params.pageId as string
+      const page = await figma.getNodeByIdAsync(pageId)
+      if (!page || page.type !== 'PAGE') {
+        return { error: 'Page not found: ' + pageId }
+      }
+      await figma.setCurrentPageAsync(page as PageNode)
+      return {
+        currentPage: { id: page.id, name: page.name },
+      }
+    }
+
+    // duplicate_page: clone an existing page, optionally renaming the clone.
+    // Missing/non-PAGE → {error}.
+    case COMMANDS.DUPLICATE_PAGE: {
+      const pageId = params.pageId as string
+      const page = await figma.getNodeByIdAsync(pageId)
+      if (!page || page.type !== 'PAGE') {
+        return { error: 'Page not found: ' + pageId }
+      }
+      const dup = (page as PageNode).clone()
+      if (params.name !== undefined) {
+        dup.name = params.name as string
+      }
+      return { id: dup.id, name: dup.name }
+    }
+
+    // create_image: register an image and return its hash. T7 degrade — when
+    // createImageAsync is unavailable or fetching/decoding fails, return
+    // {warnings} (NO hash, NO error) so the server reports success-with-warning.
+    // Supply EXACTLY ONE of url (fetched via createImageAsync) or bytes
+    // (raw bytes via createImage).
+    case COMMANDS.CREATE_IMAGE: {
+      const url = params.url as string | undefined
+      const bytes = params.bytes as number[] | undefined
+      if (url !== undefined) {
+        if (typeof figma.createImageAsync !== 'function') {
+          return {
+            warnings: [
+              'createImageAsync unavailable in this Figma version; image not created',
+            ],
+          }
+        }
+        try {
+          const image = await figma.createImageAsync(url)
+          return { hash: image.hash }
+        } catch (e) {
+          return {
+            warnings: [
+              'createImageAsync failed (network/feature unavailable): ' +
+                String(e),
+            ],
+          }
+        }
+      }
+      if (bytes !== undefined) {
+        try {
+          const image = figma.createImage(
+            new Uint8Array(bytes),
+          )
+          return { hash: image.hash }
+        } catch (e) {
+          return {
+            warnings: [
+              'createImage failed (invalid bytes/feature unavailable): ' +
+                String(e),
+            ],
+          }
+        }
+      }
+      return { error: 'create_image requires url or bytes' }
+    }
+
+    // set_plugin_data: write a single plugin-data key (shared when a namespace
+    // is given). Missing/incapable node → {error}. Twin of get_plugin_data.
+    case COMMANDS.SET_PLUGIN_DATA: {
+      const nodeId = params.nodeId as string
+      const node = await figma.getNodeByIdAsync(nodeId)
+      if (!node || !('setPluginData' in node)) {
+        return { error: 'Node not found: ' + nodeId }
+      }
+      const dataNode = node as BaseNode & PluginDataMixin
+      const key = params.key as string
+      const value = params.value as string
+      const namespace = params.namespace as
+        | string
+        | undefined
+      if (namespace !== undefined) {
+        dataNode.setSharedPluginData(namespace, key, value)
+      } else {
+        dataNode.setPluginData(key, value)
+      }
+      return { id: node.id }
+    }
+
+    // set_reactions: replace a node's prototype reactions. T7 — feature-detect
+    // setReactionsAsync and degrade to {id,warnings} (NEVER {error}) on a
+    // missing API or a failed assignment; only a missing node yields {error}.
+    case COMMANDS.SET_REACTIONS: {
+      const nodeId = params.nodeId as string
+      const node = await figma.getNodeByIdAsync(nodeId)
+      if (!node) {
+        return { error: 'Node not found: ' + nodeId }
+      }
+      const r = node as SceneNode & {
+        setReactionsAsync?: (
+          reactions: unknown[],
+        ) => Promise<void>
+      }
+      if (typeof r.setReactionsAsync !== 'function') {
+        return {
+          id: node.id,
+          warnings: [
+            'setReactionsAsync unavailable in this Figma version; reactions not set',
+          ],
+        }
+      }
+      try {
+        await r.setReactionsAsync(
+          params.reactions as unknown as Reaction[],
+        )
+        return { id: node.id, warnings: [] }
+      } catch (e) {
+        return {
+          id: node.id,
+          warnings: [
+            'Failed to set reactions: ' + String(e),
+          ],
+        }
+      }
+    }
+
+    // set_annotations: replace a node's annotations. T7 editorType-gated —
+    // feature-detect 'annotations' on the node and degrade to {id,warnings}
+    // (NEVER {error}/throw) when absent; only a missing node yields {error}.
+    case COMMANDS.SET_ANNOTATIONS: {
+      const nodeId = params.nodeId as string
+      const node = await figma.getNodeByIdAsync(nodeId)
+      if (!node) {
+        return { error: 'Node not found: ' + nodeId }
+      }
+      if (!('annotations' in node)) {
+        return {
+          id: node.id,
+          warnings: [
+            'Annotations API unavailable in this editor; annotations not set',
+          ],
+        }
+      }
+      try {
+        ;(
+          node as SceneNode & {
+            annotations?: unknown[]
+          }
+        ).annotations =
+          params.annotations as unknown as Annotation[]
+        return { id: node.id, warnings: [] }
+      } catch (e) {
+        return {
+          id: node.id,
+          warnings: [
+            'Failed to set annotations: ' + String(e),
+          ],
+        }
       }
     }
 

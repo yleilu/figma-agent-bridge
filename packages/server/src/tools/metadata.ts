@@ -13,6 +13,7 @@ import {
   type ToolResult,
   textResult,
   requireConnected,
+  formatMutationResult,
   errorMessage,
 } from './shared'
 
@@ -182,6 +183,115 @@ export const handleGetAnnotations = async (
       out.warnings = raw.warnings
     }
     return textResult(YAML.stringify(out))
+  } catch (err) {
+    return textResult(`Error: ${errorMessage(err)}`)
+  }
+}
+
+// ─── set_plugin_data (twin of get_plugin_data) ────────────────────────────────
+
+/**
+ * Write a single plugin-data key on a node (shared plugin data when `namespace`
+ * is given). The plugin returns {id} on success or {error} when the node is
+ * missing. Routed through formatMutationResult.
+ */
+export const handleSetPluginData = async (
+  {
+    nodeId,
+    key,
+    value,
+    namespace,
+  }: {
+    nodeId: string
+    key: string
+    value: string
+    namespace?: string
+  },
+  client: FigmaClient,
+): Promise<ToolResult> => {
+  const guard = requireConnected(client)
+  if (guard) {
+    return guard
+  }
+
+  try {
+    const result = (await client.sendCommand(
+      COMMANDS.SET_PLUGIN_DATA,
+      { nodeId, key, value, namespace },
+    )) as { error?: string } | null
+    return formatMutationResult(
+      result,
+      'Failed to set plugin data.',
+    )
+  } catch (err) {
+    return textResult(`Error: ${errorMessage(err)}`)
+  }
+}
+
+// ─── set_reactions (T7; twin of get_reactions) ────────────────────────────────
+
+/**
+ * Replace a node's prototype reactions. The plugin feature-detects
+ * setReactionsAsync and degrades to {id, warnings:[…]} (T7) rather than
+ * throwing when the API is unavailable or the assignment fails; only a missing
+ * node yields {error}. formatMutationResult surfaces the degrade warnings as
+ * success, the node-not-found error as an error.
+ */
+export const handleSetReactions = async (
+  {
+    nodeId,
+    reactions,
+  }: { nodeId: string; reactions: unknown[] },
+  client: FigmaClient,
+): Promise<ToolResult> => {
+  const guard = requireConnected(client)
+  if (guard) {
+    return guard
+  }
+
+  try {
+    const result = (await client.sendCommand(
+      COMMANDS.SET_REACTIONS,
+      { nodeId, reactions },
+    )) as { error?: string } | null
+    return formatMutationResult(
+      result,
+      'Failed to set reactions.',
+    )
+  } catch (err) {
+    return textResult(`Error: ${errorMessage(err)}`)
+  }
+}
+
+// ─── set_annotations (T7 editorType-gated; twin of get_annotations) ───────────
+
+/**
+ * Replace a node's annotations. The plugin feature-detects the annotations API
+ * and degrades to {id, warnings:[…]} (T7) rather than throwing when it is
+ * unavailable in the current editor; only a missing node yields {error}.
+ * formatMutationResult surfaces the degrade warnings as success.
+ */
+export const handleSetAnnotations = async (
+  {
+    nodeId,
+    annotations,
+  }: { nodeId: string; annotations: unknown[] },
+  client: FigmaClient,
+): Promise<ToolResult> => {
+  const guard = requireConnected(client)
+  if (guard) {
+    return guard
+  }
+
+  try {
+    const result = (await client.sendCommand(
+      COMMANDS.SET_ANNOTATIONS,
+      { nodeId, annotations },
+    )) as { error?: string } | null
+    return formatMutationResult(
+      result,
+      'Failed to set annotations.',
+    )
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }

@@ -12,6 +12,9 @@ import {
   handleGetReactions,
   handleGetPluginData,
   handleGetAnnotations,
+  handleSetPluginData,
+  handleSetReactions,
+  handleSetAnnotations,
 } from '@figma-agent-bridge/server/tools/metadata'
 
 type Sent = {
@@ -235,6 +238,212 @@ describe('handleGetAnnotations', () => {
     )
     expect(result.content[0].text).toBe(
       'Failed to get annotations from plugin.',
+    )
+  })
+})
+
+// ─── set_plugin_data (twin of get_plugin_data) ────────────────────────────────
+
+describe('handleSetPluginData', () => {
+  it('returns the not-connected guard when disconnected', async () => {
+    const result = await handleSetPluginData(
+      { nodeId: '1:1', key: 'k', value: 'v' },
+      stubClient({ connected: false }),
+    )
+    expect(result.content[0].text).toContain(
+      'Not connected',
+    )
+  })
+
+  it('forwards COMMANDS.SET_PLUGIN_DATA with key/value (+namespace) and emits {id}', async () => {
+    const sent: Sent[] = []
+    const result = await handleSetPluginData(
+      {
+        nodeId: '1:42',
+        key: 'k',
+        value: 'v',
+        namespace: 'ns',
+      },
+      stubClient({ sent, reply: { id: '1:42' } }),
+    )
+    expect(sent[0].command).toBe(COMMANDS.SET_PLUGIN_DATA)
+    expect(sent[0].params).toEqual({
+      nodeId: '1:42',
+      key: 'k',
+      value: 'v',
+      namespace: 'ns',
+    })
+    const out = JSON.parse(result.content[0].text) as {
+      id: string
+    }
+    expect(out.id).toBe('1:42')
+  })
+
+  it('surfaces a plugin-side {error} as an error', async () => {
+    const result = await handleSetPluginData(
+      { nodeId: 'nope', key: 'k', value: 'v' },
+      stubClient({
+        reply: { error: 'Node not found: nope' },
+      }),
+    )
+    expect(result.content[0].text).toContain('Error')
+    expect(result.content[0].text).toContain(
+      'Node not found',
+    )
+  })
+
+  it('returns failure text on a null reply', async () => {
+    const result = await handleSetPluginData(
+      { nodeId: '1:1', key: 'k', value: 'v' },
+      stubClient({ reply: null }),
+    )
+    expect(result.content[0].text).toBe(
+      'Failed to set plugin data.',
+    )
+  })
+})
+
+// ─── set_reactions (T7; twin of get_reactions) ────────────────────────────────
+
+describe('handleSetReactions', () => {
+  it('returns the not-connected guard when disconnected', async () => {
+    const result = await handleSetReactions(
+      { nodeId: '1:1', reactions: [] },
+      stubClient({ connected: false }),
+    )
+    expect(result.content[0].text).toContain(
+      'Not connected',
+    )
+  })
+
+  it('forwards COMMANDS.SET_REACTIONS and emits {id,warnings}', async () => {
+    const sent: Sent[] = []
+    const reactions = [
+      { trigger: { type: 'ON_CLICK' }, actions: [] },
+    ]
+    const result = await handleSetReactions(
+      { nodeId: '1:42', reactions },
+      stubClient({
+        sent,
+        reply: { id: '1:42', warnings: [] },
+      }),
+    )
+    expect(sent[0].command).toBe(COMMANDS.SET_REACTIONS)
+    expect(sent[0].params).toEqual({
+      nodeId: '1:42',
+      reactions,
+    })
+    const out = JSON.parse(result.content[0].text) as {
+      id: string
+      warnings: string[]
+    }
+    expect(out.id).toBe('1:42')
+    expect(out.warnings).toEqual([])
+  })
+
+  it('T7 degrade: surfaces {warnings} as success, NEVER an error', async () => {
+    const result = await handleSetReactions(
+      { nodeId: '1:42', reactions: [] },
+      stubClient({
+        reply: {
+          id: '1:42',
+          warnings: [
+            'setReactionsAsync unavailable in this Figma version; reactions not set',
+          ],
+        },
+      }),
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      id: string
+      warnings: string[]
+    }
+    expect(out.warnings).toHaveLength(1)
+    expect(result.content[0].text).not.toContain('Error:')
+  })
+
+  it('surfaces a plugin-side {error} (node-not-found) as an error', async () => {
+    const result = await handleSetReactions(
+      { nodeId: 'nope', reactions: [] },
+      stubClient({
+        reply: { error: 'Node not found: nope' },
+      }),
+    )
+    expect(result.content[0].text).toContain('Error')
+  })
+
+  it('returns failure text on a null reply', async () => {
+    const result = await handleSetReactions(
+      { nodeId: '1:1', reactions: [] },
+      stubClient({ reply: null }),
+    )
+    expect(result.content[0].text).toBe(
+      'Failed to set reactions.',
+    )
+  })
+})
+
+// ─── set_annotations (T7 editorType-gated; twin of get_annotations) ───────────
+
+describe('handleSetAnnotations', () => {
+  it('returns the not-connected guard when disconnected', async () => {
+    const result = await handleSetAnnotations(
+      { nodeId: '1:1', annotations: [] },
+      stubClient({ connected: false }),
+    )
+    expect(result.content[0].text).toContain(
+      'Not connected',
+    )
+  })
+
+  it('forwards COMMANDS.SET_ANNOTATIONS and emits {id,warnings}', async () => {
+    const sent: Sent[] = []
+    const annotations = [{ label: 'Check spacing' }]
+    const result = await handleSetAnnotations(
+      { nodeId: '1:42', annotations },
+      stubClient({
+        sent,
+        reply: { id: '1:42', warnings: [] },
+      }),
+    )
+    expect(sent[0].command).toBe(COMMANDS.SET_ANNOTATIONS)
+    expect(sent[0].params).toEqual({
+      nodeId: '1:42',
+      annotations,
+    })
+    const out = JSON.parse(result.content[0].text) as {
+      id: string
+      warnings: string[]
+    }
+    expect(out.id).toBe('1:42')
+  })
+
+  it('T7 degrade: surfaces {warnings} as success, NEVER an error', async () => {
+    const result = await handleSetAnnotations(
+      { nodeId: '1:42', annotations: [] },
+      stubClient({
+        reply: {
+          id: '1:42',
+          warnings: [
+            'Annotations API unavailable in this editor; annotations not set',
+          ],
+        },
+      }),
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      id: string
+      warnings: string[]
+    }
+    expect(out.warnings).toHaveLength(1)
+    expect(result.content[0].text).not.toContain('Error:')
+  })
+
+  it('returns failure text on a null reply', async () => {
+    const result = await handleSetAnnotations(
+      { nodeId: '1:1', annotations: [] },
+      stubClient({ reply: null }),
+    )
+    expect(result.content[0].text).toBe(
+      'Failed to set annotations.',
     )
   })
 })
