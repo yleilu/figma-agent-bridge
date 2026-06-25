@@ -672,8 +672,20 @@ const createSingleNode = async (
 const createTreeNode = async (
   spec: Record<string, unknown>,
   parent: ParentNode,
+  refs?: Record<string, Record<string, unknown>>,
 ): Promise<SceneNode> => {
   const type = spec.type as string
+
+  // Ref-pool reference: { ref } — rebuild refs[key] FRESH on each reuse so N
+  // uses of one ref yield N independent subtrees, not N shared references.
+  if (spec.ref !== undefined && spec.type === undefined) {
+    const refKey = spec.ref as string
+    const refSpec = refs?.[refKey]
+    if (!refSpec) {
+      throw new Error('Ref not found in pool: ' + refKey)
+    }
+    return createTreeNode(refSpec, parent, refs)
+  }
 
   // Clone reference: { id } with no type
   if (spec.id !== undefined && spec.type === undefined) {
@@ -719,7 +731,11 @@ const createTreeNode = async (
     }
     const childNodes: SceneNode[] = []
     for (const childSpec of children) {
-      const child = await createTreeNode(childSpec, parent)
+      const child = await createTreeNode(
+        childSpec,
+        parent,
+        refs,
+      )
       childNodes.push(child)
     }
     const group = figma.group(childNodes, parent)
@@ -739,7 +755,11 @@ const createTreeNode = async (
     }
     const childNodes: SceneNode[] = []
     for (const childSpec of children) {
-      const child = await createTreeNode(childSpec, parent)
+      const child = await createTreeNode(
+        childSpec,
+        parent,
+        refs,
+      )
       childNodes.push(child)
     }
     const modifiers = spec.modifiers as
@@ -767,7 +787,11 @@ const createTreeNode = async (
     }
     const childNodes: SceneNode[] = []
     for (const childSpec of children) {
-      const child = await createTreeNode(childSpec, parent)
+      const child = await createTreeNode(
+        childSpec,
+        parent,
+        refs,
+      )
       childNodes.push(child)
     }
     const op = spec.booleanOperation as string
@@ -805,7 +829,11 @@ const createTreeNode = async (
     'appendChild' in node
   ) {
     for (const childSpec of children) {
-      await createTreeNode(childSpec, node as ParentNode)
+      await createTreeNode(
+        childSpec,
+        node as ParentNode,
+        refs,
+      )
     }
   }
 
@@ -1316,28 +1344,41 @@ const handleCommand = async (
       }
     }
 
-    case 'create_tree': {
-      const treeParent = await figma.getNodeByIdAsync(
-        params.parentId as string,
-      )
-      if (!treeParent || !('appendChild' in treeParent)) {
+    // create_tree (M3 REBUILD): build a nested tree from a converted
+    // TreeNodeSpec. params = { tree, parentId?, refs? }. parentId omitted →
+    // current page. The recursive builder createTreeNode creates each node by
+    // type, appendChild, then applyPostAppendProperties (FILL/ABSOLUTE) per
+    // level and loadFontAsync before text. `{ ref }` rebuilds refs[key] fresh;
+    // `{ id }` clones the existing node.
+    case COMMANDS.CREATE_TREE: {
+      const treeParentNode =
+        params.parentId !== undefined
+          ? await figma.getNodeByIdAsync(
+              params.parentId as string,
+            )
+          : figma.currentPage
+      if (
+        !treeParentNode ||
+        !('appendChild' in treeParentNode)
+      ) {
         return {
           error:
             'Parent not found or cannot have children: ' +
             params.parentId,
         }
       }
-      const treeParentNode = treeParent as
-        | FrameNode
-        | PageNode
-        | SectionNode
-      const treeSpec = params.node as Record<
+      const treeParent = treeParentNode as ParentNode
+      const treeSpec = params.tree as Record<
         string,
         unknown
       >
+      const treeRefs = params.refs as
+        | Record<string, Record<string, unknown>>
+        | undefined
       const treeResult = await createTreeNode(
         treeSpec,
-        treeParentNode,
+        treeParent,
+        treeRefs,
       )
       return {
         id: treeResult.id,
@@ -1780,6 +1821,271 @@ const handleCommand = async (
           center: figma.viewport.center,
           zoom: figma.viewport.zoom,
         },
+      }
+    }
+
+    // clone_node: node.clone() (count times), optionally reparented into
+    // parentId at index. Each clone is appended (or inserted) and reported as
+    // {id,name,type}. Missing source/parent → {error}.
+    case COMMANDS.CLONE_NODE: {
+      const srcId = params.nodeId as string
+      const source = await figma.getNodeByIdAsync(srcId)
+      if (!source || !('clone' in source)) {
+        return {
+          error:
+            'Node not found or not cloneable: ' + srcId,
+        }
+      }
+      const src = source as SceneNode
+      let dest: ParentNode | null =
+        src.parent as ParentNode | null
+      if (params.parentId !== undefined) {
+        const p = await figma.getNodeByIdAsync(
+          params.parentId as string,
+        )
+        if (!p || !('appendChild' in p)) {
+          return {
+            error:
+              'Parent not found or cannot have children: ' +
+              params.parentId,
+          }
+        }
+        dest = p as ParentNode
+      }
+      if (!dest) {
+        return {
+          error: 'No parent to place the clone under.',
+        }
+      }
+      const count = (params.count as number) ?? 1
+      const index = params.index as number | undefined
+      const clones: {
+        id: string
+        name: string
+        type: string
+      }[] = []
+      for (let i = 0; i < count; i++) {
+        const clone = src.clone()
+        if (index !== undefined) {
+          dest.insertChild(index + i, clone)
+        } else {
+          dest.appendChild(clone)
+        }
+        clones.push({
+          id: clone.id,
+          name: clone.name,
+          type: clone.type,
+        })
+      }
+      return clones
+    }
+
+    // reparent_node: move a node under a new parent (re-flows in the new
+    // parent's layout). insertChild at index when given, else appendChild.
+    // Missing node/parent → {error}.
+    case COMMANDS.REPARENT_NODE: {
+      const nodeId = params.nodeId as string
+      const node = await figma.getNodeByIdAsync(nodeId)
+      if (!node || !('parent' in node)) {
+        return { error: 'Node not found: ' + nodeId }
+      }
+      const newParent = await figma.getNodeByIdAsync(
+        params.parentId as string,
+      )
+      if (!newParent || !('appendChild' in newParent)) {
+        return {
+          error:
+            'Parent not found or cannot have children: ' +
+            params.parentId,
+        }
+      }
+      const parent = newParent as ParentNode
+      const child = node as SceneNode
+      const index = params.index as number | undefined
+      if (index !== undefined) {
+        parent.insertChild(index, child)
+      } else {
+        parent.appendChild(child)
+      }
+      return {
+        id: child.id,
+        name: child.name,
+        type: child.type,
+        parentId: parent.id,
+      }
+    }
+
+    // reorder_children: reorder a parent's children to match nodeIds. The id
+    // set is SET-EQUALITY validated against the actual children — a mismatch
+    // WARNS (T7) and only the ids present in both sets are reordered; we never
+    // throw. Reorder via insertChild (re-inserting at the target index moves
+    // an existing child). Missing parent → {error}.
+    case COMMANDS.REORDER_CHILDREN: {
+      const parentId = params.parentId as string
+      const parentNode =
+        await figma.getNodeByIdAsync(parentId)
+      if (!parentNode || !('children' in parentNode)) {
+        return {
+          error:
+            'Parent not found or has no children: ' +
+            parentId,
+        }
+      }
+      const parent = parentNode as ParentNode & {
+        children: readonly SceneNode[]
+      }
+      const requested = (params.nodeIds as string[]) ?? []
+      const actualIds = parent.children.map(c => c.id)
+      const actualSet = new Set(actualIds)
+      const requestedSet = new Set(requested)
+      const warnings: string[] = []
+
+      const missing = requested.filter(
+        id => !actualSet.has(id),
+      )
+      const extra = actualIds.filter(
+        id => !requestedSet.has(id),
+      )
+      if (missing.length > 0 || extra.length > 0) {
+        warnings.push(
+          'reorder_children id set differs from the parent children: ' +
+            'not children=[' +
+            missing.join(',') +
+            '], omitted=[' +
+            extra.join(',') +
+            ']. Only matching ids were reordered.',
+        )
+      }
+
+      // Reorder only the requested ids that are actually children. Insert each
+      // at its target index in turn (insertChild on an existing child moves it).
+      const ordered = requested.filter(id =>
+        actualSet.has(id),
+      )
+      let pos = 0
+      for (const id of ordered) {
+        const child = parent.children.find(c => c.id === id)
+        if (child) {
+          parent.insertChild(pos, child)
+          pos++
+        }
+      }
+      return {
+        parentId: parent.id,
+        order: parent.children.map(c => c.id),
+        warnings,
+      }
+    }
+
+    // boolean_op: combine ≥2 nodes into a BooleanOperationNode via
+    // figma.union/subtract/intersect/exclude. parentId omitted → first node's
+    // parent. Missing nodes/parent → {error}.
+    case COMMANDS.BOOLEAN_OP: {
+      const ids = (params.nodeIds as string[]) ?? []
+      const op = params.op as string
+      const nodes: SceneNode[] = []
+      for (const id of ids) {
+        const n = await figma.getNodeByIdAsync(id)
+        if (n && 'type' in n) {
+          nodes.push(n as SceneNode)
+        }
+      }
+      if (nodes.length < 2) {
+        return {
+          error:
+            'boolean_op requires at least 2 resolvable nodes.',
+        }
+      }
+      let boolParent: ParentNode | null
+      if (params.parentId !== undefined) {
+        const p = await figma.getNodeByIdAsync(
+          params.parentId as string,
+        )
+        if (!p || !('appendChild' in p)) {
+          return {
+            error:
+              'Parent not found or cannot have children: ' +
+              params.parentId,
+          }
+        }
+        boolParent = p as ParentNode
+      } else {
+        boolParent = nodes[0].parent as ParentNode | null
+      }
+      if (!boolParent) {
+        return {
+          error: 'No parent for the boolean result.',
+        }
+      }
+      let boolNode: BooleanOperationNode
+      switch (op) {
+        case 'UNION':
+          boolNode = figma.union(nodes, boolParent)
+          break
+        case 'SUBTRACT':
+          boolNode = figma.subtract(nodes, boolParent)
+          break
+        case 'INTERSECT':
+          boolNode = figma.intersect(nodes, boolParent)
+          break
+        case 'EXCLUDE':
+          boolNode = figma.exclude(nodes, boolParent)
+          break
+        default:
+          return {
+            error: 'Unknown boolean op: ' + op,
+          }
+      }
+      return {
+        id: boolNode.id,
+        name: boolNode.name,
+        type: boolNode.type,
+      }
+    }
+
+    // flatten: flatten ≥1 nodes into a single vector via figma.flatten.
+    // parentId omitted → first node's parent. Missing nodes/parent → {error}.
+    case COMMANDS.FLATTEN: {
+      const ids = (params.nodeIds as string[]) ?? []
+      const nodes: SceneNode[] = []
+      for (const id of ids) {
+        const n = await figma.getNodeByIdAsync(id)
+        if (n && 'type' in n) {
+          nodes.push(n as SceneNode)
+        }
+      }
+      if (nodes.length < 1) {
+        return {
+          error:
+            'flatten requires at least 1 resolvable node.',
+        }
+      }
+      let flatParent: ParentNode | null
+      if (params.parentId !== undefined) {
+        const p = await figma.getNodeByIdAsync(
+          params.parentId as string,
+        )
+        if (!p || !('appendChild' in p)) {
+          return {
+            error:
+              'Parent not found or cannot have children: ' +
+              params.parentId,
+          }
+        }
+        flatParent = p as ParentNode
+      } else {
+        flatParent = nodes[0].parent as ParentNode | null
+      }
+      if (!flatParent) {
+        return {
+          error: 'No parent for the flattened result.',
+        }
+      }
+      const vector = figma.flatten(nodes, flatParent)
+      return {
+        id: vector.id,
+        name: vector.name,
+        type: vector.type,
       }
     }
 

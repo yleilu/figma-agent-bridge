@@ -432,14 +432,41 @@ export const createMockPlugin = (
         break
       }
 
+      // create_tree (M3 contract): params = { tree, parentId?, refs? }. The
+      // server has already CONVERTED every node to a FigmaWritePayload (atom
+      // leaves → Figma objects) and the ref-pool to converted form. The mock
+      // counts the realized node total by resolving `{ ref }` against refs and
+      // treating `{ id }` clones as a single node, and echoes the converted
+      // tree + refs back so e2e/round-trip tests can assert the nested
+      // structure (and ref/clone resolution) reached the plugin intact.
       case 'create_tree': {
-        const treeSpec = cmd.params?.node as
+        const treeSpec = cmd.params?.tree as
           | Record<string, unknown>
           | undefined
-        const treeParentId = cmd.params?.parentId as string
+        const treeParentId = cmd.params?.parentId as
+          | string
+          | undefined
+        const treeRefs = cmd.params?.refs as
+          | Record<string, Record<string, unknown>>
+          | undefined
         const countNodes = (
           node: Record<string, unknown>,
         ): number => {
+          // { ref }: rebuild refs[key] FRESH each reuse.
+          if (
+            node.ref !== undefined &&
+            node.type === undefined
+          ) {
+            const refSpec = treeRefs?.[node.ref as string]
+            return refSpec ? countNodes(refSpec) : 1
+          }
+          // { id } clone: a single realized node.
+          if (
+            node.id !== undefined &&
+            node.type === undefined
+          ) {
+            return 1
+          }
           let count = 1
           const children = node.children as
             | Record<string, unknown>[]
@@ -454,9 +481,6 @@ export const createMockPlugin = (
         const totalNodes = treeSpec
           ? countNodes(treeSpec)
           : 1
-        // Echo the received tree spec back (serialized fills/effects/
-        // layout, plus children) so e2e/round-trip tests can assert
-        // the converted spec reached the plugin intact.
         result = {
           ...(treeSpec ?? {}),
           id: `created:${Math.random().toString(36).slice(2, 8)}`,
@@ -465,7 +489,106 @@ export const createMockPlugin = (
             (treeSpec?.type as string),
           type: treeSpec?.type as string,
           parentId: treeParentId,
+          refs: treeRefs,
           totalNodes,
+        }
+        break
+      }
+
+      // clone_node: echo one {id,name,type} per requested clone (count, default
+      // 1) so the count + index/parent forwarding is assertable.
+      case 'clone_node': {
+        const cloneCount =
+          (cmd.params?.count as number) ?? 1
+        const cloneArr: {
+          id: string
+          name: string
+          type: string
+        }[] = []
+        for (let i = 0; i < cloneCount; i++) {
+          cloneArr.push({
+            id: `clone:${i}:${Math.random().toString(36).slice(2, 8)}`,
+            name: 'Card',
+            type: 'FRAME',
+          })
+        }
+        result = cloneArr
+        break
+      }
+
+      // reparent_node: echo {id,…,parentId} so the new-parent move is assertable.
+      case 'reparent_node':
+        result = {
+          id: cmd.params?.nodeId as string,
+          name: 'Card',
+          type: 'FRAME',
+          parentId: cmd.params?.parentId as string,
+        }
+        break
+
+      // reorder_children: set-equality validate the requested ids against the
+      // mock parent's fixed child set ['1:1','1:2','1:3']. A mismatch WARNS
+      // (T7) and never errors; `order` echoes the requested ids that match.
+      case 'reorder_children': {
+        const parentId = cmd.params?.parentId as string
+        const requested =
+          (cmd.params?.nodeIds as string[]) ?? []
+        const actual = ['1:1', '1:2', '1:3']
+        const actualSet = new Set(actual)
+        const requestedSet = new Set(requested)
+        const warnings: string[] = []
+        const missing = requested.filter(
+          id => !actualSet.has(id),
+        )
+        const extra = actual.filter(
+          id => !requestedSet.has(id),
+        )
+        if (missing.length > 0 || extra.length > 0) {
+          warnings.push(
+            'reorder_children id set differs from the parent children: ' +
+              'not children=[' +
+              missing.join(',') +
+              '], omitted=[' +
+              extra.join(',') +
+              ']. Only matching ids were reordered.',
+          )
+        }
+        result = {
+          parentId,
+          order: requested.filter(id => actualSet.has(id)),
+          warnings,
+        }
+        break
+      }
+
+      // boolean_op: echo a BooleanOperationNode {id,name,type}; <2 nodes errors.
+      case 'boolean_op': {
+        const ids = (cmd.params?.nodeIds as string[]) ?? []
+        if (ids.length < 2) {
+          error =
+            'boolean_op requires at least 2 resolvable nodes.'
+        } else {
+          result = {
+            id: `bool:${Math.random().toString(36).slice(2, 8)}`,
+            name: 'Union',
+            type: 'BOOLEAN_OPERATION',
+          }
+        }
+        break
+      }
+
+      // flatten: echo a VECTOR {id,name,type}; <1 node errors.
+      case 'flatten': {
+        const ids = (cmd.params?.nodeIds as string[]) ?? []
+        if (ids.length < 1) {
+          error =
+            'flatten requires at least 1 resolvable node.'
+        } else {
+          result = {
+            id: `vec:${Math.random().toString(36).slice(2, 8)}`,
+            name: 'Vector',
+            type: 'VECTOR',
+          }
         }
         break
       }

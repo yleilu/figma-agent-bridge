@@ -12,11 +12,12 @@ import {
 } from '@figma-agent-bridge/relay/relay'
 import { createFigmaClient } from '@figma-agent-bridge/server/figma-client'
 import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import { transformToAngle } from '@figma-agent-bridge/server/grammar'
 import { handleConnect } from '@figma-agent-bridge/server/tools/session'
-import {
-  handleCreateNode,
-  handleCreateTree,
-} from '@figma-agent-bridge/server/tools/create'
+import { handleCreateNode } from '@figma-agent-bridge/server/tools/create'
+// create_tree is REBUILT on NodeSpec (M3 chunk A); the legacy handleCreateTree
+// in tools/create.ts stays orphaned-but-present until M3-E.
+import { handleCreateTree } from '@figma-agent-bridge/server/tools/create-tree'
 import { handleCreateComponent } from '@figma-agent-bridge/server/tools/create-component'
 import { handleCreateFromSvg } from '@figma-agent-bridge/server/tools/create-svg'
 import {
@@ -118,18 +119,18 @@ describe('M3 create tools e2e', () => {
     expect(data.type).toBe('TEXT')
   })
 
-  it('create_tree creates a frame with children', async () => {
+  it('create_tree creates a frame with nested children (NodeSpec contract)', async () => {
     const result = await handleCreateTree(
       {
         parentId: 'page:1',
-        node: {
+        tree: {
           type: 'FRAME',
           name: 'Card',
           size: [320, 200],
           layout: {
             mode: 'V',
-            spacing: 12,
-            padding: [16, 16, 16, 16],
+            gap: 12,
+            pad: [16, 16, 16, 16],
             align: ['MIN', 'MIN'],
           },
           fills: ['#FFFFFF'],
@@ -141,7 +142,7 @@ describe('M3 create tools e2e', () => {
               size: [288, 24],
               text: {
                 content: 'Card Title',
-                font: 'Inter/SemiBold/18',
+                font: 'font(Inter,SemiBold,18)',
                 color: '#1A1A1A',
               },
             },
@@ -163,6 +164,21 @@ describe('M3 create tools e2e', () => {
     expect(data.type).toBe('FRAME')
     expect(data.name).toBe('Card')
     expect(data.totalNodes).toBe(3) // Card + Title + Divider
+
+    // The converted nested structure reached the (mock) plugin: a FRAME with
+    // two converted children, fills parsed to a SOLID paint, layout mapped to
+    // the plugin's spacing/padding shape.
+    const children = data.children as Record<
+      string,
+      unknown
+    >[]
+    expect(children).toHaveLength(2)
+    expect(children[0].type).toBe('TEXT')
+    expect(children[1].type).toBe('RECTANGLE')
+    const fills = data.fills as { type: string }[]
+    expect(fills[0].type).toBe('SOLID')
+    const layout = data.layout as { spacing: number }
+    expect(layout.spacing).toBe(12)
   })
 
   it('create_component promotes a node', async () => {
@@ -215,13 +231,12 @@ describe('M3 create tools e2e', () => {
     const result = await handleCreateTree(
       {
         parentId: 'page:1',
-        node: {
+        tree: {
           type: 'RECTANGLE',
           name: 'Gradient BG',
           size: [400, 300],
-          fills: [
-            'linear-gradient(135deg, #FF6B6B 0%, #4ECDC4 100%)',
-          ],
+          // New atom grammar: linear(angle, color@pos, …).
+          fills: ['linear(135, #FF6B6B@0, #4ECDC4@100)'],
         },
       },
       client,
@@ -232,11 +247,16 @@ describe('M3 create tools e2e', () => {
     ) as Record<string, unknown>
     expect(data.type).toBe('RECTANGLE')
 
-    // The mock now echoes the params it received, so a serialization
-    // regression (dropped stops, wrong angle) is visible here.
+    // The mock echoes the converted params, so a serialization regression
+    // (dropped stops, wrong angle) is visible here. The grammar emits a
+    // GRADIENT_LINEAR with normalized stops (positions 0..1) and a
+    // gradientTransform encoding the angle (feedback_gradient_tests).
     const fills = data.fills as {
       type: string
-      angle: number
+      gradientTransform: [
+        [number, number, number],
+        [number, number, number],
+      ]
       gradientStops: {
         position: number
         color: {
@@ -249,7 +269,9 @@ describe('M3 create tools e2e', () => {
     }[]
     expect(fills).toHaveLength(1)
     expect(fills[0].type).toBe('GRADIENT_LINEAR')
-    expect(fills[0].angle).toBe(135)
+    expect(
+      transformToAngle(fills[0].gradientTransform),
+    ).toBe(135)
     expect(fills[0].gradientStops).toHaveLength(2)
     expect(fills[0].gradientStops[0].position).toBe(0)
     expect(fills[0].gradientStops[0].color.r).toBeCloseTo(

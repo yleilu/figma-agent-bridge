@@ -164,6 +164,109 @@ export const setFocusParamsSchema = z.object({
     ),
 })
 
+/**
+ * Params for `clone_node`: duplicate a node, optionally into a parent at an
+ * index, optionally `count` times. Returns one entry per clone.
+ */
+export const cloneNodeParamsSchema = z.object({
+  nodeId: z.string().describe('ID of the node to clone.'),
+  parentId: z
+    .string()
+    .optional()
+    .describe(
+      "Parent to append the clone(s) under. Omit to keep the source's parent.",
+    ),
+  index: z
+    .number()
+    .int()
+    .optional()
+    .describe(
+      'Insertion index of the clone(s) within the parent. Omit to append last.',
+    ),
+  count: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      'How many clones to make (default 1). Each is a fresh copy.',
+    ),
+})
+
+/**
+ * Params for `reparent_node`: move a node under a new parent (re-flows under
+ * the new parent's layout), optionally at a specific index.
+ */
+export const reparentNodeParamsSchema = z.object({
+  nodeId: z
+    .string()
+    .describe('ID of the node to reparent.'),
+  parentId: z
+    .string()
+    .describe(
+      'ID of the new parent to move the node into.',
+    ),
+  index: z
+    .number()
+    .int()
+    .optional()
+    .describe(
+      'Insertion index within the new parent. Omit to append last.',
+    ),
+})
+
+/**
+ * Params for `reorder_children`: set the child order of a parent. `nodeIds` is
+ * the desired full order; the plugin set-equality validates it against the
+ * parent's actual children (warns on mismatch, never throws — T7).
+ */
+export const reorderChildrenParamsSchema = z.object({
+  parentId: z
+    .string()
+    .describe(
+      'ID of the parent whose children to reorder.',
+    ),
+  nodeIds: z
+    .array(z.string())
+    .describe(
+      "Child IDs in the desired order. Should be the parent's full child set; mismatches warn.",
+    ),
+})
+
+/**
+ * Params for `boolean_op`: combine ≥2 nodes into a BooleanOperationNode via
+ * union/subtract/intersect/exclude.
+ */
+export const booleanOpParamsSchema = z.object({
+  op: z
+    .enum(['UNION', 'SUBTRACT', 'INTERSECT', 'EXCLUDE'])
+    .describe('The boolean operation to apply.'),
+  nodeIds: z
+    .array(z.string())
+    .min(2)
+    .describe('Node IDs to combine (at least 2).'),
+  parentId: z
+    .string()
+    .optional()
+    .describe(
+      "Parent for the result. Omit to use the first node's parent.",
+    ),
+})
+
+/** Params for `flatten`: flatten one or more nodes into a single vector. */
+export const flattenParamsSchema = z.object({
+  nodeIds: z
+    .array(z.string())
+    .min(1)
+    .describe('Node IDs to flatten into one vector.'),
+  parentId: z
+    .string()
+    .optional()
+    .describe(
+      "Parent for the result. Omit to use the first node's parent.",
+    ),
+})
+
 // ---------------------------------------------------------------------------
 // Write tools — pages
 // ---------------------------------------------------------------------------

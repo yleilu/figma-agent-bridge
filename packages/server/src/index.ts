@@ -5,11 +5,9 @@ import {
   APP_VERSION,
   DEFAULT_PORT,
   connectParamsSchema,
-  createTreeParamsSchema,
   createComponentParamsSchema,
   createFromSvgParamsSchema,
 } from '@figma-agent-bridge/shared'
-import type { CreateTreeNodeSpec } from '@figma-agent-bridge/shared'
 // M2 param schemas live in tool-params (NOT the barrel — they shadow the
 // green-window schemas.ts versions still imported above for the old tools).
 import {
@@ -40,6 +38,12 @@ import {
   setPluginDataParamsSchema,
   setReactionsParamsSchema,
   setAnnotationsParamsSchema,
+  createTreeParamsSchema,
+  cloneNodeParamsSchema,
+  reparentNodeParamsSchema,
+  reorderChildrenParamsSchema,
+  booleanOpParamsSchema,
+  flattenParamsSchema,
 } from '@figma-agent-bridge/shared/tool-params'
 import { createFigmaClient } from './figma-client'
 import {
@@ -70,6 +74,11 @@ import {
 import {
   handleDeleteNode,
   handleSetFocus,
+  handleCloneNode,
+  handleReparentNode,
+  handleReorderChildren,
+  handleBooleanOp,
+  handleFlatten,
 } from './tools/structure'
 import {
   handleCreatePage,
@@ -85,7 +94,7 @@ import {
   handleGetSelection,
   handleSetSelection,
 } from './tools/selection'
-import { handleCreateTree } from './tools/create'
+import { handleCreateTree } from './tools/create-tree'
 import { handleCreateComponent } from './tools/create-component'
 import { handleCreateFromSvg } from './tools/create-svg'
 
@@ -223,8 +232,9 @@ server.tool(
   async params =>
     handleCreateTree(
       {
+        tree: params.tree,
         parentId: params.parentId,
-        node: params.node as CreateTreeNodeSpec,
+        refs: params.refs,
       },
       client,
     ),
@@ -289,6 +299,36 @@ server.tool(
   'set_focus',
   setFocusParamsSchema.shape,
   async params => handleSetFocus(params, client),
+)
+
+server.tool(
+  'clone_node',
+  cloneNodeParamsSchema.shape,
+  async params => handleCloneNode(params, client),
+)
+
+server.tool(
+  'reparent_node',
+  reparentNodeParamsSchema.shape,
+  async params => handleReparentNode(params, client),
+)
+
+server.tool(
+  'reorder_children',
+  reorderChildrenParamsSchema.shape,
+  async params => handleReorderChildren(params, client),
+)
+
+server.tool(
+  'boolean_op',
+  booleanOpParamsSchema.shape,
+  async params => handleBooleanOp(params, client),
+)
+
+server.tool(
+  'flatten',
+  flattenParamsSchema.shape,
+  async params => handleFlatten(params, client),
 )
 
 server.tool(
