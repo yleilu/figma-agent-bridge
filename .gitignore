@@ -7,3 +7,4 @@ bun.lock
 .obsidian/
 daily-journal/
 docs/scratch/
+verify-output/

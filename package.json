@@ -15,7 +15,8 @@
     "relay": "bun --silent run --filter @figma-agent-bridge/relay start",
     "server": "bun --silent run --filter @figma-agent-bridge/server start",
     "test": "bun --filter '@figma-agent-bridge/*' test",
-    "typecheck": "bun --filter '@figma-agent-bridge/*' typecheck"
+    "typecheck": "bun --filter '@figma-agent-bridge/*' typecheck",
+    "verify:live": "bun run packages/server/src/verify-live.ts"
   },
   "devDependencies": {
     "@jsdevtools/version-bump-prompt": "^6.1.0",
