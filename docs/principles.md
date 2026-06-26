@@ -131,6 +131,19 @@ hard-coded values — so the tool removes every reason not to build like a profe
 Only the plugin layer should *prefer* it (P1); the tool layer makes it effortless. Refines
 T6. Full reference: [[figma-bridge/docs/reference/figma-professional-practice]].
 
+### T10 — Bounded by default; never let a call blow up the agent
+Every tool is **bounded**: no single call returns unbounded output or runs unbounded work.
+Reads and scans carry a **default budget/limit** and **truncate with a continuation handle**
+(cursor/receipt) rather than flooding the agent's context or exceeding the bridge's command
+timeout. A request for "everything" is served in safe, resumable pieces — the surface
+protects the agent from one call that overflows its context (token blow-up) or hangs the
+bridge (an O(document) scan → timeout).
+*Why:* the agent's context and the bridge's round-trip are both finite; an unbounded read
+corrupts the session and an unbounded scan stalls it. A tool that can sink the agent is
+worse than one that returns a bounded page plus a way to continue. Implemented via the
+read-model (D1: limit + truncation + cursor); refines T4 (compact ≠ bounded — a call can be
+compact yet still O(document)).
+
 ## Plugin layer (skills / agents / commands)
 
 ### P1 — Preferences and recommendations live here
