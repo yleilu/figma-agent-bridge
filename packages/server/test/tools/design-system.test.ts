@@ -371,6 +371,100 @@ describe('handleGetComponents', () => {
     expect(sent[0].command).toBe(COMMANDS.GET_COMPONENTS)
   })
 
+  // T10 — includeRemote is the timeout fix. The O(document) all-instances
+  // remote-discovery scan must be OFF by default: the server threads
+  // includeRemote:false to the plugin so the plugin skips the expensive scan
+  // and returns only LOCAL components.
+  it('threads includeRemote:false to the plugin by default (the timeout fix)', async () => {
+    const sent: Sent[] = []
+    await handleGetComponents(
+      {},
+      stubClient({ sent, reply: componentsReply }),
+    )
+    expect(sent[0].params?.includeRemote).toBe(false)
+  })
+
+  it('threads includeRemote:true to the plugin when requested', async () => {
+    const sent: Sent[] = []
+    await handleGetComponents(
+      { includeRemote: true },
+      stubClient({ sent, reply: componentsReply }),
+    )
+    expect(sent[0].params?.includeRemote).toBe(true)
+  })
+
+  // T10 — server-side pagination (limit + cursor + truncated), mirroring the
+  // other bounded list reads: the plugin returns its (local-only by default)
+  // list; the SERVER bounds the AGENT-CONTEXT by slicing through paginateList.
+  const manyComponents = (n: number) => ({
+    local: Array.from({ length: n }, (_, i) => ({
+      id: `C:${i}`,
+      name: `Comp ${i}`,
+      key: `k${i}`,
+      type: 'COMPONENT',
+    })),
+    remote: [],
+  })
+
+  it('paginates with limit: page 1 is truncated and emits a cursor', async () => {
+    const result = await handleGetComponents(
+      { limit: 2 },
+      stubClient({ reply: manyComponents(5) }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { id: string }[]
+      truncated: boolean
+      cursor?: string
+    }
+    expect(out.results).toHaveLength(2)
+    expect(out.results[0].id).toBe('C:0')
+    expect(out.results[1].id).toBe('C:1')
+    expect(out.truncated).toBe(true)
+    expect(typeof out.cursor).toBe('string')
+  })
+
+  it('resumes from a cursor on the next page (no cursor at the end)', async () => {
+    const page1 = await handleGetComponents(
+      { limit: 2 },
+      stubClient({ reply: manyComponents(4) }),
+    )
+    const out1 = YAML.parse(page1.content[0].text) as {
+      cursor: string
+    }
+    const page2 = await handleGetComponents(
+      { limit: 2, cursor: out1.cursor },
+      stubClient({ reply: manyComponents(4) }),
+    )
+    const out2 = YAML.parse(page2.content[0].text) as {
+      results: { id: string }[]
+      truncated: boolean
+      cursor?: string
+    }
+    expect(out2.results).toHaveLength(2)
+    expect(out2.results[0].id).toBe('C:2')
+    expect(out2.results[1].id).toBe('C:3')
+    expect(out2.truncated).toBe(false)
+    expect(out2).not.toHaveProperty('cursor')
+  })
+
+  it('reports a STALE cursor without throwing when the set changed', async () => {
+    const page1 = await handleGetComponents(
+      { limit: 2 },
+      stubClient({ reply: manyComponents(5) }),
+    )
+    const out1 = YAML.parse(page1.content[0].text) as {
+      cursor: string
+    }
+    const stale = await handleGetComponents(
+      { limit: 2, cursor: out1.cursor },
+      // A different set → different version stamp → STALE.
+      stubClient({ reply: manyComponents(2) }),
+    )
+    const { text } = stale.content[0]
+    expect(text).toContain('Cursor rejected (STALE)')
+    expect(text.toLowerCase()).toContain('re-run')
+  })
+
   it('flattens local+remote into Rule-A results carrying key + variantAxes', async () => {
     const result = await handleGetComponents(
       {},

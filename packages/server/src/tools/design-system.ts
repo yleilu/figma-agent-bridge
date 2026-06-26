@@ -207,9 +207,29 @@ type ComponentEntry = {
  * variantAxes, defaults); the SERVER applies the case-insensitive substring
  * `query` filter (literal, not glob), flattens local ⧺ remote into the Rule-A
  * list shape, and emits YAML.
+ *
+ * T10 — two layers of bounding:
+ *  - `includeRemote` (default **false**) is threaded to the plugin and gates the
+ *    O(document) all-instances remote-discovery scan (walk every INSTANCE's
+ *    mainComponent to index library mains). That scan timed out live on a real
+ *    UI-kit document; making it opt-in is the primary fix. Default false → the
+ *    plugin returns only the cheap LOCAL component/set scan, `remote` is empty.
+ *  - `limit`/`cursor` page the flattened list SERVER-side via `paginateList`
+ *    (the same helper the other bounded list reads use). The plugin returns its
+ *    full (local-only by default) list; the server bounds the agent context.
  */
 export const handleGetComponents = async (
-  { query }: { query?: string },
+  {
+    query,
+    includeRemote = false,
+    limit,
+    cursor,
+  }: {
+    query?: string
+    includeRemote?: boolean
+    limit?: number
+    cursor?: string
+  },
   client: FigmaClient,
 ): Promise<ToolResult> => {
   const guard = requireConnected(client)
@@ -220,7 +240,7 @@ export const handleGetComponents = async (
   try {
     const raw = (await client.sendCommand(
       COMMANDS.GET_COMPONENTS,
-      { query },
+      { query, includeRemote },
     )) as {
       local?: unknown
       remote?: unknown
@@ -263,6 +283,19 @@ export const handleGetComponents = async (
 
     const results = [...local, ...remote]
 
+    // T10 — bound the flattened list to one page server-side (same helper as the
+    // other list reads). A STALE/MALFORMED cursor is surfaced cleanly, never
+    // silently resumed.
+    let bounded
+    try {
+      bounded = paginateList(results, { limit, cursor })
+    } catch (err) {
+      if (err instanceof CursorError) {
+        return cursorRejected(err, 'read')
+      }
+      throw err
+    }
+
     // Bug A degrade (T7): when one malformed set throws during the plugin's
     // per-set variant projection, that set degrades to a warning and the rest
     // still return. The warnings[] rides on the SUCCESS envelope (never thrown);
@@ -270,10 +303,21 @@ export const handleGetComponents = async (
     const warnings = Array.isArray(raw.warnings)
       ? (raw.warnings as string[])
       : undefined
-    const envelope =
-      warnings !== undefined && warnings.length > 0
-        ? { results, truncated: false, warnings }
-        : { results, truncated: false }
+    const envelope: {
+      results: unknown[]
+      truncated: boolean
+      cursor?: string
+      warnings?: string[]
+    } = {
+      results: bounded.page,
+      truncated: bounded.truncated,
+    }
+    if (bounded.cursor !== undefined) {
+      envelope.cursor = bounded.cursor
+    }
+    if (warnings !== undefined && warnings.length > 0) {
+      envelope.warnings = warnings
+    }
 
     return textResult(YAML.stringify(envelope))
   } catch (err) {

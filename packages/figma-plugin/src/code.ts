@@ -1446,9 +1446,13 @@ const handleCommand = async (
         }
       }
 
-      const instances = figma.root.findAllWithCriteria({
-        types: ['INSTANCE'],
-      })
+      // Remote/library discovery (T10 — the live timeout fix). This walks EVERY
+      // instance in the document (findAllWithCriteria(['INSTANCE'])) and resolves
+      // each one's mainComponent to index library mains — O(all instances). On a
+      // real UI-kit document that exceeds the 30s command timeout, while the
+      // LOCAL scan above is cheap. So it is OPT-IN: skipped entirely unless the
+      // caller asks for it via includeRemote. Default (false) → remote is empty.
+      const includeRemote = params.includeRemote === true
       const remoteMap: Record<
         string,
         {
@@ -1458,22 +1462,27 @@ const handleCommand = async (
           instancesCount: number
         }
       > = {}
-      for (const inst of instances) {
-        const main = inst.mainComponent
-        if (main && main.remote) {
-          const mkey = main.key
-          if (!remoteMap[mkey]) {
-            remoteMap[mkey] = {
-              key: mkey,
-              name: main.name,
-              library:
-                main.parent && main.parent.name
-                  ? main.parent.name
-                  : 'Unknown',
-              instancesCount: 0,
+      if (includeRemote) {
+        const instances = figma.root.findAllWithCriteria({
+          types: ['INSTANCE'],
+        })
+        for (const inst of instances) {
+          const main = inst.mainComponent
+          if (main && main.remote) {
+            const mkey = main.key
+            if (!remoteMap[mkey]) {
+              remoteMap[mkey] = {
+                key: mkey,
+                name: main.name,
+                library:
+                  main.parent && main.parent.name
+                    ? main.parent.name
+                    : 'Unknown',
+                instancesCount: 0,
+              }
             }
+            remoteMap[mkey].instancesCount++
           }
-          remoteMap[mkey].instancesCount++
         }
       }
 

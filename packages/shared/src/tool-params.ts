@@ -740,9 +740,12 @@ export const getStylesParamsSchema = z.object({
 })
 
 /**
- * Params for `get_components`: list local + remote components,
- * optionally filtered by a name substring. Bounded read — it never
- * paginates (always returns { truncated:false }), so it takes no cursor.
+ * Params for `get_components`: list local + remote components, optionally
+ * filtered by a name substring. Bounded by T10 — the flattened list is paged
+ * server-side via the shared limit+cursor mixin. `includeRemote` (default
+ * **false**) gates the O(document) all-instances remote-discovery scan that
+ * timed out live on a real UI-kit document; default false returns only the
+ * cheap LOCAL component/set scan.
  */
 export const getComponentsParamsSchema = z.object({
   query: z
@@ -751,6 +754,13 @@ export const getComponentsParamsSchema = z.object({
     .describe(
       'Case-insensitive substring filter on component/set name.',
     ),
+  includeRemote: z
+    .boolean()
+    .optional()
+    .describe(
+      'Also discover library/remote components by scanning every instance (O(document) — can be slow on large docs). Defaults to false: only LOCAL components are scanned.',
+    ),
+  ...listPaginationParamsSchema.shape,
 })
 
 /**
