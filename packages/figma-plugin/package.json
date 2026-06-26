@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "rm -rf dist && vite build --config vite.config.ui.ts && vite build --config vite.config.code.ts",
+    "test": "bun test",
     "typecheck": "tsc --noEmit --project tsconfig.ui.json && tsc --noEmit --project tsconfig.code.json",
     "watch": "concurrently 'vite build --watch --config vite.config.ui.ts' 'vite build --watch --config vite.config.code.ts'"
   },

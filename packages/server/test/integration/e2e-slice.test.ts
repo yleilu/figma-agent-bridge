@@ -1085,6 +1085,67 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(out.echo[1].valuesByMode.Light).toBe(8)
   })
 
+  // 25a — create_variables: aliases / scopes / codeSyntax / hiddenFromPublishing
+  // reach the plugin's shared per-variable apply path on create (E1 parity with
+  // update_variables).
+  it('create_variables forwards aliases/scopes/codeSyntax/hiddenFromPublishing over the relay (E1)', async () => {
+    const result = await handleCreateVariables(
+      {
+        collection: 'Brand',
+        modes: ['Light'],
+        variables: [
+          {
+            name: 'Brand/Primary',
+            type: 'COLOR',
+            valuesByMode: { Light: '#FF0000' },
+            aliases: { Light: 'var:target' },
+            scopes: ['ALL_SCOPES'],
+            codeSyntax: { WEB: '--brand-primary' },
+            hiddenFromPublishing: true,
+          },
+        ],
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const out = JSON.parse(result.content[0].text) as {
+      echo: {
+        aliases?: Record<string, string>
+        scopes?: string[]
+        codeSyntax?: Record<string, string>
+        hiddenFromPublishing?: boolean
+      }[]
+    }
+    const v = out.echo[0]
+    expect(v.aliases).toEqual({ Light: 'var:target' })
+    expect(v.scopes).toEqual(['ALL_SCOPES'])
+    expect(v.codeSyntax).toEqual({ WEB: '--brand-primary' })
+    expect(v.hiddenFromPublishing).toBe(true)
+  })
+
+  // 25b — create_variables: an alias-target-not-found degrades through the shared
+  // per-variable apply path (warn on success, never {error}) — E1 + T7.
+  it('create_variables alias-target-not-found degrades (E1 + T7)', async () => {
+    const result = await handleCreateVariables(
+      {
+        collection: 'Brand',
+        variables: [
+          {
+            name: 'Brand/Primary',
+            type: 'COLOR',
+            valuesByMode: { 'Mode 1': '#FF0000' },
+            aliases: { 'Mode 1': 'missing:nope' },
+          },
+        ],
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    expect(result.content[0].text).toContain(
+      'alias target not found',
+    )
+  })
+
   // 26 — update_variables: addMode + a COLOR value edit, parsed from hex.
   it('update_variables forwards addModes + a parsed COLOR value edit over the relay', async () => {
     const result = await handleUpdateVariables(

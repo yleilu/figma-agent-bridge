@@ -174,8 +174,9 @@ export const deleteNodeParamsSchema = z.object({
 
 /**
  * Params for `set_focus`: scroll and zoom the viewport so the given nodes are
- * in view. This moves the CANVAS only — it does not change the selection
- * (pair with set_selection for that).
+ * in view. set_focus is the viewport WRITER — the viewport is READ via `status`
+ * (which now returns the live viewport). This moves the CANVAS only — it does
+ * not change the selection (pair with set_selection for that).
  */
 export const setFocusParamsSchema = z.object({
   nodeIds: z
@@ -442,6 +443,9 @@ export const variableTypeSchema = z.enum([
  * One variable to create inside the collection. `valuesByMode` maps a MODE NAME
  * (matched against the collection's modes) to a value. COLOR values are hex
  * atoms (parsed via the grammar paint face); FLOAT/STRING/BOOLEAN are literals.
+ * `aliases` / `scopes` / `codeSyntax` / `hiddenFromPublishing` may also be set on
+ * create (parity with update_variables — applied through the same per-variable
+ * path, each feature-detected + T7-degraded).
  */
 export const createVariableSpecSchema = z.object({
   name: z
@@ -454,6 +458,28 @@ export const createVariableSpecSchema = z.object({
     .record(z.union([z.string(), z.number(), z.boolean()]))
     .describe(
       'Map of mode NAME → value. COLOR values are hex atoms (e.g. "#3B82F6"); FLOAT/STRING/BOOLEAN are literals. Modes not present in the collection are reported as warnings.',
+    ),
+  aliases: z
+    .record(z.string())
+    .optional()
+    .describe(
+      'Map of mode NAME → target variable ID — sets that mode to a VARIABLE_ALIAS of the target (feature-detected + T7-degraded).',
+    ),
+  scopes: z
+    .array(z.string())
+    .optional()
+    .describe('Variable scopes (e.g. ["ALL_SCOPES"]).'),
+  codeSyntax: z
+    .record(z.string())
+    .optional()
+    .describe(
+      'Code syntax per platform (keys: WEB | ANDROID | iOS).',
+    ),
+  hiddenFromPublishing: z
+    .boolean()
+    .optional()
+    .describe(
+      'Whether to hide the variable from publishing.',
     ),
 })
 
@@ -810,28 +836,16 @@ export const exportParamsSchema = z.object({
 // ---------------------------------------------------------------------------
 
 /**
- * Params for `create_component`: promote a node and/or build from a NodeSpec,
- * then componentize. Supply EXACTLY ONE source: `nodeId` (an existing node to
- * promote) OR `spec` (a NodeSpec to create first, then promote). The handler
- * validates that exactly one is present.
+ * Params for `create_component`: PROMOTE-ONLY (un-overloaded per the spec's
+ * single-node-promote decision). Componentizes an existing node via
+ * createComponentFromNode(); optionally renames / sets its description. To build
+ * a node first, use create_node / create_tree, then promote the returned id.
  */
 export const createComponentParamsSchema = z.object({
   nodeId: z
     .string()
-    .optional()
     .describe(
-      'Existing node to componentize via createComponentFromNode(). Provide this OR spec, not both.',
-    ),
-  spec: nodeSpecSchema
-    .optional()
-    .describe(
-      'A NodeSpec to create first (via the create path), then componentize. Provide this OR nodeId, not both.',
-    ),
-  parentId: z
-    .string()
-    .optional()
-    .describe(
-      'When building from spec, the parent to create under. Omit for the current page.',
+      'Existing node to componentize via createComponentFromNode().',
     ),
   name: z
     .string()
@@ -925,14 +939,30 @@ export const combineVariantsParamsSchema = z.object({
     .describe('Name for the resulting component set.'),
 })
 
-/** Params for `swap_component`: point an instance at a different main component. */
+/**
+ * Params for `swap_component`: point an instance at a different main component.
+ * Remote-capable: provide EITHER `mainComponentId` (a LOCAL component node id —
+ * resolved directly) OR `key` (a component KEY — resolved via
+ * importComponentByKeyAsync, T7-gated: if the import fails the swap degrades with
+ * a warning). At least one is required. If BOTH are given the LOCAL
+ * `mainComponentId` WINS (it needs no async import).
+ */
 export const swapComponentParamsSchema = z.object({
   instanceId: z
     .string()
     .describe('ID of the instance to swap.'),
   mainComponentId: z
     .string()
-    .describe('ID of the component to swap to.'),
+    .optional()
+    .describe(
+      'LOCAL component node id to swap to. Wins over `key` if both are given.',
+    ),
+  key: z
+    .string()
+    .optional()
+    .describe(
+      'Component KEY to swap to (remote/library) — resolved via importComponentByKeyAsync (T7-gated). Used when `mainComponentId` is absent.',
+    ),
 })
 
 /**

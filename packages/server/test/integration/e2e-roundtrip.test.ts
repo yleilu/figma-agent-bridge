@@ -66,15 +66,42 @@ describe('e2e roundtrip', () => {
     expect(result.content[0].text).toContain(TEST_CHANNEL)
   })
 
-  it('status tool returns connected', async () => {
+  it('status tool returns connected + LIVE context (D1)', async () => {
+    // D1: status sends COMMANDS.STATUS to the plugin and merges the live context
+    // (currentPage / selection / viewport) with the server-side connection
+    // state — so a plugin must be running for the live read to resolve.
+    plugin = createMockPlugin({
+      relayUrl: RELAY_URL,
+      channel: TEST_CHANNEL,
+      documentName: 'Status Doc',
+      pageName: 'Live Page',
+    })
+    await plugin.start()
     await handleConnect({ channel: TEST_CHANNEL }, client)
 
     const result = await handleStatus(client)
 
     expect(result.content).toHaveLength(1)
     expect(result.content[0].type).toBe('text')
-    expect(result.content[0].text).toContain('connected')
-    expect(result.content[0].text).toContain(TEST_CHANNEL)
+    const out = JSON.parse(result.content[0].text) as {
+      connected: boolean
+      channel: string
+      currentPage: { id: string; name: string }
+      selection: { id: string; type: string }[]
+      viewport: {
+        center: { x: number; y: number }
+        zoom: number
+      }
+    }
+    expect(out.connected).toBe(true)
+    expect(out.channel).toBe(TEST_CHANNEL)
+    // Live context merged from the plugin's STATUS reply.
+    expect(out.currentPage).toEqual({
+      id: 'page:1',
+      name: 'Live Page',
+    })
+    expect(out.selection[0].type).toBe('FRAME')
+    expect(out.viewport.zoom).toBe(1.5)
   })
 
   it('server can send command to mock plugin and get response', async () => {

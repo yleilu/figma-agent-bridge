@@ -35,13 +35,20 @@ type CreateVariableSpec = {
   name: string
   type: 'COLOR' | 'FLOAT' | 'STRING' | 'BOOLEAN'
   valuesByMode: Record<string, string | number | boolean>
+  aliases?: Record<string, string>
+  scopes?: string[]
+  codeSyntax?: Record<string, string>
+  hiddenFromPublishing?: boolean
 }
 
 /**
  * Create a variable collection (+ optional extra modes) and its variables with
  * per-mode values. COLOR values are hex atoms parsed server-side to {r,g,b[,a]}
  * (the grammar paint face — hexToRgba); FLOAT/STRING/BOOLEAN pass through as
- * literals. Returns { collectionId, modes, variables:[{id,name}] }.
+ * literals. aliases / scopes / codeSyntax / hiddenFromPublishing pass through to
+ * the plugin's per-variable apply path (parity with update_variables; each
+ * feature-detected + T7-degraded). Returns
+ * { collectionId, modes, variables:[{id,name}], warnings }.
  */
 export const handleCreateVariables = async (
   {
@@ -62,6 +69,8 @@ export const handleCreateVariables = async (
 
   try {
     // Parse COLOR valuesByMode to {r,g,b[,a]}; other types pass through.
+    // aliases / scopes / codeSyntax / hiddenFromPublishing forward as-is (the
+    // plugin applies them through the same per-variable path as update_variables).
     const converted = variables.map(v => ({
       name: v.name,
       type: v.type,
@@ -75,6 +84,10 @@ export const handleCreateVariables = async (
           ],
         ),
       ),
+      aliases: v.aliases,
+      scopes: v.scopes,
+      codeSyntax: v.codeSyntax,
+      hiddenFromPublishing: v.hiddenFromPublishing,
     }))
 
     const result = (await client.sendCommand(

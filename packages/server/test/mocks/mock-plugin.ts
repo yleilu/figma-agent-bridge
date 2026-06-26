@@ -91,6 +91,22 @@ export const createMockPlugin = (
         }
         break
 
+      // status (D1): the LIVE context — current page, selection, viewport. The
+      // server adds connection state (connected/channel); this returns only the
+      // plugin-known live context, faithful to the real plugin's STATUS case.
+      case 'status':
+        result = {
+          currentPage: { id: 'page:1', name: pageName },
+          selection: [
+            { id: '1:42', name: 'Card', type: 'FRAME' },
+          ],
+          viewport: {
+            center: { x: 100, y: 200 },
+            zoom: 1.5,
+          },
+        }
+        break
+
       case 'get_selection':
         result = [
           { id: '1:42', name: 'Card', type: 'FRAME' },
@@ -243,9 +259,12 @@ export const createMockPlugin = (
         }
         break
 
-      // get_components: the NEW richer shape — key + variantAxes +
-      // propertyDefinitions + defaults per local entry, key + library +
-      // instancesCount per remote entry.
+      // get_components: the NEW richer shape — key + variantAxes + `properties`
+      // + defaults per local entry, key + library + instancesCount per remote
+      // entry. `properties` is the SAME {id,name,type,defaultValue,
+      // variantOptions?} array shape + key update_component emits (read == write,
+      // T2): each entry's `id` is the CANONICAL property id and `name` is the
+      // part before "#".
       case 'get_components':
         result = {
           local: [
@@ -255,14 +274,16 @@ export const createMockPlugin = (
               key: 'btn-key',
               type: 'COMPONENT_SET',
               page: 'Main',
-              propertyDefinitions: [
+              properties: [
                 {
+                  id: 'Variant',
                   name: 'Variant',
                   type: 'VARIANT',
                   defaultValue: 'Primary',
                   variantOptions: ['Primary', 'Secondary'],
                 },
                 {
+                  id: 'Disabled#2:0',
                   name: 'Disabled',
                   type: 'BOOLEAN',
                   defaultValue: false,
@@ -949,15 +970,10 @@ export const createMockPlugin = (
         break
       }
 
-      // create_component: the M3-B rebuild promotes nodeId OR builds-from-spec
-      // then componentizes, echoing {id,key,name,type} + the converted spec so
-      // the e2e can assert the spec atoms were parsed server-side. (The legacy
-      // {combineAsVariants,nodeIds} / {slots} branches were retired in M3-E
-      // alongside the old tools/create-component.ts handler.)
+      // create_component (PROMOTE-ONLY, un-overloaded per spec): promote the
+      // given nodeId, echoing {id,key,name,type} + the source nodeId so the e2e
+      // can assert routing. The build-from-spec overload was removed.
       case 'create_component': {
-        const ccSpec = cmd.params?.spec as
-          | Record<string, unknown>
-          | undefined
         const ccNodeId = cmd.params?.nodeId as
           | string
           | undefined
@@ -967,13 +983,9 @@ export const createMockPlugin = (
         result = {
           id: `comp:${Math.random().toString(36).slice(2, 8)}`,
           key: `key:${Math.random().toString(36).slice(2, 8)}`,
-          name:
-            ccName ??
-            (ccSpec?.name as string) ??
-            'Component',
+          name: ccName ?? 'Component',
           type: 'COMPONENT',
-          // echo the converted spec / source so tests can assert conversion + routing
-          spec: ccSpec,
+          // echo the source so tests can assert routing
           sourceNodeId: ccNodeId,
         }
         break
@@ -1043,6 +1055,10 @@ export const createMockPlugin = (
       // warning (honest partial success — never silently swallowed), mirroring
       // the real plugin. ≥2 SURVIVORS → a COMPONENT_SET; <2 → error (guarded
       // server-side too). The mock treats `bad:`-prefixed ids as not-a-component.
+      // The set's `key` is returned (read/write symmetry). A `noaxis:`-prefixed
+      // KEPT id models a component whose name lacks the "Property=Value" axis
+      // convention → the MULTI-AXIS warning (T7/T9), faithful to the real plugin
+      // checking the source names.
       case 'combine_variants': {
         const cvIds =
           (cmd.params?.componentIds as string[]) ?? []
@@ -1066,6 +1082,20 @@ export const createMockPlugin = (
             'Need at least 2 components for combine_variants'
           break
         }
+        // Multi-axis nudge: KEPT ids prefixed `noaxis:` model component names
+        // lacking the "Property=Value" axis convention.
+        const cvUnaxised = cvKept.filter(id =>
+          id.startsWith('noaxis:'),
+        )
+        if (cvUnaxised.length > 0) {
+          cvWarnings.push(
+            'combine_variants: ' +
+              cvUnaxised.length +
+              ' component name(s) do not use the "Property=Value" axis convention (' +
+              cvUnaxised.join(', ') +
+              '); the variant set will not form a clean axis set. Name each variant one property per axis (e.g. "Style=Primary, Size=Large").',
+          )
+        }
         // A `nogood:` parent can't bear children → fall back to the first
         // component's parent, but REPORT it (no silent fallback), mirroring the
         // real plugin.
@@ -1081,6 +1111,7 @@ export const createMockPlugin = (
         }
         result = {
           id: `cs:${Math.random().toString(36).slice(2, 8)}`,
+          key: `cskey:${Math.random().toString(36).slice(2, 8)}`,
           name:
             (cmd.params?.name as string) ?? 'VariantSet',
           type: 'COMPONENT_SET',
@@ -1090,16 +1121,46 @@ export const createMockPlugin = (
         break
       }
 
-      // swap_component: echo {id, mainComponent, warnings}. instanceId
-      // `degrade:` → swap warns (T7), success not error. On a FAILED swap the
-      // real plugin re-reads getMainComponentAsync() → the ORIGINAL main (the
-      // swap never took), so the mock echoes the original main here too, NOT the
-      // requested target. We derive the original id from the instance id
-      // (`degrade:i9` → `orig:i9`) so it is deterministic and assertable.
+      // swap_component: echo {id, mainComponent, warnings}. Remote-capable,
+      // faithful to the real plugin:
+      //  - LOCAL mainComponentId WINS if both it and `key` are given.
+      //  - REMOTE `key` (no mainComponentId) is resolved via
+      //    importComponentByKeyAsync. A key prefixed `importfail:` models a
+      //    FAILED import → degrade ({mainComponent:null, warning}), NEVER {error};
+      //    else the imported main id is derived (`key` → `imported:<key>`).
+      //  - instanceId `degrade:` models a FAILED swap (T7): the real plugin
+      //    re-reads getMainComponentAsync() → the ORIGINAL main (swap never took),
+      //    so the mock echoes `orig:<id>`, NOT the requested target.
       case 'swap_component': {
         const scId = cmd.params?.instanceId as string
-        const scMain = cmd.params?.mainComponentId as string
+        const scMainId = cmd.params?.mainComponentId as
+          | string
+          | undefined
+        const scKey = cmd.params?.key as string | undefined
         const scWarnings: string[] = []
+        // Resolve the target main: LOCAL wins; else import by key.
+        let target: string | null
+        if (scMainId !== undefined) {
+          target = scMainId
+        } else if (scKey !== undefined) {
+          if (scKey.startsWith('importfail:')) {
+            result = {
+              id: scId,
+              mainComponent: null,
+              warnings: [
+                'importComponentByKeyAsync failed for key "' +
+                  scKey +
+                  '": import error; remote swap skipped',
+              ],
+            }
+            break
+          }
+          target = 'imported:' + scKey
+        } else {
+          error =
+            'swap_component requires mainComponentId (local) or key (remote)'
+          break
+        }
         const degraded = scId?.startsWith('degrade:')
         if (degraded) {
           scWarnings.push(
@@ -1110,7 +1171,7 @@ export const createMockPlugin = (
           id: scId,
           mainComponent: degraded
             ? 'orig:' + scId.slice('degrade:'.length)
-            : scMain,
+            : target,
           warnings: scWarnings,
         }
         break
@@ -1120,10 +1181,10 @@ export const createMockPlugin = (
       // (not applied). The real plugin returns the RAW Figma
       // inst2.componentProperties — a NESTED map { [name]: { value, type } }
       // (VARIANT and non-VARIANT props mixed, value wrapped) — NOT the flat
-      // input. Mirror that nested shape here so the echo is faithful (the
-      // flatten-to-read-twin fix is a DEFERRED spec item; the mock only needs to
-      // match the plugin's CURRENT echo). Infer type from the value kind:
-      // boolean → BOOLEAN, string → VARIANT (the common case in tests).
+      // input. The mock stays FAITHFUL to that raw plugin shape; the SERVER now
+      // splits it into the read-twin { variantProperties?, componentProperties? }
+      // shape (C3 — flatten-to-read-twin landed). Infer type from the value
+      // kind: boolean → BOOLEAN, string → VARIANT (the common case in tests).
       case 'set_instance': {
         const siId = cmd.params?.instanceId as string
         const siProps = cmd.params?.properties as
@@ -1322,13 +1383,16 @@ export const createMockPlugin = (
 
       // create_variables: the server has CONVERTED COLOR values to {r,g,b,a}
       // (FLOAT/STRING/BOOLEAN pass through). Echo the converted variables back
-      // (as `echo`) so the e2e can assert the parse reached the plugin, and
+      // (as `echo`) so the e2e can assert the parse + the E1 fields (aliases /
+      // scopes / codeSyntax / hiddenFromPublishing) reached the plugin, and
       // mirror the real reply { collectionId, modes, variables:[{id,name}] }.
       // T7: a collection name prefixed `err:` models the collection-level
       // factory THROWING — a genuine failure (nothing to return) → {error}, not
       // a degrade. A variable name prefixed `degrade:` models a per-variable
       // create / setValueForMode failure — it degrades to a warning and the rest
-      // of the batch continues (never a throw, never {error}).
+      // of the batch continues (never a throw, never {error}). E1: an `aliases`
+      // target id prefixed `missing:` models alias-target-not-found (the SHARED
+      // per-variable apply path's T7 degrade — warned, never thrown).
       case 'create_variables': {
         const collectionName = cmd.params
           ?.collection as string
@@ -1342,6 +1406,10 @@ export const createMockPlugin = (
                 name: string
                 type: string
                 valuesByMode: Record<string, unknown>
+                aliases?: Record<string, string>
+                scopes?: string[]
+                codeSyntax?: Record<string, string>
+                hiddenFromPublishing?: boolean
               }[]
             | undefined) ?? []
         const reqModes =
@@ -1368,6 +1436,19 @@ export const createMockPlugin = (
               `setValueForMode failed for variable "${v.name}"; value not set`,
             )
             return
+          }
+          // E1: model the shared per-variable apply path's alias-target-not-found
+          // degrade (an aliases target id prefixed `missing:`).
+          for (const [modeName, targetId] of Object.entries(
+            v.aliases ?? {},
+          )) {
+            if (targetId.startsWith('missing:')) {
+              warnings.push(
+                `alias target not found: ${targetId} for variable "${v.name}"`,
+              )
+            } else {
+              void modeName
+            }
           }
           created.push({ id: `var:${i + 1}`, name: v.name })
         })

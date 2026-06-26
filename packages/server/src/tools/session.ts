@@ -1,3 +1,4 @@
+import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { FigmaClient } from '../figma-client'
 import { discoverChannels } from '../figma-client'
 import { ensureRelay } from '../ensure-relay'
@@ -63,6 +64,17 @@ export const handleConnect = async (
   }
 }
 
+/**
+ * status() → { connected, channel, currentPage, selection[], viewport } (D1).
+ *
+ * Connection state (connected, channel) is known SERVER-side; the LIVE context
+ * (currentPage / selection / viewport — what the user is looking at) is read
+ * from the plugin via COMMANDS.STATUS and merged in. The plugin's live context
+ * is best-effort: if the STATUS round-trip fails or returns nothing, the
+ * connection state still reports honestly (never a throw, never a hallucinated
+ * context). This is also the documented READ path for the viewport (set_focus is
+ * the writer).
+ */
 export const handleStatus = async (
   client: FigmaClient,
 ): Promise<ToolResult> => {
@@ -70,5 +82,34 @@ export const handleStatus = async (
     return textResult('disconnected')
   }
   const channel = client.currentChannel()
-  return textResult(`connected to channel: ${channel}`)
+
+  let live: {
+    currentPage?: { id: string; name: string }
+    selection?: { id: string; name: string; type: string }[]
+    viewport?: {
+      center: { x: number; y: number }
+      zoom: number
+    }
+  } = {}
+  try {
+    const raw = (await client.sendCommand(
+      COMMANDS.STATUS,
+      {},
+    )) as typeof live | null
+    if (raw !== null && typeof raw === 'object') {
+      live = raw
+    }
+  } catch {
+    // Best-effort: a failed live-context read still reports connection state.
+  }
+
+  return textResult(
+    JSON.stringify({
+      connected: true,
+      channel,
+      currentPage: live.currentPage,
+      selection: live.selection,
+      viewport: live.viewport,
+    }),
+  )
 }

@@ -141,7 +141,7 @@ export const handleGetStyles = async (
   }
 }
 
-// ─── get_components (Rule A; carries key + variant axes + property defs) ──────
+// ─── get_components (Rule A; key + variant axes + `properties` == write twin) ─
 
 type ComponentEntry = {
   id?: string
@@ -149,7 +149,9 @@ type ComponentEntry = {
   key?: string
   type?: string
   page?: string | null
-  propertyDefinitions?: unknown[]
+  // `properties`: the SAME {id,name,type,defaultValue,variantOptions?} array
+  // shape + key update_component emits (read == write, T2).
+  properties?: unknown[]
   variantAxes?: Record<string, string[]>
   defaults?: Record<string, unknown>
   [k: string]: unknown
@@ -157,9 +159,10 @@ type ComponentEntry = {
 
 /**
  * List local + remote components. The plugin builds the rich per-entry shape
- * (key, type, page, propertyDefinitions, variantAxes, defaults); the SERVER
- * applies the case-insensitive substring `query` filter (literal, not glob),
- * flattens local ⧺ remote into the Rule-A list shape, and emits YAML.
+ * (key, type, page, `properties` [== update_component's property array, T2],
+ * variantAxes, defaults); the SERVER applies the case-insensitive substring
+ * `query` filter (literal, not glob), flattens local ⧺ remote into the Rule-A
+ * list shape, and emits YAML.
  */
 export const handleGetComponents = async (
   { query }: { query?: string },

@@ -154,6 +154,47 @@ describe('handleCreateVariables', () => {
     )
   })
 
+  // E1: aliases / scopes / codeSyntax / hiddenFromPublishing may be set on
+  // create (parity with update_variables). The server forwards them as-is to the
+  // plugin's shared per-variable apply path.
+  it('forwards aliases / scopes / codeSyntax / hiddenFromPublishing on create (E1)', async () => {
+    const sent: Sent[] = []
+    await handleCreateVariables(
+      {
+        collection: 'Brand',
+        modes: ['Light'],
+        variables: [
+          {
+            name: 'Brand/Primary',
+            type: 'COLOR',
+            valuesByMode: { Light: '#FF0000' },
+            aliases: { Light: 'var:alias-target' },
+            scopes: ['ALL_SCOPES'],
+            codeSyntax: { WEB: '--brand-primary' },
+            hiddenFromPublishing: true,
+          },
+        ],
+      },
+      stubClient({
+        sent,
+        reply: { collectionId: 'col:1' },
+      }),
+    )
+    const params = sent[0].params as {
+      variables: {
+        aliases?: Record<string, string>
+        scopes?: string[]
+        codeSyntax?: Record<string, string>
+        hiddenFromPublishing?: boolean
+      }[]
+    }
+    const v = params.variables[0]
+    expect(v.aliases).toEqual({ Light: 'var:alias-target' })
+    expect(v.scopes).toEqual(['ALL_SCOPES'])
+    expect(v.codeSyntax).toEqual({ WEB: '--brand-primary' })
+    expect(v.hiddenFromPublishing).toBe(true)
+  })
+
   it('emits the {collectionId,modes,variables} reply', async () => {
     const result = await handleCreateVariables(
       {

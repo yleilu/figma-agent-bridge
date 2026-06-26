@@ -1,5 +1,7 @@
 import { COMMANDS } from '@figma-agent-bridge/shared'
 
+import { projectComponentDefs } from './project-component-defs'
+
 figma.showUI(__html__, {
   width: 340,
   height: 280,
@@ -893,6 +895,144 @@ const createTreeNode = async (
   return node
 }
 
+// Apply per-variable metadata (aliases / scopes / codeSyntax /
+// hiddenFromPublishing) — the SHARED apply path mirroring update_variables'
+// per-variable edits, used by create_variables so create reaches parity with
+// update. Each member is feature-detected and degrades with a warning (T7),
+// never throwing. `aliases` maps a mode NAME → target variable id; that mode is
+// set to a VARIABLE_ALIAS of the target via setValueForMode (async target read).
+const applyVariableMeta = async (
+  variable: Variable,
+  meta: {
+    name: string
+    aliases?: Record<string, string>
+    scopes?: string[]
+    codeSyntax?: Record<string, string>
+    hiddenFromPublishing?: boolean
+  },
+  modeByName: Record<string, string>,
+  warnings: string[],
+): Promise<void> => {
+  if (meta.aliases !== undefined) {
+    const aliasFactory = (
+      figma.variables as VariablesAPI & {
+        createVariableAlias?: (v: Variable) => VariableAlias
+      }
+    ).createVariableAlias
+    for (const [modeName, targetId] of Object.entries(
+      meta.aliases,
+    )) {
+      const modeId = modeByName[modeName]
+      if (modeId === undefined) {
+        warnings.push(
+          'unknown mode "' +
+            modeName +
+            '" for variable "' +
+            meta.name +
+            '" alias; skipped',
+        )
+        continue
+      }
+      if (
+        typeof aliasFactory !== 'function' ||
+        typeof variable.setValueForMode !== 'function'
+      ) {
+        warnings.push(
+          'createVariableAlias unavailable; alias for "' +
+            meta.name +
+            '" not set',
+        )
+        continue
+      }
+      try {
+        const target =
+          await figma.variables.getVariableByIdAsync(
+            targetId,
+          )
+        if (!target) {
+          warnings.push(
+            'alias target not found: ' +
+              targetId +
+              ' for variable "' +
+              meta.name +
+              '"',
+          )
+          continue
+        }
+        variable.setValueForMode(
+          modeId,
+          aliasFactory(target),
+        )
+      } catch (e) {
+        warnings.push(
+          'alias not set for variable "' +
+            meta.name +
+            '" mode "' +
+            modeName +
+            '": ' +
+            String(e),
+        )
+      }
+    }
+  }
+  if (meta.scopes !== undefined) {
+    try {
+      variable.scopes = meta.scopes as VariableScope[]
+    } catch (e) {
+      warnings.push(
+        'scopes not settable on "' +
+          meta.name +
+          '": ' +
+          String(e),
+      )
+    }
+  }
+  if (meta.codeSyntax !== undefined) {
+    if (
+      typeof variable.setVariableCodeSyntax === 'function'
+    ) {
+      for (const [platform, value] of Object.entries(
+        meta.codeSyntax,
+      )) {
+        try {
+          variable.setVariableCodeSyntax(
+            platform as CodeSyntaxPlatform,
+            value,
+          )
+        } catch (e) {
+          warnings.push(
+            'codeSyntax not set (' +
+              platform +
+              ') on "' +
+              meta.name +
+              '": ' +
+              String(e),
+          )
+        }
+      }
+    } else {
+      warnings.push(
+        'setVariableCodeSyntax unavailable; codeSyntax not set on "' +
+          meta.name +
+          '"',
+      )
+    }
+  }
+  if (meta.hiddenFromPublishing !== undefined) {
+    try {
+      variable.hiddenFromPublishing =
+        meta.hiddenFromPublishing
+    } catch (e) {
+      warnings.push(
+        'hiddenFromPublishing not settable on "' +
+          meta.name +
+          '": ' +
+          String(e),
+      )
+    }
+  }
+}
+
 const handleCommand = async (
   command: string,
   params: Record<string, unknown>,
@@ -904,6 +1044,27 @@ const handleCommand = async (
         currentPage: {
           id: figma.currentPage.id,
           name: figma.currentPage.name,
+        },
+      }
+
+    // status (D1): the LIVE context the user is looking at — current page,
+    // selection, and viewport. Connection state (connected/channel) is added
+    // SERVER-side; this case supplies only the plugin-known live context. This
+    // is the documented READ path for the viewport (set_focus is the writer).
+    case COMMANDS.STATUS:
+      return {
+        currentPage: {
+          id: figma.currentPage.id,
+          name: figma.currentPage.name,
+        },
+        selection: figma.currentPage.selection.map(n => ({
+          id: n.id,
+          name: n.name,
+          type: n.type,
+        })),
+        viewport: {
+          center: figma.viewport.center,
+          zoom: figma.viewport.zoom,
         },
       }
 
@@ -1159,35 +1320,9 @@ const handleCommand = async (
         types: ['COMPONENT'],
       })
 
-      const projectDefs = (
-        defs: ComponentPropertyDefinitions,
-      ): {
-        name: string
-        type: string
-        defaultValue: string | boolean
-        variantOptions?: string[]
-      }[] =>
-        Object.keys(defs).map(key => {
-          const def = defs[key]
-          const entry: {
-            name: string
-            type: string
-            defaultValue: string | boolean
-            variantOptions?: string[]
-          } = {
-            name: key,
-            type: def.type,
-            defaultValue: def.defaultValue,
-          }
-          if (
-            def.type === 'VARIANT' &&
-            def.variantOptions
-          ) {
-            entry.variantOptions = def.variantOptions
-          }
-          return entry
-        })
-
+      // get_components' `properties` projection (READ) — shares
+      // projectComponentDefs with update_component (WRITE) so the shape is
+      // identical by construction, not convention (read == write, T2).
       const defaultsOf = (
         defs: ComponentPropertyDefinitions,
       ): Record<string, unknown> =>
@@ -1229,7 +1364,7 @@ const handleCommand = async (
             cs.parent && cs.parent.type === 'PAGE'
               ? cs.parent.name
               : null,
-          propertyDefinitions: projectDefs(csDefs),
+          properties: projectComponentDefs(csDefs),
           variantAxes:
             Object.keys(variantAxes).length > 0
               ? variantAxes
@@ -1257,7 +1392,7 @@ const handleCommand = async (
             comp.parent && comp.parent.type === 'PAGE'
               ? comp.parent.name
               : null,
-          propertyDefinitions: projectDefs(compDefs),
+          properties: projectComponentDefs(compDefs),
           defaults: defaultsOf(compDefs),
         })
       }
@@ -1628,64 +1763,25 @@ const handleCommand = async (
       }
     }
 
-    // create_component (M3-B rebuild): supply EXACTLY ONE source — `spec` (a
-    // NodeSpec built first via createSingleNode, then componentized) OR `nodeId`
-    // (promote an existing node via createComponentFromNode). The server has
-    // already validated the XOR and converted the spec on the grammar write
-    // face. Returns {id,key,name,type}.
+    // create_component (PROMOTE-ONLY, un-overloaded per spec): componentize an
+    // existing node via createComponentFromNode(), optionally rename / set
+    // description. The build-from-spec overload (+ its orphan cleanup) was
+    // removed — build with create_node / create_tree first, then promote.
     case COMMANDS.CREATE_COMPONENT: {
       const ccName = params.name as string | undefined
       const ccDescription = params.description as
         | string
         | undefined
-      let sourceNode: SceneNode
-      // Track whether we built the source from a spec — if the subsequent
-      // promote throws, only a spec-built node is an orphan we must clean up
-      // (a pre-existing nodeId node must be left untouched).
-      let ccSpecBuilt = false
-      const ccSpec = params.spec as
-        | Record<string, unknown>
-        | undefined
-      if (ccSpec !== undefined) {
-        // Build from NodeSpec first, then componentize. Resolve parentId if
-        // supplied and able to host children; else use the current page.
-        const ccParentNode =
-          params.parentId !== undefined
-            ? await figma.getNodeByIdAsync(
-                params.parentId as string,
-              )
-            : null
-        const ccParent =
-          ccParentNode && 'appendChild' in ccParentNode
-            ? (ccParentNode as ParentNode)
-            : figma.currentPage
-        sourceNode = await createSingleNode(
-          ccSpec,
-          ccParent,
-        )
-        ccSpecBuilt = true
-      } else {
-        const found = await figma.getNodeByIdAsync(
-          params.nodeId as string,
-        )
-        if (!found) {
-          return {
-            error: 'Node not found: ' + params.nodeId,
-          }
+      const found = await figma.getNodeByIdAsync(
+        params.nodeId as string,
+      )
+      if (!found) {
+        return {
+          error: 'Node not found: ' + params.nodeId,
         }
-        sourceNode = found as SceneNode
       }
-      let comp: ComponentNode
-      try {
-        comp = figma.createComponentFromNode(sourceNode)
-      } catch (e) {
-        // The spec-built source was placed on the canvas but never promoted;
-        // remove the orphan so a failed create_component leaves no stray node.
-        if (ccSpecBuilt) {
-          sourceNode.remove()
-        }
-        throw e
-      }
+      const sourceNode = found as SceneNode
+      const comp = figma.createComponentFromNode(sourceNode)
       if (ccName !== undefined) comp.name = ccName
       if (ccDescription !== undefined)
         comp.description = ccDescription
@@ -1839,32 +1935,12 @@ const handleCommand = async (
           }
         }
       }
-      // Project componentPropertyDefinitions into the catalogue `properties`
-      // ARRAY of {id,name,type,defaultValue,variantOptions?}. The object key is
-      // the CANONICAL property id (e.g. "Label#1:0") → `id`; the human name is
-      // the part before "#" → `name`. This carries each added property's id
-      // (the `id` field) within the shape and round-trips get_components.
+      // update_component's `properties` projection (WRITE) — shares
+      // projectComponentDefs with get_components (READ) so each added property's
+      // id is carried in the SAME shape and round-trips get_components by
+      // construction (read == write, T2).
       const ucDefs = comp.componentPropertyDefinitions || {}
-      const ucProperties = Object.keys(ucDefs).map(key => {
-        const def = ucDefs[key]
-        const hashIdx = key.indexOf('#')
-        const entry: {
-          id: string
-          name: string
-          type: string
-          defaultValue: string | boolean
-          variantOptions?: string[]
-        } = {
-          id: key,
-          name: hashIdx >= 0 ? key.slice(0, hashIdx) : key,
-          type: def.type,
-          defaultValue: def.defaultValue,
-        }
-        if (def.type === 'VARIANT' && def.variantOptions) {
-          entry.variantOptions = def.variantOptions
-        }
-        return entry
-      })
+      const ucProperties = projectComponentDefs(ucDefs)
       return {
         id: comp.id,
         properties: ucProperties,
@@ -1937,11 +2013,31 @@ const handleCommand = async (
         cvParent = fallbackParent as BaseNode &
           ChildrenMixin
       }
+      // Multi-axis variant-name warning (T7/T9): Figma derives variant axes from
+      // each component NAME via the `Property=Value, Property2=Value2`
+      // convention. A name WITHOUT `=` packs its whole value into one anonymous
+      // axis (the `Style=PrimaryLarge` class problem), so the set won't form a
+      // CLEAN one-property-per-axis grouping. Detect this from the source names
+      // before combining and nudge toward one property per axis. (A name with a
+      // single comma-free `Prop=Value` pair is the clean single-axis case.)
+      const cvUnaxised = cvComps
+        .filter(c => !c.name.includes('='))
+        .map(c => c.name)
+      if (cvUnaxised.length > 0) {
+        cvWarnings.push(
+          'combine_variants: ' +
+            cvUnaxised.length +
+            ' component name(s) do not use the "Property=Value" axis convention (' +
+            cvUnaxised.join(', ') +
+            '); the variant set will not form a clean axis set. Name each variant one property per axis (e.g. "Style=Primary, Size=Large").',
+        )
+      }
       const cs = figma.combineAsVariants(cvComps, cvParent)
       if (params.name !== undefined)
         cs.name = params.name as string
       return {
         id: cs.id,
+        key: cs.key,
         name: cs.name,
         type: cs.type,
         variantAxes: cs.variantGroupProperties,
@@ -1949,8 +2045,11 @@ const handleCommand = async (
       }
     }
 
-    // swap_component: point an instance at a different main component. swap
-    // failures degrade into a warning (T7) — never throw.
+    // swap_component: point an instance at a different main component. Remote-
+    // capable: a LOCAL mainComponentId resolves directly (and WINS if both are
+    // given); otherwise a `key` is resolved via importComponentByKeyAsync, which
+    // is feature-detected + T7-degraded (a failed import warns, never throws).
+    // The actual swap also degrades into a warning (T7) — never throw.
     case COMMANDS.SWAP_COMPONENT: {
       const scInst = await figma.getNodeByIdAsync(
         params.instanceId as string,
@@ -1966,20 +2065,63 @@ const handleCommand = async (
             'Node is not an instance: ' + params.instanceId,
         }
       }
-      const scMain = await figma.getNodeByIdAsync(
-        params.mainComponentId as string,
-      )
-      if (!scMain || scMain.type !== 'COMPONENT') {
-        return {
-          error:
-            'Main component not found: ' +
-            params.mainComponentId,
-        }
-      }
       const scWarnings: string[] = []
       const inst = scInst as InstanceNode
+      const scMainId = params.mainComponentId as
+        | string
+        | undefined
+      const scKey = params.key as string | undefined
+      let scMain: ComponentNode | null = null
+      if (scMainId !== undefined) {
+        // LOCAL path (wins if both given).
+        const found = await figma.getNodeByIdAsync(scMainId)
+        if (!found || found.type !== 'COMPONENT') {
+          return {
+            error: 'Main component not found: ' + scMainId,
+          }
+        }
+        scMain = found as ComponentNode
+      } else if (scKey !== undefined) {
+        // REMOTE path: import the component by key (T7 feature-detect/degrade).
+        const importer = (
+          figma as typeof figma & {
+            importComponentByKeyAsync?: (
+              key: string,
+            ) => Promise<ComponentNode>
+          }
+        ).importComponentByKeyAsync
+        if (typeof importer !== 'function') {
+          return {
+            id: inst.id,
+            mainComponent: null,
+            warnings: [
+              'importComponentByKeyAsync unavailable in this Figma version; remote swap skipped',
+            ],
+          }
+        }
+        try {
+          scMain = await importer(scKey)
+        } catch (e) {
+          return {
+            id: inst.id,
+            mainComponent: null,
+            warnings: [
+              'importComponentByKeyAsync failed for key "' +
+                scKey +
+                '": ' +
+                String(e) +
+                '; remote swap skipped',
+            ],
+          }
+        }
+      } else {
+        return {
+          error:
+            'swap_component requires mainComponentId (local) or key (remote)',
+        }
+      }
       try {
-        inst.swapComponent(scMain as ComponentNode)
+        inst.swapComponent(scMain)
       } catch (e) {
         scWarnings.push(
           'swapComponent failed: ' + String(e),
@@ -1997,7 +2139,10 @@ const handleCommand = async (
 
     // set_instance: set instance properties via setProperties and/or apply
     // per-node overrides. setProperties failures degrade (T7); per-node override
-    // application is limited via the plugin API → warn rather than fail.
+    // application is limited via the plugin API → warn rather than fail. The
+    // RAW Figma inst2.componentProperties ({ [name]:{type,value} }) is echoed
+    // back; the SERVER splits it into the read-twin { variantProperties?,
+    // componentProperties? } shape (C3 / T2).
     case COMMANDS.SET_INSTANCE: {
       const siInst = await figma.getNodeByIdAsync(
         params.instanceId as string,
@@ -3132,6 +3277,10 @@ const handleCommand = async (
               name: string
               type: VariableResolvedDataType
               valuesByMode: Record<string, unknown>
+              aliases?: Record<string, string>
+              scopes?: string[]
+              codeSyntax?: Record<string, string>
+              hiddenFromPublishing?: boolean
             }[]
           | undefined) ?? []
       const created: { id: string; name: string }[] = []
@@ -3205,6 +3354,20 @@ const handleCommand = async (
             )
           }
         }
+        // E1: apply aliases / scopes / codeSyntax / hiddenFromPublishing through
+        // the SHARED per-variable path (parity with update_variables, T7).
+        await applyVariableMeta(
+          variable,
+          {
+            name: spec.name,
+            aliases: spec.aliases,
+            scopes: spec.scopes,
+            codeSyntax: spec.codeSyntax,
+            hiddenFromPublishing: spec.hiddenFromPublishing,
+          },
+          modeByName,
+          warnings,
+        )
         created.push({
           id: variable.id,
           name: variable.name,

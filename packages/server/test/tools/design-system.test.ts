@@ -239,8 +239,11 @@ describe('handleGetComponents', () => {
         key: 'btn-key',
         type: 'COMPONENT_SET',
         page: 'Main',
-        propertyDefinitions: [
+        // `properties` is the SAME {id,name,type,defaultValue,variantOptions?}
+        // array shape + key update_component emits (read == write, T2).
+        properties: [
           {
+            id: 'Variant',
             name: 'Variant',
             type: 'VARIANT',
             defaultValue: 'Primary',
@@ -256,7 +259,7 @@ describe('handleGetComponents', () => {
         key: 'av-key',
         type: 'COMPONENT',
         page: 'Main',
-        propertyDefinitions: [],
+        properties: [],
       },
     ],
     remote: [
@@ -293,7 +296,7 @@ describe('handleGetComponents', () => {
         name: string
         key: string
         variantAxes?: Record<string, string[]>
-        propertyDefinitions?: unknown[]
+        properties?: unknown[]
       }[]
       truncated: boolean
     }
@@ -306,7 +309,47 @@ describe('handleGetComponents', () => {
     expect(button.variantAxes).toEqual({
       Variant: ['Primary', 'Secondary'],
     })
-    expect(button.propertyDefinitions).toHaveLength(1)
+    expect(button.properties).toHaveLength(1)
+  })
+
+  // T2 read == write: get_components' `properties` projection is the SAME shape
+  // + key update_component emits — {id,name,type,defaultValue,variantOptions?}.
+  it('projects `properties` in the update_component shape (read == write, T2)', async () => {
+    const result = await handleGetComponents(
+      {},
+      stubClient({ reply: componentsReply }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: {
+        name: string
+        properties?: {
+          id: string
+          name: string
+          type: string
+          defaultValue: string | boolean
+          variantOptions?: string[]
+        }[]
+      }[]
+    }
+    const button = out.results.find(
+      r => r.name === 'Button',
+    )!
+    // The legacy `propertyDefinitions` key is GONE (renamed to `properties`).
+    expect(
+      'propertyDefinitions' in
+        (button as Record<string, unknown>),
+    ).toBe(false)
+    const variant = button.properties![0]
+    // Same per-entry shape as update_component: id + name + type +
+    // defaultValue + variantOptions.
+    expect(variant.id).toBe('Variant')
+    expect(variant.name).toBe('Variant')
+    expect(variant.type).toBe('VARIANT')
+    expect(variant.defaultValue).toBe('Primary')
+    expect(variant.variantOptions).toEqual([
+      'Primary',
+      'Secondary',
+    ])
   })
 
   it('filters by query as a case-insensitive substring (literal, not glob)', async () => {
