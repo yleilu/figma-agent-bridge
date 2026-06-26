@@ -14,16 +14,25 @@ import type { Match } from '@figma-agent-bridge/shared/read-model'
 
 /**
  * Augmented NodeSpec with optional extra fields the matcher can test.
- * The read layer must populate these before calling the matcher.
- *   componentKey — the component definition key (from Figma API)
- *   styleId      — a style reference id (from Figma API)
- *   variableId   — a variable id (from Figma API)
- *   instancesOf  — the component name this INSTANCE is an instance of
+ * The read layer (the search plugin scan, B3) populates these before calling
+ * the matcher.
+ *   componentKey — the INSTANCE's main-component key (getMainComponentAsync)
+ *   instancesOf  — the INSTANCE's main-component name
+ *   styleId / styleIds   — a style reference id, or (the plugin's emission) the
+ *                          node's set of fill/text/effect/stroke/grid style ids
+ *   variableId / variableIds — a bound variable id, or (the plugin's emission)
+ *                          every id in the node's boundVariables
+ *
+ * A node can carry SEVERAL style refs / bound variables, so the plugin emits
+ * the PLURAL arrays; the matcher matches when the requested id equals the
+ * singular field OR ANY entry of the plural array.
  */
 type MatchableNode = NodeSpec & {
   componentKey?: string
   styleId?: string
+  styleIds?: string[]
   variableId?: string
+  variableIds?: string[]
   instancesOf?: string
 }
 
@@ -86,12 +95,22 @@ export const buildMatcher = (
 
   if (m.styleId !== undefined) {
     const sid = m.styleId
-    predicates.push(n => n.styleId === sid)
+    predicates.push(
+      n =>
+        n.styleId === sid ||
+        (Array.isArray(n.styleIds) &&
+          n.styleIds.includes(sid)),
+    )
   }
 
   if (m.variableId !== undefined) {
     const vid = m.variableId
-    predicates.push(n => n.variableId === vid)
+    predicates.push(
+      n =>
+        n.variableId === vid ||
+        (Array.isArray(n.variableIds) &&
+          n.variableIds.includes(vid)),
+    )
   }
 
   if (m.instancesOf !== undefined) {

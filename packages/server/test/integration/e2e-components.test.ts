@@ -5,8 +5,8 @@
 // atom strings) and on the T7 degrade paths (warnings on success, never error).
 //
 // Covers:
-//   - create_component from a NodeSpec (server parsed the atom → SOLID; key set).
-//   - create_component from a node id (promotion path; sourceNodeId echoed).
+//   - create_component PROMOTE-ONLY from a node id (sourceNodeId echoed; the
+//     build-from-spec overload was removed per spec).
 //   - combine_variants → COMPONENT_SET (+ handler <2 guard).
 //   - set_instance setProperties round-trip.
 //   - swap_component T7 degrade (warning on success).
@@ -68,32 +68,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
     stopRelay(server)
   })
 
-  it('create_component from a NodeSpec returns a key (atom parsed server-side)', async () => {
-    const result = await handleCreateComponent(
-      {
-        spec: {
-          type: 'FRAME',
-          name: 'Card',
-          size: [200, 100],
-          fills: ['#3B82F6'],
-        },
-      },
-      client,
-    )
-    const data = JSON.parse(
-      result.content[0].text,
-    ) as Record<string, unknown>
-    expect(data.type).toBe('COMPONENT')
-    expect(data.key).toBeDefined()
-    expect(data.id).toBeDefined()
-    // The mock echoes the converted spec — proof the server parsed the atom.
-    const spec = data.spec as {
-      fills: { type: string }[]
-    }
-    expect(spec.fills[0].type).toBe('SOLID')
-  })
-
-  it('create_component from a node id promotes (sourceNodeId echoed)', async () => {
+  it('create_component PROMOTE-ONLY from a node id (sourceNodeId echoed; key set)', async () => {
     const result = await handleCreateComponent(
       { nodeId: '1:5', name: 'Promoted' },
       client,
@@ -103,10 +78,11 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
     ) as Record<string, unknown>
     expect(data.type).toBe('COMPONENT')
     expect(data.key).toBeDefined()
+    expect(data.id).toBeDefined()
     expect(data.sourceNodeId).toBe('1:5')
   })
 
-  it('combine_variants produces a COMPONENT_SET', async () => {
+  it('combine_variants produces a COMPONENT_SET and returns its key (C1)', async () => {
     const result = await handleCombineVariants(
       { componentIds: ['c:1', 'c:2'] },
       client,
@@ -117,6 +93,27 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
     expect(data.type).toBe('COMPONENT_SET')
     expect(data.variantAxes).toBeDefined()
     expect(data.id).toBeDefined()
+    // C1: the set's key is returned (read/write symmetry).
+    expect(data.key).toBeDefined()
+  })
+
+  // C1: the multi-axis variant-name warning surfaces on SUCCESS — source names
+  // lacking the "Property=Value" axis convention (modeled by `noaxis:` ids).
+  it('combine_variants warns when names do not form a clean axis set (C1)', async () => {
+    const result = await handleCombineVariants(
+      {
+        componentIds: ['noaxis:c1', 'noaxis:c2'],
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const data = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(data.type).toBe('COMPONENT_SET')
+    const warnings = data.warnings as string[]
+    expect(warnings.length).toBe(1)
+    expect(warnings[0]).toContain('clean axis set')
   })
 
   it('combine_variants reports dropped invalid ids as a warning (honest partial success)', async () => {
@@ -178,7 +175,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
     expect(result.content[0].text).toContain('at least 2')
   })
 
-  it('set_instance sets properties (echo is the real NESTED Figma shape)', async () => {
+  it('set_instance echo is SPLIT into the read-twin shape (C3 / T2)', async () => {
     const result = await handleSetInstance(
       {
         instanceId: 'i:1',
@@ -190,20 +187,15 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
       result.content[0].text,
     ) as Record<string, unknown>
     expect(data.id).toBe('i:1')
-    // The real plugin returns inst2.componentProperties — a NESTED map
-    // { [name]: { value, type } }, not the flat input. The mock now mirrors
-    // that, so the round-trip is asserted against the true plugin shape.
-    const props = data.componentProperties as Record<
-      string,
-      { value: string | boolean; type: string }
-    >
-    expect(props.Size).toEqual({
-      value: 'Large',
-      type: 'VARIANT',
+    // The plugin (mock) echoes the RAW Figma NESTED componentProperties; the
+    // SERVER splits it into the SAME { variantProperties, componentProperties }
+    // shape get_node emits — VARIANT → variantProperties (flat string),
+    // BOOLEAN/TEXT → componentProperties (raw value). Exact READ-twin round-trip.
+    expect(data.variantProperties).toEqual({
+      Size: 'Large',
     })
-    expect(props.Disabled).toEqual({
-      value: true,
-      type: 'BOOLEAN',
+    expect(data.componentProperties).toEqual({
+      Disabled: true,
     })
     expect(Array.isArray(data.warnings)).toBe(true)
     expect((data.warnings as unknown[]).length).toBe(0)
@@ -263,6 +255,59 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
     expect((data.warnings as unknown[]).length).toBe(0)
   })
 
+  // C2: remote-by-key. The plugin imports the component via
+  // importComponentByKeyAsync, then swaps to the imported main.
+  it('swap_component REMOTE-by-key imports then swaps', async () => {
+    const result = await handleSwapComponent(
+      { instanceId: 'i:1', key: 'remote-btn-key' },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const data = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(data.mainComponent).toBe(
+      'imported:remote-btn-key',
+    )
+    expect((data.warnings as unknown[]).length).toBe(0)
+  })
+
+  // C2 + T7: a FAILED importComponentByKeyAsync degrades — warning on success,
+  // NEVER {error}.
+  it('swap_component REMOTE-by-key degrades (T7) when the import fails', async () => {
+    const result = await handleSwapComponent(
+      { instanceId: 'i:1', key: 'importfail:nope' },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const data = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(data.mainComponent).toBeNull()
+    const warnings = data.warnings as string[]
+    expect(warnings.length).toBe(1)
+    expect(warnings[0]).toContain(
+      'importComponentByKeyAsync failed',
+    )
+  })
+
+  // C2: LOCAL wins when BOTH a local id and a key are given.
+  it('swap_component prefers LOCAL mainComponentId when both are given', async () => {
+    const result = await handleSwapComponent(
+      {
+        instanceId: 'i:1',
+        mainComponentId: 'c:local',
+        key: 'remote-key',
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const data = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(data.mainComponent).toBe('c:local')
+  })
+
   it('update_component adds a property and degrades on expose (T7)', async () => {
     const result = await handleUpdateComponent(
       {
@@ -283,24 +328,23 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
       result.content[0].text,
     ) as Record<string, unknown>
     expect(data.id).toBe('c:1')
-    const defs = data.propertyDefinitions as Record<
-      string,
-      unknown
-    >
-    // componentPropertyDefinitions is keyed by the CANONICAL id (e.g.
-    // "Label#1:0"), not the bare name — that is the ground-truth return.
-    expect(defs['Label#1:0']).toBeDefined()
-    expect((data.warnings as unknown[]).length).toBe(1)
-    // The canonical property id (e.g. "Label#1:0") that agents need for later
-    // setProperties is surfaced, not discarded.
-    const added = data.added as {
-      name: string
+    // The catalogue return key is `properties` — an ARRAY of
+    // {id,name,type,defaultValue,variantOptions?}. Each entry's `id` is the
+    // CANONICAL property id (e.g. "Label#1:0") agents need for later
+    // setProperties, so it carries the added id WITHIN the shape (no separate
+    // `added` array).
+    const properties = data.properties as {
       id: string
+      name: string
+      type: string
+      defaultValue: string | boolean
     }[]
-    expect(Array.isArray(added)).toBe(true)
-    expect(added).toHaveLength(1)
-    expect(added[0].name).toBe('Label')
-    expect(added[0].id).toContain('Label#')
+    expect(Array.isArray(properties)).toBe(true)
+    const label = properties.find(p => p.name === 'Label')!
+    expect(label).toBeDefined()
+    expect(label.id).toContain('Label#')
+    expect(label.type).toBe('TEXT')
+    expect((data.warnings as unknown[]).length).toBe(1)
   })
 
   // Genuine T7 {error} boundary #1: an unresolvable componentId is a not-found

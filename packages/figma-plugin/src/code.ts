@@ -1,5 +1,7 @@
 import { COMMANDS } from '@figma-agent-bridge/shared'
 
+import { projectComponentDefs } from './project-component-defs'
+
 figma.showUI(__html__, {
   width: 340,
   height: 280,
@@ -893,6 +895,144 @@ const createTreeNode = async (
   return node
 }
 
+// Apply per-variable metadata (aliases / scopes / codeSyntax /
+// hiddenFromPublishing) — the SHARED apply path mirroring update_variables'
+// per-variable edits, used by create_variables so create reaches parity with
+// update. Each member is feature-detected and degrades with a warning (T7),
+// never throwing. `aliases` maps a mode NAME → target variable id; that mode is
+// set to a VARIABLE_ALIAS of the target via setValueForMode (async target read).
+const applyVariableMeta = async (
+  variable: Variable,
+  meta: {
+    name: string
+    aliases?: Record<string, string>
+    scopes?: string[]
+    codeSyntax?: Record<string, string>
+    hiddenFromPublishing?: boolean
+  },
+  modeByName: Record<string, string>,
+  warnings: string[],
+): Promise<void> => {
+  if (meta.aliases !== undefined) {
+    const aliasFactory = (
+      figma.variables as VariablesAPI & {
+        createVariableAlias?: (v: Variable) => VariableAlias
+      }
+    ).createVariableAlias
+    for (const [modeName, targetId] of Object.entries(
+      meta.aliases,
+    )) {
+      const modeId = modeByName[modeName]
+      if (modeId === undefined) {
+        warnings.push(
+          'unknown mode "' +
+            modeName +
+            '" for variable "' +
+            meta.name +
+            '" alias; skipped',
+        )
+        continue
+      }
+      if (
+        typeof aliasFactory !== 'function' ||
+        typeof variable.setValueForMode !== 'function'
+      ) {
+        warnings.push(
+          'createVariableAlias unavailable; alias for "' +
+            meta.name +
+            '" not set',
+        )
+        continue
+      }
+      try {
+        const target =
+          await figma.variables.getVariableByIdAsync(
+            targetId,
+          )
+        if (!target) {
+          warnings.push(
+            'alias target not found: ' +
+              targetId +
+              ' for variable "' +
+              meta.name +
+              '"',
+          )
+          continue
+        }
+        variable.setValueForMode(
+          modeId,
+          aliasFactory(target),
+        )
+      } catch (e) {
+        warnings.push(
+          'alias not set for variable "' +
+            meta.name +
+            '" mode "' +
+            modeName +
+            '": ' +
+            String(e),
+        )
+      }
+    }
+  }
+  if (meta.scopes !== undefined) {
+    try {
+      variable.scopes = meta.scopes as VariableScope[]
+    } catch (e) {
+      warnings.push(
+        'scopes not settable on "' +
+          meta.name +
+          '": ' +
+          String(e),
+      )
+    }
+  }
+  if (meta.codeSyntax !== undefined) {
+    if (
+      typeof variable.setVariableCodeSyntax === 'function'
+    ) {
+      for (const [platform, value] of Object.entries(
+        meta.codeSyntax,
+      )) {
+        try {
+          variable.setVariableCodeSyntax(
+            platform as CodeSyntaxPlatform,
+            value,
+          )
+        } catch (e) {
+          warnings.push(
+            'codeSyntax not set (' +
+              platform +
+              ') on "' +
+              meta.name +
+              '": ' +
+              String(e),
+          )
+        }
+      }
+    } else {
+      warnings.push(
+        'setVariableCodeSyntax unavailable; codeSyntax not set on "' +
+          meta.name +
+          '"',
+      )
+    }
+  }
+  if (meta.hiddenFromPublishing !== undefined) {
+    try {
+      variable.hiddenFromPublishing =
+        meta.hiddenFromPublishing
+    } catch (e) {
+      warnings.push(
+        'hiddenFromPublishing not settable on "' +
+          meta.name +
+          '": ' +
+          String(e),
+      )
+    }
+  }
+}
+
 const handleCommand = async (
   command: string,
   params: Record<string, unknown>,
@@ -904,6 +1044,27 @@ const handleCommand = async (
         currentPage: {
           id: figma.currentPage.id,
           name: figma.currentPage.name,
+        },
+      }
+
+    // status (D1): the LIVE context the user is looking at — current page,
+    // selection, and viewport. Connection state (connected/channel) is added
+    // SERVER-side; this case supplies only the plugin-known live context. This
+    // is the documented READ path for the viewport (set_focus is the writer).
+    case COMMANDS.STATUS:
+      return {
+        currentPage: {
+          id: figma.currentPage.id,
+          name: figma.currentPage.name,
+        },
+        selection: figma.currentPage.selection.map(n => ({
+          id: n.id,
+          name: n.name,
+          type: n.type,
+        })),
+        viewport: {
+          center: figma.viewport.center,
+          zoom: figma.viewport.zoom,
         },
       }
 
@@ -1159,35 +1320,9 @@ const handleCommand = async (
         types: ['COMPONENT'],
       })
 
-      const projectDefs = (
-        defs: ComponentPropertyDefinitions,
-      ): {
-        name: string
-        type: string
-        defaultValue: string | boolean
-        variantOptions?: string[]
-      }[] =>
-        Object.keys(defs).map(key => {
-          const def = defs[key]
-          const entry: {
-            name: string
-            type: string
-            defaultValue: string | boolean
-            variantOptions?: string[]
-          } = {
-            name: key,
-            type: def.type,
-            defaultValue: def.defaultValue,
-          }
-          if (
-            def.type === 'VARIANT' &&
-            def.variantOptions
-          ) {
-            entry.variantOptions = def.variantOptions
-          }
-          return entry
-        })
-
+      // get_components' `properties` projection (READ) — shares
+      // projectComponentDefs with update_component (WRITE) so the shape is
+      // identical by construction, not convention (read == write, T2).
       const defaultsOf = (
         defs: ComponentPropertyDefinitions,
       ): Record<string, unknown> =>
@@ -1229,7 +1364,7 @@ const handleCommand = async (
             cs.parent && cs.parent.type === 'PAGE'
               ? cs.parent.name
               : null,
-          propertyDefinitions: projectDefs(csDefs),
+          properties: projectComponentDefs(csDefs),
           variantAxes:
             Object.keys(variantAxes).length > 0
               ? variantAxes
@@ -1257,7 +1392,7 @@ const handleCommand = async (
             comp.parent && comp.parent.type === 'PAGE'
               ? comp.parent.name
               : null,
-          propertyDefinitions: projectDefs(compDefs),
+          properties: projectComponentDefs(compDefs),
           defaults: defaultsOf(compDefs),
         })
       }
@@ -1366,36 +1501,174 @@ const handleCommand = async (
             : undefined,
       })
 
-      const seen = new Set<string>()
-      const candidates: Record<string, unknown>[] = []
+      // B2 — depth bounds the SCAN SCOPE (descent depth), NOT the output shape:
+      // candidates are still returned as a flat list. -1 (or omitted) scans the
+      // whole subtree; 0 scans only the root; N descends N levels. This replaces
+      // the former unbounded findAll(() => true) so the agent can cap traversal.
+      const rawDepth = params.depth as number | undefined
+      const scanDepth =
+        rawDepth === undefined ? -1 : rawDepth
 
-      // selection scope: the selected nodes plus their subtrees.
-      if (scope === 'selection') {
-        for (const sel of figma.currentPage.selection) {
-          if (!seen.has(sel.id)) {
-            seen.add(sel.id)
-            candidates.push(toCandidate(sel))
+      // B3 + B4 — conditional per-candidate metadata collection. These flags are
+      // set by the SERVER only when the request actually needs them (a
+      // reverse-lookup match key or the `characters` projection), because each
+      // is an async/extra-cost per-node call. An unhinted scan pays nothing.
+      const collectComponentRef =
+        params.collectComponentRef === true
+      const collectStyleId = params.collectStyleId === true
+      const collectVariableId =
+        params.collectVariableId === true
+      const collectCharacters =
+        params.collectCharacters === true
+      const needsEnrich =
+        collectComponentRef ||
+        collectStyleId ||
+        collectVariableId ||
+        collectCharacters
+
+      const seen = new Set<string>()
+      const scanned: SceneNode[] = []
+
+      // Depth-bounded DFS collector. `levelsLeft < 0` is treated as unlimited
+      // (the -1 / scan-all default); each descent decrements it.
+      const collect = (
+        node: SceneNode,
+        levelsLeft: number,
+      ): void => {
+        if (!seen.has(node.id)) {
+          seen.add(node.id)
+          scanned.push(node)
+        }
+        if (levelsLeft === 0) {
+          return
+        }
+        if ('children' in node) {
+          for (const child of (node as ChildrenMixin)
+            .children) {
+            collect(child, levelsLeft - 1)
           }
-          if ('findAll' in sel) {
-            for (const fn of (
-              sel as SceneNode & ChildrenMixin
-            ).findAll(() => true)) {
-              if (!seen.has(fn.id)) {
-                seen.add(fn.id)
-                candidates.push(toCandidate(fn))
+        }
+      }
+
+      if (scope === 'selection') {
+        // The selected nodes are level 0; their subtrees descend from there.
+        for (const sel of figma.currentPage.selection) {
+          collect(sel, scanDepth)
+        }
+      } else {
+        // For container roots (page / node subtree) the root itself is level 0,
+        // so its direct children are level 1. A page root is not a candidate
+        // (we want its descendants); start the descent from each child at the
+        // requested depth so depth=0 yields the page's immediate children.
+        for (const root of roots) {
+          if ('children' in root) {
+            for (const child of (root as ChildrenMixin)
+              .children) {
+              collect(child, scanDepth)
+            }
+          }
+        }
+      }
+
+      // Enrich the flat candidate list. The base candidate (id/name/type/size)
+      // is cheap and always present; the reverse-lookup metadata + characters
+      // are attached only when hinted (B3/B4) so the server's buildMatcher can
+      // filter and projectNode can map `characters`.
+      const candidates: Record<string, unknown>[] = []
+      for (const fn of scanned) {
+        const candidate = toCandidate(fn)
+
+        if (needsEnrich) {
+          // B4 — characters: TEXT nodes expose their text content as a flat
+          // string for copy-inventory scans (non-text nodes leave it undefined).
+          if (collectCharacters && fn.type === 'TEXT') {
+            candidate.characters = (
+              fn as TextNode
+            ).characters
+          }
+
+          // B3 — instancesOf / componentKey: resolve the INSTANCE's main
+          // component (async). `instancesOf` matches by the main component's
+          // NAME; `componentKey` matches by its KEY. Failures degrade silently
+          // (the candidate simply won't match those keys).
+          if (
+            collectComponentRef &&
+            fn.type === 'INSTANCE'
+          ) {
+            const main = await (fn as InstanceNode)
+              .getMainComponentAsync()
+              .catch(() => null)
+            if (main) {
+              candidate.componentKey = main.key
+              candidate.instancesOf = main.name
+            }
+          }
+
+          // B3 — styleId: any of the node's style references. The server's
+          // matcher tests a single `styleId`, so expose the bound style ids and
+          // let buildMatcher match if ANY equals the requested id (see match.ts).
+          if (collectStyleId) {
+            const styleIds: string[] = []
+            const g = fn as Partial<{
+              fillStyleId: string | symbol
+              strokeStyleId: string | symbol
+              effectStyleId: string | symbol
+              gridStyleId: string | symbol
+              textStyleId: string | symbol
+            }>
+            for (const key of [
+              'fillStyleId',
+              'strokeStyleId',
+              'effectStyleId',
+              'gridStyleId',
+              'textStyleId',
+            ] as const) {
+              const v = g[key]
+              // figma.mixed is a symbol; only collect concrete string ids.
+              if (typeof v === 'string' && v.length > 0) {
+                styleIds.push(v)
+              }
+            }
+            if (styleIds.length > 0) {
+              candidate.styleIds = styleIds
+            }
+          }
+
+          // B3 — variableId: the ids bound on the node via boundVariables.
+          // boundVariables maps a field → VariableAlias{id} (or an array of
+          // them for paints/strokes). Flatten every bound id so the matcher can
+          // match if ANY equals the requested variableId.
+          if (collectVariableId && 'boundVariables' in fn) {
+            const bound = (
+              fn as SceneNode & {
+                boundVariables?: Record<string, unknown>
+              }
+            ).boundVariables
+            if (bound) {
+              const ids: string[] = []
+              const pushAlias = (a: unknown): void => {
+                const id = (a as { id?: string } | null)?.id
+                if (typeof id === 'string') {
+                  ids.push(id)
+                }
+              }
+              for (const val of Object.values(bound)) {
+                if (Array.isArray(val)) {
+                  for (const a of val) {
+                    pushAlias(a)
+                  }
+                } else {
+                  pushAlias(val)
+                }
+              }
+              if (ids.length > 0) {
+                candidate.variableIds = ids
               }
             }
           }
         }
-      } else {
-        for (const root of roots) {
-          for (const fn of root.findAll(() => true)) {
-            if (!seen.has(fn.id)) {
-              seen.add(fn.id)
-              candidates.push(toCandidate(fn))
-            }
-          }
-        }
+
+        candidates.push(candidate)
       }
 
       return { results: candidates }
@@ -1490,64 +1763,25 @@ const handleCommand = async (
       }
     }
 
-    // create_component (M3-B rebuild): supply EXACTLY ONE source — `spec` (a
-    // NodeSpec built first via createSingleNode, then componentized) OR `nodeId`
-    // (promote an existing node via createComponentFromNode). The server has
-    // already validated the XOR and converted the spec on the grammar write
-    // face. Returns {id,key,name,type}.
+    // create_component (PROMOTE-ONLY, un-overloaded per spec): componentize an
+    // existing node via createComponentFromNode(), optionally rename / set
+    // description. The build-from-spec overload (+ its orphan cleanup) was
+    // removed — build with create_node / create_tree first, then promote.
     case COMMANDS.CREATE_COMPONENT: {
       const ccName = params.name as string | undefined
       const ccDescription = params.description as
         | string
         | undefined
-      let sourceNode: SceneNode
-      // Track whether we built the source from a spec — if the subsequent
-      // promote throws, only a spec-built node is an orphan we must clean up
-      // (a pre-existing nodeId node must be left untouched).
-      let ccSpecBuilt = false
-      const ccSpec = params.spec as
-        | Record<string, unknown>
-        | undefined
-      if (ccSpec !== undefined) {
-        // Build from NodeSpec first, then componentize. Resolve parentId if
-        // supplied and able to host children; else use the current page.
-        const ccParentNode =
-          params.parentId !== undefined
-            ? await figma.getNodeByIdAsync(
-                params.parentId as string,
-              )
-            : null
-        const ccParent =
-          ccParentNode && 'appendChild' in ccParentNode
-            ? (ccParentNode as ParentNode)
-            : figma.currentPage
-        sourceNode = await createSingleNode(
-          ccSpec,
-          ccParent,
-        )
-        ccSpecBuilt = true
-      } else {
-        const found = await figma.getNodeByIdAsync(
-          params.nodeId as string,
-        )
-        if (!found) {
-          return {
-            error: 'Node not found: ' + params.nodeId,
-          }
+      const found = await figma.getNodeByIdAsync(
+        params.nodeId as string,
+      )
+      if (!found) {
+        return {
+          error: 'Node not found: ' + params.nodeId,
         }
-        sourceNode = found as SceneNode
       }
-      let comp: ComponentNode
-      try {
-        comp = figma.createComponentFromNode(sourceNode)
-      } catch (e) {
-        // The spec-built source was placed on the canvas but never promoted;
-        // remove the orphan so a failed create_component leaves no stray node.
-        if (ccSpecBuilt) {
-          sourceNode.remove()
-        }
-        throw e
-      }
+      const sourceNode = found as SceneNode
+      const comp = figma.createComponentFromNode(sourceNode)
       if (ccName !== undefined) comp.name = ccName
       if (ccDescription !== undefined)
         comp.description = ccDescription
@@ -1587,9 +1821,8 @@ const handleCommand = async (
         | ComponentSetNode
       const ucWarnings: string[] = []
       // add. addComponentProperty returns the CANONICAL property id
-      // (e.g. "Label#1:0") that agents need for later setProperties — surface
-      // each {name,id} rather than discarding it.
-      const ucAdded: { name: string; id: string }[] = []
+      // (e.g. "Label#1:0") that agents need for later setProperties. It is
+      // surfaced inside the returned `properties` array (the entry's `id`).
       const addProps = params.add as
         | {
             name: string
@@ -1600,12 +1833,11 @@ const handleCommand = async (
       if (addProps) {
         for (const p of addProps) {
           try {
-            const propId = comp.addComponentProperty(
+            comp.addComponentProperty(
               p.name,
               p.type as ComponentPropertyType,
               p.defaultValue,
             )
-            ucAdded.push({ name: p.name, id: propId })
           } catch (e) {
             ucWarnings.push(
               'Failed to add property "' +
@@ -1703,11 +1935,15 @@ const handleCommand = async (
           }
         }
       }
+      // update_component's `properties` projection (WRITE) — shares
+      // projectComponentDefs with get_components (READ) so each added property's
+      // id is carried in the SAME shape and round-trips get_components by
+      // construction (read == write, T2).
+      const ucDefs = comp.componentPropertyDefinitions || {}
+      const ucProperties = projectComponentDefs(ucDefs)
       return {
         id: comp.id,
-        propertyDefinitions:
-          comp.componentPropertyDefinitions,
-        added: ucAdded,
+        properties: ucProperties,
         warnings: ucWarnings,
       }
     }
@@ -1777,11 +2013,31 @@ const handleCommand = async (
         cvParent = fallbackParent as BaseNode &
           ChildrenMixin
       }
+      // Multi-axis variant-name warning (T7/T9): Figma derives variant axes from
+      // each component NAME via the `Property=Value, Property2=Value2`
+      // convention. A name WITHOUT `=` packs its whole value into one anonymous
+      // axis (the `Style=PrimaryLarge` class problem), so the set won't form a
+      // CLEAN one-property-per-axis grouping. Detect this from the source names
+      // before combining and nudge toward one property per axis. (A name with a
+      // single comma-free `Prop=Value` pair is the clean single-axis case.)
+      const cvUnaxised = cvComps
+        .filter(c => !c.name.includes('='))
+        .map(c => c.name)
+      if (cvUnaxised.length > 0) {
+        cvWarnings.push(
+          'combine_variants: ' +
+            cvUnaxised.length +
+            ' component name(s) do not use the "Property=Value" axis convention (' +
+            cvUnaxised.join(', ') +
+            '); the variant set will not form a clean axis set. Name each variant one property per axis (e.g. "Style=Primary, Size=Large").',
+        )
+      }
       const cs = figma.combineAsVariants(cvComps, cvParent)
       if (params.name !== undefined)
         cs.name = params.name as string
       return {
         id: cs.id,
+        key: cs.key,
         name: cs.name,
         type: cs.type,
         variantAxes: cs.variantGroupProperties,
@@ -1789,8 +2045,11 @@ const handleCommand = async (
       }
     }
 
-    // swap_component: point an instance at a different main component. swap
-    // failures degrade into a warning (T7) — never throw.
+    // swap_component: point an instance at a different main component. Remote-
+    // capable: a LOCAL mainComponentId resolves directly (and WINS if both are
+    // given); otherwise a `key` is resolved via importComponentByKeyAsync, which
+    // is feature-detected + T7-degraded (a failed import warns, never throws).
+    // The actual swap also degrades into a warning (T7) — never throw.
     case COMMANDS.SWAP_COMPONENT: {
       const scInst = await figma.getNodeByIdAsync(
         params.instanceId as string,
@@ -1806,20 +2065,63 @@ const handleCommand = async (
             'Node is not an instance: ' + params.instanceId,
         }
       }
-      const scMain = await figma.getNodeByIdAsync(
-        params.mainComponentId as string,
-      )
-      if (!scMain || scMain.type !== 'COMPONENT') {
-        return {
-          error:
-            'Main component not found: ' +
-            params.mainComponentId,
-        }
-      }
       const scWarnings: string[] = []
       const inst = scInst as InstanceNode
+      const scMainId = params.mainComponentId as
+        | string
+        | undefined
+      const scKey = params.key as string | undefined
+      let scMain: ComponentNode | null = null
+      if (scMainId !== undefined) {
+        // LOCAL path (wins if both given).
+        const found = await figma.getNodeByIdAsync(scMainId)
+        if (!found || found.type !== 'COMPONENT') {
+          return {
+            error: 'Main component not found: ' + scMainId,
+          }
+        }
+        scMain = found as ComponentNode
+      } else if (scKey !== undefined) {
+        // REMOTE path: import the component by key (T7 feature-detect/degrade).
+        const importer = (
+          figma as typeof figma & {
+            importComponentByKeyAsync?: (
+              key: string,
+            ) => Promise<ComponentNode>
+          }
+        ).importComponentByKeyAsync
+        if (typeof importer !== 'function') {
+          return {
+            id: inst.id,
+            mainComponent: null,
+            warnings: [
+              'importComponentByKeyAsync unavailable in this Figma version; remote swap skipped',
+            ],
+          }
+        }
+        try {
+          scMain = await importer(scKey)
+        } catch (e) {
+          return {
+            id: inst.id,
+            mainComponent: null,
+            warnings: [
+              'importComponentByKeyAsync failed for key "' +
+                scKey +
+                '": ' +
+                String(e) +
+                '; remote swap skipped',
+            ],
+          }
+        }
+      } else {
+        return {
+          error:
+            'swap_component requires mainComponentId (local) or key (remote)',
+        }
+      }
       try {
-        inst.swapComponent(scMain as ComponentNode)
+        inst.swapComponent(scMain)
       } catch (e) {
         scWarnings.push(
           'swapComponent failed: ' + String(e),
@@ -1837,7 +2139,10 @@ const handleCommand = async (
 
     // set_instance: set instance properties via setProperties and/or apply
     // per-node overrides. setProperties failures degrade (T7); per-node override
-    // application is limited via the plugin API → warn rather than fail.
+    // application is limited via the plugin API → warn rather than fail. The
+    // RAW Figma inst2.componentProperties ({ [name]:{type,value} }) is echoed
+    // back; the SERVER splits it into the read-twin { variantProperties?,
+    // componentProperties? } shape (C3 / T2).
     case COMMANDS.SET_INSTANCE: {
       const siInst = await figma.getNodeByIdAsync(
         params.instanceId as string,
@@ -2972,6 +3277,10 @@ const handleCommand = async (
               name: string
               type: VariableResolvedDataType
               valuesByMode: Record<string, unknown>
+              aliases?: Record<string, string>
+              scopes?: string[]
+              codeSyntax?: Record<string, string>
+              hiddenFromPublishing?: boolean
             }[]
           | undefined) ?? []
       const created: { id: string; name: string }[] = []
@@ -3045,6 +3354,20 @@ const handleCommand = async (
             )
           }
         }
+        // E1: apply aliases / scopes / codeSyntax / hiddenFromPublishing through
+        // the SHARED per-variable path (parity with update_variables, T7).
+        await applyVariableMeta(
+          variable,
+          {
+            name: spec.name,
+            aliases: spec.aliases,
+            scopes: spec.scopes,
+            codeSyntax: spec.codeSyntax,
+            hiddenFromPublishing: spec.hiddenFromPublishing,
+          },
+          modeByName,
+          warnings,
+        )
         created.push({
           id: variable.id,
           name: variable.name,
@@ -3317,174 +3640,69 @@ const handleCommand = async (
     // server-CONVERTED value (paint→Paint, text→FontName, effect→Effect,
     // grid→LayoutGrid). loadFontAsync first for text styles. T7: feature-detect
     // the createXStyle factory.
+    // create_styles: array-create with PARTIAL SUCCESS. The server has already
+    // CONVERTED each entry's value atom (paint→Paint, text→FontName, effect→
+    // Effect, grid→LayoutGrid). Loop, creating one style per entry (loadFontAsync
+    // first for text); a single failure degrades to that entry's {index,error}
+    // and does NOT abort the rest. Returns { results:[{id,key,name,type,index}],
+    // errors:[{index,error}] }.
     case COMMANDS.CREATE_STYLES: {
-      const styleType = params.type as
-        | 'paint'
-        | 'text'
-        | 'effect'
-        | 'grid'
-      const styleName = params.name as string
-      const styleValue = params.value
-      const styleDesc = params.description as
-        | string
-        | undefined
+      const csEntries =
+        (params.styles as
+          | {
+              index: number
+              type: 'paint' | 'text' | 'effect' | 'grid'
+              name: string
+              value: unknown
+              description?: string
+            }[]
+          | undefined) ?? []
+      const csResults: {
+        id: string
+        key: string
+        name: string
+        type: 'paint' | 'text' | 'effect' | 'grid'
+        index: number
+      }[] = []
+      const csErrors: { index: number; error: string }[] =
+        []
 
-      if (styleType === 'paint') {
-        if (typeof figma.createPaintStyle !== 'function') {
-          return {
-            error: 'createPaintStyle unavailable',
-          }
-        }
-        const style = figma.createPaintStyle()
-        style.name = styleName
-        if (styleDesc !== undefined) {
-          style.description = styleDesc
-        }
-        style.paints = [styleValue as Paint]
-        return {
-          id: style.id,
-          key: style.key,
-          name: style.name,
-          type: 'paint',
-        }
-      }
-      if (styleType === 'text') {
-        if (typeof figma.createTextStyle !== 'function') {
-          return { error: 'createTextStyle unavailable' }
-        }
-        const font = styleValue as {
-          family: string
-          style: string
-          size: number
-          lineHeight?: LineHeight
-          letterSpacing?: LetterSpacing
-        }
-        await figma.loadFontAsync({
-          family: font.family,
-          style: font.style,
-        })
-        const style = figma.createTextStyle()
-        style.name = styleName
-        if (styleDesc !== undefined) {
-          style.description = styleDesc
-        }
-        style.fontName = {
-          family: font.family,
-          style: font.style,
-        }
-        style.fontSize = font.size
-        if (font.lineHeight !== undefined) {
-          style.lineHeight = font.lineHeight
-        }
-        if (font.letterSpacing !== undefined) {
-          style.letterSpacing = font.letterSpacing
-        }
-        return {
-          id: style.id,
-          key: style.key,
-          name: style.name,
-          type: 'text',
-        }
-      }
-      if (styleType === 'effect') {
-        if (typeof figma.createEffectStyle !== 'function') {
-          return { error: 'createEffectStyle unavailable' }
-        }
-        const style = figma.createEffectStyle()
-        style.name = styleName
-        if (styleDesc !== undefined) {
-          style.description = styleDesc
-        }
-        style.effects = [styleValue as Effect]
-        return {
-          id: style.id,
-          key: style.key,
-          name: style.name,
-          type: 'effect',
-        }
-      }
-      // grid
-      if (typeof figma.createGridStyle !== 'function') {
-        return { error: 'createGridStyle unavailable' }
-      }
-      const gridStyle = figma.createGridStyle()
-      gridStyle.name = styleName
-      if (styleDesc !== undefined) {
-        gridStyle.description = styleDesc
-      }
-      gridStyle.layoutGrids = [styleValue as LayoutGrid]
-      return {
-        id: gridStyle.id,
-        key: gridStyle.key,
-        name: gridStyle.name,
-        type: 'grid',
-      }
-    }
-
-    // update_styles: edit an existing style's value/name/description. The server
-    // sends the CONVERTED value + the inferred valueType; the plugin resolves the
-    // style, validates valueType against the style's actual type (warns on
-    // mismatch, T7), and assigns. Missing style → {error}.
-    case COMMANDS.UPDATE_STYLES: {
-      const styleId = params.styleId as string
-      const style = await figma.getStyleByIdAsync(styleId)
-      if (!style) {
-        return { error: 'Style not found: ' + styleId }
-      }
-      const warnings: string[] = []
-      if (params.name !== undefined) {
-        style.name = params.name as string
-      }
-      if (params.description !== undefined) {
-        style.description = params.description as string
-      }
-      if (params.value !== undefined) {
-        const valueType = params.valueType as
-          | 'paint'
-          | 'text'
-          | 'effect'
-          | 'grid'
-          | undefined
-        const actual = {
-          PAINT: 'paint',
-          TEXT: 'text',
-          EFFECT: 'effect',
-          GRID: 'grid',
-        }[style.type]
-        if (
-          valueType !== undefined &&
-          valueType !== actual
-        ) {
-          warnings.push(
-            'value looks like a ' +
-              valueType +
-              ' atom but the style is ' +
-              actual +
-              '; value not applied',
-          )
-        } else if (style.type === 'PAINT') {
-          ;(style as PaintStyle).paints = [
-            params.value as Paint,
-          ]
-        } else if (style.type === 'TEXT') {
-          const font = params.value as {
-            family: string
-            style: string
-            size: number
-            lineHeight?: LineHeight
-            letterSpacing?: LetterSpacing
-          }
-          // T7 partial-success: name/description were ALREADY committed above.
-          // loadFontAsync throws for an unavailable font — degrade to a warning
-          // and still return {id,warnings} so the applied name/description are
-          // honestly reported, rather than letting the throw turn the whole call
-          // into {error} (a silent partial write masquerading as a no-op).
-          try {
+      for (const entry of csEntries) {
+        try {
+          let style:
+            | PaintStyle
+            | TextStyle
+            | EffectStyle
+            | GridStyle
+          if (entry.type === 'paint') {
+            if (
+              typeof figma.createPaintStyle !== 'function'
+            ) {
+              throw new Error(
+                'createPaintStyle unavailable',
+              )
+            }
+            const ps = figma.createPaintStyle()
+            ps.paints = [entry.value as Paint]
+            style = ps
+          } else if (entry.type === 'text') {
+            if (
+              typeof figma.createTextStyle !== 'function'
+            ) {
+              throw new Error('createTextStyle unavailable')
+            }
+            const font = entry.value as {
+              family: string
+              style: string
+              size: number
+              lineHeight?: LineHeight
+              letterSpacing?: LetterSpacing
+            }
             await figma.loadFontAsync({
               family: font.family,
               style: font.style,
             })
-            const ts = style as TextStyle
+            const ts = figma.createTextStyle()
             ts.fontName = {
               family: font.family,
               style: font.style,
@@ -3496,27 +3714,220 @@ const handleCommand = async (
             if (font.letterSpacing !== undefined) {
               ts.letterSpacing = font.letterSpacing
             }
-          } catch (e) {
-            warnings.push(
-              'font "' +
-                font.family +
-                ' ' +
-                font.style +
-                '" unavailable; value not applied (name/description were updated): ' +
-                String(e),
-            )
+            style = ts
+          } else if (entry.type === 'effect') {
+            if (
+              typeof figma.createEffectStyle !== 'function'
+            ) {
+              throw new Error(
+                'createEffectStyle unavailable',
+              )
+            }
+            const es = figma.createEffectStyle()
+            es.effects = [entry.value as Effect]
+            style = es
+          } else {
+            if (
+              typeof figma.createGridStyle !== 'function'
+            ) {
+              throw new Error('createGridStyle unavailable')
+            }
+            const gs = figma.createGridStyle()
+            gs.layoutGrids = [entry.value as LayoutGrid]
+            style = gs
           }
-        } else if (style.type === 'EFFECT') {
-          ;(style as EffectStyle).effects = [
-            params.value as Effect,
-          ]
-        } else if (style.type === 'GRID') {
-          ;(style as GridStyle).layoutGrids = [
-            params.value as LayoutGrid,
-          ]
+          style.name = entry.name
+          if (entry.description !== undefined) {
+            style.description = entry.description
+          }
+          csResults.push({
+            id: style.id,
+            key: style.key,
+            name: style.name,
+            type: entry.type,
+            index: entry.index,
+          })
+        } catch (e) {
+          csErrors.push({
+            index: entry.index,
+            error: String(e),
+          })
         }
       }
-      return { id: style.id, warnings }
+      return { results: csResults, errors: csErrors }
+    }
+
+    // update_styles: array-edit existing styles' value/newName/description with
+    // PARTIAL SUCCESS. Each entry is looked up by `id` OR by `name`+`type` (the
+    // async local-style listers). The server sends the CONVERTED value + the
+    // inferred valueType; the plugin validates valueType against the style's
+    // actual type and assigns. One entry's failure becomes THAT entry's
+    // {index,error} and does NOT abort the rest. Partial-write contract per
+    // entry: a TEXT entry whose newName/description committed but whose font
+    // load failed becomes that entry's error, naming that name/description WERE
+    // applied (an honest partial write, never a silent no-op).
+    case COMMANDS.UPDATE_STYLES: {
+      const usEntries =
+        (params.styles as
+          | {
+              index: number
+              id?: string
+              name?: string
+              type?: 'paint' | 'text' | 'effect' | 'grid'
+              value?: unknown
+              valueType?:
+                | 'paint'
+                | 'text'
+                | 'effect'
+                | 'grid'
+              newName?: string
+              description?: string
+            }[]
+          | undefined) ?? []
+      const usResults: { id: string; index: number }[] = []
+      const usErrors: { index: number; error: string }[] =
+        []
+
+      // Resolve a style by id, else by name + category. The name+type listers
+      // are loaded lazily (only when an entry omits its id).
+      const resolveStyle = async (entry: {
+        id?: string
+        name?: string
+        type?: 'paint' | 'text' | 'effect' | 'grid'
+      }): Promise<BaseStyle | null> => {
+        if (entry.id !== undefined) {
+          return figma.getStyleByIdAsync(entry.id)
+        }
+        if (
+          entry.name === undefined ||
+          entry.type === undefined
+        ) {
+          return null
+        }
+        const listers = {
+          paint: figma.getLocalPaintStylesAsync,
+          text: figma.getLocalTextStylesAsync,
+          effect: figma.getLocalEffectStylesAsync,
+          grid: figma.getLocalGridStylesAsync,
+        }
+        const list = await listers[entry.type]()
+        return (
+          (list as BaseStyle[]).find(
+            s => s.name === entry.name,
+          ) ?? null
+        )
+      }
+
+      for (const entry of usEntries) {
+        try {
+          const style = await resolveStyle(entry)
+          if (!style) {
+            usErrors.push({
+              index: entry.index,
+              error:
+                'Style not found: ' +
+                (entry.id ??
+                  `${entry.name} (${entry.type})`),
+            })
+            continue
+          }
+          // name/description commit first (partial-write contract).
+          if (entry.newName !== undefined) {
+            style.name = entry.newName
+          }
+          if (entry.description !== undefined) {
+            style.description = entry.description
+          }
+          if (entry.value !== undefined) {
+            const actual = {
+              PAINT: 'paint',
+              TEXT: 'text',
+              EFFECT: 'effect',
+              GRID: 'grid',
+            }[style.type]
+            if (
+              entry.valueType !== undefined &&
+              entry.valueType !== actual
+            ) {
+              usErrors.push({
+                index: entry.index,
+                error:
+                  'value looks like a ' +
+                  entry.valueType +
+                  ' atom but the style is ' +
+                  actual +
+                  '; value not applied (newName/description were updated)',
+              })
+              continue
+            }
+            if (style.type === 'PAINT') {
+              ;(style as PaintStyle).paints = [
+                entry.value as Paint,
+              ]
+            } else if (style.type === 'TEXT') {
+              const font = entry.value as {
+                family: string
+                style: string
+                size: number
+                lineHeight?: LineHeight
+                letterSpacing?: LetterSpacing
+              }
+              // loadFontAsync throws for an unavailable font. newName/description
+              // were ALREADY committed above, so this entry becomes a per-entry
+              // error that NAMES the applied name/description — an honest partial
+              // write, not a silent no-op, and it does not abort other entries.
+              try {
+                await figma.loadFontAsync({
+                  family: font.family,
+                  style: font.style,
+                })
+                const ts = style as TextStyle
+                ts.fontName = {
+                  family: font.family,
+                  style: font.style,
+                }
+                ts.fontSize = font.size
+                if (font.lineHeight !== undefined) {
+                  ts.lineHeight = font.lineHeight
+                }
+                if (font.letterSpacing !== undefined) {
+                  ts.letterSpacing = font.letterSpacing
+                }
+              } catch (e) {
+                usErrors.push({
+                  index: entry.index,
+                  error:
+                    'font "' +
+                    font.family +
+                    ' ' +
+                    font.style +
+                    '" unavailable; value not applied (newName/description were updated): ' +
+                    String(e),
+                })
+                continue
+              }
+            } else if (style.type === 'EFFECT') {
+              ;(style as EffectStyle).effects = [
+                entry.value as Effect,
+              ]
+            } else if (style.type === 'GRID') {
+              ;(style as GridStyle).layoutGrids = [
+                entry.value as LayoutGrid,
+              ]
+            }
+          }
+          usResults.push({
+            id: style.id,
+            index: entry.index,
+          })
+        } catch (e) {
+          usErrors.push({
+            index: entry.index,
+            error: String(e),
+          })
+        }
+      }
+      return { results: usResults, errors: usErrors }
     }
 
     // apply_style: bind a style to a node field via the matching async setter.

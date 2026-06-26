@@ -41,7 +41,7 @@ const stubClient = (opts: {
   currentChannel: () => 'ch',
 })
 
-describe('handleCreateComponent (rebuild on NodeSpec)', () => {
+describe('handleCreateComponent (promote-only, un-overloaded)', () => {
   it('returns the not-connected guard when disconnected', async () => {
     const result = await handleCreateComponent(
       { nodeId: '1:5' },
@@ -52,33 +52,7 @@ describe('handleCreateComponent (rebuild on NodeSpec)', () => {
     )
   })
 
-  it('errors when neither nodeId nor spec is provided', async () => {
-    const sent: Sent[] = []
-    const result = await handleCreateComponent(
-      {},
-      stubClient({ sent }),
-    )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'exactly one of nodeId or spec',
-    )
-    expect(sent).toHaveLength(0)
-  })
-
-  it('errors when BOTH nodeId and spec are provided', async () => {
-    const sent: Sent[] = []
-    const result = await handleCreateComponent(
-      { nodeId: '1:5', spec: { type: 'FRAME' } },
-      stubClient({ sent }),
-    )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'exactly one of nodeId or spec',
-    )
-    expect(sent).toHaveLength(0)
-  })
-
-  it('forwards COMMANDS.CREATE_COMPONENT with {nodeId,name,description} for the node path', async () => {
+  it('forwards COMMANDS.CREATE_COMPONENT with {nodeId,name,description} (no spec/parentId)', async () => {
     const sent: Sent[] = []
     await handleCreateComponent(
       {
@@ -101,40 +75,9 @@ describe('handleCreateComponent (rebuild on NodeSpec)', () => {
     expect(sent[0].params?.nodeId).toBe('1:5')
     expect(sent[0].params?.name).toBe('Promoted')
     expect(sent[0].params?.description).toBe('A card')
+    // The build-from-spec overload was removed (un-overloaded per spec).
     expect(sent[0].params?.spec).toBeUndefined()
-  })
-
-  it('converts atom leaves on the spec write face and strips children', async () => {
-    const sent: Sent[] = []
-    await handleCreateComponent(
-      {
-        spec: {
-          type: 'FRAME',
-          size: [10, 10],
-          fills: ['#FF0000'],
-          children: [{ type: 'RECTANGLE' }],
-        },
-      },
-      stubClient({
-        sent,
-        reply: {
-          id: 'comp:1',
-          key: 'key:1',
-          name: 'FRAME',
-          type: 'COMPONENT',
-        },
-      }),
-    )
-    expect(sent[0].command).toBe(COMMANDS.CREATE_COMPONENT)
-    const spec = sent[0].params?.spec as {
-      fills: unknown[]
-    } & Record<string, unknown>
-    expect(spec.fills[0]).toEqual({
-      type: 'SOLID',
-      color: { r: 1, g: 0, b: 0 },
-    })
-    expect(spec).not.toHaveProperty('children')
-    expect(sent[0].params?.nodeId).toBeUndefined()
+    expect(sent[0].params?.parentId).toBeUndefined()
   })
 
   it('emits {id,key,name,type} from the plugin reply', async () => {
@@ -209,7 +152,7 @@ describe('handleUpdateComponent', () => {
         sent,
         reply: {
           id: 'c:1',
-          propertyDefinitions: {},
+          properties: [],
           warnings: [],
         },
       }),
@@ -227,30 +170,55 @@ describe('handleUpdateComponent', () => {
     })
   })
 
-  it('emits {id,propertyDefinitions,warnings} from the reply', async () => {
+  // The catalogue return key is `properties` (an ARRAY of
+  // {id,name,type,defaultValue,variantOptions?}), NOT the raw
+  // `propertyDefinitions` object map — round-trips get_components, which projects
+  // the same array shape.
+  it('emits {id,properties,warnings} from the reply', async () => {
     const result = await handleUpdateComponent(
       { componentId: 'c:1' },
       stubClient({
         reply: {
           id: 'c:1',
-          propertyDefinitions: {
-            Label: { type: 'TEXT', defaultValue: 'Hi' },
-          },
+          properties: [
+            {
+              id: 'Label#1:0',
+              name: 'Label',
+              type: 'TEXT',
+              defaultValue: 'Hi',
+            },
+          ],
           warnings: [],
         },
       }),
     )
     const out = JSON.parse(result.content[0].text) as {
       id: string
-      propertyDefinitions: Record<string, unknown>
+      properties: {
+        id: string
+        name: string
+        type: string
+        defaultValue: string | boolean
+      }[]
       warnings: string[]
     }
     expect(out.id).toBe('c:1')
-    expect(out.propertyDefinitions.Label).toBeDefined()
+    expect(Array.isArray(out.properties)).toBe(true)
+    expect(out.properties[0].name).toBe('Label')
     expect(out.warnings).toEqual([])
+    // The legacy keys are GONE (renamed to `properties`).
+    expect(
+      'propertyDefinitions' in
+        (out as Record<string, unknown>),
+    ).toBe(false)
+    expect(
+      'added' in (out as Record<string, unknown>),
+    ).toBe(false)
   })
 
-  it('surfaces the added property ids ({name,id}) from the reply', async () => {
+  // The canonical property id agents need for later setProperties lives INSIDE
+  // each `properties` entry (the `id` field) — no separate `added` array.
+  it('carries the added property canonical ids within `properties`', async () => {
     const result = await handleUpdateComponent(
       {
         componentId: 'c:1',
@@ -265,23 +233,25 @@ describe('handleUpdateComponent', () => {
       stubClient({
         reply: {
           id: 'c:1',
-          propertyDefinitions: {
-            'Label#1:0': {
+          properties: [
+            {
+              id: 'Label#1:0',
+              name: 'Label',
               type: 'TEXT',
               defaultValue: 'Hi',
             },
-          },
-          added: [{ name: 'Label', id: 'Label#1:0' }],
+          ],
           warnings: [],
         },
       }),
     )
     const out = JSON.parse(result.content[0].text) as {
-      added: { name: string; id: string }[]
+      properties: { id: string; name: string }[]
     }
-    expect(out.added).toEqual([
-      { name: 'Label', id: 'Label#1:0' },
-    ])
+    const label = out.properties.find(
+      p => p.name === 'Label',
+    )!
+    expect(label.id).toBe('Label#1:0')
   })
 
   it('T7: a reply with warnings surfaces on SUCCESS (not Error)', async () => {
@@ -290,7 +260,7 @@ describe('handleUpdateComponent', () => {
       stubClient({
         reply: {
           id: 'c:1',
-          propertyDefinitions: {},
+          properties: [],
           warnings: [
             'exposeNestedInstances unavailable in this Figma version; expose skipped',
           ],
@@ -356,12 +326,15 @@ describe('handleCombineVariants', () => {
     })
   })
 
-  it('emits {id,name,type,variantAxes} from the reply', async () => {
+  // C1: the set's `key` is returned (read/write symmetry — feeds get_components
+  // / swap_component by key).
+  it('emits {id,key,name,type,variantAxes} from the reply', async () => {
     const result = await handleCombineVariants(
       { componentIds: ['c:1', 'c:2'] },
       stubClient({
         reply: {
           id: 'cs:1',
+          key: 'cskey:1',
           name: 'Set',
           type: 'COMPONENT_SET',
           variantAxes: { Variant: { values: ['Default'] } },
@@ -370,13 +343,44 @@ describe('handleCombineVariants', () => {
     )
     const out = JSON.parse(result.content[0].text) as {
       id: string
+      key: string
       name: string
       type: string
       variantAxes: Record<string, unknown>
     }
     expect(out.id).toBe('cs:1')
+    expect(out.key).toBe('cskey:1')
     expect(out.type).toBe('COMPONENT_SET')
     expect(out.variantAxes).toBeDefined()
+  })
+
+  // C1: multi-axis variant-name warning surfaces on SUCCESS (not Error) — the
+  // plugin warns when source names don't use the "Property=Value" convention.
+  it('multi-axis warning surfaces on SUCCESS (not Error)', async () => {
+    const result = await handleCombineVariants(
+      { componentIds: ['c:1', 'c:2'] },
+      stubClient({
+        reply: {
+          id: 'cs:1',
+          key: 'cskey:1',
+          name: 'Set',
+          type: 'COMPONENT_SET',
+          variantAxes: {},
+          warnings: [
+            'combine_variants: 2 component name(s) do not use the "Property=Value" axis convention (PrimaryLarge, SecondarySmall); the variant set will not form a clean axis set. Name each variant one property per axis (e.g. "Style=Primary, Size=Large").',
+          ],
+        },
+      }),
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const out = JSON.parse(result.content[0].text) as {
+      type: string
+      warnings: string[]
+    }
+    expect(out.type).toBe('COMPONENT_SET')
+    expect(out.warnings).toHaveLength(1)
+    expect(out.warnings[0]).toContain('clean axis set')
+    expect(out.warnings[0]).toContain('Property=Value')
   })
 
   it('partial drop: a dropped-id warning surfaces on SUCCESS (not Error)', async () => {
@@ -418,7 +422,7 @@ describe('handleSwapComponent', () => {
     )
   })
 
-  it('forwards COMMANDS.SWAP_COMPONENT with {instanceId,mainComponentId}', async () => {
+  it('forwards COMMANDS.SWAP_COMPONENT with {instanceId,mainComponentId} (local path)', async () => {
     const sent: Sent[] = []
     await handleSwapComponent(
       { instanceId: 'i:1', mainComponentId: 'c:1' },
@@ -432,10 +436,62 @@ describe('handleSwapComponent', () => {
       }),
     )
     expect(sent[0].command).toBe(COMMANDS.SWAP_COMPONENT)
-    expect(sent[0].params).toEqual({
-      instanceId: 'i:1',
-      mainComponentId: 'c:1',
-    })
+    expect(sent[0].params?.instanceId).toBe('i:1')
+    expect(sent[0].params?.mainComponentId).toBe('c:1')
+  })
+
+  // C2: remote-by-key. The handler forwards `key`; the plugin resolves it via
+  // importComponentByKeyAsync (T7-gated).
+  it('forwards the remote `key` when no local mainComponentId is given', async () => {
+    const sent: Sent[] = []
+    await handleSwapComponent(
+      { instanceId: 'i:1', key: 'remote-key-123' },
+      stubClient({
+        sent,
+        reply: {
+          id: 'i:1',
+          mainComponent: 'imported:remote-key-123',
+          warnings: [],
+        },
+      }),
+    )
+    expect(sent[0].command).toBe(COMMANDS.SWAP_COMPONENT)
+    expect(sent[0].params?.key).toBe('remote-key-123')
+    expect(sent[0].params?.mainComponentId).toBeUndefined()
+  })
+
+  it('forwards BOTH when given — the plugin documents LOCAL wins', async () => {
+    const sent: Sent[] = []
+    await handleSwapComponent(
+      {
+        instanceId: 'i:1',
+        mainComponentId: 'c:1',
+        key: 'remote-key-123',
+      },
+      stubClient({
+        sent,
+        reply: {
+          id: 'i:1',
+          mainComponent: 'c:1',
+          warnings: [],
+        },
+      }),
+    )
+    expect(sent[0].params?.mainComponentId).toBe('c:1')
+    expect(sent[0].params?.key).toBe('remote-key-123')
+  })
+
+  it('errors WITHOUT sending when neither mainComponentId nor key is given', async () => {
+    const sent: Sent[] = []
+    const result = await handleSwapComponent(
+      { instanceId: 'i:1' },
+      stubClient({ sent }),
+    )
+    expect(result.content[0].text).toContain('Error')
+    expect(result.content[0].text).toContain(
+      'mainComponentId (local) or key (remote)',
+    )
+    expect(sent).toHaveLength(0)
   })
 
   it('emits {id,mainComponent,warnings} from the reply', async () => {
@@ -523,17 +579,23 @@ describe('handleSetInstance', () => {
     })
   })
 
-  it('emits {id,componentProperties,warnings} from the reply (real NESTED shape)', async () => {
-    // The real plugin returns inst2.componentProperties — a NESTED map
-    // { [name]: { value, type } }, not the flat input. The reply models that
-    // true shape so the assertion is against the contract the plugin emits.
+  // C3 / T2: the plugin echoes the RAW Figma componentProperties
+  // ({ [name]:{type,value} }); the SERVER splits it into the SAME read-twin
+  // shape get_node / get_components emit — VARIANT → variantProperties (value as
+  // string), non-VARIANT → componentProperties (raw value). So the write echo
+  // round-trips its READ twin EXACTLY.
+  it('splits the raw plugin echo into the read-twin { variantProperties, componentProperties } shape', async () => {
     const result = await handleSetInstance(
-      { instanceId: 'i:1', properties: { Size: 'Large' } },
+      {
+        instanceId: 'i:1',
+        properties: { Size: 'Large', Disabled: true },
+      },
       stubClient({
         reply: {
           id: 'i:1',
           componentProperties: {
             Size: { value: 'Large', type: 'VARIANT' },
+            Disabled: { value: true, type: 'BOOLEAN' },
           },
           warnings: [],
         },
@@ -541,18 +603,53 @@ describe('handleSetInstance', () => {
     )
     const out = JSON.parse(result.content[0].text) as {
       id: string
-      componentProperties: Record<
-        string,
-        { value: string; type: string }
-      >
+      variantProperties?: Record<string, string>
+      componentProperties?: Record<string, string | boolean>
       warnings: string[]
     }
     expect(out.id).toBe('i:1')
-    expect(out.componentProperties.Size).toEqual({
-      value: 'Large',
-      type: 'VARIANT',
+    // VARIANT prop → variantProperties (value as a flat string).
+    expect(out.variantProperties).toEqual({ Size: 'Large' })
+    // non-VARIANT prop → componentProperties (raw value).
+    expect(out.componentProperties).toEqual({
+      Disabled: true,
     })
+    // The raw nested { [name]:{type,value} } map is GONE — it was split.
+    const raw = (
+      out.componentProperties as Record<string, unknown>
+    ).Disabled
+    expect(typeof raw).not.toBe('object')
     expect(out.warnings).toEqual([])
+  })
+
+  it('matches the get_node read twin exactly for the same raw props', async () => {
+    // The READ twin (componentMeta via get_node) splits the SAME raw map; the
+    // write echo must produce the identical projection.
+    const rawProps = {
+      Variant: { value: 'Primary', type: 'VARIANT' },
+      Label: { value: 'Hi', type: 'TEXT' },
+    }
+    const result = await handleSetInstance(
+      {
+        instanceId: 'i:1',
+        properties: { Variant: 'Primary' },
+      },
+      stubClient({
+        reply: {
+          id: 'i:1',
+          componentProperties: rawProps,
+          warnings: [],
+        },
+      }),
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      variantProperties?: Record<string, string>
+      componentProperties?: Record<string, string | boolean>
+    }
+    expect(out.variantProperties).toEqual({
+      Variant: 'Primary',
+    })
+    expect(out.componentProperties).toEqual({ Label: 'Hi' })
   })
 
   it('T7 degrade: an overrides warning surfaces on SUCCESS (not Error)', async () => {

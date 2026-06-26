@@ -91,6 +91,22 @@ export const createMockPlugin = (
         }
         break
 
+      // status (D1): the LIVE context — current page, selection, viewport. The
+      // server adds connection state (connected/channel); this returns only the
+      // plugin-known live context, faithful to the real plugin's STATUS case.
+      case 'status':
+        result = {
+          currentPage: { id: 'page:1', name: pageName },
+          selection: [
+            { id: '1:42', name: 'Card', type: 'FRAME' },
+          ],
+          viewport: {
+            center: { x: 100, y: 200 },
+            zoom: 1.5,
+          },
+        }
+        break
+
       case 'get_selection':
         result = [
           { id: '1:42', name: 'Card', type: 'FRAME' },
@@ -243,9 +259,12 @@ export const createMockPlugin = (
         }
         break
 
-      // get_components: the NEW richer shape — key + variantAxes +
-      // propertyDefinitions + defaults per local entry, key + library +
-      // instancesCount per remote entry.
+      // get_components: the NEW richer shape — key + variantAxes + `properties`
+      // + defaults per local entry, key + library + instancesCount per remote
+      // entry. `properties` is the SAME {id,name,type,defaultValue,
+      // variantOptions?} array shape + key update_component emits (read == write,
+      // T2): each entry's `id` is the CANONICAL property id and `name` is the
+      // part before "#".
       case 'get_components':
         result = {
           local: [
@@ -255,14 +274,16 @@ export const createMockPlugin = (
               key: 'btn-key',
               type: 'COMPONENT_SET',
               page: 'Main',
-              propertyDefinitions: [
+              properties: [
                 {
+                  id: 'Variant',
                   name: 'Variant',
                   type: 'VARIANT',
                   defaultValue: 'Primary',
                   variantOptions: ['Primary', 'Secondary'],
                 },
                 {
+                  id: 'Disabled#2:0',
                   name: 'Disabled',
                   type: 'BOOLEAN',
                   defaultValue: false,
@@ -432,33 +453,124 @@ export const createMockPlugin = (
           }
           break
         }
-        result = {
-          results: [
-            {
+
+        // A tiny fixed tree mirroring the real plugin's scan. Card (1:42) is a
+        // direct child of the page (scan level 0); Title/Body/Action Button are
+        // its children (level 1). Metadata (characters / componentKey /
+        // instancesOf / styleIds / variableIds) is held here but only ATTACHED
+        // when the matching collect* hint is set — faithfully mirroring the real
+        // plugin's CONDITIONAL collection (B3/B4), so the e2e drives the same
+        // contract the live plugin produces.
+        type ScanNode = {
+          base: Record<string, unknown>
+          depth: number
+          characters?: string
+          componentKey?: string
+          instancesOf?: string
+          styleIds?: string[]
+          variableIds?: string[]
+        }
+        const tree: ScanNode[] = [
+          {
+            base: {
               id: '1:42',
               name: 'Card',
               type: 'FRAME',
               size: [320, 200],
             },
-            {
+            depth: 0,
+            styleIds: ['S:card-fill'],
+            variableIds: ['V:radius'],
+          },
+          {
+            base: {
               id: '1:43',
               name: 'Title',
               type: 'TEXT',
               size: [288, 24],
             },
-            {
+            depth: 1,
+            characters: 'Welcome back',
+            styleIds: ['S:title-text'],
+          },
+          {
+            base: {
               id: '1:44',
               name: 'Body',
               type: 'TEXT',
               size: [288, 48],
             },
-            {
+            depth: 1,
+            characters: 'Sign in to continue',
+          },
+          {
+            base: {
               id: '1:45',
               name: 'Action Button',
               type: 'INSTANCE',
               size: [100, 40],
             },
-          ],
+            depth: 1,
+            componentKey: 'btn-key-123',
+            instancesOf: 'Button',
+            variableIds: ['V:brand'],
+          },
+        ]
+
+        // B2 — depth bounds the scan SCOPE. undefined/-1 = scan all; N keeps
+        // nodes at scan level ≤ N (the level-1 children appear once depth ≥ 1).
+        const sDepth = cmd.params?.depth as
+          | number
+          | undefined
+        const inScope = (n: ScanNode): boolean =>
+          sDepth === undefined ||
+          sDepth < 0 ||
+          n.depth <= sDepth
+
+        // B3/B4 — conditional collection hints (set by the server only when the
+        // request needs them). Attach metadata only under the matching flag.
+        const collectComponentRef =
+          cmd.params?.collectComponentRef === true
+        const collectStyleId =
+          cmd.params?.collectStyleId === true
+        const collectVariableId =
+          cmd.params?.collectVariableId === true
+        const collectCharacters =
+          cmd.params?.collectCharacters === true
+
+        result = {
+          results: tree.filter(inScope).map(n => {
+            const candidate: Record<string, unknown> = {
+              ...n.base,
+            }
+            if (
+              collectCharacters &&
+              n.characters !== undefined
+            ) {
+              candidate.characters = n.characters
+            }
+            if (collectComponentRef) {
+              if (n.componentKey !== undefined) {
+                candidate.componentKey = n.componentKey
+              }
+              if (n.instancesOf !== undefined) {
+                candidate.instancesOf = n.instancesOf
+              }
+            }
+            if (
+              collectStyleId &&
+              n.styleIds !== undefined
+            ) {
+              candidate.styleIds = n.styleIds
+            }
+            if (
+              collectVariableId &&
+              n.variableIds !== undefined
+            ) {
+              candidate.variableIds = n.variableIds
+            }
+            return candidate
+          }),
         }
         break
       }
@@ -858,15 +970,10 @@ export const createMockPlugin = (
         break
       }
 
-      // create_component: the M3-B rebuild promotes nodeId OR builds-from-spec
-      // then componentizes, echoing {id,key,name,type} + the converted spec so
-      // the e2e can assert the spec atoms were parsed server-side. (The legacy
-      // {combineAsVariants,nodeIds} / {slots} branches were retired in M3-E
-      // alongside the old tools/create-component.ts handler.)
+      // create_component (PROMOTE-ONLY, un-overloaded per spec): promote the
+      // given nodeId, echoing {id,key,name,type} + the source nodeId so the e2e
+      // can assert routing. The build-from-spec overload was removed.
       case 'create_component': {
-        const ccSpec = cmd.params?.spec as
-          | Record<string, unknown>
-          | undefined
         const ccNodeId = cmd.params?.nodeId as
           | string
           | undefined
@@ -876,23 +983,20 @@ export const createMockPlugin = (
         result = {
           id: `comp:${Math.random().toString(36).slice(2, 8)}`,
           key: `key:${Math.random().toString(36).slice(2, 8)}`,
-          name:
-            ccName ??
-            (ccSpec?.name as string) ??
-            'Component',
+          name: ccName ?? 'Component',
           type: 'COMPONENT',
-          // echo the converted spec / source so tests can assert conversion + routing
-          spec: ccSpec,
+          // echo the source so tests can assert routing
           sourceNodeId: ccNodeId,
         }
         break
       }
 
-      // update_component: echo {id, propertyDefinitions, added, warnings}. An
+      // update_component: echo {id, properties, warnings}. `properties` is the
+      // catalogue ARRAY of {id,name,type,defaultValue,variantOptions?}. An
       // `expose` list degrades (warn, never error) — exposeNestedInstances is
       // gated. addComponentProperty returns a CANONICAL id (`<name>#<suffix>`)
       // that agents need for later setProperties, so the mock mirrors the real
-      // plugin by keying defs on that id and surfacing `added: [{name,id}]`.
+      // plugin by carrying it inside each `properties` entry's `id` field.
       // Genuine {error} boundaries (mirroring the real plugin):
       //  - componentId `err:` → {error:'Component not found: …'} (not-found).
       //  - componentId `notcomp:` → {error:'Node is not a component …'} (the
@@ -918,16 +1022,20 @@ export const createMockPlugin = (
           | string[]
           | undefined
         const ucWarnings: string[] = []
-        const defs: Record<string, unknown> = {}
-        const added: { name: string; id: string }[] = []
+        const properties: {
+          id: string
+          name: string
+          type: string
+          defaultValue: string | boolean
+        }[] = []
         if (ucAdd) {
           for (const p of ucAdd) {
-            const propId = `${p.name}#1:0`
-            defs[propId] = {
+            properties.push({
+              id: `${p.name}#1:0`,
+              name: p.name,
               type: p.type,
               defaultValue: p.defaultValue,
-            }
-            added.push({ name: p.name, id: propId })
+            })
           }
         }
         if (ucExpose && ucExpose.length > 0) {
@@ -937,8 +1045,7 @@ export const createMockPlugin = (
         }
         result = {
           id: ucId,
-          propertyDefinitions: defs,
-          added,
+          properties,
           warnings: ucWarnings,
         }
         break
@@ -948,6 +1055,10 @@ export const createMockPlugin = (
       // warning (honest partial success — never silently swallowed), mirroring
       // the real plugin. ≥2 SURVIVORS → a COMPONENT_SET; <2 → error (guarded
       // server-side too). The mock treats `bad:`-prefixed ids as not-a-component.
+      // The set's `key` is returned (read/write symmetry). A `noaxis:`-prefixed
+      // KEPT id models a component whose name lacks the "Property=Value" axis
+      // convention → the MULTI-AXIS warning (T7/T9), faithful to the real plugin
+      // checking the source names.
       case 'combine_variants': {
         const cvIds =
           (cmd.params?.componentIds as string[]) ?? []
@@ -971,6 +1082,20 @@ export const createMockPlugin = (
             'Need at least 2 components for combine_variants'
           break
         }
+        // Multi-axis nudge: KEPT ids prefixed `noaxis:` model component names
+        // lacking the "Property=Value" axis convention.
+        const cvUnaxised = cvKept.filter(id =>
+          id.startsWith('noaxis:'),
+        )
+        if (cvUnaxised.length > 0) {
+          cvWarnings.push(
+            'combine_variants: ' +
+              cvUnaxised.length +
+              ' component name(s) do not use the "Property=Value" axis convention (' +
+              cvUnaxised.join(', ') +
+              '); the variant set will not form a clean axis set. Name each variant one property per axis (e.g. "Style=Primary, Size=Large").',
+          )
+        }
         // A `nogood:` parent can't bear children → fall back to the first
         // component's parent, but REPORT it (no silent fallback), mirroring the
         // real plugin.
@@ -986,6 +1111,7 @@ export const createMockPlugin = (
         }
         result = {
           id: `cs:${Math.random().toString(36).slice(2, 8)}`,
+          key: `cskey:${Math.random().toString(36).slice(2, 8)}`,
           name:
             (cmd.params?.name as string) ?? 'VariantSet',
           type: 'COMPONENT_SET',
@@ -995,16 +1121,46 @@ export const createMockPlugin = (
         break
       }
 
-      // swap_component: echo {id, mainComponent, warnings}. instanceId
-      // `degrade:` → swap warns (T7), success not error. On a FAILED swap the
-      // real plugin re-reads getMainComponentAsync() → the ORIGINAL main (the
-      // swap never took), so the mock echoes the original main here too, NOT the
-      // requested target. We derive the original id from the instance id
-      // (`degrade:i9` → `orig:i9`) so it is deterministic and assertable.
+      // swap_component: echo {id, mainComponent, warnings}. Remote-capable,
+      // faithful to the real plugin:
+      //  - LOCAL mainComponentId WINS if both it and `key` are given.
+      //  - REMOTE `key` (no mainComponentId) is resolved via
+      //    importComponentByKeyAsync. A key prefixed `importfail:` models a
+      //    FAILED import → degrade ({mainComponent:null, warning}), NEVER {error};
+      //    else the imported main id is derived (`key` → `imported:<key>`).
+      //  - instanceId `degrade:` models a FAILED swap (T7): the real plugin
+      //    re-reads getMainComponentAsync() → the ORIGINAL main (swap never took),
+      //    so the mock echoes `orig:<id>`, NOT the requested target.
       case 'swap_component': {
         const scId = cmd.params?.instanceId as string
-        const scMain = cmd.params?.mainComponentId as string
+        const scMainId = cmd.params?.mainComponentId as
+          | string
+          | undefined
+        const scKey = cmd.params?.key as string | undefined
         const scWarnings: string[] = []
+        // Resolve the target main: LOCAL wins; else import by key.
+        let target: string | null
+        if (scMainId !== undefined) {
+          target = scMainId
+        } else if (scKey !== undefined) {
+          if (scKey.startsWith('importfail:')) {
+            result = {
+              id: scId,
+              mainComponent: null,
+              warnings: [
+                'importComponentByKeyAsync failed for key "' +
+                  scKey +
+                  '": import error; remote swap skipped',
+              ],
+            }
+            break
+          }
+          target = 'imported:' + scKey
+        } else {
+          error =
+            'swap_component requires mainComponentId (local) or key (remote)'
+          break
+        }
         const degraded = scId?.startsWith('degrade:')
         if (degraded) {
           scWarnings.push(
@@ -1015,7 +1171,7 @@ export const createMockPlugin = (
           id: scId,
           mainComponent: degraded
             ? 'orig:' + scId.slice('degrade:'.length)
-            : scMain,
+            : target,
           warnings: scWarnings,
         }
         break
@@ -1025,10 +1181,10 @@ export const createMockPlugin = (
       // (not applied). The real plugin returns the RAW Figma
       // inst2.componentProperties — a NESTED map { [name]: { value, type } }
       // (VARIANT and non-VARIANT props mixed, value wrapped) — NOT the flat
-      // input. Mirror that nested shape here so the echo is faithful (the
-      // flatten-to-read-twin fix is a DEFERRED spec item; the mock only needs to
-      // match the plugin's CURRENT echo). Infer type from the value kind:
-      // boolean → BOOLEAN, string → VARIANT (the common case in tests).
+      // input. The mock stays FAITHFUL to that raw plugin shape; the SERVER now
+      // splits it into the read-twin { variantProperties?, componentProperties? }
+      // shape (C3 — flatten-to-read-twin landed). Infer type from the value
+      // kind: boolean → BOOLEAN, string → VARIANT (the common case in tests).
       case 'set_instance': {
         const siId = cmd.params?.instanceId as string
         const siProps = cmd.params?.properties as
@@ -1227,13 +1383,16 @@ export const createMockPlugin = (
 
       // create_variables: the server has CONVERTED COLOR values to {r,g,b,a}
       // (FLOAT/STRING/BOOLEAN pass through). Echo the converted variables back
-      // (as `echo`) so the e2e can assert the parse reached the plugin, and
+      // (as `echo`) so the e2e can assert the parse + the E1 fields (aliases /
+      // scopes / codeSyntax / hiddenFromPublishing) reached the plugin, and
       // mirror the real reply { collectionId, modes, variables:[{id,name}] }.
       // T7: a collection name prefixed `err:` models the collection-level
       // factory THROWING — a genuine failure (nothing to return) → {error}, not
       // a degrade. A variable name prefixed `degrade:` models a per-variable
       // create / setValueForMode failure — it degrades to a warning and the rest
-      // of the batch continues (never a throw, never {error}).
+      // of the batch continues (never a throw, never {error}). E1: an `aliases`
+      // target id prefixed `missing:` models alias-target-not-found (the SHARED
+      // per-variable apply path's T7 degrade — warned, never thrown).
       case 'create_variables': {
         const collectionName = cmd.params
           ?.collection as string
@@ -1247,6 +1406,10 @@ export const createMockPlugin = (
                 name: string
                 type: string
                 valuesByMode: Record<string, unknown>
+                aliases?: Record<string, string>
+                scopes?: string[]
+                codeSyntax?: Record<string, string>
+                hiddenFromPublishing?: boolean
               }[]
             | undefined) ?? []
         const reqModes =
@@ -1273,6 +1436,19 @@ export const createMockPlugin = (
               `setValueForMode failed for variable "${v.name}"; value not set`,
             )
             return
+          }
+          // E1: model the shared per-variable apply path's alias-target-not-found
+          // degrade (an aliases target id prefixed `missing:`).
+          for (const [modeName, targetId] of Object.entries(
+            v.aliases ?? {},
+          )) {
+            if (targetId.startsWith('missing:')) {
+              warnings.push(
+                `alias target not found: ${targetId} for variable "${v.name}"`,
+              )
+            } else {
+              void modeName
+            }
           }
           created.push({ id: `var:${i + 1}`, name: v.name })
         })
@@ -1349,53 +1525,95 @@ export const createMockPlugin = (
         break
       }
 
-      // create_styles: the server has CONVERTED the value atom (paint→Paint,
-      // text→FontName, effect→Effect, grid→LayoutGrid). Echo it back + mirror
-      // the real reply { id, key, name, type }.
+      // create_styles: array-create with PARTIAL SUCCESS. The server has
+      // CONVERTED each entry's value atom (paint→Paint, text→FontName,
+      // effect→Effect, grid→LayoutGrid). Loop, mirroring the real plugin's
+      // { results:[{id,key,name,type,index}], errors:[{index,error}] }. A style
+      // `name` prefixed `err:` models a per-entry create failure (degrade, not
+      // abort). Each result carries the entry's `value` as `echo` so conversion
+      // assertions still round-trip.
       case 'create_styles': {
-        result = {
-          id: 'S:new',
-          key: 'style-key',
-          name: cmd.params?.name as string,
-          type: cmd.params?.type as string,
-          echo: cmd.params?.value,
+        const csEntries =
+          (cmd.params?.styles as
+            | {
+                index: number
+                type: string
+                name: string
+                value: unknown
+                description?: string
+              }[]
+            | undefined) ?? []
+        const csResults: unknown[] = []
+        const csErrors: { index: number; error: string }[] =
+          []
+        for (const e of csEntries) {
+          if (e.name.startsWith('err:')) {
+            csErrors.push({
+              index: e.index,
+              error: `create${e.type}Style unavailable`,
+            })
+            continue
+          }
+          csResults.push({
+            id: `S:${e.index}`,
+            key: 'style-key',
+            name: e.name,
+            type: e.type,
+            index: e.index,
+            echo: e.value,
+          })
         }
+        result = { results: csResults, errors: csErrors }
         break
       }
 
-      // update_styles: a styleId starting with `err:` → {error}; `degrade:` →
-      // success-with-warning; `fontfail:` → PARTIAL SUCCESS (name/description
-      // committed, the TEXT value branch's loadFontAsync threw → warned, NOT
-      // {error}). Else echo {id,warnings:[]} + the converted value.
+      // update_styles: array-edit with PARTIAL SUCCESS. Each entry is keyed by
+      // its `id` (mirrors the real plugin's lookup). Per-entry models:
+      //  - id `err:` → {index,error} not-found (does NOT abort the rest).
+      //  - id `degrade:` → {index,error} category mismatch (value not applied;
+      //    newName/description were).
+      //  - id `fontfail:` → {index,error} partial write (newName/description
+      //    committed, the TEXT value branch's loadFontAsync threw).
+      //  - else → {id,index} success.
       case 'update_styles': {
-        const sId = cmd.params?.styleId as string
-        if (sId.startsWith('err:')) {
-          error = `Style not found: ${sId}`
-        } else if (sId.startsWith('degrade:')) {
-          result = {
-            id: sId,
-            warnings: [
-              'value looks like a paint atom but the style is text; value not applied',
-            ],
-          }
-        } else if (sId.startsWith('fontfail:')) {
-          const ufFont = cmd.params?.value as
-            | { family?: string; style?: string }
-            | undefined
-          result = {
-            id: sId,
-            warnings: [
-              `font "${ufFont?.family} ${ufFont?.style}" unavailable; value not applied (name/description were updated)`,
-            ],
-          }
-        } else {
-          result = {
-            id: sId,
-            warnings: [],
-            echo: cmd.params?.value,
-            valueType: cmd.params?.valueType,
+        const usEntries =
+          (cmd.params?.styles as
+            | {
+                index: number
+                id?: string
+                name?: string
+                value?: { family?: string; style?: string }
+              }[]
+            | undefined) ?? []
+        const usResults: { id: string; index: number }[] =
+          []
+        const usErrors: {
+          index: number
+          error: string
+        }[] = []
+        for (const e of usEntries) {
+          const sId = e.id ?? e.name ?? ''
+          if (sId.startsWith('err:')) {
+            usErrors.push({
+              index: e.index,
+              error: `Style not found: ${sId}`,
+            })
+          } else if (sId.startsWith('degrade:')) {
+            usErrors.push({
+              index: e.index,
+              error:
+                'value looks like a paint atom but the style is text; value not applied (newName/description were updated)',
+            })
+          } else if (sId.startsWith('fontfail:')) {
+            usErrors.push({
+              index: e.index,
+              error: `font "${e.value?.family} ${e.value?.style}" unavailable; value not applied (newName/description were updated)`,
+            })
+          } else {
+            usResults.push({ id: sId, index: e.index })
           }
         }
+        result = { results: usResults, errors: usErrors }
         break
       }
 

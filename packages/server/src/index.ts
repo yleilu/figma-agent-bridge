@@ -271,8 +271,6 @@ server.tool(
     handleCreateComponent(
       {
         nodeId: params.nodeId,
-        spec: params.spec,
-        parentId: params.parentId,
         name: params.name,
         description: params.description,
       },

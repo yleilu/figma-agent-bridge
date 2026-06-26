@@ -52,11 +52,54 @@ const versionOf = (candidates: { id?: string }[]): string =>
     .digest('base64url')
     .slice(0, 12)
 
+/**
+ * Conditional-collection hints for the plugin scan (B3 + B4).
+ *
+ * The reverse-lookup match keys (componentKey / styleId / variableId /
+ * instancesOf) and the `characters` projection require PER-CANDIDATE async
+ * Figma calls (getMainComponentAsync, style ids, boundVariables, TEXT
+ * .characters). Those are expensive, so the plugin only pays them when the
+ * request actually needs them — the server tells it WHICH via these flags:
+ *
+ *   collectComponentRef — match.componentKey OR match.instancesOf
+ *                         (the instance's main component key + name)
+ *   collectStyleId      — match.styleId   (fill/text/effect/stroke/grid styleId)
+ *   collectVariableId   — match.variableId (boundVariables ids)
+ *   collectCharacters   — fields includes 'characters' (TEXT .characters)
+ *
+ * Returns only the flags that are TRUE, so an unhinted scan stays byte-for-byte
+ * the same request it was before B3/B4 (no cost on the common path).
+ */
+export const buildCollectHints = (params: {
+  match?: Match
+  fields?: string[]
+}): Record<string, true> => {
+  const hints: Record<string, true> = {}
+  const m = params.match
+  if (
+    m?.componentKey !== undefined ||
+    m?.instancesOf !== undefined
+  ) {
+    hints.collectComponentRef = true
+  }
+  if (m?.styleId !== undefined) {
+    hints.collectStyleId = true
+  }
+  if (m?.variableId !== undefined) {
+    hints.collectVariableId = true
+  }
+  if (params.fields?.includes('characters')) {
+    hints.collectCharacters = true
+  }
+  return hints
+}
+
 export const handleSearch = async (
   params: {
     scope?: SearchScope
     pageId?: string
     nodeId?: string
+    depth?: number
     match?: Match
     fields?: string[]
     profile?: Profile
@@ -71,10 +114,22 @@ export const handleSearch = async (
   }
 
   try {
+    // The plugin scans the scope and returns flat candidate nodes (it does NOT
+    // match/project/paginate — that is the server's job below). `depth` bounds
+    // the scan SCOPE (descent depth) only; it is forwarded verbatim and
+    // omitted when not given so the plugin applies its scan-all default.
+    // When `match` requests a reverse-lookup key (componentKey / styleId /
+    // variableId / instancesOf) or `fields`/`profile` requests `characters`,
+    // the plugin must collect that metadata per candidate — forward the hints
+    // so it only pays that async cost when actually needed.
     const raw = (await client.sendCommand(COMMANDS.SEARCH, {
       scope: params.scope ?? 'document',
       pageId: params.pageId,
       nodeId: params.nodeId,
+      ...(params.depth !== undefined
+        ? { depth: params.depth }
+        : {}),
+      ...buildCollectHints(params),
     })) as {
       results?: Record<string, unknown>[]
       error?: string

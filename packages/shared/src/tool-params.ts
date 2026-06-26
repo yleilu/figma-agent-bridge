@@ -1,9 +1,12 @@
 // tool-params.ts — per-tool Zod param schemas for the MCP tool surface.
 //
-// SSOT mixin pattern: tree-read tools spread `treeReadParamsSchema.shape`
-// (depth/budget/fields/profile/match) and list-read tools spread
-// `listReadParamsSchema.shape` (cursor/limit/fields/match). This ensures
-// that schema changes to the mixin propagate automatically.
+// SSOT mixin pattern: the full tree-read tool (`inspect`) spreads
+// `treeReadParamsSchema.shape` (depth/budget/fields/profile/match); the
+// fidelity-first readers (`get_node`/`get_nodes`) spread the REDUCED
+// `fidelityReadParamsSchema.shape` (depth/fields/profile — no budget, no
+// match, per D1/T2); and list-read tools spread `listReadParamsSchema.shape`
+// (cursor/limit/fields/match). This ensures that schema changes to a mixin
+// propagate automatically.
 //
 // SUBPATH (not barrel-exported): this module is the canonical per-tool param
 // surface for the live server, imported via the
@@ -26,17 +29,25 @@ import {
 } from './node-spec-schema'
 import {
   treeReadParamsSchema,
+  fidelityReadParamsSchema,
   listReadParamsSchema,
 } from './read-model'
 
 // ---------------------------------------------------------------------------
-// Read tools — tree read mixin (depth / budget / fields / profile / match)
+// Read tools — fidelity-first tree readers (depth / fields / profile ONLY)
+//
+// `get_node` / `get_nodes` are the D1/T2 fidelity exception: they spread the
+// REDUCED `fidelityReadParamsSchema` (depth + projection), NOT the full
+// `treeReadParamsSchema`. They are NEVER budget-truncated (a budget-capped edit
+// read would break the round-trip) and carry NO `match` filter (the edit reader
+// returns the node's faithful spec, it does not filter at the source). `inspect`
+// (below) keeps the full mixin — it legitimately takes budget + depth + match.
 // ---------------------------------------------------------------------------
 
 /** Params for `get_node`: retrieve a single node by ID. */
 export const getNodeParamsSchema = z.object({
   nodeId: z.string().describe('The node ID to retrieve.'),
-  ...treeReadParamsSchema.shape,
+  ...fidelityReadParamsSchema.shape,
 })
 
 /** Params for `get_nodes`: retrieve multiple nodes by their IDs. */
@@ -44,7 +55,7 @@ export const getNodesParamsSchema = z.object({
   nodeIds: z
     .array(z.string())
     .describe('Array of node IDs to retrieve.'),
-  ...treeReadParamsSchema.shape,
+  ...fidelityReadParamsSchema.shape,
 })
 
 /**
@@ -94,6 +105,11 @@ export const searchScopeSchema = z.enum([
  * `scope` selects where the plugin scans; the SERVER applies `match`
  * (the list mixin), `fields` projection, and the opaque cursor + `limit`.
  * `pageId` / `nodeId` qualify the page / node scopes respectively.
+ *
+ * `depth` bounds the SCAN SCOPE — how deep into each root the plugin
+ * traverses — NOT the output shape: results always stay a flat Rule-A list
+ * (search is a list read, not a tree read). `-1` (or omitted) scans the whole
+ * subtree; `depth=0` scans only the root(s); `depth=N` descends N levels.
  */
 export const searchParamsSchema = z.object({
   scope: searchScopeSchema
@@ -111,6 +127,13 @@ export const searchParamsSchema = z.object({
     .string()
     .optional()
     .describe('Node subtree to scan when scope=node.'),
+  depth: z
+    .number()
+    .int()
+    .optional()
+    .describe(
+      'Scan-scope depth: how deep the plugin traverses each root. -1 (default) = whole subtree; 0 = root(s) only; N = N levels deep. Results stay a flat list.',
+    ),
   ...listReadParamsSchema.shape,
 })
 
@@ -151,8 +174,9 @@ export const deleteNodeParamsSchema = z.object({
 
 /**
  * Params for `set_focus`: scroll and zoom the viewport so the given nodes are
- * in view. This moves the CANVAS only — it does not change the selection
- * (pair with set_selection for that).
+ * in view. set_focus is the viewport WRITER — the viewport is READ via `status`
+ * (which now returns the live viewport). This moves the CANVAS only — it does
+ * not change the selection (pair with set_selection for that).
  */
 export const setFocusParamsSchema = z.object({
   nodeIds: z
@@ -419,6 +443,9 @@ export const variableTypeSchema = z.enum([
  * One variable to create inside the collection. `valuesByMode` maps a MODE NAME
  * (matched against the collection's modes) to a value. COLOR values are hex
  * atoms (parsed via the grammar paint face); FLOAT/STRING/BOOLEAN are literals.
+ * `aliases` / `scopes` / `codeSyntax` / `hiddenFromPublishing` may also be set on
+ * create (parity with update_variables — applied through the same per-variable
+ * path, each feature-detected + T7-degraded).
  */
 export const createVariableSpecSchema = z.object({
   name: z
@@ -431,6 +458,28 @@ export const createVariableSpecSchema = z.object({
     .record(z.union([z.string(), z.number(), z.boolean()]))
     .describe(
       'Map of mode NAME → value. COLOR values are hex atoms (e.g. "#3B82F6"); FLOAT/STRING/BOOLEAN are literals. Modes not present in the collection are reported as warnings.',
+    ),
+  aliases: z
+    .record(z.string())
+    .optional()
+    .describe(
+      'Map of mode NAME → target variable ID — sets that mode to a VARIABLE_ALIAS of the target (feature-detected + T7-degraded).',
+    ),
+  scopes: z
+    .array(z.string())
+    .optional()
+    .describe('Variable scopes (e.g. ["ALL_SCOPES"]).'),
+  codeSyntax: z
+    .record(z.string())
+    .optional()
+    .describe(
+      'Code syntax per platform (keys: WEB | ANDROID | iOS).',
+    ),
+  hiddenFromPublishing: z
+    .boolean()
+    .optional()
+    .describe(
+      'Whether to hide the variable from publishing.',
     ),
 })
 
@@ -533,12 +582,11 @@ export const styleTypeSchema = z.enum([
 ])
 
 /**
- * Params for `create_styles`: create one paint/text/effect/grid style from a
- * grammar atom value. paint → atomToPaint, text → atomToFont (+loadFont in the
- * plugin), effect → atomToEffect, grid → the grid head. Returns
- * { id, key, name, type }.
+ * One style to create: a paint/text/effect/grid style from a grammar atom value.
+ * paint → atomToPaint, text → atomToFont (+loadFont in the plugin), effect →
+ * atomToEffect, grid → the grid head.
  */
-export const createStylesParamsSchema = z.object({
+export const createStyleSpecSchema = z.object({
   type: styleTypeSchema.describe(
     'Style category: paint | text | effect | grid.',
   ),
@@ -555,21 +603,45 @@ export const createStylesParamsSchema = z.object({
 })
 
 /**
- * Params for `update_styles`: edit an existing style's parsed value, name,
- * and/or description. The style's category is resolved plugin-side from its id.
- * Returns { id, warnings[] }.
+ * Params for `create_styles`: BATCH-create paint/text/effect/grid styles from
+ * grammar atom values with PARTIAL SUCCESS — one entry's failure does not abort
+ * the rest. Returns { results:[{id,key,name,type,index}], errors:[{index,error}] }.
  */
-export const updateStylesParamsSchema = z.object({
-  styleId: z
+export const createStylesParamsSchema = z.object({
+  styles: z
+    .array(createStyleSpecSchema)
+    .describe('The styles to create (partial success).'),
+})
+
+/**
+ * One style to edit: looked up by `id` OR by `name` + `type`. A supplied `value`
+ * is parsed per the style's category; `newName`/`description` apply directly.
+ */
+export const updateStyleSpecSchema = z.object({
+  id: z
     .string()
-    .describe('ID of the style to update.'),
+    .optional()
+    .describe(
+      'ID of the style to update (or look it up by name + type).',
+    ),
+  name: z
+    .string()
+    .optional()
+    .describe(
+      'Style name to look up (with `type`) when no `id` is given.',
+    ),
+  type: styleTypeSchema
+    .optional()
+    .describe(
+      'Style category for name lookup: paint | text | effect | grid.',
+    ),
   value: z
     .string()
     .optional()
     .describe(
       'New style VALUE as a grammar atom (parsed per the style category).',
     ),
-  name: z
+  newName: z
     .string()
     .optional()
     .describe('New name for the style.'),
@@ -577,6 +649,17 @@ export const updateStylesParamsSchema = z.object({
     .string()
     .optional()
     .describe('New description for the style.'),
+})
+
+/**
+ * Params for `update_styles`: BATCH-edit existing styles' parsed value, name,
+ * and/or description with PARTIAL SUCCESS — one entry's failure does not abort
+ * the rest. Returns { results:[{id,index}], errors:[{index,error}] }.
+ */
+export const updateStylesParamsSchema = z.object({
+  styles: z
+    .array(updateStyleSpecSchema)
+    .describe('The styles to edit (partial success).'),
 })
 
 /**
@@ -753,28 +836,16 @@ export const exportParamsSchema = z.object({
 // ---------------------------------------------------------------------------
 
 /**
- * Params for `create_component`: promote a node and/or build from a NodeSpec,
- * then componentize. Supply EXACTLY ONE source: `nodeId` (an existing node to
- * promote) OR `spec` (a NodeSpec to create first, then promote). The handler
- * validates that exactly one is present.
+ * Params for `create_component`: PROMOTE-ONLY (un-overloaded per the spec's
+ * single-node-promote decision). Componentizes an existing node via
+ * createComponentFromNode(); optionally renames / sets its description. To build
+ * a node first, use create_node / create_tree, then promote the returned id.
  */
 export const createComponentParamsSchema = z.object({
   nodeId: z
     .string()
-    .optional()
     .describe(
-      'Existing node to componentize via createComponentFromNode(). Provide this OR spec, not both.',
-    ),
-  spec: nodeSpecSchema
-    .optional()
-    .describe(
-      'A NodeSpec to create first (via the create path), then componentize. Provide this OR nodeId, not both.',
-    ),
-  parentId: z
-    .string()
-    .optional()
-    .describe(
-      'When building from spec, the parent to create under. Omit for the current page.',
+      'Existing node to componentize via createComponentFromNode().',
     ),
   name: z
     .string()
@@ -868,14 +939,30 @@ export const combineVariantsParamsSchema = z.object({
     .describe('Name for the resulting component set.'),
 })
 
-/** Params for `swap_component`: point an instance at a different main component. */
+/**
+ * Params for `swap_component`: point an instance at a different main component.
+ * Remote-capable: provide EITHER `mainComponentId` (a LOCAL component node id —
+ * resolved directly) OR `key` (a component KEY — resolved via
+ * importComponentByKeyAsync, T7-gated: if the import fails the swap degrades with
+ * a warning). At least one is required. If BOTH are given the LOCAL
+ * `mainComponentId` WINS (it needs no async import).
+ */
 export const swapComponentParamsSchema = z.object({
   instanceId: z
     .string()
     .describe('ID of the instance to swap.'),
   mainComponentId: z
     .string()
-    .describe('ID of the component to swap to.'),
+    .optional()
+    .describe(
+      'LOCAL component node id to swap to. Wins over `key` if both are given.',
+    ),
+  key: z
+    .string()
+    .optional()
+    .describe(
+      'Component KEY to swap to (remote/library) — resolved via importComponentByKeyAsync (T7-gated). Used when `mainComponentId` is absent.',
+    ),
 })
 
 /**

@@ -496,21 +496,28 @@ type RawComponentProp = {
   value: string | boolean
 }
 
-const componentMeta = (
-  raw: RawNode,
+/**
+ * Split a raw Figma `componentProperties` map ({ [name]: { type, value } }) into
+ * the canonical NodeSpec instance shape — VARIANT props → `variantProperties`
+ * ({ [name]: string }), everything else → `componentProperties`
+ * ({ [name]: string|boolean }). This is the ONE canonical instance-property
+ * projection shared by the READ twin (get_node / get_components / inspect) and
+ * the WRITE echo (set_instance), so the round-trip is exact (T2). Returns only
+ * the keys with content (an empty group is omitted).
+ */
+export const splitComponentProperties = (
+  props:
+    | Record<string, RawComponentProp>
+    | undefined
+    | null,
 ): Pick<
   NodeSpec,
-  'componentProperties' | 'variantProperties' | 'overrides'
+  'componentProperties' | 'variantProperties'
 > => {
   const out: Pick<
     NodeSpec,
-    | 'componentProperties'
-    | 'variantProperties'
-    | 'overrides'
+    'componentProperties' | 'variantProperties'
   > = {}
-  const props = raw.componentProperties as
-    | Record<string, RawComponentProp>
-    | undefined
   if (props !== undefined && props !== null) {
     const variant: Record<string, string> = {}
     const component: Record<string, string | boolean> = {}
@@ -527,6 +534,27 @@ const componentMeta = (
     if (Object.keys(component).length > 0) {
       out.componentProperties = component
     }
+  }
+  return out
+}
+
+const componentMeta = (
+  raw: RawNode,
+): Pick<
+  NodeSpec,
+  'componentProperties' | 'variantProperties' | 'overrides'
+> => {
+  const out: Pick<
+    NodeSpec,
+    | 'componentProperties'
+    | 'variantProperties'
+    | 'overrides'
+  > = {
+    ...splitComponentProperties(
+      raw.componentProperties as
+        | Record<string, RawComponentProp>
+        | undefined,
+    ),
   }
   const rawOverrides = raw.overrides
   if (

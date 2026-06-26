@@ -518,6 +518,87 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(text).not.toContain('results: []')
   })
 
+  // 11b — B2: depth bounds the scan SCOPE across the relay. depth=0 keeps only
+  // the page's level-0 node (Card); the default scans the whole subtree (4).
+  it('search depth bounds the scan scope across the relay', async () => {
+    const shallow = await handleSearch({ depth: 0 }, client)
+    const outShallow = YAML.parse(
+      shallow.content[0].text,
+    ) as { results: { id: string }[] }
+    expect(outShallow.results).toHaveLength(1)
+    expect(outShallow.results[0].id).toBe('1:42')
+
+    const full = await handleSearch({}, client)
+    const outFull = YAML.parse(full.content[0].text) as {
+      results: { id: string }[]
+    }
+    expect(outFull.results).toHaveLength(4)
+  })
+
+  // 11c — B3: a reverse-lookup match (instancesOf) drives conditional
+  // collection in the plugin so the server can filter to the matching INSTANCE.
+  it('search reverse-lookup instancesOf matches across the relay (B3)', async () => {
+    const result = await handleSearch(
+      { match: { instancesOf: 'Button' } },
+      client,
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { id: string; type: string }[]
+    }
+    expect(out.results).toHaveLength(1)
+    expect(out.results[0].id).toBe('1:45')
+    expect(out.results[0].type).toBe('INSTANCE')
+  })
+
+  // 11d — B3: styleId / variableId reverse-lookups (matched against the
+  // plugin-collected styleIds[]/variableIds[]).
+  it('search reverse-lookup styleId / variableId match across the relay (B3)', async () => {
+    const byStyle = await handleSearch(
+      { match: { styleId: 'S:card-fill' } },
+      client,
+    )
+    const outStyle = YAML.parse(
+      byStyle.content[0].text,
+    ) as { results: { id: string }[] }
+    expect(outStyle.results.map(r => r.id)).toEqual([
+      '1:42',
+    ])
+
+    const byVar = await handleSearch(
+      { match: { variableId: 'V:brand' } },
+      client,
+    )
+    const outVar = YAML.parse(byVar.content[0].text) as {
+      results: { id: string }[]
+    }
+    expect(outVar.results.map(r => r.id)).toEqual(['1:45'])
+  })
+
+  // 11e — B4: fields:['characters'] projects a text-copy inventory across the
+  // relay (TEXT → its content, non-text omitted).
+  it('search projects characters (text inventory) across the relay (B4)', async () => {
+    const result = await handleSearch(
+      {
+        fields: ['id', 'type', 'characters'],
+        match: { type: ['TEXT', 'FRAME'] },
+      },
+      client,
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: {
+        id: string
+        type: string
+        characters?: string
+      }[]
+    }
+    const title = out.results.find(r => r.id === '1:43')
+    const card = out.results.find(r => r.id === '1:42')
+    expect(title?.characters).toBe('Welcome back')
+    // The FRAME has no characters projected.
+    expect(card).toBeDefined()
+    expect(card?.characters).toBeUndefined()
+  })
+
   // 12 — get_nodes multi-id read → { results, errors } over the relay.
   it('get_nodes returns NodeSpec results over the relay', async () => {
     const result = await handleGetNodes(
@@ -1004,6 +1085,67 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(out.echo[1].valuesByMode.Light).toBe(8)
   })
 
+  // 25a — create_variables: aliases / scopes / codeSyntax / hiddenFromPublishing
+  // reach the plugin's shared per-variable apply path on create (E1 parity with
+  // update_variables).
+  it('create_variables forwards aliases/scopes/codeSyntax/hiddenFromPublishing over the relay (E1)', async () => {
+    const result = await handleCreateVariables(
+      {
+        collection: 'Brand',
+        modes: ['Light'],
+        variables: [
+          {
+            name: 'Brand/Primary',
+            type: 'COLOR',
+            valuesByMode: { Light: '#FF0000' },
+            aliases: { Light: 'var:target' },
+            scopes: ['ALL_SCOPES'],
+            codeSyntax: { WEB: '--brand-primary' },
+            hiddenFromPublishing: true,
+          },
+        ],
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const out = JSON.parse(result.content[0].text) as {
+      echo: {
+        aliases?: Record<string, string>
+        scopes?: string[]
+        codeSyntax?: Record<string, string>
+        hiddenFromPublishing?: boolean
+      }[]
+    }
+    const v = out.echo[0]
+    expect(v.aliases).toEqual({ Light: 'var:target' })
+    expect(v.scopes).toEqual(['ALL_SCOPES'])
+    expect(v.codeSyntax).toEqual({ WEB: '--brand-primary' })
+    expect(v.hiddenFromPublishing).toBe(true)
+  })
+
+  // 25b — create_variables: an alias-target-not-found degrades through the shared
+  // per-variable apply path (warn on success, never {error}) — E1 + T7.
+  it('create_variables alias-target-not-found degrades (E1 + T7)', async () => {
+    const result = await handleCreateVariables(
+      {
+        collection: 'Brand',
+        variables: [
+          {
+            name: 'Brand/Primary',
+            type: 'COLOR',
+            valuesByMode: { 'Mode 1': '#FF0000' },
+            aliases: { 'Mode 1': 'missing:nope' },
+          },
+        ],
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    expect(result.content[0].text).toContain(
+      'alias target not found',
+    )
+  })
+
   // 26 — update_variables: addMode + a COLOR value edit, parsed from hex.
   it('update_variables forwards addModes + a parsed COLOR value edit over the relay', async () => {
     const result = await handleUpdateVariables(
@@ -1165,85 +1307,118 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   })
 
   // 28 — create_styles: a paint atom is parsed server-side to a SOLID Paint
-  // before the plugin creates the style.
+  // before the plugin creates the style (array-create, partial-success envelope).
   it('create_styles parses a paint atom to a SOLID Paint over the relay', async () => {
     const result = await handleCreateStyles(
       {
-        type: 'paint',
-        name: 'Brand/Primary',
-        value: '#3B82F6',
+        styles: [
+          {
+            type: 'paint',
+            name: 'Brand/Primary',
+            value: '#3B82F6',
+          },
+        ],
       },
       client,
     )
     const out = JSON.parse(result.content[0].text) as {
-      id: string
-      key: string
-      type: string
-      echo: { type: string; color: unknown }
+      results: {
+        id: string
+        type: string
+        index: number
+        echo: { type: string; color: unknown }
+      }[]
+      errors: unknown[]
     }
-    expect(out.id).toBe('S:new')
-    expect(out.type).toBe('paint')
+    expect(out.errors).toEqual([])
+    expect(out.results).toHaveLength(1)
+    expect(out.results[0].type).toBe('paint')
+    expect(out.results[0].index).toBe(0)
     // The atom was parsed to a Figma Paint before the plugin saw it.
-    expect(out.echo.type).toBe('SOLID')
-    expect(out.echo.color).toEqual({
+    expect(out.results[0].echo.type).toBe('SOLID')
+    expect(out.results[0].echo.color).toEqual({
       r: 0.231,
       g: 0.51,
       b: 0.965,
     })
   })
 
-  // 29 — create_styles: a font atom is parsed to a FontName over the relay.
-  it('create_styles parses a font atom to a FontName over the relay', async () => {
+  // 29 — create_styles: multiple atoms parsed + created in one batch over the
+  // relay; partial success keeps each entry's index.
+  it('create_styles parses a font atom to a FontName over the relay (batch)', async () => {
     const result = await handleCreateStyles(
       {
-        type: 'text',
-        name: 'Heading/H1',
-        value: 'font(Inter,Bold,32,{lh=40})',
+        styles: [
+          {
+            type: 'paint',
+            name: 'Brand/Primary',
+            value: '#3B82F6',
+          },
+          {
+            type: 'text',
+            name: 'Heading/H1',
+            value: 'font(Inter,Bold,32,{lh=40})',
+          },
+        ],
       },
       client,
     )
     const out = JSON.parse(result.content[0].text) as {
-      type: string
-      echo: {
-        family: string
-        size: number
-        lineHeight: { value: number; unit: string }
-      }
+      results: {
+        type: string
+        index: number
+        echo: {
+          family?: string
+          size?: number
+          lineHeight?: { value: number; unit: string }
+        }
+      }[]
+      errors: unknown[]
     }
-    expect(out.type).toBe('text')
-    expect(out.echo.family).toBe('Inter')
-    expect(out.echo.size).toBe(32)
-    expect(out.echo.lineHeight).toEqual({
+    expect(out.errors).toEqual([])
+    const text = out.results.find(r => r.type === 'text')!
+    expect(text.index).toBe(1)
+    expect(text.echo.family).toBe('Inter')
+    expect(text.echo.size).toBe(32)
+    expect(text.echo.lineHeight).toEqual({
       value: 40,
       unit: 'PIXELS',
     })
   })
 
-  // 29a — update_styles partial write (T7): name/description commit, then the
+  // 29a — update_styles partial write: newName/description commit, then the
   // value branch (loadFontAsync for a TEXT style) throws for an unavailable
-  // font. The plugin must report PARTIAL SUCCESS + a warning (the name was
-  // already applied), NOT a total {error}. The mock keys the font-load failure
-  // off a styleId prefixed `fontfail:`.
-  it('update_styles reports partial success + warning when the value branch fails', async () => {
+  // font. With the array envelope this becomes THAT entry's {index,error}
+  // (naming that newName/description WERE applied) — an honest partial write,
+  // never a silent no-op, and it does not abort other entries. Tool-level
+  // success (no top-level "Error:"). The mock keys the font-load failure off an
+  // id prefixed `fontfail:`.
+  it('update_styles reports the failed entry in errors[] when the value branch fails (partial write)', async () => {
     const result = await handleUpdateStyles(
       {
-        styleId: 'fontfail:S',
-        name: 'Heading/H1',
-        value: 'font(Nonexistent,Bold,32)',
+        styles: [
+          {
+            id: 'fontfail:S',
+            newName: 'Heading/H1',
+            value: 'font(Nonexistent,Bold,32)',
+          },
+        ],
       },
       client,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const out = JSON.parse(result.content[0].text) as {
-      id: string
-      warnings: string[]
+      results: unknown[]
+      errors: { index: number; error: string }[]
     }
-    expect(out.id).toBe('fontfail:S')
-    expect(
-      out.warnings.some(w =>
-        w.toLowerCase().includes('font'),
-      ),
-    ).toBe(true)
+    expect(out.results).toEqual([])
+    expect(out.errors[0].index).toBe(0)
+    expect(out.errors[0].error.toLowerCase()).toContain(
+      'font',
+    )
+    expect(out.errors[0].error.toLowerCase()).toContain(
+      'newname/description were updated',
+    )
   })
 
   // 30 — apply_style happy path reports success (no error) over the relay.

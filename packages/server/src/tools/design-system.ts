@@ -141,7 +141,7 @@ export const handleGetStyles = async (
   }
 }
 
-// ─── get_components (Rule A; carries key + variant axes + property defs) ──────
+// ─── get_components (Rule A; key + variant axes + `properties` == write twin) ─
 
 type ComponentEntry = {
   id?: string
@@ -149,7 +149,9 @@ type ComponentEntry = {
   key?: string
   type?: string
   page?: string | null
-  propertyDefinitions?: unknown[]
+  // `properties`: the SAME {id,name,type,defaultValue,variantOptions?} array
+  // shape + key update_component emits (read == write, T2).
+  properties?: unknown[]
   variantAxes?: Record<string, string[]>
   defaults?: Record<string, unknown>
   [k: string]: unknown
@@ -157,9 +159,10 @@ type ComponentEntry = {
 
 /**
  * List local + remote components. The plugin builds the rich per-entry shape
- * (key, type, page, propertyDefinitions, variantAxes, defaults); the SERVER
- * applies the case-insensitive substring `query` filter (literal, not glob),
- * flattens local ⧺ remote into the Rule-A list shape, and emits YAML.
+ * (key, type, page, `properties` [== update_component's property array, T2],
+ * variantAxes, defaults); the SERVER applies the case-insensitive substring
+ * `query` filter (literal, not glob), flattens local ⧺ remote into the Rule-A
+ * list shape, and emits YAML.
  */
 export const handleGetComponents = async (
   { query }: { query?: string },
@@ -364,7 +367,10 @@ const renderVariableValues = (
  * Read local variable collections + variables. The plugin sends per-variable
  * scopes / codeSyntax / hiddenFromPublishing / aliases plus raw valuesByMode;
  * the SERVER renders COLOR valuesByMode to hex atoms (aliases and other types
- * pass through) and projects the enhanced members. No cursor (P4 concern).
+ * pass through), projects the enhanced members, and wraps them in the Rule-A
+ * list envelope { results, truncated: false } — the SAME shape as the shipped
+ * sibling reads (get_styles / get_components / list_fonts). Bounded read: no
+ * cursor input, no cursor output (consistent with those siblings).
  */
 export const handleGetVariables = async (
   { collectionId }: { collectionId?: string },
@@ -388,31 +394,24 @@ export const handleGetVariables = async (
     }
 
     const collections = raw.results ?? []
-    const varCount = collections.reduce(
-      (n, c) => n + (c.variables?.length ?? 0),
-      0,
-    )
-    const header = `# ${collections.length} collections, ${varCount} variables\n\n`
-    const body = YAML.stringify(
-      collections.map(c => ({
-        id: c.id,
-        name: c.name,
-        modes: c.modes,
-        variables: (c.variables ?? []).map(v => ({
-          id: v.id,
-          name: v.name,
-          type: v.resolvedType,
-          valuesByMode: renderVariableValues(
-            v.valuesByMode,
-          ),
-          aliases: v.aliases,
-          scopes: v.scopes,
-          codeSyntax: v.codeSyntax,
-          hiddenFromPublishing: v.hiddenFromPublishing,
-        })),
+    const results = collections.map(c => ({
+      id: c.id,
+      name: c.name,
+      modes: c.modes,
+      variables: (c.variables ?? []).map(v => ({
+        id: v.id,
+        name: v.name,
+        type: v.resolvedType,
+        valuesByMode: renderVariableValues(v.valuesByMode),
+        aliases: v.aliases,
+        scopes: v.scopes,
+        codeSyntax: v.codeSyntax,
+        hiddenFromPublishing: v.hiddenFromPublishing,
       })),
+    }))
+    return textResult(
+      YAML.stringify({ results, truncated: false }),
     )
-    return textResult(header + body)
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }

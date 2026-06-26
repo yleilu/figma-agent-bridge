@@ -154,6 +154,47 @@ describe('handleCreateVariables', () => {
     )
   })
 
+  // E1: aliases / scopes / codeSyntax / hiddenFromPublishing may be set on
+  // create (parity with update_variables). The server forwards them as-is to the
+  // plugin's shared per-variable apply path.
+  it('forwards aliases / scopes / codeSyntax / hiddenFromPublishing on create (E1)', async () => {
+    const sent: Sent[] = []
+    await handleCreateVariables(
+      {
+        collection: 'Brand',
+        modes: ['Light'],
+        variables: [
+          {
+            name: 'Brand/Primary',
+            type: 'COLOR',
+            valuesByMode: { Light: '#FF0000' },
+            aliases: { Light: 'var:alias-target' },
+            scopes: ['ALL_SCOPES'],
+            codeSyntax: { WEB: '--brand-primary' },
+            hiddenFromPublishing: true,
+          },
+        ],
+      },
+      stubClient({
+        sent,
+        reply: { collectionId: 'col:1' },
+      }),
+    )
+    const params = sent[0].params as {
+      variables: {
+        aliases?: Record<string, string>
+        scopes?: string[]
+        codeSyntax?: Record<string, string>
+        hiddenFromPublishing?: boolean
+      }[]
+    }
+    const v = params.variables[0]
+    expect(v.aliases).toEqual({ Light: 'var:alias-target' })
+    expect(v.scopes).toEqual(['ALL_SCOPES'])
+    expect(v.codeSyntax).toEqual({ WEB: '--brand-primary' })
+    expect(v.hiddenFromPublishing).toBe(true)
+  })
+
   it('emits the {collectionId,modes,variables} reply', async () => {
     const result = await handleCreateVariables(
       {
@@ -380,7 +421,11 @@ describe('handleUpdateVariables', () => {
 describe('handleCreateStyles', () => {
   it('returns the not-connected guard when disconnected', async () => {
     const result = await handleCreateStyles(
-      { type: 'paint', name: 'P', value: '#FF0000' },
+      {
+        styles: [
+          { type: 'paint', name: 'P', value: '#FF0000' },
+        ],
+      },
       stubClient({ connected: false }),
     )
     expect(result.content[0].text).toContain(
@@ -388,138 +433,236 @@ describe('handleCreateStyles', () => {
     )
   })
 
-  it('forwards a paint atom converted to a SOLID Paint', async () => {
+  it('forwards each style atom converted to its Figma object (paint/text/effect/grid)', async () => {
     const sent: Sent[] = []
     await handleCreateStyles(
       {
-        type: 'paint',
-        name: 'Brand/Primary',
-        value: '#3B82F6',
-        description: 'brand blue',
+        styles: [
+          {
+            type: 'paint',
+            name: 'Brand/Primary',
+            value: '#3B82F6',
+            description: 'brand blue',
+          },
+          {
+            type: 'text',
+            name: 'Heading/H1',
+            value: 'font(Inter,Bold,32,{lh=40})',
+          },
+          {
+            type: 'effect',
+            name: 'Card Shadow',
+            value: 'shadow(0,4,12,#0000001A)',
+          },
+          {
+            type: 'grid',
+            name: '12 Col',
+            value: 'columns(12,80,20)',
+          },
+        ],
       },
       stubClient({
         sent,
         reply: {
-          id: 'S:1',
-          key: 'k',
-          name: 'Brand/Primary',
-          type: 'paint',
+          results: [
+            {
+              id: 'S:1',
+              key: 'k',
+              name: 'Brand/Primary',
+              type: 'paint',
+              index: 0,
+            },
+            {
+              id: 'S:2',
+              key: 'k',
+              name: 'Heading/H1',
+              type: 'text',
+              index: 1,
+            },
+            {
+              id: 'S:3',
+              key: 'k',
+              name: 'Card Shadow',
+              type: 'effect',
+              index: 2,
+            },
+            {
+              id: 'S:4',
+              key: 'k',
+              name: '12 Col',
+              type: 'grid',
+              index: 3,
+            },
+          ],
         },
       }),
     )
     expect(sent[0].command).toBe(COMMANDS.CREATE_STYLES)
-    const params = sent[0].params as {
+    const styles = sent[0].params?.styles as {
       type: string
       name: string
       description?: string
-      value: { type: string; color: unknown }
-    }
-    expect(params.type).toBe('paint')
-    expect(params.description).toBe('brand blue')
-    expect(params.value.type).toBe('SOLID')
-    expect(params.value.color).toEqual({
+      value: Record<string, unknown>
+    }[]
+    // paint atom → SOLID Paint
+    expect(styles[0].type).toBe('paint')
+    expect(styles[0].description).toBe('brand blue')
+    expect(styles[0].value.type).toBe('SOLID')
+    expect(styles[0].value.color).toEqual({
       r: 0.231,
       g: 0.51,
       b: 0.965,
     })
-  })
-
-  it('forwards a font atom converted to a FontName', async () => {
-    const sent: Sent[] = []
-    await handleCreateStyles(
-      {
-        type: 'text',
-        name: 'Heading/H1',
-        value: 'font(Inter,Bold,32,{lh=40})',
-      },
-      stubClient({ sent, reply: { id: 'S:2' } }),
-    )
-    const params = sent[0].params as {
-      value: {
-        family: string
-        style: string
-        size: number
-        lineHeight?: { value: number; unit: string }
-      }
-    }
-    expect(params.value.family).toBe('Inter')
-    expect(params.value.style).toBe('Bold')
-    expect(params.value.size).toBe(32)
-    expect(params.value.lineHeight).toEqual({
+    // font atom → FontName
+    expect(styles[1].value.family).toBe('Inter')
+    expect(styles[1].value.size).toBe(32)
+    expect(styles[1].value.lineHeight).toEqual({
       value: 40,
       unit: 'PIXELS',
     })
+    // effect atom → DROP_SHADOW
+    expect(styles[2].value.type).toBe('DROP_SHADOW')
+    expect(styles[2].value.radius).toBe(12)
+    // grid atom → LayoutGrid
+    expect(styles[3].value.pattern).toBe('COLUMNS')
+    expect(styles[3].value.count).toBe(12)
   })
 
-  it('forwards an effect atom converted to a DROP_SHADOW', async () => {
-    const sent: Sent[] = []
-    await handleCreateStyles(
-      {
-        type: 'effect',
-        name: 'Card Shadow',
-        value: 'shadow(0,4,12,#0000001A)',
-      },
-      stubClient({ sent, reply: { id: 'S:3' } }),
-    )
-    const params = sent[0].params as {
-      value: { type: string; radius: number }
-    }
-    expect(params.value.type).toBe('DROP_SHADOW')
-    expect(params.value.radius).toBe(12)
-  })
-
-  it('forwards a grid atom converted to a LayoutGrid', async () => {
-    const sent: Sent[] = []
-    await handleCreateStyles(
-      {
-        type: 'grid',
-        name: '12 Col',
-        value: 'columns(12,80,20)',
-      },
-      stubClient({ sent, reply: { id: 'S:4' } }),
-    )
-    const params = sent[0].params as {
-      value: { pattern: string; count: number }
-    }
-    expect(params.value.pattern).toBe('COLUMNS')
-    expect(params.value.count).toBe(12)
-  })
-
-  it('emits the {id,key,name,type} reply', async () => {
+  it('emits the { results, errors } partial-success envelope', async () => {
     const result = await handleCreateStyles(
-      { type: 'paint', name: 'P', value: '#FFFFFF' },
+      {
+        styles: [
+          { type: 'paint', name: 'P', value: '#FFFFFF' },
+        ],
+      },
       stubClient({
         reply: {
-          id: 'S:1',
-          key: 'kk',
-          name: 'P',
-          type: 'paint',
+          results: [
+            {
+              id: 'S:1',
+              key: 'kk',
+              name: 'P',
+              type: 'paint',
+              index: 0,
+            },
+          ],
         },
       }),
     )
     const out = JSON.parse(result.content[0].text) as {
-      id: string
-      key: string
+      results: {
+        id: string
+        key: string
+        name: string
+        type: string
+        index: number
+      }[]
+      errors: { index: number; error: string }[]
     }
-    expect(out.id).toBe('S:1')
-    expect(out.key).toBe('kk')
+    expect(out.results).toHaveLength(1)
+    expect(out.results[0].id).toBe('S:1')
+    expect(out.results[0].key).toBe('kk')
+    expect(out.results[0].index).toBe(0)
+    expect(out.errors).toEqual([])
   })
 
-  it('catches a malformed atom locally and reports an error (never throws)', async () => {
+  it('isolates a malformed atom to its entry (never throws; valid entries still sent + created)', async () => {
+    const sent: Sent[] = []
     const result = await handleCreateStyles(
-      { type: 'paint', name: 'P', value: 'not-a-paint(' },
-      stubClient({ reply: { id: 'S:1' } }),
+      {
+        styles: [
+          { type: 'paint', name: 'Good', value: '#FFFFFF' },
+          {
+            type: 'paint',
+            name: 'Bad',
+            value: 'not-a-paint(',
+          },
+          {
+            type: 'paint',
+            name: 'Good2',
+            value: '#000000',
+          },
+        ],
+      },
+      stubClient({
+        sent,
+        reply: {
+          results: [
+            {
+              id: 'S:1',
+              key: 'k',
+              name: 'Good',
+              type: 'paint',
+              index: 0,
+            },
+            {
+              id: 'S:3',
+              key: 'k',
+              name: 'Good2',
+              type: 'paint',
+              index: 2,
+            },
+          ],
+        },
+      }),
     )
-    expect(result.content[0].text).toContain('Error')
+    // Only the two valid entries reached the plugin; the bad one was isolated.
+    const styles = sent[0].params?.styles as {
+      name: string
+    }[]
+    expect(styles).toHaveLength(2)
+    expect(styles.map(s => s.name)).toEqual([
+      'Good',
+      'Good2',
+    ])
+    const out = JSON.parse(result.content[0].text) as {
+      results: { index: number; name: string }[]
+      errors: { index: number; error: string }[]
+    }
+    // Results keep their ORIGINAL indices (0 and 2); the error is index 1.
+    expect(out.results.map(r => r.index)).toEqual([0, 2])
+    expect(out.errors).toHaveLength(1)
+    expect(out.errors[0].index).toBe(1)
+  })
+
+  it('surfaces a plugin-side per-entry error in the errors[] array', async () => {
+    const result = await handleCreateStyles(
+      {
+        styles: [
+          { type: 'paint', name: 'P', value: '#FFFFFF' },
+        ],
+      },
+      stubClient({
+        reply: {
+          results: [],
+          errors: [
+            {
+              index: 0,
+              error: 'createPaintStyle unavailable',
+            },
+          ],
+        },
+      }),
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      results: unknown[]
+      errors: { index: number; error: string }[]
+    }
+    expect(out.results).toEqual([])
+    expect(out.errors[0].error).toContain('unavailable')
   })
 
   it('returns failure text on a null reply', async () => {
     const result = await handleCreateStyles(
-      { type: 'paint', name: 'P', value: '#FFFFFF' },
+      {
+        styles: [
+          { type: 'paint', name: 'P', value: '#FFFFFF' },
+        ],
+      },
       stubClient({ reply: null }),
     )
     expect(result.content[0].text).toBe(
-      'Failed to create style.',
+      'Failed to create styles.',
     )
   })
 })
@@ -529,7 +672,7 @@ describe('handleCreateStyles', () => {
 describe('handleUpdateStyles', () => {
   it('returns the not-connected guard when disconnected', async () => {
     const result = await handleUpdateStyles(
-      { styleId: 'S:1' },
+      { styles: [{ id: 'S:1' }] },
       stubClient({ connected: false }),
     )
     expect(result.content[0].text).toContain(
@@ -537,47 +680,83 @@ describe('handleUpdateStyles', () => {
     )
   })
 
-  it('forwards name/description without a value untouched', async () => {
+  it('forwards newName/description without a value untouched (lookup by id)', async () => {
     const sent: Sent[] = []
     await handleUpdateStyles(
-      { styleId: 'S:1', name: 'New', description: 'desc' },
+      {
+        styles: [
+          {
+            id: 'S:1',
+            newName: 'New',
+            description: 'desc',
+          },
+        ],
+      },
       stubClient({
         sent,
-        reply: { id: 'S:1', warnings: [] },
+        reply: { results: [{ id: 'S:1', index: 0 }] },
       }),
     )
     expect(sent[0].command).toBe(COMMANDS.UPDATE_STYLES)
-    const params = sent[0].params as {
-      styleId: string
-      name?: string
+    const styles = sent[0].params?.styles as {
+      index: number
+      id?: string
+      newName?: string
       description?: string
       value?: unknown
-    }
-    expect(params.styleId).toBe('S:1')
-    expect(params.name).toBe('New')
-    expect(params.description).toBe('desc')
-    expect(params.value).toBeUndefined()
+    }[]
+    expect(styles[0].index).toBe(0)
+    expect(styles[0].id).toBe('S:1')
+    expect(styles[0].newName).toBe('New')
+    expect(styles[0].description).toBe('desc')
+    expect(styles[0].value).toBeUndefined()
+  })
+
+  it('supports lookup by name+type when no id is given', async () => {
+    const sent: Sent[] = []
+    await handleUpdateStyles(
+      {
+        styles: [
+          {
+            name: 'Brand/Primary',
+            type: 'paint',
+            value: '#FF0000',
+          },
+        ],
+      },
+      stubClient({
+        sent,
+        reply: { results: [{ id: 'S:1', index: 0 }] },
+      }),
+    )
+    const styles = sent[0].params?.styles as {
+      name?: string
+      type?: string
+      valueType?: string
+    }[]
+    expect(styles[0].name).toBe('Brand/Primary')
+    expect(styles[0].type).toBe('paint')
   })
 
   it('forwards a value atom: server infers paint category and converts to a Paint', async () => {
     const sent: Sent[] = []
     await handleUpdateStyles(
-      { styleId: 'S:1', value: '#FF0000' },
+      { styles: [{ id: 'S:1', value: '#FF0000' }] },
       stubClient({
         sent,
-        reply: { id: 'S:1', warnings: [] },
+        reply: { results: [{ id: 'S:1', index: 0 }] },
       }),
     )
-    const params = sent[0].params as {
+    const styles = sent[0].params?.styles as {
       value?: { type?: string; color?: unknown }
       valueType?: string
-    }
+    }[]
     // The server infers the category from the atom syntax (a bare hex → paint)
     // and parses it to a Figma object; the inferred category rides alongside so
     // the plugin can validate it against the resolved style's actual type.
-    expect(params.valueType).toBe('paint')
-    expect(params.value?.type).toBe('SOLID')
-    expect(params.value?.color).toEqual({
+    expect(styles[0].valueType).toBe('paint')
+    expect(styles[0].value?.type).toBe('SOLID')
+    expect(styles[0].value?.color).toEqual({
       r: 1,
       g: 0,
       b: 0,
@@ -587,92 +766,135 @@ describe('handleUpdateStyles', () => {
   it('infers the font category for a font(...) value', async () => {
     const sent: Sent[] = []
     await handleUpdateStyles(
-      { styleId: 'S:2', value: 'font(Inter,Bold,20)' },
+      {
+        styles: [
+          { id: 'S:2', value: 'font(Inter,Bold,20)' },
+        ],
+      },
       stubClient({
         sent,
-        reply: { id: 'S:2', warnings: [] },
+        reply: { results: [{ id: 'S:2', index: 0 }] },
       }),
     )
-    const params = sent[0].params as {
+    const styles = sent[0].params?.styles as {
       value?: { family?: string }
       valueType?: string
-    }
-    expect(params.valueType).toBe('text')
-    expect(params.value?.family).toBe('Inter')
+    }[]
+    expect(styles[0].valueType).toBe('text')
+    expect(styles[0].value?.family).toBe('Inter')
   })
 
   it('infers the effect category for a shadow(...) value', async () => {
     const sent: Sent[] = []
     await handleUpdateStyles(
-      { styleId: 'S:3', value: 'shadow(0,4,12,#00000040)' },
+      {
+        styles: [
+          { id: 'S:3', value: 'shadow(0,4,12,#00000040)' },
+        ],
+      },
       stubClient({
         sent,
-        reply: { id: 'S:3', warnings: [] },
+        reply: { results: [{ id: 'S:3', index: 0 }] },
       }),
     )
-    const params = sent[0].params as {
+    const styles = sent[0].params?.styles as {
       value?: { type?: string }
       valueType?: string
-    }
-    expect(params.valueType).toBe('effect')
-    expect(params.value?.type).toBe('DROP_SHADOW')
+    }[]
+    expect(styles[0].valueType).toBe('effect')
+    expect(styles[0].value?.type).toBe('DROP_SHADOW')
   })
 
   it('infers the grid category for a columns(...) value', async () => {
     const sent: Sent[] = []
     await handleUpdateStyles(
-      { styleId: 'S:4', value: 'columns(12,80,20)' },
+      {
+        styles: [{ id: 'S:4', value: 'columns(12,80,20)' }],
+      },
       stubClient({
         sent,
-        reply: { id: 'S:4', warnings: [] },
+        reply: { results: [{ id: 'S:4', index: 0 }] },
       }),
     )
-    const params = sent[0].params as {
+    const styles = sent[0].params?.styles as {
       value?: { pattern?: string }
       valueType?: string
-    }
-    expect(params.valueType).toBe('grid')
-    expect(params.value?.pattern).toBe('COLUMNS')
+    }[]
+    expect(styles[0].valueType).toBe('grid')
+    expect(styles[0].value?.pattern).toBe('COLUMNS')
   })
 
-  it('reports a {…,warnings} degrade as success-with-warning (T7)', async () => {
+  it('emits the { results, errors } partial-success envelope', async () => {
     const result = await handleUpdateStyles(
-      { styleId: 'S:1', value: '#FF0000' },
+      { styles: [{ id: 'S:1', value: '#FF0000' }] },
+      stubClient({
+        reply: { results: [{ id: 'S:1', index: 0 }] },
+      }),
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      results: { id: string; index: number }[]
+      errors: { index: number; error: string }[]
+    }
+    expect(out.results[0].id).toBe('S:1')
+    expect(out.results[0].index).toBe(0)
+    expect(out.errors).toEqual([])
+  })
+
+  it('surfaces a per-entry plugin error in errors[] (e.g. style not found)', async () => {
+    const result = await handleUpdateStyles(
+      { styles: [{ id: 'nope' }] },
       stubClient({
         reply: {
-          id: 'S:1',
-          warnings: [
-            'style category unknown; value skipped',
+          results: [],
+          errors: [
+            { index: 0, error: 'Style not found: nope' },
           ],
         },
       }),
     )
     expect(result.content[0].text).not.toContain('Error:')
-    expect(result.content[0].text).toContain(
-      'value skipped',
-    )
+    const out = JSON.parse(result.content[0].text) as {
+      results: unknown[]
+      errors: { index: number; error: string }[]
+    }
+    expect(out.results).toEqual([])
+    expect(out.errors[0].error).toContain('Style not found')
   })
 
-  it('surfaces a plugin-side {error} as an error', async () => {
+  it('isolates a malformed value atom to its entry (never throws; valid entries still sent)', async () => {
+    const sent: Sent[] = []
     const result = await handleUpdateStyles(
-      { styleId: 'nope' },
+      {
+        styles: [
+          { id: 'S:1', value: '#FF0000' },
+          { id: 'S:2', value: 'not-a-paint(' },
+        ],
+      },
       stubClient({
-        reply: { error: 'Style not found: nope' },
+        sent,
+        reply: { results: [{ id: 'S:1', index: 0 }] },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'Style not found',
-    )
+    const styles = sent[0].params?.styles as {
+      id?: string
+    }[]
+    expect(styles).toHaveLength(1)
+    expect(styles[0].id).toBe('S:1')
+    const out = JSON.parse(result.content[0].text) as {
+      results: { index: number }[]
+      errors: { index: number; error: string }[]
+    }
+    expect(out.results.map(r => r.index)).toEqual([0])
+    expect(out.errors[0].index).toBe(1)
   })
 
   it('returns failure text on a null reply', async () => {
     const result = await handleUpdateStyles(
-      { styleId: 'S:1' },
+      { styles: [{ id: 'S:1' }] },
       stubClient({ reply: null }),
     )
     expect(result.content[0].text).toBe(
-      'Failed to update style.',
+      'Failed to update styles.',
     )
   })
 })

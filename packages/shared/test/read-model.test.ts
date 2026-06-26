@@ -7,12 +7,14 @@ import {
   profileSchema,
   matchSchema,
   treeReadParamsSchema,
+  fidelityReadParamsSchema,
   listReadParamsSchema,
 } from '@figma-agent-bridge/shared/read-model'
 import type {
   Match,
   Profile,
   TreeReadParams,
+  FidelityReadParams,
   ListReadParams,
 } from '@figma-agent-bridge/shared/read-model'
 
@@ -36,6 +38,12 @@ assertEqual<
   Equal<
     z.infer<typeof treeReadParamsSchema>,
     TreeReadParams
+  >
+>()
+assertEqual<
+  Equal<
+    z.infer<typeof fidelityReadParamsSchema>,
+    FidelityReadParams
   >
 >()
 assertEqual<
@@ -173,6 +181,46 @@ describe('treeReadParamsSchema', () => {
       treeReadParamsSchema.safeParse({ budget: -1 })
         .success,
     ).toBe(false)
+  })
+})
+
+describe('fidelityReadParamsSchema (get_node/get_nodes — D1/T2 exception)', () => {
+  it('accepts an empty object (server defaults)', () => {
+    expect(
+      fidelityReadParamsSchema.safeParse({}).success,
+    ).toBe(true)
+  })
+
+  it('accepts the reduced object (depth + projection only)', () => {
+    const max: FidelityReadParams = {
+      depth: 3,
+      fields: ['id', 'name', 'type'],
+      profile: 'layout',
+    }
+    expect(
+      fidelityReadParamsSchema.safeParse(max).success,
+    ).toBe(true)
+  })
+
+  it('strips budget (never budget-truncated)', () => {
+    const parsed = fidelityReadParamsSchema.safeParse({
+      depth: 0,
+      budget: 5000,
+    })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect(parsed.data).not.toHaveProperty('budget')
+    }
+  })
+
+  it('strips match (no source-side filter on the edit reader)', () => {
+    const parsed = fidelityReadParamsSchema.safeParse({
+      match: { type: 'FRAME' },
+    })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect(parsed.data).not.toHaveProperty('match')
+    }
   })
 })
 

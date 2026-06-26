@@ -2,9 +2,10 @@
 //
 // delete_node: COMMANDS.DELETE_NODE with {nodeId} → {id,name,type} (captured
 //   before removal). A node-not-found plugin {error} surfaces as an error.
-// set_focus: COMMANDS.SET_FOCUS with {nodeIds} → {viewport}. This moves the
-//   CANVAS only (scroll + zoom) — it does NOT change the selection (pair with
-//   set_selection for that).
+// set_focus: COMMANDS.SET_FOCUS with {nodeIds} → {viewport}. The viewport
+//   WRITER — the viewport is READ via `status` (which now returns the live
+//   viewport). This moves the CANVAS only (scroll + zoom) — it does NOT change
+//   the selection (pair with set_selection for that).
 // clone_node: COMMANDS.CLONE_NODE with {nodeId,parentId?,index?,count?} →
 //   [{id,…}] (one entry per clone). Plugin node.clone() + optional reparent/
 //   index/count.
