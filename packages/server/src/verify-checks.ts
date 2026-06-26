@@ -690,9 +690,29 @@ const tier2: Check[] = [
       // works, then look for an INSTANCE via search. If none exists in the live
       // doc, this honestly SKIPs (instances require an existing component).
       const comps = await handleGetComponents({}, client)
+      // Resilient-read contract (Bug A+B): a malformed component set (one with
+      // conflicting variants → "Component set for node has existing errors")
+      // must NOT sink the whole read. It must surface as neither a hard {error}
+      // nor the generic "Unexpected response from plugin"; instead the good
+      // components return alongside a warnings[] entry naming the bad set (T7).
       if (isError(comps)) {
         return fail(`get_components: ${text(comps)}`)
       }
+      const compsText = text(comps)
+      if (compsText.includes('Unexpected response')) {
+        return fail(
+          `get_components masked a degrade as "Unexpected response": ${compsText}`,
+        )
+      }
+      const compsYaml = asYaml(comps)
+      if (!Array.isArray(compsYaml.results)) {
+        return fail(
+          `get_components: expected a results[] envelope, got ${compsText}`,
+        )
+      }
+      const compsWarnings = (compsYaml.warnings ??
+        []) as string[]
+      // If the live doc HAS a malformed set, the warning rides on success here.
       const found = await handleSearch(
         { match: { type: 'INSTANCE' }, limit: 1 },
         client,
@@ -704,9 +724,13 @@ const tier2: Check[] = [
         id?: string
       }[]
       const instanceId = results[0]?.id
+      const warnNote =
+        compsWarnings.length > 0
+          ? ` (get_components degraded ${compsWarnings.length} malformed set(s) to warnings)`
+          : ''
       if (typeof instanceId !== 'string') {
         return skip(
-          'no INSTANCE node in the document to drive set_instance↔get_node (create a component + instance to exercise this live)',
+          `no INSTANCE node in the document to drive set_instance↔get_node (create a component + instance to exercise this live)${warnNote}`,
         )
       }
       const set = await handleSetInstance(
@@ -724,7 +748,7 @@ const tier2: Check[] = [
         return fail(`get_node(instance): ${text(node)}`)
       }
       return pass(
-        `set_instance + get_node round-tripped on ${instanceId}`,
+        `set_instance + get_node round-tripped on ${instanceId}${warnNote}`,
       )
     },
   },

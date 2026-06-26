@@ -761,6 +761,61 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     })
   })
 
+  // 17b — get_components degrades a malformed component set to a warning over
+  // the relay: a ComponentSet with conflicting variants throws "Component set
+  // for node has existing errors" during the plugin's per-set variant
+  // projection. The plugin guards each set individually so that one bad set
+  // degrades to a warnings[] entry — the good components still return, the read
+  // is NOT an {error} and NOT a crash (Bug A + B; T7). Uses a dedicated mock on
+  // its own channel configured with componentSetError so the live degrade reply
+  // is exercised end-to-end over the real relay.
+  it('get_components degrades a malformed set to a warning, good components still returned', async () => {
+    const errChannel = 'e2e-slice-cserr-channel'
+    const errClient = createFigmaClient(RELAY_URL)
+    const errPlugin = createMockPlugin({
+      relayUrl: RELAY_URL,
+      channel: errChannel,
+      documentName: 'Slice Doc',
+      pageName: 'Main',
+      componentSetError: true,
+    })
+    await errPlugin.start()
+    await handleConnect({ channel: errChannel }, errClient)
+    try {
+      const result = await handleGetComponents(
+        {},
+        errClient,
+      )
+      const out = YAML.parse(result.content[0].text) as {
+        results: { name: string }[]
+        truncated: boolean
+        warnings?: string[]
+      }
+      // Not surfaced as an {error}; the good components survived the bad set.
+      // (The warning text embeds the throw reason, so "Error:" may appear inside
+      // a warning — what must NOT happen is the whole read failing as an error.)
+      expect(result.content[0].text).not.toContain(
+        'Unexpected response from plugin',
+      )
+      expect(
+        result.content[0].text.startsWith('Error:'),
+      ).toBe(false)
+      expect(
+        out.results.some(r => r.name === 'Button'),
+      ).toBe(true)
+      expect(out.truncated).toBe(false)
+      // The malformed set is named in a warning with the throw reason.
+      expect(out.warnings).toBeDefined()
+      expect(out.warnings!.join('\n')).toContain('Broken')
+      expect(out.warnings!.join('\n')).toContain(
+        'Component set for node has existing errors',
+      )
+    } finally {
+      errPlugin.stop()
+      errClient.disconnect()
+    }
+  })
+
   // 18 — list_fonts returns families grouped with styles over the relay.
   it('list_fonts returns families with styles over the relay', async () => {
     const result = await handleListFonts({}, client)

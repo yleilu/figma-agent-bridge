@@ -180,12 +180,22 @@ export const handleGetComponents = async (
     )) as {
       local?: unknown
       remote?: unknown
+      warnings?: unknown
+      error?: string
     } | null
 
     if (raw === null) {
       return textResult(
         'Failed to get components from plugin.',
       )
+    }
+    // A getter that throws plugin-side (e.g. get_variantProperties on a
+    // ComponentSet with conflicting variants → "Component set for node has
+    // existing errors") resolves as {error}, not a WS reject; surface it (T7)
+    // instead of masking it behind the generic "Unexpected response" — the
+    // sibling reads get_styles/list_fonts already do this.
+    if (raw.error !== undefined) {
+      return textResult(`Error: ${raw.error}`)
     }
 
     if (
@@ -209,9 +219,19 @@ export const handleGetComponents = async (
 
     const results = [...local, ...remote]
 
-    return textResult(
-      YAML.stringify({ results, truncated: false }),
-    )
+    // Bug A degrade (T7): when one malformed set throws during the plugin's
+    // per-set variant projection, that set degrades to a warning and the rest
+    // still return. The warnings[] rides on the SUCCESS envelope (never thrown);
+    // a clean read carries no `warnings` key.
+    const warnings = Array.isArray(raw.warnings)
+      ? (raw.warnings as string[])
+      : undefined
+    const envelope =
+      warnings !== undefined && warnings.length > 0
+        ? { results, truncated: false, warnings }
+        : { results, truncated: false }
+
+    return textResult(YAML.stringify(envelope))
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }

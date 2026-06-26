@@ -26,6 +26,15 @@ type MockPluginOptions = {
    * default single-node export (representing the current page).
    */
   selection?: Record<string, unknown>[]
+  /**
+   * When true, get_components models a document containing a ComponentSet with
+   * conflicting variants. The real plugin THROWS ("Component set for node has
+   * existing errors") while projecting that set's variant axes; the fixed
+   * plugin guards each set individually so the bad set degrades to a warnings[]
+   * entry and the good components still return. Byte-faithful to the real
+   * plugin's degraded reply shape + message (Bug A).
+   */
+  componentSetError?: boolean
 }
 
 type MockPlugin = {
@@ -42,6 +51,7 @@ export const createMockPlugin = (
     documentName = 'Mock Document',
     pageName = 'Page 1',
     selection,
+    componentSetError = false,
   } = options
 
   let ws: WebSocket | null = null
@@ -265,49 +275,76 @@ export const createMockPlugin = (
       // variantOptions?} array shape + key update_component emits (read == write,
       // T2): each entry's `id` is the CANONICAL property id and `name` is the
       // part before "#".
-      case 'get_components':
+      case 'get_components': {
+        const goodSet = {
+          id: '1:10',
+          name: 'Button',
+          key: 'btn-key',
+          type: 'COMPONENT_SET',
+          page: 'Main',
+          properties: [
+            {
+              id: 'Variant',
+              name: 'Variant',
+              type: 'VARIANT',
+              defaultValue: 'Primary',
+              variantOptions: ['Primary', 'Secondary'],
+            },
+            {
+              id: 'Disabled#2:0',
+              name: 'Disabled',
+              type: 'BOOLEAN',
+              defaultValue: false,
+            },
+          ],
+          variantAxes: {
+            Variant: ['Primary', 'Secondary'],
+          },
+          defaults: {
+            Variant: 'Primary',
+            Disabled: false,
+          },
+        }
+        const remote = [
+          {
+            key: 'remote-key',
+            name: 'Icon',
+            library: 'Lib',
+            instancesCount: 3,
+          },
+        ]
+        // Faithful degrade model (Bug A): with componentSetError, the document
+        // contains a ComponentSet whose per-set variant projection THROWS in the
+        // real plugin ("Component set for node has existing errors"). The fixed
+        // plugin guards each set individually → the bad set is included WITHOUT
+        // its variant info and a warnings[] entry names the set + reason; the
+        // good set still returns intact. Byte-faithful to the real plugin's
+        // degraded reply shape + message.
+        if (componentSetError) {
+          result = {
+            local: [
+              goodSet,
+              {
+                id: '3:7',
+                name: 'Broken',
+                key: 'broken-key',
+                type: 'COMPONENT_SET',
+                page: 'Main',
+              },
+            ],
+            remote,
+            warnings: [
+              'component set "Broken" (3:7) skipped variant projection: Error: in get_variantProperties: Component set for node has existing errors',
+            ],
+          }
+          break
+        }
         result = {
-          local: [
-            {
-              id: '1:10',
-              name: 'Button',
-              key: 'btn-key',
-              type: 'COMPONENT_SET',
-              page: 'Main',
-              properties: [
-                {
-                  id: 'Variant',
-                  name: 'Variant',
-                  type: 'VARIANT',
-                  defaultValue: 'Primary',
-                  variantOptions: ['Primary', 'Secondary'],
-                },
-                {
-                  id: 'Disabled#2:0',
-                  name: 'Disabled',
-                  type: 'BOOLEAN',
-                  defaultValue: false,
-                },
-              ],
-              variantAxes: {
-                Variant: ['Primary', 'Secondary'],
-              },
-              defaults: {
-                Variant: 'Primary',
-                Disabled: false,
-              },
-            },
-          ],
-          remote: [
-            {
-              key: 'remote-key',
-              name: 'Icon',
-              library: 'Lib',
-              instancesCount: 3,
-            },
-          ],
+          local: [goodSet],
+          remote,
         }
         break
+      }
 
       // list_fonts: families grouped by the plugin ({ family, styles }).
       case 'list_fonts':

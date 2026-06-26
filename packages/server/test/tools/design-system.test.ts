@@ -407,6 +407,83 @@ describe('handleGetComponents', () => {
     )
   })
 
+  // Bug B: a genuine plugin-side {error} (e.g. a ComponentSet with conflicting
+  // variants throwing "Component set for node has existing errors") must be
+  // surfaced honestly — NOT masked behind the generic "Unexpected response from
+  // plugin" (the sibling reads get_styles/list_fonts already do this; T7).
+  it('surfaces a plugin-side {error} instead of masking it as "Unexpected response"', async () => {
+    const result = await handleGetComponents(
+      {},
+      stubClient({
+        reply: {
+          error:
+            'Error: in get_variantProperties: Component set for node has existing errors',
+        },
+      }),
+    )
+    const { text } = result.content[0]
+    expect(text).toContain('Error')
+    expect(text).toContain(
+      'Component set for node has existing errors',
+    )
+    // The honest {error} surfacing must NOT be swallowed into the generic mask.
+    expect(text).not.toBe('Unexpected response from plugin')
+  })
+
+  // Bug A degrade (server side): a resilient plugin reply carries the good
+  // components AND a warnings[] naming the malformed set. The handler surfaces
+  // the warnings on the SUCCESS path (T7 — warnings ride on success, never
+  // thrown), good components still returned, NOT an {error}, NOT a crash.
+  it('surfaces warnings[] on the success path when a set degraded', async () => {
+    const result = await handleGetComponents(
+      {},
+      stubClient({
+        reply: {
+          local: [
+            {
+              id: '1:10',
+              name: 'Button',
+              key: 'btn-key',
+              type: 'COMPONENT_SET',
+            },
+          ],
+          remote: [],
+          warnings: [
+            'component set "Broken" (3:7) skipped variant projection: Error: in get_variantProperties: Component set for node has existing errors',
+          ],
+        },
+      }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { name: string }[]
+      truncated: boolean
+      warnings?: string[]
+    }
+    // Good components still returned.
+    expect(out.results).toHaveLength(1)
+    expect(out.results[0].name).toBe('Button')
+    expect(out.truncated).toBe(false)
+    // The warning rides on success, naming the set + the reason.
+    expect(out.warnings).toBeDefined()
+    expect(out.warnings![0]).toContain('Broken')
+    expect(out.warnings![0]).toContain(
+      'Component set for node has existing errors',
+    )
+  })
+
+  // No warnings → no `warnings` key on the envelope (clean reads stay clean).
+  it('omits the warnings key when there are no warnings', async () => {
+    const result = await handleGetComponents(
+      {},
+      stubClient({ reply: componentsReply }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: unknown[]
+      warnings?: string[]
+    }
+    expect(out.warnings).toBeUndefined()
+  })
+
   it('returns failure text on a null reply', async () => {
     const result = await handleGetComponents(
       {},
