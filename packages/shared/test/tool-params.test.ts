@@ -30,17 +30,40 @@ describe('getNodeParamsSchema', () => {
     ).toBe(true)
   })
 
-  it('accepts a maximal payload (all mixin fields)', () => {
+  it('accepts the reduced mixin (depth + fields + profile only)', () => {
     expect(
       getNodeParamsSchema.safeParse({
         nodeId: '1:2',
         depth: 3,
-        budget: 5000,
         fields: ['id', 'name', 'type'],
         profile: 'layout',
-        match: { type: ['FRAME', 'TEXT'], name: 'Row' },
       }).success,
     ).toBe(true)
+  })
+
+  // B1 — get_node is the fidelity exception (never budget-truncated, no match
+  // filter). Zod strips unknown keys by default, so assert the PARSED OUTPUT
+  // never carries budget/match (the schema does not advertise them).
+  it('drops budget (the fidelity exception is never budget-truncated)', () => {
+    const parsed = getNodeParamsSchema.safeParse({
+      nodeId: '1:2',
+      budget: 5000,
+    })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect(parsed.data).not.toHaveProperty('budget')
+    }
+  })
+
+  it('drops match (no source-side filter on the edit reader)', () => {
+    const parsed = getNodeParamsSchema.safeParse({
+      nodeId: '1:2',
+      match: { type: ['FRAME', 'TEXT'], name: 'Row' },
+    })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect(parsed.data).not.toHaveProperty('match')
+    }
   })
 
   it('rejects a missing nodeId', () => {
@@ -72,17 +95,30 @@ describe('getNodesParamsSchema', () => {
     ).toBe(true)
   })
 
-  it('accepts a maximal payload (all mixin fields)', () => {
+  it('accepts the reduced mixin (depth + fields + profile only)', () => {
     expect(
       getNodesParamsSchema.safeParse({
         nodeIds: ['1:2'],
         depth: 2,
-        budget: 1000,
         fields: ['id', 'name'],
         profile: 'minimal',
-        match: { type: 'FRAME' },
       }).success,
     ).toBe(true)
+  })
+
+  // B1 — get_nodes is the fidelity exception too: budget/match are not
+  // advertised, so a supplied budget/match is stripped from the parsed output.
+  it('drops budget and match (fidelity exception, no source filter)', () => {
+    const parsed = getNodesParamsSchema.safeParse({
+      nodeIds: ['1:2'],
+      budget: 1000,
+      match: { type: 'FRAME' },
+    })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect(parsed.data).not.toHaveProperty('budget')
+      expect(parsed.data).not.toHaveProperty('match')
+    }
   })
 
   it('rejects missing nodeIds', () => {
@@ -174,13 +210,34 @@ describe('searchParamsSchema', () => {
     ).toBe(true)
   })
 
+  // B2 — search `depth` bounds the SCAN SCOPE (how deep the plugin traverses);
+  // results stay a flat Rule-A list.
+  it('accepts a depth scan-scope bound', () => {
+    expect(
+      searchParamsSchema.safeParse({ depth: 2 }).success,
+    ).toBe(true)
+  })
+
+  it('accepts depth -1 (scan everything)', () => {
+    expect(
+      searchParamsSchema.safeParse({ depth: -1 }).success,
+    ).toBe(true)
+  })
+
+  it('rejects a non-integer depth', () => {
+    expect(
+      searchParamsSchema.safeParse({ depth: 1.5 }).success,
+    ).toBe(false)
+  })
+
   it('accepts a full payload', () => {
     expect(
       searchParamsSchema.safeParse({
         pageId: 'p:1',
+        depth: 3,
         cursor: 'eyJwb3MiOjQyfQ==',
         limit: 50,
-        fields: ['id', 'name', 'type'],
+        fields: ['id', 'name', 'type', 'characters'],
         match: {
           name: 'Button',
           type: ['INSTANCE', 'COMPONENT'],

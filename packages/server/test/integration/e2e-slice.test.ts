@@ -518,6 +518,87 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(text).not.toContain('results: []')
   })
 
+  // 11b — B2: depth bounds the scan SCOPE across the relay. depth=0 keeps only
+  // the page's level-0 node (Card); the default scans the whole subtree (4).
+  it('search depth bounds the scan scope across the relay', async () => {
+    const shallow = await handleSearch({ depth: 0 }, client)
+    const outShallow = YAML.parse(
+      shallow.content[0].text,
+    ) as { results: { id: string }[] }
+    expect(outShallow.results).toHaveLength(1)
+    expect(outShallow.results[0].id).toBe('1:42')
+
+    const full = await handleSearch({}, client)
+    const outFull = YAML.parse(full.content[0].text) as {
+      results: { id: string }[]
+    }
+    expect(outFull.results).toHaveLength(4)
+  })
+
+  // 11c — B3: a reverse-lookup match (instancesOf) drives conditional
+  // collection in the plugin so the server can filter to the matching INSTANCE.
+  it('search reverse-lookup instancesOf matches across the relay (B3)', async () => {
+    const result = await handleSearch(
+      { match: { instancesOf: 'Button' } },
+      client,
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { id: string; type: string }[]
+    }
+    expect(out.results).toHaveLength(1)
+    expect(out.results[0].id).toBe('1:45')
+    expect(out.results[0].type).toBe('INSTANCE')
+  })
+
+  // 11d — B3: styleId / variableId reverse-lookups (matched against the
+  // plugin-collected styleIds[]/variableIds[]).
+  it('search reverse-lookup styleId / variableId match across the relay (B3)', async () => {
+    const byStyle = await handleSearch(
+      { match: { styleId: 'S:card-fill' } },
+      client,
+    )
+    const outStyle = YAML.parse(
+      byStyle.content[0].text,
+    ) as { results: { id: string }[] }
+    expect(outStyle.results.map(r => r.id)).toEqual([
+      '1:42',
+    ])
+
+    const byVar = await handleSearch(
+      { match: { variableId: 'V:brand' } },
+      client,
+    )
+    const outVar = YAML.parse(byVar.content[0].text) as {
+      results: { id: string }[]
+    }
+    expect(outVar.results.map(r => r.id)).toEqual(['1:45'])
+  })
+
+  // 11e — B4: fields:['characters'] projects a text-copy inventory across the
+  // relay (TEXT → its content, non-text omitted).
+  it('search projects characters (text inventory) across the relay (B4)', async () => {
+    const result = await handleSearch(
+      {
+        fields: ['id', 'type', 'characters'],
+        match: { type: ['TEXT', 'FRAME'] },
+      },
+      client,
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: {
+        id: string
+        type: string
+        characters?: string
+      }[]
+    }
+    const title = out.results.find(r => r.id === '1:43')
+    const card = out.results.find(r => r.id === '1:42')
+    expect(title?.characters).toBe('Welcome back')
+    // The FRAME has no characters projected.
+    expect(card).toBeDefined()
+    expect(card?.characters).toBeUndefined()
+  })
+
   // 12 — get_nodes multi-id read → { results, errors } over the relay.
   it('get_nodes returns NodeSpec results over the relay', async () => {
     const result = await handleGetNodes(

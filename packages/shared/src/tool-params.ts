@@ -1,9 +1,12 @@
 // tool-params.ts — per-tool Zod param schemas for the MCP tool surface.
 //
-// SSOT mixin pattern: tree-read tools spread `treeReadParamsSchema.shape`
-// (depth/budget/fields/profile/match) and list-read tools spread
-// `listReadParamsSchema.shape` (cursor/limit/fields/match). This ensures
-// that schema changes to the mixin propagate automatically.
+// SSOT mixin pattern: the full tree-read tool (`inspect`) spreads
+// `treeReadParamsSchema.shape` (depth/budget/fields/profile/match); the
+// fidelity-first readers (`get_node`/`get_nodes`) spread the REDUCED
+// `fidelityReadParamsSchema.shape` (depth/fields/profile — no budget, no
+// match, per D1/T2); and list-read tools spread `listReadParamsSchema.shape`
+// (cursor/limit/fields/match). This ensures that schema changes to a mixin
+// propagate automatically.
 //
 // SUBPATH (not barrel-exported): this module is the canonical per-tool param
 // surface for the live server, imported via the
@@ -26,17 +29,25 @@ import {
 } from './node-spec-schema'
 import {
   treeReadParamsSchema,
+  fidelityReadParamsSchema,
   listReadParamsSchema,
 } from './read-model'
 
 // ---------------------------------------------------------------------------
-// Read tools — tree read mixin (depth / budget / fields / profile / match)
+// Read tools — fidelity-first tree readers (depth / fields / profile ONLY)
+//
+// `get_node` / `get_nodes` are the D1/T2 fidelity exception: they spread the
+// REDUCED `fidelityReadParamsSchema` (depth + projection), NOT the full
+// `treeReadParamsSchema`. They are NEVER budget-truncated (a budget-capped edit
+// read would break the round-trip) and carry NO `match` filter (the edit reader
+// returns the node's faithful spec, it does not filter at the source). `inspect`
+// (below) keeps the full mixin — it legitimately takes budget + depth + match.
 // ---------------------------------------------------------------------------
 
 /** Params for `get_node`: retrieve a single node by ID. */
 export const getNodeParamsSchema = z.object({
   nodeId: z.string().describe('The node ID to retrieve.'),
-  ...treeReadParamsSchema.shape,
+  ...fidelityReadParamsSchema.shape,
 })
 
 /** Params for `get_nodes`: retrieve multiple nodes by their IDs. */
@@ -44,7 +55,7 @@ export const getNodesParamsSchema = z.object({
   nodeIds: z
     .array(z.string())
     .describe('Array of node IDs to retrieve.'),
-  ...treeReadParamsSchema.shape,
+  ...fidelityReadParamsSchema.shape,
 })
 
 /**
@@ -94,6 +105,11 @@ export const searchScopeSchema = z.enum([
  * `scope` selects where the plugin scans; the SERVER applies `match`
  * (the list mixin), `fields` projection, and the opaque cursor + `limit`.
  * `pageId` / `nodeId` qualify the page / node scopes respectively.
+ *
+ * `depth` bounds the SCAN SCOPE — how deep into each root the plugin
+ * traverses — NOT the output shape: results always stay a flat Rule-A list
+ * (search is a list read, not a tree read). `-1` (or omitted) scans the whole
+ * subtree; `depth=0` scans only the root(s); `depth=N` descends N levels.
  */
 export const searchParamsSchema = z.object({
   scope: searchScopeSchema
@@ -111,6 +127,13 @@ export const searchParamsSchema = z.object({
     .string()
     .optional()
     .describe('Node subtree to scan when scope=node.'),
+  depth: z
+    .number()
+    .int()
+    .optional()
+    .describe(
+      'Scan-scope depth: how deep the plugin traverses each root. -1 (default) = whole subtree; 0 = root(s) only; N = N levels deep. Results stay a flat list.',
+    ),
   ...listReadParamsSchema.shape,
 })
 

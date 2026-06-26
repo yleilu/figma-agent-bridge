@@ -77,6 +77,18 @@ export const treeReadParamsSchema = z.object({
   match: matchSchema.optional(),
 })
 
+// Params for the FIDELITY-FIRST tree readers (`get_node` / `get_nodes`, D1/T2).
+// A REDUCED tree-read mixin: depth + projection ONLY — deliberately NO `budget`
+// (these reads are NEVER size-truncated, or the round-trip would break) and NO
+// `match` (the edit reader returns the node's faithful spec; it does not filter
+// at the source). This is the documented exception to the full tree-read mixin
+// — `inspect` keeps the full mixin (budget + depth + match) per spec.
+export const fidelityReadParamsSchema = z.object({
+  depth: z.number().int().optional(),
+  fields: fieldsSchema.optional(),
+  profile: profileSchema.optional(),
+})
+
 // Params for a list (flat, paginated) read. All optional.
 export const listReadParamsSchema = z.object({
   cursor: cursorSchema.optional(),
@@ -102,6 +114,9 @@ export type Match = z.infer<typeof matchSchema>
 export type Profile = z.infer<typeof profileSchema>
 export type TreeReadParams = z.infer<
   typeof treeReadParamsSchema
+>
+export type FidelityReadParams = z.infer<
+  typeof fidelityReadParamsSchema
 >
 export type ListReadParams = z.infer<
   typeof listReadParamsSchema

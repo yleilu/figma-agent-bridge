@@ -1366,36 +1366,174 @@ const handleCommand = async (
             : undefined,
       })
 
-      const seen = new Set<string>()
-      const candidates: Record<string, unknown>[] = []
+      // B2 — depth bounds the SCAN SCOPE (descent depth), NOT the output shape:
+      // candidates are still returned as a flat list. -1 (or omitted) scans the
+      // whole subtree; 0 scans only the root; N descends N levels. This replaces
+      // the former unbounded findAll(() => true) so the agent can cap traversal.
+      const rawDepth = params.depth as number | undefined
+      const scanDepth =
+        rawDepth === undefined ? -1 : rawDepth
 
-      // selection scope: the selected nodes plus their subtrees.
-      if (scope === 'selection') {
-        for (const sel of figma.currentPage.selection) {
-          if (!seen.has(sel.id)) {
-            seen.add(sel.id)
-            candidates.push(toCandidate(sel))
+      // B3 + B4 — conditional per-candidate metadata collection. These flags are
+      // set by the SERVER only when the request actually needs them (a
+      // reverse-lookup match key or the `characters` projection), because each
+      // is an async/extra-cost per-node call. An unhinted scan pays nothing.
+      const collectComponentRef =
+        params.collectComponentRef === true
+      const collectStyleId = params.collectStyleId === true
+      const collectVariableId =
+        params.collectVariableId === true
+      const collectCharacters =
+        params.collectCharacters === true
+      const needsEnrich =
+        collectComponentRef ||
+        collectStyleId ||
+        collectVariableId ||
+        collectCharacters
+
+      const seen = new Set<string>()
+      const scanned: SceneNode[] = []
+
+      // Depth-bounded DFS collector. `levelsLeft < 0` is treated as unlimited
+      // (the -1 / scan-all default); each descent decrements it.
+      const collect = (
+        node: SceneNode,
+        levelsLeft: number,
+      ): void => {
+        if (!seen.has(node.id)) {
+          seen.add(node.id)
+          scanned.push(node)
+        }
+        if (levelsLeft === 0) {
+          return
+        }
+        if ('children' in node) {
+          for (const child of (node as ChildrenMixin)
+            .children) {
+            collect(child, levelsLeft - 1)
           }
-          if ('findAll' in sel) {
-            for (const fn of (
-              sel as SceneNode & ChildrenMixin
-            ).findAll(() => true)) {
-              if (!seen.has(fn.id)) {
-                seen.add(fn.id)
-                candidates.push(toCandidate(fn))
+        }
+      }
+
+      if (scope === 'selection') {
+        // The selected nodes are level 0; their subtrees descend from there.
+        for (const sel of figma.currentPage.selection) {
+          collect(sel, scanDepth)
+        }
+      } else {
+        // For container roots (page / node subtree) the root itself is level 0,
+        // so its direct children are level 1. A page root is not a candidate
+        // (we want its descendants); start the descent from each child at the
+        // requested depth so depth=0 yields the page's immediate children.
+        for (const root of roots) {
+          if ('children' in root) {
+            for (const child of (root as ChildrenMixin)
+              .children) {
+              collect(child, scanDepth)
+            }
+          }
+        }
+      }
+
+      // Enrich the flat candidate list. The base candidate (id/name/type/size)
+      // is cheap and always present; the reverse-lookup metadata + characters
+      // are attached only when hinted (B3/B4) so the server's buildMatcher can
+      // filter and projectNode can map `characters`.
+      const candidates: Record<string, unknown>[] = []
+      for (const fn of scanned) {
+        const candidate = toCandidate(fn)
+
+        if (needsEnrich) {
+          // B4 — characters: TEXT nodes expose their text content as a flat
+          // string for copy-inventory scans (non-text nodes leave it undefined).
+          if (collectCharacters && fn.type === 'TEXT') {
+            candidate.characters = (
+              fn as TextNode
+            ).characters
+          }
+
+          // B3 — instancesOf / componentKey: resolve the INSTANCE's main
+          // component (async). `instancesOf` matches by the main component's
+          // NAME; `componentKey` matches by its KEY. Failures degrade silently
+          // (the candidate simply won't match those keys).
+          if (
+            collectComponentRef &&
+            fn.type === 'INSTANCE'
+          ) {
+            const main = await (fn as InstanceNode)
+              .getMainComponentAsync()
+              .catch(() => null)
+            if (main) {
+              candidate.componentKey = main.key
+              candidate.instancesOf = main.name
+            }
+          }
+
+          // B3 — styleId: any of the node's style references. The server's
+          // matcher tests a single `styleId`, so expose the bound style ids and
+          // let buildMatcher match if ANY equals the requested id (see match.ts).
+          if (collectStyleId) {
+            const styleIds: string[] = []
+            const g = fn as Partial<{
+              fillStyleId: string | symbol
+              strokeStyleId: string | symbol
+              effectStyleId: string | symbol
+              gridStyleId: string | symbol
+              textStyleId: string | symbol
+            }>
+            for (const key of [
+              'fillStyleId',
+              'strokeStyleId',
+              'effectStyleId',
+              'gridStyleId',
+              'textStyleId',
+            ] as const) {
+              const v = g[key]
+              // figma.mixed is a symbol; only collect concrete string ids.
+              if (typeof v === 'string' && v.length > 0) {
+                styleIds.push(v)
+              }
+            }
+            if (styleIds.length > 0) {
+              candidate.styleIds = styleIds
+            }
+          }
+
+          // B3 — variableId: the ids bound on the node via boundVariables.
+          // boundVariables maps a field → VariableAlias{id} (or an array of
+          // them for paints/strokes). Flatten every bound id so the matcher can
+          // match if ANY equals the requested variableId.
+          if (collectVariableId && 'boundVariables' in fn) {
+            const bound = (
+              fn as SceneNode & {
+                boundVariables?: Record<string, unknown>
+              }
+            ).boundVariables
+            if (bound) {
+              const ids: string[] = []
+              const pushAlias = (a: unknown): void => {
+                const id = (a as { id?: string } | null)?.id
+                if (typeof id === 'string') {
+                  ids.push(id)
+                }
+              }
+              for (const val of Object.values(bound)) {
+                if (Array.isArray(val)) {
+                  for (const a of val) {
+                    pushAlias(a)
+                  }
+                } else {
+                  pushAlias(val)
+                }
+              }
+              if (ids.length > 0) {
+                candidate.variableIds = ids
               }
             }
           }
         }
-      } else {
-        for (const root of roots) {
-          for (const fn of root.findAll(() => true)) {
-            if (!seen.has(fn.id)) {
-              seen.add(fn.id)
-              candidates.push(toCandidate(fn))
-            }
-          }
-        }
+
+        candidates.push(candidate)
       }
 
       return { results: candidates }

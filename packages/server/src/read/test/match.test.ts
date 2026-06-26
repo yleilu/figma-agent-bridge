@@ -8,6 +8,10 @@ type MatchableNode = NodeSpec & {
   styleId?: string
   variableId?: string
   instancesOf?: string
+  // B3 — the plugin scan emits the PLURAL forms (a node can carry several
+  // style refs / bound variable ids); the matcher matches if ANY equals.
+  styleIds?: string[]
+  variableIds?: string[]
 }
 
 const frame = (
@@ -109,6 +113,18 @@ describe('buildMatcher', () => {
       expect(match(frame({ styleId: 'S:2' }))).toBe(false)
       expect(match(frame())).toBe(false)
     })
+
+    // B3 — the plugin scan emits styleIds[] (a node has fill/text/effect/…
+    // style ids); the matcher matches when ANY equals the requested id.
+    it('matches when the requested id is ANY of styleIds[]', () => {
+      const match = buildMatcher({ styleId: 'S:1' })
+      expect(
+        match(frame({ styleIds: ['S:9', 'S:1'] })),
+      ).toBe(true)
+      expect(
+        match(frame({ styleIds: ['S:9', 'S:8'] })),
+      ).toBe(false)
+    })
   })
 
   describe('variableId', () => {
@@ -121,6 +137,18 @@ describe('buildMatcher', () => {
         false,
       )
       expect(match(frame())).toBe(false)
+    })
+
+    // B3 — the plugin scan emits variableIds[] (every boundVariables id on the
+    // node); the matcher matches when ANY equals the requested id.
+    it('matches when the requested id is ANY of variableIds[]', () => {
+      const match = buildMatcher({ variableId: 'V:42' })
+      expect(
+        match(frame({ variableIds: ['V:1', 'V:42'] })),
+      ).toBe(true)
+      expect(
+        match(frame({ variableIds: ['V:1', 'V:2'] })),
+      ).toBe(false)
     })
   })
 

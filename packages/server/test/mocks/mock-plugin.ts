@@ -432,33 +432,124 @@ export const createMockPlugin = (
           }
           break
         }
-        result = {
-          results: [
-            {
+
+        // A tiny fixed tree mirroring the real plugin's scan. Card (1:42) is a
+        // direct child of the page (scan level 0); Title/Body/Action Button are
+        // its children (level 1). Metadata (characters / componentKey /
+        // instancesOf / styleIds / variableIds) is held here but only ATTACHED
+        // when the matching collect* hint is set — faithfully mirroring the real
+        // plugin's CONDITIONAL collection (B3/B4), so the e2e drives the same
+        // contract the live plugin produces.
+        type ScanNode = {
+          base: Record<string, unknown>
+          depth: number
+          characters?: string
+          componentKey?: string
+          instancesOf?: string
+          styleIds?: string[]
+          variableIds?: string[]
+        }
+        const tree: ScanNode[] = [
+          {
+            base: {
               id: '1:42',
               name: 'Card',
               type: 'FRAME',
               size: [320, 200],
             },
-            {
+            depth: 0,
+            styleIds: ['S:card-fill'],
+            variableIds: ['V:radius'],
+          },
+          {
+            base: {
               id: '1:43',
               name: 'Title',
               type: 'TEXT',
               size: [288, 24],
             },
-            {
+            depth: 1,
+            characters: 'Welcome back',
+            styleIds: ['S:title-text'],
+          },
+          {
+            base: {
               id: '1:44',
               name: 'Body',
               type: 'TEXT',
               size: [288, 48],
             },
-            {
+            depth: 1,
+            characters: 'Sign in to continue',
+          },
+          {
+            base: {
               id: '1:45',
               name: 'Action Button',
               type: 'INSTANCE',
               size: [100, 40],
             },
-          ],
+            depth: 1,
+            componentKey: 'btn-key-123',
+            instancesOf: 'Button',
+            variableIds: ['V:brand'],
+          },
+        ]
+
+        // B2 — depth bounds the scan SCOPE. undefined/-1 = scan all; N keeps
+        // nodes at scan level ≤ N (the level-1 children appear once depth ≥ 1).
+        const sDepth = cmd.params?.depth as
+          | number
+          | undefined
+        const inScope = (n: ScanNode): boolean =>
+          sDepth === undefined ||
+          sDepth < 0 ||
+          n.depth <= sDepth
+
+        // B3/B4 — conditional collection hints (set by the server only when the
+        // request needs them). Attach metadata only under the matching flag.
+        const collectComponentRef =
+          cmd.params?.collectComponentRef === true
+        const collectStyleId =
+          cmd.params?.collectStyleId === true
+        const collectVariableId =
+          cmd.params?.collectVariableId === true
+        const collectCharacters =
+          cmd.params?.collectCharacters === true
+
+        result = {
+          results: tree.filter(inScope).map(n => {
+            const candidate: Record<string, unknown> = {
+              ...n.base,
+            }
+            if (
+              collectCharacters &&
+              n.characters !== undefined
+            ) {
+              candidate.characters = n.characters
+            }
+            if (collectComponentRef) {
+              if (n.componentKey !== undefined) {
+                candidate.componentKey = n.componentKey
+              }
+              if (n.instancesOf !== undefined) {
+                candidate.instancesOf = n.instancesOf
+              }
+            }
+            if (
+              collectStyleId &&
+              n.styleIds !== undefined
+            ) {
+              candidate.styleIds = n.styleIds
+            }
+            if (
+              collectVariableId &&
+              n.variableIds !== undefined
+            ) {
+              candidate.variableIds = n.variableIds
+            }
+            return candidate
+          }),
         }
         break
       }

@@ -86,6 +86,21 @@ describe('handleSearch (rebuilt — Rule A)', () => {
     expect(sent[0].params?.nodeId).toBe('1:9')
   })
 
+  // B2 — depth threads through to the plugin scan (bounds the scan SCOPE; the
+  // result still comes back as a flat Rule-A list). The server passes it
+  // verbatim; the plugin limits its descent.
+  it('threads depth through to the plugin SEARCH command', async () => {
+    const sent: Sent[] = []
+    await handleSearch({ depth: 2 }, stubClient({ sent }))
+    expect(sent[0].params?.depth).toBe(2)
+  })
+
+  it('omits depth when not given (plugin applies its scan-all default)', async () => {
+    const sent: Sent[] = []
+    await handleSearch({}, stubClient({ sent }))
+    expect(sent[0].params).not.toHaveProperty('depth')
+  })
+
   it('applies the match predicate server-side (name glob)', async () => {
     const result = await handleSearch(
       { match: { name: 'Card' } },
@@ -124,6 +139,109 @@ describe('handleSearch (rebuilt — Rule A)', () => {
     expect(out.results[0]).toHaveProperty('name')
     expect(out.results[0]).not.toHaveProperty('type')
     expect(out.results[0]).not.toHaveProperty('size')
+  })
+
+  // B4 — characters projection: when fields requests `characters`, the plugin
+  // has collected TEXT .characters onto the candidate and the server projects
+  // it. TEXT → its string; non-text → absent (undefined).
+  it('projects characters (text-copy inventory) when fields requests it', async () => {
+    const withChars = [
+      {
+        id: '1:1',
+        name: 'Card',
+        type: 'FRAME',
+      },
+      {
+        id: '1:2',
+        name: 'Title',
+        type: 'TEXT',
+        characters: 'Hello world',
+      },
+    ]
+    const result = await handleSearch(
+      { fields: ['id', 'type', 'characters'] },
+      stubClient({ results: withChars }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: Record<string, unknown>[]
+    }
+    // TEXT node carries its content; FRAME node has no characters field.
+    expect(out.results[1].characters).toBe('Hello world')
+    expect(out.results[0]).not.toHaveProperty('characters')
+  })
+
+  // B4 — the server hints the plugin to collect characters only when needed.
+  it('hints collectCharacters to the plugin when fields includes characters', async () => {
+    const sent: Sent[] = []
+    await handleSearch(
+      { fields: ['id', 'characters'] },
+      stubClient({ sent }),
+    )
+    expect(sent[0].params?.collectCharacters).toBe(true)
+  })
+
+  it('does NOT hint collectCharacters when characters is not requested', async () => {
+    const sent: Sent[] = []
+    await handleSearch(
+      { fields: ['id', 'name'] },
+      stubClient({ sent }),
+    )
+    expect(sent[0].params).not.toHaveProperty(
+      'collectCharacters',
+    )
+  })
+
+  // B3 — reverse-lookup match keys trigger conditional metadata collection
+  // hints (only when the match actually needs them).
+  it('hints collectComponentRef for an instancesOf match', async () => {
+    const sent: Sent[] = []
+    await handleSearch(
+      { match: { instancesOf: 'Button' } },
+      stubClient({ sent }),
+    )
+    expect(sent[0].params?.collectComponentRef).toBe(true)
+  })
+
+  it('hints collectComponentRef for a componentKey match', async () => {
+    const sent: Sent[] = []
+    await handleSearch(
+      { match: { componentKey: 'abc' } },
+      stubClient({ sent }),
+    )
+    expect(sent[0].params?.collectComponentRef).toBe(true)
+  })
+
+  it('hints collectStyleId / collectVariableId per the match key', async () => {
+    const sentS: Sent[] = []
+    await handleSearch(
+      { match: { styleId: 'S:1' } },
+      stubClient({ sent: sentS }),
+    )
+    expect(sentS[0].params?.collectStyleId).toBe(true)
+
+    const sentV: Sent[] = []
+    await handleSearch(
+      { match: { variableId: 'V:1' } },
+      stubClient({ sent: sentV }),
+    )
+    expect(sentV[0].params?.collectVariableId).toBe(true)
+  })
+
+  it('does NOT hint any collection for a plain name/type match', async () => {
+    const sent: Sent[] = []
+    await handleSearch(
+      { match: { name: 'Card', type: 'FRAME' } },
+      stubClient({ sent }),
+    )
+    expect(sent[0].params).not.toHaveProperty(
+      'collectComponentRef',
+    )
+    expect(sent[0].params).not.toHaveProperty(
+      'collectStyleId',
+    )
+    expect(sent[0].params).not.toHaveProperty(
+      'collectVariableId',
+    )
   })
 
   it('paginates with limit + cursor: page 1 is truncated and emits a cursor', async () => {
