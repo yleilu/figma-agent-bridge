@@ -288,33 +288,111 @@ export const createMockPlugin = (
         }
         break
 
-      // get_plugin_data: pluginData always; sharedPluginData only with a namespace.
-      case 'get_plugin_data':
-        result = {
-          nodeId: cmd.params?.nodeId as string,
-          pluginData: { foo: 'bar' },
-          sharedPluginData: cmd.params?.namespace
-            ? { baz: 'qux' }
-            : undefined,
+      // get_plugin_data: pluginData always; sharedPluginData only with a
+      // namespace. Faithful to the real plugin: a `degrade:` nodeId models a
+      // node-not-found degrade — empty pluginData + a 'Node not found' warning
+      // (RESOLVES, never a WS reject), so the warnings-forwarding branch is
+      // exercised over the relay (T7).
+      case 'get_plugin_data': {
+        const pdNodeId = cmd.params?.nodeId as string
+        if (pdNodeId?.startsWith('degrade:')) {
+          result = {
+            nodeId: pdNodeId,
+            pluginData: {},
+            warnings: ['Node not found: ' + pdNodeId],
+          }
+        } else {
+          result = {
+            nodeId: pdNodeId,
+            pluginData: { foo: 'bar' },
+            sharedPluginData: cmd.params?.namespace
+              ? { baz: 'qux' }
+              : undefined,
+          }
         }
         break
+      }
 
-      // get_annotations: happy path (Rule A). The degrade path is covered by the
-      // metadata unit test with a stub client.
-      case 'get_annotations':
-        result = {
-          results: [
-            { label: 'Check spacing', categoryId: 'cat:1' },
-          ],
-          truncated: false,
+      // get_annotations: happy path (Rule A). Faithful to the real plugin:
+      //   • an explicit, unresolvable nodeId (`degrade:` prefix) RESOLVES to a
+      //     {results:[], warnings:['Node not found: …']} not-found degrade (T7);
+      //   • a `multi:` nodeId sentinel models a >1-node selection read, tagging
+      //     each annotation with its source nodeId so it stays attributable.
+      case 'get_annotations': {
+        const annNodeId = cmd.params?.nodeId as
+          | string
+          | undefined
+        if (annNodeId?.startsWith('degrade:')) {
+          result = {
+            results: [],
+            truncated: false,
+            warnings: ['Node not found: ' + annNodeId],
+          }
+        } else if (annNodeId === 'multi:') {
+          result = {
+            results: [
+              {
+                label: 'Check spacing',
+                categoryId: 'cat:1',
+                nodeId: '1:42',
+              },
+              {
+                label: 'Align icon',
+                categoryId: 'cat:2',
+                nodeId: '1:45',
+              },
+            ],
+            truncated: false,
+          }
+        } else {
+          result = {
+            results: [
+              {
+                label: 'Check spacing',
+                categoryId: 'cat:1',
+              },
+            ],
+            truncated: false,
+          }
         }
         break
+      }
 
       // search (Rule A): the plugin returns RAW candidate nodes; the SERVER
       // applies match + fields + limit + cursor. We echo a small mixed-type
       // candidate set so e2e can exercise the server-side match (incl. type
-      // array) and pagination.
-      case 'search':
+      // array) and pagination. Faithful to the real plugin: an unresolvable
+      // scope=node/page qualifier returns {error} (T7), not a zero-match.
+      case 'search': {
+        const searchScope =
+          (cmd.params?.scope as string) || 'document'
+        const knownIds = new Set([
+          '1:42',
+          '1:43',
+          '1:44',
+          '1:45',
+        ])
+        const knownPages = new Set(['0:1'])
+        // The real plugin RESOLVES a not-found as a handler {error} (rides in
+        // command-result.result, NOT a WS-level reject), so set result.error.
+        if (
+          searchScope === 'node' &&
+          !knownIds.has(cmd.params?.nodeId as string)
+        ) {
+          result = {
+            error: 'Node not found: ' + cmd.params?.nodeId,
+          }
+          break
+        }
+        if (
+          searchScope === 'page' &&
+          !knownPages.has(cmd.params?.pageId as string)
+        ) {
+          result = {
+            error: 'Page not found: ' + cmd.params?.pageId,
+          }
+          break
+        }
         result = {
           results: [
             {
@@ -344,6 +422,7 @@ export const createMockPlugin = (
           ],
         }
         break
+      }
 
       case 'export': {
         const fmt = (cmd.params?.format as string) || 'PNG'
@@ -852,7 +931,9 @@ export const createMockPlugin = (
         break
 
       // create_image: a url starting with `degrade:` exercises the T7 degrade
-      // (warnings, NO hash, NO error → success-with-warning); else a hash.
+      // (warnings, NO hash, NO error → success-with-warning); an empty `bytes`
+      // array models the bytes-path degrade (invalid bytes/feature unavailable)
+      // faithfully to the real plugin's own bytes try/catch; else a hash.
       case 'create_image': {
         const imgUrl = cmd.params?.url as string | undefined
         const imgBytes = cmd.params?.bytes as
@@ -862,6 +943,15 @@ export const createMockPlugin = (
           result = {
             warnings: [
               'createImageAsync failed (network/feature unavailable): degrade requested',
+            ],
+          }
+        } else if (
+          imgBytes !== undefined &&
+          imgBytes.length === 0
+        ) {
+          result = {
+            warnings: [
+              'createImage failed (invalid bytes/feature unavailable)',
             ],
           }
         } else if (

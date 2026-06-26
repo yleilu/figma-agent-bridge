@@ -75,12 +75,20 @@ export const handleSearch = async (
       scope: params.scope ?? 'document',
       pageId: params.pageId,
       nodeId: params.nodeId,
-    })) as { results: Record<string, unknown>[] } | null
+    })) as {
+      results?: Record<string, unknown>[]
+      error?: string
+    } | null
 
     if (raw === null) {
       return textResult(
         'Search failed: no response from plugin.',
       )
+    }
+    // An unresolvable node/page scope qualifier resolves as {error} (not a WS
+    // reject); surface it (T7) so a typo'd id is distinguishable from no-match.
+    if (raw.error !== undefined) {
+      return textResult(`Error: ${raw.error}`)
     }
     if (!Array.isArray(raw.results)) {
       return textResult('Unexpected response from plugin')

@@ -351,6 +351,20 @@ describe('M2 chunk D writes e2e', () => {
     expect(result.content[0].text).not.toContain('Error:')
   })
 
+  it('create_image T7 degrade (bytes path) → warnings, success NOT error', async () => {
+    const result = await handleCreateImage(
+      { bytes: [] },
+      client,
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      hash?: string
+      warnings?: string[]
+    }
+    expect(data.hash).toBeUndefined()
+    expect(data.warnings).toBeDefined()
+    expect(result.content[0].text).not.toContain('Error:')
+  })
+
   it('set_plugin_data echoes {id}', async () => {
     const result = await handleSetPluginData(
       { nodeId: '1:42', key: 'k', value: 'v' },

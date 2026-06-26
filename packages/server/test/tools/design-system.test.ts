@@ -111,6 +111,53 @@ describe('handleGetStyles', () => {
     })
   })
 
+  it('surfaces a plugin-side {error} instead of swallowing it into empty results', async () => {
+    const result = await handleGetStyles(
+      {},
+      stubClient({
+        reply: {
+          error:
+            'getLocalGridStylesAsync is not a function',
+        },
+      }),
+    )
+    const { text } = result.content[0]
+    expect(text).toContain('Error')
+    expect(text).toContain('getLocalGridStylesAsync')
+    // Must NOT degrade a hard failure into a clean empty list.
+    expect(text).not.toContain('results: []')
+  })
+
+  it('round-trips letterSpacing PERCENT for a text style (T1/T2)', async () => {
+    const result = await handleGetStyles(
+      { type: 'text' },
+      stubClient({
+        reply: {
+          text: [
+            {
+              id: 'S:9',
+              name: 'Tracked',
+              value: {
+                family: 'Inter',
+                style: 'Regular',
+                size: 16,
+                letterSpacing: {
+                  value: 5,
+                  unit: 'PERCENT',
+                },
+              },
+            },
+          ],
+        },
+      }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { value: string }[]
+    }
+    // PERCENT must be preserved in the atom, not silently rendered as PIXELS.
+    expect(out.results[0].value).toContain('ls=5%')
+  })
+
   it('renders paint/text/effect/grid values to atoms in Rule-A shape', async () => {
     const result = await handleGetStyles(
       {},
@@ -382,6 +429,30 @@ describe('handleListFonts', () => {
     )
     expect(result.content[0].text).toBe(
       'Failed to list fonts from plugin.',
+    )
+  })
+
+  it('surfaces a plugin-throw {error} reply instead of an empty success (T7)', async () => {
+    const result = await handleListFonts(
+      {},
+      stubClient({
+        reply: { error: 'Figma API unavailable' },
+      }),
+    )
+    const { text } = result.content[0]
+    expect(text).toContain('Error')
+    expect(text).toContain('Figma API unavailable')
+    // A hard failure must NOT degrade to a clean empty list.
+    expect(text).not.toContain('results: []')
+  })
+
+  it('treats a non-array results payload as an error, not empty success', async () => {
+    const result = await handleListFonts(
+      {},
+      stubClient({ reply: { results: 'oops' } }),
+    )
+    expect(result.content[0].text).toBe(
+      'Unexpected response from plugin',
     )
   })
 })

@@ -163,6 +163,26 @@ describe('handleGetPluginData', () => {
     expect(out.sharedPluginData).toBeUndefined()
   })
 
+  it('forwards a node-not-found degrade (empty pluginData + warning), never throwing', async () => {
+    const result = await handleGetPluginData(
+      { nodeId: 'nope' },
+      stubClient({
+        reply: {
+          nodeId: 'nope',
+          pluginData: {},
+          warnings: ['Node not found: nope'],
+        },
+      }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      pluginData: Record<string, string>
+      warnings?: string[]
+    }
+    expect(result.content[0].text).not.toContain('Error')
+    expect(out.pluginData).toEqual({})
+    expect(out.warnings).toContain('Node not found: nope')
+  })
+
   it('returns failure text on a null reply', async () => {
     const result = await handleGetPluginData(
       { nodeId: '1:1' },

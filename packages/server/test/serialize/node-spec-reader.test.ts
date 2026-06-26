@@ -47,6 +47,25 @@ describe('toNodeSpec — atom-grammar leaves', () => {
     expect(spec.radius).toBe('8')
   })
 
+  it('emits position from relativeTransform (T1/T2 round-trip)', () => {
+    const spec = toNodeSpec(raw, { depth: -1 })
+    // relativeTransform [[1,0,100],[0,1,200]] → [x,y] translation.
+    expect(spec.position).toEqual([100, 200])
+  })
+
+  it('falls back to absoluteBoundingBox.x/y when relativeTransform is absent', () => {
+    const spec = toNodeSpec(raw, { depth: -1 })
+    const title = (spec.children as NodeSpec[])[0]
+    // Title carries no relativeTransform; absoluteBoundingBox {x:116,y:216}.
+    expect(title.position).toEqual([116, 216])
+  })
+
+  it('position survives the reader→writer round-trip', () => {
+    const spec = toNodeSpec(raw, { depth: -1 })
+    const figma = specToFigma(spec)
+    expect(figma.position).toEqual([100, 200])
+  })
+
   it('renders a TEXT child font as a font(...) atom with lh in the {…} channel', () => {
     const spec = toNodeSpec(raw, { depth: -1 })
     const title = (spec.children as NodeSpec[])[0]

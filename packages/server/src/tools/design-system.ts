@@ -98,10 +98,15 @@ export const handleGetStyles = async (
         type,
         id,
       },
-    )) as StylesReply | null
+    )) as (StylesReply & { error?: string }) | null
 
     if (raw === null) {
       return textResult('Failed to get styles from plugin.')
+    }
+    // A style getter that throws plugin-side resolves as {error} (not a WS
+    // reject); surface it (T7) instead of swallowing it into an empty list.
+    if (raw.error !== undefined) {
+      return textResult(`Error: ${raw.error}`)
     }
 
     const results: {
@@ -231,15 +236,23 @@ export const handleListFonts = async (
     const raw = (await client.sendCommand(
       COMMANDS.LIST_FONTS,
       { query },
-    )) as { results?: unknown } | null
+    )) as { results?: unknown; error?: string } | null
 
     if (raw === null) {
       return textResult('Failed to list fonts from plugin.')
     }
+    // A thrown listAvailableFontsAsync() resolves as {error} (not a WS reject);
+    // surface it (T7) rather than masking a hard failure as "no fonts".
+    if (raw.error !== undefined) {
+      return textResult(`Error: ${raw.error}`)
+    }
+    // A non-array results payload is a malformed reply, not an empty font set —
+    // do not coerce it to [] (which would read as a clean "no fonts available").
+    if (!Array.isArray(raw.results)) {
+      return textResult('Unexpected response from plugin')
+    }
 
-    let results = Array.isArray(raw.results)
-      ? (raw.results as FontFamily[])
-      : []
+    let results = raw.results as FontFamily[]
 
     if (query !== undefined) {
       const needle = query.toLowerCase()

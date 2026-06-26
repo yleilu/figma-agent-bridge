@@ -178,6 +178,27 @@ describe('handleExport', () => {
     ).toBe('Error: plugin exploded')
   })
 
+  it('surfaces a plugin-side {error} (not-found) instead of the generic mask', async () => {
+    const mockClient: FigmaClient = {
+      joinChannel: () => Promise.resolve(''),
+      sendCommand: () =>
+        Promise.resolve({ error: 'Node not found: 1:99' }),
+      disconnect: () => undefined,
+      isConnected: () => true,
+      currentChannel: () => 'test-ch',
+    }
+    const result = await handleExport(
+      { nodeId: '1:99' },
+      mockClient,
+    )
+    const { text } = result.content[0] as { text: string }
+    expect(text).toContain('Error')
+    expect(text).toContain('Node not found: 1:99')
+    expect(text).not.toContain(
+      'Unexpected response from plugin',
+    )
+  })
+
   it('returns Unexpected response when data is not a string', async () => {
     const mockClient: FigmaClient = {
       joinChannel: () => Promise.resolve(''),

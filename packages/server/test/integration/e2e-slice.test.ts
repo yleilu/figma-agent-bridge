@@ -365,6 +365,18 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(ids1.some(id => ids2.includes(id))).toBe(false)
   })
 
+  // 11a — search scope=node with an unresolvable id → {error} over the relay.
+  it('search surfaces a plugin-side {error} for an unresolvable scope=node id', async () => {
+    const result = await handleSearch(
+      { scope: 'node', nodeId: 'nope:1' },
+      client,
+    )
+    const { text } = result.content[0]
+    expect(text).toContain('Error')
+    expect(text).toContain('Node not found: nope:1')
+    expect(text).not.toContain('results: []')
+  })
+
   // 12 — get_nodes multi-id read → { results, errors } over the relay.
   it('get_nodes returns NodeSpec results over the relay', async () => {
     const result = await handleGetNodes(
@@ -540,6 +552,24 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(sharedOut.sharedPluginData?.baz).toBe('qux')
   })
 
+  // 21a — get_plugin_data on a missing node degrades to empty pluginData + a
+  // 'Node not found' warning over the relay (T7), never a silent empty/error.
+  it('get_plugin_data forwards a node-not-found warning over the relay', async () => {
+    const result = await handleGetPluginData(
+      { nodeId: 'degrade:gone' },
+      client,
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      pluginData: Record<string, string>
+      warnings?: string[]
+    }
+    expect(result.content[0].text).not.toContain('Error')
+    expect(out.pluginData).toEqual({})
+    expect(out.warnings?.[0]).toContain(
+      'Node not found: degrade:gone',
+    )
+  })
+
   // 22 — get_annotations returns the Rule-A handoff shape over the relay.
   it('get_annotations returns { results, truncated } over the relay', async () => {
     const result = await handleGetAnnotations(
@@ -552,6 +582,40 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     }
     expect(out.truncated).toBe(false)
     expect(out.results[0].label).toBe('Check spacing')
+  })
+
+  // 22a — get_annotations on an unresolvable explicit nodeId degrades to an
+  // empty result WITH a 'Node not found' warning (T7), never a silent empty.
+  it('get_annotations surfaces a not-found warning for an unresolvable nodeId over the relay', async () => {
+    const result = await handleGetAnnotations(
+      { nodeId: 'degrade:gone' },
+      client,
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: unknown[]
+      warnings?: string[]
+    }
+    expect(result.content[0].text).not.toContain('Error')
+    expect(out.results).toHaveLength(0)
+    expect(out.warnings?.[0]).toContain(
+      'Node not found: degrade:gone',
+    )
+  })
+
+  // 22b — a multi-selection read tags each annotation with its source nodeId so
+  // the flat result stays attributable / round-trippable to the single-node
+  // set_annotations writer (T2).
+  it('get_annotations tags each annotation with its source nodeId on a multi-selection read', async () => {
+    const result = await handleGetAnnotations(
+      { nodeId: 'multi:' },
+      client,
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { label: string; nodeId: string }[]
+    }
+    expect(out.results).toHaveLength(2)
+    expect(out.results[0].nodeId).toBe('1:42')
+    expect(out.results[1].nodeId).toBe('1:45')
   })
 
   // 23 — set_annotations happy path reports success (no error) over the relay.

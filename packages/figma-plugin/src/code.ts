@@ -1229,16 +1229,24 @@ const handleCommand = async (
         const target = await figma.getNodeByIdAsync(
           params.nodeId as string,
         )
-        if (target && 'findAll' in target) {
-          roots.push(target as BaseNode & ChildrenMixin)
+        // A typo'd / deleted / non-container nodeId is a genuine not-found,
+        // not a zero-match — surface {error} so it is distinguishable (T7).
+        if (!target || !('findAll' in target)) {
+          return {
+            error: 'Node not found: ' + params.nodeId,
+          }
         }
+        roots.push(target as BaseNode & ChildrenMixin)
       } else if (scope === 'page') {
         const pageNode = await figma.getNodeByIdAsync(
           params.pageId as string,
         )
-        if (pageNode && pageNode.type === 'PAGE') {
-          roots.push(pageNode as PageNode)
+        if (!pageNode || pageNode.type !== 'PAGE') {
+          return {
+            error: 'Page not found: ' + params.pageId,
+          }
         }
+        roots.push(pageNode as PageNode)
       } else {
         // document (default): a page may be restricted via pageId.
         const pageId = params.pageId as string | undefined
@@ -2034,18 +2042,35 @@ const handleCommand = async (
       }
       try {
         const targets: BaseNode[] = []
-        if (params.nodeId !== undefined) {
+        const explicit = params.nodeId !== undefined
+        if (explicit) {
           const node = await figma.getNodeByIdAsync(
             params.nodeId as string,
           )
-          if (node) {
-            targets.push(node)
+          // An explicit, unresolvable nodeId is a genuine not-found — surface
+          // it as a warning (T7) so the agent can tell it apart from "node has
+          // zero annotations", never a silent empty success.
+          if (!node) {
+            return {
+              results: [],
+              truncated: false,
+              warnings: [
+                'Node not found: ' + params.nodeId,
+              ],
+            }
           }
+          targets.push(node)
         } else {
           for (const sel of figma.currentPage.selection) {
             targets.push(sel)
           }
         }
+        // Multi-selection reads tag each annotation with its source nodeId so
+        // the flat result remains attributable and can be regrouped/fed back to
+        // the single-node set_annotations writer (T2). The single-node path
+        // (explicit nodeId / a 1-node selection) stays bare for a clean
+        // round-trip.
+        const tag = !explicit && targets.length > 1
         const collected: unknown[] = []
         let supported = false
         for (const node of targets) {
@@ -2058,7 +2083,11 @@ const handleCommand = async (
                 }
               ).annotations ?? []
             for (const a of anns) {
-              collected.push(a)
+              collected.push(
+                tag
+                  ? { ...(a as object), nodeId: node.id }
+                  : a,
+              )
             }
           }
         }
@@ -2533,12 +2562,29 @@ const handleCommand = async (
         }
       }
       try {
+        // Strip the optional `nodeId` attribution tag that a multi-selection
+        // get_annotations read adds, so a tagged annotation round-trips cleanly
+        // through this single-node writer without leaking an extraneous key.
+        const incoming =
+          params.annotations as unknown as (Annotation & {
+            nodeId?: string
+          })[]
+        const cleaned = incoming.map(a => {
+          if (
+            a &&
+            typeof a === 'object' &&
+            'nodeId' in a
+          ) {
+            const { nodeId: _drop, ...rest } = a
+            return rest as Annotation
+          }
+          return a as Annotation
+        })
         ;(
           node as SceneNode & {
             annotations?: unknown[]
           }
-        ).annotations =
-          params.annotations as unknown as Annotation[]
+        ).annotations = cleaned
         return { id: node.id, warnings: [] }
       } catch (e) {
         return {
