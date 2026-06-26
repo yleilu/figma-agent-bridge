@@ -106,6 +106,105 @@ describe('handleGetReactions', () => {
       'Failed to get reactions from plugin.',
     )
   })
+
+  // T10 — server-side pagination over the reactions list.
+  const manyReactions = (n: number) => ({
+    nodeId: '1:42',
+    reactions: Array.from({ length: n }, (_, i) => ({
+      id: `r:${i}`,
+      trigger: { type: 'ON_CLICK' },
+      actions: [{ type: 'NODE' }],
+    })),
+  })
+
+  it('paginates with limit: page 1 truncated + cursor', async () => {
+    const result = await handleGetReactions(
+      { nodeId: '1:42', limit: 2 },
+      stubClient({ reply: manyReactions(5) }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: unknown[]
+      truncated: boolean
+      cursor?: string
+    }
+    expect(out.results).toHaveLength(2)
+    expect(out.truncated).toBe(true)
+    expect(typeof out.cursor).toBe('string')
+  })
+
+  it('resumes from a cursor on the next page', async () => {
+    const page1 = await handleGetReactions(
+      { nodeId: '1:42', limit: 2 },
+      stubClient({ reply: manyReactions(4) }),
+    )
+    const out1 = YAML.parse(page1.content[0].text) as {
+      cursor: string
+    }
+    const page2 = await handleGetReactions(
+      { nodeId: '1:42', limit: 2, cursor: out1.cursor },
+      stubClient({ reply: manyReactions(4) }),
+    )
+    const out2 = YAML.parse(page2.content[0].text) as {
+      results: { id: string }[]
+      truncated: boolean
+      cursor?: string
+    }
+    expect(out2.results).toHaveLength(2)
+    expect(out2.results[0].id).toBe('r:2')
+    expect(out2.truncated).toBe(false)
+    expect(out2).not.toHaveProperty('cursor')
+  })
+
+  it('reports a STALE cursor without throwing when the set changed', async () => {
+    const page1 = await handleGetReactions(
+      { nodeId: '1:42', limit: 2 },
+      stubClient({ reply: manyReactions(5) }),
+    )
+    const out1 = YAML.parse(page1.content[0].text) as {
+      cursor: string
+    }
+    const stale = await handleGetReactions(
+      { nodeId: '1:42', limit: 2, cursor: out1.cursor },
+      stubClient({ reply: manyReactions(2) }),
+    )
+    const { text } = stale.content[0]
+    expect(text).toContain('Cursor rejected (STALE)')
+    expect(text.toLowerCase()).toContain('re-run')
+  })
+
+  // T7 honesty preserved: warnings still ride on the SUCCESS envelope even when
+  // the read paginates.
+  it('keeps warnings on success alongside the paginated page', async () => {
+    const result = await handleGetReactions(
+      { nodeId: '1:42', limit: 2 },
+      stubClient({
+        reply: {
+          ...manyReactions(5),
+          warnings: ['some degrade warning'],
+        },
+      }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: unknown[]
+      truncated: boolean
+      warnings?: string[]
+    }
+    expect(out.results).toHaveLength(2)
+    expect(out.truncated).toBe(true)
+    expect(out.warnings).toContain('some degrade warning')
+  })
+
+  it('single-page behavior unchanged: no cursor when it fits', async () => {
+    const result = await handleGetReactions(
+      { nodeId: '1:42' },
+      stubClient({ reply: manyReactions(1) }),
+    )
+    const out = YAML.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(out.truncated).toBe(false)
+    expect(out).not.toHaveProperty('cursor')
+  })
 })
 
 describe('handleGetPluginData', () => {
@@ -259,6 +358,107 @@ describe('handleGetAnnotations', () => {
     expect(result.content[0].text).toBe(
       'Failed to get annotations from plugin.',
     )
+  })
+
+  // T10 — server-side pagination over the annotations list.
+  const manyAnnotations = (n: number) => ({
+    results: Array.from({ length: n }, (_, i) => ({
+      id: `a:${i}`,
+      label: `Note ${i}`,
+      categoryId: 'cat:1',
+    })),
+    truncated: false,
+  })
+
+  it('paginates with limit: page 1 truncated + cursor', async () => {
+    const result = await handleGetAnnotations(
+      { nodeId: '1:42', limit: 2 },
+      stubClient({ reply: manyAnnotations(5) }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: unknown[]
+      truncated: boolean
+      cursor?: string
+    }
+    expect(out.results).toHaveLength(2)
+    expect(out.truncated).toBe(true)
+    expect(typeof out.cursor).toBe('string')
+  })
+
+  it('resumes from a cursor on the next page', async () => {
+    const page1 = await handleGetAnnotations(
+      { nodeId: '1:42', limit: 2 },
+      stubClient({ reply: manyAnnotations(4) }),
+    )
+    const out1 = YAML.parse(page1.content[0].text) as {
+      cursor: string
+    }
+    const page2 = await handleGetAnnotations(
+      { nodeId: '1:42', limit: 2, cursor: out1.cursor },
+      stubClient({ reply: manyAnnotations(4) }),
+    )
+    const out2 = YAML.parse(page2.content[0].text) as {
+      results: { id: string }[]
+      truncated: boolean
+      cursor?: string
+    }
+    expect(out2.results).toHaveLength(2)
+    expect(out2.results[0].id).toBe('a:2')
+    expect(out2.truncated).toBe(false)
+    expect(out2).not.toHaveProperty('cursor')
+  })
+
+  it('reports a STALE cursor without throwing when the set changed', async () => {
+    const page1 = await handleGetAnnotations(
+      { nodeId: '1:42', limit: 2 },
+      stubClient({ reply: manyAnnotations(5) }),
+    )
+    const out1 = YAML.parse(page1.content[0].text) as {
+      cursor: string
+    }
+    const stale = await handleGetAnnotations(
+      { nodeId: '1:42', limit: 2, cursor: out1.cursor },
+      stubClient({ reply: manyAnnotations(2) }),
+    )
+    const { text } = stale.content[0]
+    expect(text).toContain('Cursor rejected (STALE)')
+    expect(text.toLowerCase()).toContain('re-run')
+  })
+
+  // T7 honesty preserved: the editorType-gated degrade warning still rides on
+  // success when the read paginates.
+  it('keeps warnings on success alongside the paginated page', async () => {
+    const result = await handleGetAnnotations(
+      { nodeId: '1:42', limit: 2 },
+      stubClient({
+        reply: {
+          ...manyAnnotations(5),
+          warnings: ['Annotations API degrade'],
+        },
+      }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: unknown[]
+      truncated: boolean
+      warnings?: string[]
+    }
+    expect(out.results).toHaveLength(2)
+    expect(out.truncated).toBe(true)
+    expect(out.warnings).toContain(
+      'Annotations API degrade',
+    )
+  })
+
+  it('single-page behavior unchanged: no cursor when it fits', async () => {
+    const result = await handleGetAnnotations(
+      { nodeId: '1:42' },
+      stubClient({ reply: manyAnnotations(1) }),
+    )
+    const out = YAML.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(out.truncated).toBe(false)
+    expect(out).not.toHaveProperty('cursor')
   })
 })
 

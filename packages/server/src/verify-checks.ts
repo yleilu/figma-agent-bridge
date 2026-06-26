@@ -868,7 +868,7 @@ const tier3: Check[] = [
             client,
           ),
         ],
-        ['list_pages', await handleListPages(client)],
+        ['list_pages', await handleListPages({}, client)],
         ['get_selection', await handleGetSelection(client)],
         ['get_styles', await handleGetStyles({}, client)],
         ['list_fonts', await handleListFonts({}, client)],
@@ -1073,7 +1073,7 @@ const tier3: Check[] = [
     run: async client => {
       // Record the current page so we can restore it (pages are not deletable
       // via delete_node — we leave them but switch back to where we were).
-      const before = await handleListPages(client)
+      const before = await handleListPages({}, client)
       if (isError(before)) {
         return fail(`list_pages: ${text(before)}`)
       }

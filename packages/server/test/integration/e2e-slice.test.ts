@@ -695,7 +695,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
 
   // 14 — list_pages returns the Rule A document + page shape over the relay.
   it('list_pages returns { docName, results, truncated } over the relay', async () => {
-    const result = await handleListPages(client)
+    const result = await handleListPages({}, client)
     const out = YAML.parse(result.content[0].text) as {
       docName: string
       results: {

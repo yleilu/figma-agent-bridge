@@ -31,7 +31,37 @@ import {
   treeReadParamsSchema,
   fidelityReadParamsSchema,
   listReadParamsSchema,
+  cursorSchema,
 } from './read-model'
+
+// ---------------------------------------------------------------------------
+// Pagination mixin — the limit+cursor pair (T10)
+//
+// The cheap doc-bounded list reads (get_styles / get_variables / list_fonts /
+// get_reactions / get_annotations / list_pages) keep their OWN params but share
+// the SERVER-SIDE pagination contract: a default `limit` (100) caps the page
+// and an opaque `cursor` continues it (the server slices the plugin's full list
+// via `paginateList`). They take JUST these two fields — NOT the full
+// `listReadParamsSchema` (which also carries `fields`/`match`), since these
+// reads do not project or run the matcher; `search` keeps that fuller mixin.
+// ---------------------------------------------------------------------------
+
+/** The limit+cursor pagination pair shared by every bounded list read (T10). */
+export const listPaginationParamsSchema = z.object({
+  cursor: cursorSchema
+    .optional()
+    .describe(
+      'Opaque continuation token from a prior page (returned only when truncated). Pass it back verbatim to fetch the next page.',
+    ),
+  limit: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      'Max results per page (default 100). Results beyond this are truncated; use the returned cursor to continue.',
+    ),
+})
 
 // ---------------------------------------------------------------------------
 // Read tools — fidelity-first tree readers (depth / fields / profile ONLY)
@@ -148,11 +178,14 @@ export const statusParamsSchema = z.object({})
 export const getSelectionParamsSchema = z.object({})
 
 /**
- * Params for `list_pages`: document + page enumeration (Rule A; bounded).
- * The page set is naturally small and bounded, so this reader takes no
- * params — it never paginates (it always returns { truncated:false }).
+ * Params for `list_pages`: document + page enumeration (Rule A; bounded by T10).
+ * The page set is server-side paginated through the shared limit+cursor contract
+ * (`limit` defaults to 100, `cursor` continues when `truncated`) — `docName`
+ * stays on the envelope alongside the bounded page.
  */
-export const listPagesParamsSchema = z.object({})
+export const listPagesParamsSchema = z.object({
+  ...listPaginationParamsSchema.shape,
+})
 
 /** Params for `set_selection`: replace the current Figma selection. */
 export const setSelectionParamsSchema = z.object({
@@ -420,7 +453,9 @@ export const bindVariableParamsSchema = z.object({
 
 /**
  * Params for `get_variables`: list variables, optionally filtered by
- * collection. Cursor/pagination is deferred (P4 concern).
+ * collection. Bounded by T10 — server-side paginated over the collections list
+ * via the shared limit+cursor contract (`limit` defaults to 100, `cursor`
+ * continues when `truncated`).
  */
 export const getVariablesParamsSchema = z.object({
   collectionId: z
@@ -429,6 +464,7 @@ export const getVariablesParamsSchema = z.object({
     .describe(
       'Variable collection ID to filter by. Omit to return all collections.',
     ),
+  ...listPaginationParamsSchema.shape,
 })
 
 /** The four resolved variable data types. */
@@ -685,8 +721,9 @@ export const applyStyleParamsSchema = z.object({
 
 /**
  * Params for `get_styles`: list local styles, optionally narrowed to one
- * category or a single style ID. Bounded read — it never paginates (always
- * returns { truncated:false }), so it takes no cursor.
+ * category or a single style ID. Bounded by T10 — server-side paginated via the
+ * shared limit+cursor contract (`limit` defaults to 100, `cursor` continues when
+ * `truncated`).
  */
 export const getStylesParamsSchema = z.object({
   type: z
@@ -699,6 +736,7 @@ export const getStylesParamsSchema = z.object({
     .string()
     .optional()
     .describe('A specific style ID to fetch.'),
+  ...listPaginationParamsSchema.shape,
 })
 
 /**
@@ -717,7 +755,10 @@ export const getComponentsParamsSchema = z.object({
 
 /**
  * Params for `list_fonts`: enumerate available fonts grouped by family,
- * optionally filtered by a family-name substring.
+ * optionally filtered by a family-name substring. Bounded by T10 — the host
+ * font list is large, so this read is server-side paginated (over the
+ * post-`query` list) via the shared limit+cursor contract (`limit` defaults to
+ * 100, `cursor` continues when `truncated`).
  */
 export const listFontsParamsSchema = z.object({
   query: z
@@ -726,19 +767,26 @@ export const listFontsParamsSchema = z.object({
     .describe(
       'Case-insensitive substring filter on font family name.',
     ),
+  ...listPaginationParamsSchema.shape,
 })
 
 // ---------------------------------------------------------------------------
 // Read tools — node metadata & prototype
 // ---------------------------------------------------------------------------
 
-/** Params for `get_reactions`: read a node's prototype reactions. */
+/**
+ * Params for `get_reactions`: read a node's prototype reactions. Bounded by
+ * T10 — server-side paginated via the shared limit+cursor contract (`limit`
+ * defaults to 100, `cursor` continues when `truncated`); the T7 degrade
+ * `warnings` still ride on the success envelope.
+ */
 export const getReactionsParamsSchema = z.object({
   nodeId: z
     .string()
     .describe(
       'The node whose prototype reactions to read.',
     ),
+  ...listPaginationParamsSchema.shape,
 })
 
 /** Params for `get_plugin_data`: read a node's plugin data. */
@@ -789,7 +837,12 @@ export const setReactionsParamsSchema = z.object({
 // Handoff — annotations
 // ---------------------------------------------------------------------------
 
-/** Params for `get_annotations`: read a node's (or the selection's) annotations. */
+/**
+ * Params for `get_annotations`: read a node's (or the selection's) annotations.
+ * Bounded by T10 — server-side paginated via the shared limit+cursor contract
+ * (`limit` defaults to 100, `cursor` continues when `truncated`); the
+ * editorType-gated T7 degrade `warnings` still ride on the success envelope.
+ */
 export const getAnnotationsParamsSchema = z.object({
   nodeId: z
     .string()
@@ -797,6 +850,7 @@ export const getAnnotationsParamsSchema = z.object({
     .describe(
       "Node whose annotations to read. Omit to read the current selection's annotations.",
     ),
+  ...listPaginationParamsSchema.shape,
 })
 
 /** Params for `set_annotations`: replace a node's annotations. */

@@ -228,6 +228,91 @@ describe('handleGetStyles', () => {
     expect(out.results).toHaveLength(1)
     expect(out.results[0].id).toBe('S:1')
   })
+
+  // T10 — server-side pagination (limit + cursor + truncated). The plugin
+  // returns the full doc-bounded list; the SERVER bounds the AGENT-CONTEXT by
+  // slicing through paginateList. A paint list of >limit entries pages.
+  const manyPaintStyles = (n: number) => ({
+    paint: Array.from({ length: n }, (_, i) => ({
+      id: `S:${i}`,
+      name: `Paint ${i}`,
+      value: {
+        type: 'SOLID',
+        color: { r: 0, g: 0, b: 0 },
+      },
+    })),
+  })
+
+  it('paginates with limit: page 1 is truncated and emits a cursor', async () => {
+    const result = await handleGetStyles(
+      { limit: 2 },
+      stubClient({ reply: manyPaintStyles(5) }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { id: string }[]
+      truncated: boolean
+      cursor?: string
+    }
+    expect(out.results).toHaveLength(2)
+    expect(out.results[0].id).toBe('S:0')
+    expect(out.results[1].id).toBe('S:1')
+    expect(out.truncated).toBe(true)
+    expect(typeof out.cursor).toBe('string')
+  })
+
+  it('resumes from a cursor on the next page (no cursor at the end)', async () => {
+    const page1 = await handleGetStyles(
+      { limit: 2 },
+      stubClient({ reply: manyPaintStyles(4) }),
+    )
+    const out1 = YAML.parse(page1.content[0].text) as {
+      cursor: string
+    }
+    const page2 = await handleGetStyles(
+      { limit: 2, cursor: out1.cursor },
+      stubClient({ reply: manyPaintStyles(4) }),
+    )
+    const out2 = YAML.parse(page2.content[0].text) as {
+      results: { id: string }[]
+      truncated: boolean
+      cursor?: string
+    }
+    expect(out2.results).toHaveLength(2)
+    expect(out2.results[0].id).toBe('S:2')
+    expect(out2.results[1].id).toBe('S:3')
+    expect(out2.truncated).toBe(false)
+    expect(out2).not.toHaveProperty('cursor')
+  })
+
+  it('reports a STALE cursor without throwing when the set changed', async () => {
+    const page1 = await handleGetStyles(
+      { limit: 2 },
+      stubClient({ reply: manyPaintStyles(5) }),
+    )
+    const out1 = YAML.parse(page1.content[0].text) as {
+      cursor: string
+    }
+    const stale = await handleGetStyles(
+      { limit: 2, cursor: out1.cursor },
+      // A different set → different version stamp → STALE.
+      stubClient({ reply: manyPaintStyles(2) }),
+    )
+    const { text } = stale.content[0]
+    expect(text).toContain('Cursor rejected (STALE)')
+    expect(text.toLowerCase()).toContain('re-run')
+  })
+
+  it('single-page behavior unchanged: no cursor when it fits the limit', async () => {
+    const result = await handleGetStyles(
+      {},
+      stubClient({ reply: stylesReply }),
+    )
+    const out = YAML.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(out.truncated).toBe(false)
+    expect(out).not.toHaveProperty('cursor')
+  })
 })
 
 describe('handleGetComponents', () => {
@@ -574,5 +659,119 @@ describe('handleListFonts', () => {
     expect(result.content[0].text).toBe(
       'Unexpected response from plugin',
     )
+  })
+
+  // T10 — server-side pagination. The host font list is large, so list_fonts is
+  // genuinely paged. Pagination runs AFTER the `query` filter.
+  const manyFonts = (n: number) => ({
+    results: Array.from({ length: n }, (_, i) => ({
+      id: `F${i}`,
+      family: `Family ${i}`,
+      styles: ['Regular'],
+    })),
+  })
+
+  it('paginates with limit: page 1 truncated + cursor', async () => {
+    const result = await handleListFonts(
+      { limit: 2 },
+      stubClient({ reply: manyFonts(5) }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { family: string }[]
+      truncated: boolean
+      cursor?: string
+    }
+    expect(out.results).toHaveLength(2)
+    expect(out.truncated).toBe(true)
+    expect(typeof out.cursor).toBe('string')
+  })
+
+  it('resumes from a cursor on the next page', async () => {
+    const page1 = await handleListFonts(
+      { limit: 2 },
+      stubClient({ reply: manyFonts(4) }),
+    )
+    const out1 = YAML.parse(page1.content[0].text) as {
+      cursor: string
+    }
+    const page2 = await handleListFonts(
+      { limit: 2, cursor: out1.cursor },
+      stubClient({ reply: manyFonts(4) }),
+    )
+    const out2 = YAML.parse(page2.content[0].text) as {
+      results: { family: string }[]
+      truncated: boolean
+      cursor?: string
+    }
+    expect(out2.results).toHaveLength(2)
+    expect(out2.results[0].family).toBe('Family 2')
+    expect(out2.truncated).toBe(false)
+    expect(out2).not.toHaveProperty('cursor')
+  })
+
+  // Pagination is applied AFTER the query filter — the page is over the FILTERED
+  // list, not the raw list.
+  it('paginates the post-filter list (limit applies after query)', async () => {
+    const reply = {
+      results: [
+        { id: 'F1', family: 'Roboto', styles: ['Regular'] },
+        { id: 'F2', family: 'Inter', styles: ['Regular'] },
+        {
+          id: 'F3',
+          family: 'Roboto Mono',
+          styles: ['Regular'],
+        },
+        {
+          id: 'F4',
+          family: 'Roboto Slab',
+          styles: ['Regular'],
+        },
+      ],
+    }
+    const result = await handleListFonts(
+      { query: 'roboto', limit: 2 },
+      stubClient({ reply }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { family: string }[]
+      truncated: boolean
+      cursor?: string
+    }
+    // 3 Roboto matches, page size 2 → 2 returned, truncated, cursor present.
+    expect(out.results).toHaveLength(2)
+    expect(
+      out.results.every(r => /roboto/i.test(r.family)),
+    ).toBe(true)
+    expect(out.truncated).toBe(true)
+    expect(typeof out.cursor).toBe('string')
+  })
+
+  it('reports a STALE cursor without throwing when the set changed', async () => {
+    const page1 = await handleListFonts(
+      { limit: 2 },
+      stubClient({ reply: manyFonts(5) }),
+    )
+    const out1 = YAML.parse(page1.content[0].text) as {
+      cursor: string
+    }
+    const stale = await handleListFonts(
+      { limit: 2, cursor: out1.cursor },
+      stubClient({ reply: manyFonts(2) }),
+    )
+    const { text } = stale.content[0]
+    expect(text).toContain('Cursor rejected (STALE)')
+    expect(text.toLowerCase()).toContain('re-run')
+  })
+
+  it('single-page behavior unchanged: no cursor when it fits', async () => {
+    const result = await handleListFonts(
+      {},
+      stubClient({ reply: fontsReply }),
+    )
+    const out = YAML.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(out.truncated).toBe(false)
+    expect(out).not.toHaveProperty('cursor')
   })
 })

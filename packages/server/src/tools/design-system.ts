@@ -14,6 +14,7 @@ import type {
   FigmaLayoutGrid,
 } from '../grammar'
 import type { FigmaClient } from '../figma-client'
+import { paginateList, CursorError } from '../read/paginate'
 import {
   type ToolResult,
   textResult,
@@ -21,6 +22,17 @@ import {
   formatMutationResult,
   errorMessage,
 } from './shared'
+
+// The clean "cursor rejected" surface for a bounded list read — mirrors
+// search's message style so a stale/garbage token reads the same everywhere
+// (T7: a wrong/old opaque cursor is reported, never silently resumed).
+const cursorRejected = (
+  err: CursorError,
+  read: string,
+): ToolResult =>
+  textResult(
+    `Cursor rejected (${err.reason}) — re-run the ${read} to get a fresh cursor.`,
+  )
 
 // ─── get_styles (Rule A; the server renders each style VALUE to an atom) ──────
 
@@ -79,11 +91,23 @@ const asEntries = (raw: unknown): StyleEntry[] =>
  * List local styles. The plugin sends each style's raw VALUE pre-shaped per
  * category ({ paint, text, effect, grid } of { id, name, value }); the SERVER
  * renders each value to a view atom (paint→hex, text→font, effect/grid→head)
- * and flattens into the Rule-A list shape { results, truncated:false }. The
- * `type` / `id` filters are applied server-side; the read is bounded (no cursor).
+ * and flattens into the Rule-A list shape. The `type` / `id` filters are applied
+ * server-side. The plugin returns the full doc-bounded list cheaply; the SERVER
+ * bounds the AGENT-CONTEXT by paginating the rendered list through paginateList
+ * (T10) — `limit` defaults to 100, an opaque `cursor` continues when truncated.
  */
 export const handleGetStyles = async (
-  { type, id }: { type?: string; id?: string },
+  {
+    type,
+    id,
+    limit,
+    cursor,
+  }: {
+    type?: string
+    id?: string
+    limit?: number
+    cursor?: string
+  },
   client: FigmaClient,
 ): Promise<ToolResult> => {
   const guard = requireConnected(client)
@@ -133,9 +157,29 @@ export const handleGetStyles = async (
       }
     }
 
-    return textResult(
-      YAML.stringify({ results, truncated: false }),
-    )
+    // T10 — bound the AGENT-CONTEXT: slice the rendered list to one page.
+    let bounded
+    try {
+      bounded = paginateList(results, { limit, cursor })
+    } catch (err) {
+      if (err instanceof CursorError) {
+        return cursorRejected(err, 'read')
+      }
+      throw err
+    }
+
+    const out: {
+      results: unknown[]
+      truncated: boolean
+      cursor?: string
+    } = {
+      results: bounded.page,
+      truncated: bounded.truncated,
+    }
+    if (bounded.cursor !== undefined) {
+      out.cursor = bounded.cursor
+    }
+    return textResult(YAML.stringify(out))
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }
@@ -239,15 +283,31 @@ export const handleGetComponents = async (
 
 // ─── list_fonts (Rule A; families grouped by the plugin) ──────────────────────
 
-type FontFamily = { family?: unknown; styles?: string[] }
+// `id?` is declared (even though the plugin keys fonts by `family`, not `id`)
+// only so FontFamily is structurally assignable to paginateList's
+// `{ id?: string }` constraint. With no `id`, the cursor's version stamp falls
+// back to the list LENGTH (the joined-empty-ids hash differs by entry count),
+// so a changed font set is still reported STALE — fonts rarely change mid-read.
+type FontFamily = {
+  id?: string
+  family?: unknown
+  styles?: string[]
+}
 
 /**
  * List available fonts, grouped by family ({ family, styles }) by the plugin.
  * The SERVER optionally applies the case-insensitive `query` substring filter
- * (double-filtering with the plugin is harmless) and emits the Rule-A shape.
+ * (double-filtering with the plugin is harmless) and emits the Rule-A shape. The
+ * host font list is large, so the SERVER bounds the AGENT-CONTEXT by paginating
+ * the POST-FILTER list through paginateList (T10) — `limit` defaults to 100, an
+ * opaque `cursor` continues when truncated.
  */
 export const handleListFonts = async (
-  { query }: { query?: string },
+  {
+    query,
+    limit,
+    cursor,
+  }: { query?: string; limit?: number; cursor?: string },
   client: FigmaClient,
 ): Promise<ToolResult> => {
   const guard = requireConnected(client)
@@ -286,9 +346,30 @@ export const handleListFonts = async (
       )
     }
 
-    return textResult(
-      YAML.stringify({ results, truncated: false }),
-    )
+    // T10 — bound the AGENT-CONTEXT: page the POST-FILTER list (the slice is
+    // over the filtered families, not the raw host list).
+    let bounded
+    try {
+      bounded = paginateList(results, { limit, cursor })
+    } catch (err) {
+      if (err instanceof CursorError) {
+        return cursorRejected(err, 'read')
+      }
+      throw err
+    }
+
+    const out: {
+      results: unknown[]
+      truncated: boolean
+      cursor?: string
+    } = {
+      results: bounded.page,
+      truncated: bounded.truncated,
+    }
+    if (bounded.cursor !== undefined) {
+      out.cursor = bounded.cursor
+    }
+    return textResult(YAML.stringify(out))
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }
@@ -388,12 +469,22 @@ const renderVariableValues = (
  * scopes / codeSyntax / hiddenFromPublishing / aliases plus raw valuesByMode;
  * the SERVER renders COLOR valuesByMode to hex atoms (aliases and other types
  * pass through), projects the enhanced members, and wraps them in the Rule-A
- * list envelope { results, truncated: false } — the SAME shape as the shipped
- * sibling reads (get_styles / get_components / list_fonts). Bounded read: no
- * cursor input, no cursor output (consistent with those siblings).
+ * list envelope — the SAME shape as the shipped sibling reads (get_styles /
+ * get_components / list_fonts). The plugin returns the full collection list
+ * cheaply; the SERVER bounds the AGENT-CONTEXT by paginating the top-level
+ * COLLECTIONS list through paginateList (T10) — `limit` defaults to 100, an
+ * opaque `cursor` continues when truncated.
  */
 export const handleGetVariables = async (
-  { collectionId }: { collectionId?: string },
+  {
+    collectionId,
+    limit,
+    cursor,
+  }: {
+    collectionId?: string
+    limit?: number
+    cursor?: string
+  },
   client: FigmaClient,
 ): Promise<ToolResult> => {
   const guard = requireConnected(client)
@@ -429,9 +520,30 @@ export const handleGetVariables = async (
         hiddenFromPublishing: v.hiddenFromPublishing,
       })),
     }))
-    return textResult(
-      YAML.stringify({ results, truncated: false }),
-    )
+
+    // T10 — bound the AGENT-CONTEXT: page the top-level collections list.
+    let bounded
+    try {
+      bounded = paginateList(results, { limit, cursor })
+    } catch (err) {
+      if (err instanceof CursorError) {
+        return cursorRejected(err, 'read')
+      }
+      throw err
+    }
+
+    const out: {
+      results: unknown[]
+      truncated: boolean
+      cursor?: string
+    } = {
+      results: bounded.page,
+      truncated: bounded.truncated,
+    }
+    if (bounded.cursor !== undefined) {
+      out.cursor = bounded.cursor
+    }
+    return textResult(YAML.stringify(out))
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }
