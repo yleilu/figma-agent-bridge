@@ -32,6 +32,7 @@ import {
   textResult,
   requireConnected,
   errorMessage,
+  cursorRejected,
 } from './shared'
 
 const DEFAULT_LIMIT = 50
@@ -165,9 +166,7 @@ export const handleSearch = async (
       })
     } catch (err) {
       if (err instanceof CursorError) {
-        return textResult(
-          `Cursor rejected (${err.reason}) — re-run the search to get a fresh cursor.`,
-        )
+        return textResult(cursorRejected(err))
       }
       throw err
     }

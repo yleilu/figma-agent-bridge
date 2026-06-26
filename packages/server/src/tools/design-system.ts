@@ -21,18 +21,8 @@ import {
   requireConnected,
   formatMutationResult,
   errorMessage,
+  cursorRejected,
 } from './shared'
-
-// The clean "cursor rejected" surface for a bounded list read — mirrors
-// search's message style so a stale/garbage token reads the same everywhere
-// (T7: a wrong/old opaque cursor is reported, never silently resumed).
-const cursorRejected = (
-  err: CursorError,
-  read: string,
-): ToolResult =>
-  textResult(
-    `Cursor rejected (${err.reason}) — re-run the ${read} to get a fresh cursor.`,
-  )
 
 // ─── get_styles (Rule A; the server renders each style VALUE to an atom) ──────
 
@@ -163,7 +153,7 @@ export const handleGetStyles = async (
       bounded = paginateList(results, { limit, cursor })
     } catch (err) {
       if (err instanceof CursorError) {
-        return cursorRejected(err, 'read')
+        return textResult(cursorRejected(err))
       }
       throw err
     }
@@ -291,7 +281,7 @@ export const handleGetComponents = async (
       bounded = paginateList(results, { limit, cursor })
     } catch (err) {
       if (err instanceof CursorError) {
-        return cursorRejected(err, 'read')
+        return textResult(cursorRejected(err))
       }
       throw err
     }
@@ -397,7 +387,7 @@ export const handleListFonts = async (
       bounded = paginateList(results, { limit, cursor })
     } catch (err) {
       if (err instanceof CursorError) {
-        return cursorRejected(err, 'read')
+        return textResult(cursorRejected(err))
       }
       throw err
     }
@@ -571,7 +561,7 @@ export const handleGetVariables = async (
       bounded = paginateList(results, { limit, cursor })
     } catch (err) {
       if (err instanceof CursorError) {
-        return cursorRejected(err, 'read')
+        return textResult(cursorRejected(err))
       }
       throw err
     }

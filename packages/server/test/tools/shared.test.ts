@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'bun:test'
 import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import { CursorError } from '@figma-agent-bridge/server/read/paginate'
 import {
   textResult,
   requireConnected,
   formatMutationResult,
   errorMessage,
+  cursorRejected,
 } from '@figma-agent-bridge/server/tools/shared'
 
 const connected: FigmaClient = {
@@ -50,6 +52,22 @@ describe('errorMessage', () => {
     expect(errorMessage('raw string')).toBe('raw string')
     expect(errorMessage(42)).toBe('42')
     expect(errorMessage(null)).toBe('null')
+  })
+})
+
+describe('cursorRejected', () => {
+  it('returns the STALE re-run message string for a STALE cursor', () => {
+    expect(cursorRejected(new CursorError('STALE'))).toBe(
+      'Cursor rejected (STALE) — re-run the read to get a fresh cursor.',
+    )
+  })
+
+  it('returns the MALFORMED re-run message string for a MALFORMED cursor', () => {
+    expect(
+      cursorRejected(new CursorError('MALFORMED')),
+    ).toBe(
+      'Cursor rejected (MALFORMED) — re-run the read to get a fresh cursor.',
+    )
   })
 })
 

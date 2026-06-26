@@ -16,15 +16,8 @@ import {
   requireConnected,
   formatMutationResult,
   errorMessage,
+  cursorRejected,
 } from './shared'
-
-// The clean "cursor rejected" surface for a bounded list read — mirrors
-// search's message style so a stale/garbage token reads the same everywhere
-// (T7: a wrong/old opaque cursor is reported, never silently resumed).
-const cursorRejected = (err: CursorError): ToolResult =>
-  textResult(
-    `Cursor rejected (${err.reason}) — re-run the read to get a fresh cursor.`,
-  )
 
 // ─── get_reactions ────────────────────────────────────────────────────────────
 
@@ -79,7 +72,7 @@ export const handleGetReactions = async (
       bounded = paginateList(results, { limit, cursor })
     } catch (err) {
       if (err instanceof CursorError) {
-        return cursorRejected(err)
+        return textResult(cursorRejected(err))
       }
       throw err
     }
@@ -223,7 +216,7 @@ export const handleGetAnnotations = async (
       bounded = paginateList(results, { limit, cursor })
     } catch (err) {
       if (err instanceof CursorError) {
-        return cursorRejected(err)
+        return textResult(cursorRejected(err))
       }
       throw err
     }

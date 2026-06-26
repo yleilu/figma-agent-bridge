@@ -689,6 +689,12 @@ const tier2: Check[] = [
       // Find an instance to drive. We use get_components to confirm the DS read
       // works, then look for an INSTANCE via search. If none exists in the live
       // doc, this honestly SKIPs (instances require an existing component).
+      // T10 — the DEFAULT call (no includeRemote) is BOUNDED and LOCAL-ONLY: the
+      // O(document) all-instances remote-discovery scan that timed out live is
+      // opt-in (includeRemote=true). So the default returns the cheap local
+      // component/set scan, paged server-side into the {results, truncated}
+      // envelope. The fact that this default call RESOLVES (no timeout, with the
+      // unbounded scan gated off) is what we assert below.
       const comps = await handleGetComponents({}, client)
       // Resilient-read contract (Bug A+B): a malformed component set (one with
       // conflicting variants → "Component set for node has existing errors")
@@ -708,6 +714,14 @@ const tier2: Check[] = [
       if (!Array.isArray(compsYaml.results)) {
         return fail(
           `get_components: expected a results[] envelope, got ${compsText}`,
+        )
+      }
+      // T10 — the default read is BOUNDED: every list read carries a `truncated`
+      // flag (and an opaque `cursor` only when truncated). A missing/non-boolean
+      // `truncated` means the bounding envelope was lost — fail loudly.
+      if (typeof compsYaml.truncated !== 'boolean') {
+        return fail(
+          `get_components: expected a bounded {results, truncated} envelope (T10), got ${compsText}`,
         )
       }
       const compsWarnings = (compsYaml.warnings ??

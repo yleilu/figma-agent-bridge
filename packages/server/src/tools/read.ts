@@ -19,6 +19,7 @@ import {
   textResult,
   requireConnected,
   errorMessage,
+  cursorRejected,
 } from './shared'
 
 type ReadSelectors = {
@@ -339,9 +340,7 @@ export const handleListPages = async (
       })
     } catch (err) {
       if (err instanceof CursorError) {
-        return textResult(
-          `Cursor rejected (${err.reason}) — re-run the read to get a fresh cursor.`,
-        )
+        return textResult(cursorRejected(err))
       }
       throw err
     }
