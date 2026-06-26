@@ -1587,9 +1587,8 @@ const handleCommand = async (
         | ComponentSetNode
       const ucWarnings: string[] = []
       // add. addComponentProperty returns the CANONICAL property id
-      // (e.g. "Label#1:0") that agents need for later setProperties — surface
-      // each {name,id} rather than discarding it.
-      const ucAdded: { name: string; id: string }[] = []
+      // (e.g. "Label#1:0") that agents need for later setProperties. It is
+      // surfaced inside the returned `properties` array (the entry's `id`).
       const addProps = params.add as
         | {
             name: string
@@ -1600,12 +1599,11 @@ const handleCommand = async (
       if (addProps) {
         for (const p of addProps) {
           try {
-            const propId = comp.addComponentProperty(
+            comp.addComponentProperty(
               p.name,
               p.type as ComponentPropertyType,
               p.defaultValue,
             )
-            ucAdded.push({ name: p.name, id: propId })
           } catch (e) {
             ucWarnings.push(
               'Failed to add property "' +
@@ -1703,11 +1701,35 @@ const handleCommand = async (
           }
         }
       }
+      // Project componentPropertyDefinitions into the catalogue `properties`
+      // ARRAY of {id,name,type,defaultValue,variantOptions?}. The object key is
+      // the CANONICAL property id (e.g. "Label#1:0") → `id`; the human name is
+      // the part before "#" → `name`. This carries each added property's id
+      // (the `id` field) within the shape and round-trips get_components.
+      const ucDefs = comp.componentPropertyDefinitions || {}
+      const ucProperties = Object.keys(ucDefs).map(key => {
+        const def = ucDefs[key]
+        const hashIdx = key.indexOf('#')
+        const entry: {
+          id: string
+          name: string
+          type: string
+          defaultValue: string | boolean
+          variantOptions?: string[]
+        } = {
+          id: key,
+          name: hashIdx >= 0 ? key.slice(0, hashIdx) : key,
+          type: def.type,
+          defaultValue: def.defaultValue,
+        }
+        if (def.type === 'VARIANT' && def.variantOptions) {
+          entry.variantOptions = def.variantOptions
+        }
+        return entry
+      })
       return {
         id: comp.id,
-        propertyDefinitions:
-          comp.componentPropertyDefinitions,
-        added: ucAdded,
+        properties: ucProperties,
         warnings: ucWarnings,
       }
     }
@@ -3317,174 +3339,69 @@ const handleCommand = async (
     // server-CONVERTED value (paint→Paint, text→FontName, effect→Effect,
     // grid→LayoutGrid). loadFontAsync first for text styles. T7: feature-detect
     // the createXStyle factory.
+    // create_styles: array-create with PARTIAL SUCCESS. The server has already
+    // CONVERTED each entry's value atom (paint→Paint, text→FontName, effect→
+    // Effect, grid→LayoutGrid). Loop, creating one style per entry (loadFontAsync
+    // first for text); a single failure degrades to that entry's {index,error}
+    // and does NOT abort the rest. Returns { results:[{id,key,name,type,index}],
+    // errors:[{index,error}] }.
     case COMMANDS.CREATE_STYLES: {
-      const styleType = params.type as
-        | 'paint'
-        | 'text'
-        | 'effect'
-        | 'grid'
-      const styleName = params.name as string
-      const styleValue = params.value
-      const styleDesc = params.description as
-        | string
-        | undefined
+      const csEntries =
+        (params.styles as
+          | {
+              index: number
+              type: 'paint' | 'text' | 'effect' | 'grid'
+              name: string
+              value: unknown
+              description?: string
+            }[]
+          | undefined) ?? []
+      const csResults: {
+        id: string
+        key: string
+        name: string
+        type: 'paint' | 'text' | 'effect' | 'grid'
+        index: number
+      }[] = []
+      const csErrors: { index: number; error: string }[] =
+        []
 
-      if (styleType === 'paint') {
-        if (typeof figma.createPaintStyle !== 'function') {
-          return {
-            error: 'createPaintStyle unavailable',
-          }
-        }
-        const style = figma.createPaintStyle()
-        style.name = styleName
-        if (styleDesc !== undefined) {
-          style.description = styleDesc
-        }
-        style.paints = [styleValue as Paint]
-        return {
-          id: style.id,
-          key: style.key,
-          name: style.name,
-          type: 'paint',
-        }
-      }
-      if (styleType === 'text') {
-        if (typeof figma.createTextStyle !== 'function') {
-          return { error: 'createTextStyle unavailable' }
-        }
-        const font = styleValue as {
-          family: string
-          style: string
-          size: number
-          lineHeight?: LineHeight
-          letterSpacing?: LetterSpacing
-        }
-        await figma.loadFontAsync({
-          family: font.family,
-          style: font.style,
-        })
-        const style = figma.createTextStyle()
-        style.name = styleName
-        if (styleDesc !== undefined) {
-          style.description = styleDesc
-        }
-        style.fontName = {
-          family: font.family,
-          style: font.style,
-        }
-        style.fontSize = font.size
-        if (font.lineHeight !== undefined) {
-          style.lineHeight = font.lineHeight
-        }
-        if (font.letterSpacing !== undefined) {
-          style.letterSpacing = font.letterSpacing
-        }
-        return {
-          id: style.id,
-          key: style.key,
-          name: style.name,
-          type: 'text',
-        }
-      }
-      if (styleType === 'effect') {
-        if (typeof figma.createEffectStyle !== 'function') {
-          return { error: 'createEffectStyle unavailable' }
-        }
-        const style = figma.createEffectStyle()
-        style.name = styleName
-        if (styleDesc !== undefined) {
-          style.description = styleDesc
-        }
-        style.effects = [styleValue as Effect]
-        return {
-          id: style.id,
-          key: style.key,
-          name: style.name,
-          type: 'effect',
-        }
-      }
-      // grid
-      if (typeof figma.createGridStyle !== 'function') {
-        return { error: 'createGridStyle unavailable' }
-      }
-      const gridStyle = figma.createGridStyle()
-      gridStyle.name = styleName
-      if (styleDesc !== undefined) {
-        gridStyle.description = styleDesc
-      }
-      gridStyle.layoutGrids = [styleValue as LayoutGrid]
-      return {
-        id: gridStyle.id,
-        key: gridStyle.key,
-        name: gridStyle.name,
-        type: 'grid',
-      }
-    }
-
-    // update_styles: edit an existing style's value/name/description. The server
-    // sends the CONVERTED value + the inferred valueType; the plugin resolves the
-    // style, validates valueType against the style's actual type (warns on
-    // mismatch, T7), and assigns. Missing style → {error}.
-    case COMMANDS.UPDATE_STYLES: {
-      const styleId = params.styleId as string
-      const style = await figma.getStyleByIdAsync(styleId)
-      if (!style) {
-        return { error: 'Style not found: ' + styleId }
-      }
-      const warnings: string[] = []
-      if (params.name !== undefined) {
-        style.name = params.name as string
-      }
-      if (params.description !== undefined) {
-        style.description = params.description as string
-      }
-      if (params.value !== undefined) {
-        const valueType = params.valueType as
-          | 'paint'
-          | 'text'
-          | 'effect'
-          | 'grid'
-          | undefined
-        const actual = {
-          PAINT: 'paint',
-          TEXT: 'text',
-          EFFECT: 'effect',
-          GRID: 'grid',
-        }[style.type]
-        if (
-          valueType !== undefined &&
-          valueType !== actual
-        ) {
-          warnings.push(
-            'value looks like a ' +
-              valueType +
-              ' atom but the style is ' +
-              actual +
-              '; value not applied',
-          )
-        } else if (style.type === 'PAINT') {
-          ;(style as PaintStyle).paints = [
-            params.value as Paint,
-          ]
-        } else if (style.type === 'TEXT') {
-          const font = params.value as {
-            family: string
-            style: string
-            size: number
-            lineHeight?: LineHeight
-            letterSpacing?: LetterSpacing
-          }
-          // T7 partial-success: name/description were ALREADY committed above.
-          // loadFontAsync throws for an unavailable font — degrade to a warning
-          // and still return {id,warnings} so the applied name/description are
-          // honestly reported, rather than letting the throw turn the whole call
-          // into {error} (a silent partial write masquerading as a no-op).
-          try {
+      for (const entry of csEntries) {
+        try {
+          let style:
+            | PaintStyle
+            | TextStyle
+            | EffectStyle
+            | GridStyle
+          if (entry.type === 'paint') {
+            if (
+              typeof figma.createPaintStyle !== 'function'
+            ) {
+              throw new Error(
+                'createPaintStyle unavailable',
+              )
+            }
+            const ps = figma.createPaintStyle()
+            ps.paints = [entry.value as Paint]
+            style = ps
+          } else if (entry.type === 'text') {
+            if (
+              typeof figma.createTextStyle !== 'function'
+            ) {
+              throw new Error('createTextStyle unavailable')
+            }
+            const font = entry.value as {
+              family: string
+              style: string
+              size: number
+              lineHeight?: LineHeight
+              letterSpacing?: LetterSpacing
+            }
             await figma.loadFontAsync({
               family: font.family,
               style: font.style,
             })
-            const ts = style as TextStyle
+            const ts = figma.createTextStyle()
             ts.fontName = {
               family: font.family,
               style: font.style,
@@ -3496,27 +3413,220 @@ const handleCommand = async (
             if (font.letterSpacing !== undefined) {
               ts.letterSpacing = font.letterSpacing
             }
-          } catch (e) {
-            warnings.push(
-              'font "' +
-                font.family +
-                ' ' +
-                font.style +
-                '" unavailable; value not applied (name/description were updated): ' +
-                String(e),
-            )
+            style = ts
+          } else if (entry.type === 'effect') {
+            if (
+              typeof figma.createEffectStyle !== 'function'
+            ) {
+              throw new Error(
+                'createEffectStyle unavailable',
+              )
+            }
+            const es = figma.createEffectStyle()
+            es.effects = [entry.value as Effect]
+            style = es
+          } else {
+            if (
+              typeof figma.createGridStyle !== 'function'
+            ) {
+              throw new Error('createGridStyle unavailable')
+            }
+            const gs = figma.createGridStyle()
+            gs.layoutGrids = [entry.value as LayoutGrid]
+            style = gs
           }
-        } else if (style.type === 'EFFECT') {
-          ;(style as EffectStyle).effects = [
-            params.value as Effect,
-          ]
-        } else if (style.type === 'GRID') {
-          ;(style as GridStyle).layoutGrids = [
-            params.value as LayoutGrid,
-          ]
+          style.name = entry.name
+          if (entry.description !== undefined) {
+            style.description = entry.description
+          }
+          csResults.push({
+            id: style.id,
+            key: style.key,
+            name: style.name,
+            type: entry.type,
+            index: entry.index,
+          })
+        } catch (e) {
+          csErrors.push({
+            index: entry.index,
+            error: String(e),
+          })
         }
       }
-      return { id: style.id, warnings }
+      return { results: csResults, errors: csErrors }
+    }
+
+    // update_styles: array-edit existing styles' value/newName/description with
+    // PARTIAL SUCCESS. Each entry is looked up by `id` OR by `name`+`type` (the
+    // async local-style listers). The server sends the CONVERTED value + the
+    // inferred valueType; the plugin validates valueType against the style's
+    // actual type and assigns. One entry's failure becomes THAT entry's
+    // {index,error} and does NOT abort the rest. Partial-write contract per
+    // entry: a TEXT entry whose newName/description committed but whose font
+    // load failed becomes that entry's error, naming that name/description WERE
+    // applied (an honest partial write, never a silent no-op).
+    case COMMANDS.UPDATE_STYLES: {
+      const usEntries =
+        (params.styles as
+          | {
+              index: number
+              id?: string
+              name?: string
+              type?: 'paint' | 'text' | 'effect' | 'grid'
+              value?: unknown
+              valueType?:
+                | 'paint'
+                | 'text'
+                | 'effect'
+                | 'grid'
+              newName?: string
+              description?: string
+            }[]
+          | undefined) ?? []
+      const usResults: { id: string; index: number }[] = []
+      const usErrors: { index: number; error: string }[] =
+        []
+
+      // Resolve a style by id, else by name + category. The name+type listers
+      // are loaded lazily (only when an entry omits its id).
+      const resolveStyle = async (entry: {
+        id?: string
+        name?: string
+        type?: 'paint' | 'text' | 'effect' | 'grid'
+      }): Promise<BaseStyle | null> => {
+        if (entry.id !== undefined) {
+          return figma.getStyleByIdAsync(entry.id)
+        }
+        if (
+          entry.name === undefined ||
+          entry.type === undefined
+        ) {
+          return null
+        }
+        const listers = {
+          paint: figma.getLocalPaintStylesAsync,
+          text: figma.getLocalTextStylesAsync,
+          effect: figma.getLocalEffectStylesAsync,
+          grid: figma.getLocalGridStylesAsync,
+        }
+        const list = await listers[entry.type]()
+        return (
+          (list as BaseStyle[]).find(
+            s => s.name === entry.name,
+          ) ?? null
+        )
+      }
+
+      for (const entry of usEntries) {
+        try {
+          const style = await resolveStyle(entry)
+          if (!style) {
+            usErrors.push({
+              index: entry.index,
+              error:
+                'Style not found: ' +
+                (entry.id ??
+                  `${entry.name} (${entry.type})`),
+            })
+            continue
+          }
+          // name/description commit first (partial-write contract).
+          if (entry.newName !== undefined) {
+            style.name = entry.newName
+          }
+          if (entry.description !== undefined) {
+            style.description = entry.description
+          }
+          if (entry.value !== undefined) {
+            const actual = {
+              PAINT: 'paint',
+              TEXT: 'text',
+              EFFECT: 'effect',
+              GRID: 'grid',
+            }[style.type]
+            if (
+              entry.valueType !== undefined &&
+              entry.valueType !== actual
+            ) {
+              usErrors.push({
+                index: entry.index,
+                error:
+                  'value looks like a ' +
+                  entry.valueType +
+                  ' atom but the style is ' +
+                  actual +
+                  '; value not applied (newName/description were updated)',
+              })
+              continue
+            }
+            if (style.type === 'PAINT') {
+              ;(style as PaintStyle).paints = [
+                entry.value as Paint,
+              ]
+            } else if (style.type === 'TEXT') {
+              const font = entry.value as {
+                family: string
+                style: string
+                size: number
+                lineHeight?: LineHeight
+                letterSpacing?: LetterSpacing
+              }
+              // loadFontAsync throws for an unavailable font. newName/description
+              // were ALREADY committed above, so this entry becomes a per-entry
+              // error that NAMES the applied name/description — an honest partial
+              // write, not a silent no-op, and it does not abort other entries.
+              try {
+                await figma.loadFontAsync({
+                  family: font.family,
+                  style: font.style,
+                })
+                const ts = style as TextStyle
+                ts.fontName = {
+                  family: font.family,
+                  style: font.style,
+                }
+                ts.fontSize = font.size
+                if (font.lineHeight !== undefined) {
+                  ts.lineHeight = font.lineHeight
+                }
+                if (font.letterSpacing !== undefined) {
+                  ts.letterSpacing = font.letterSpacing
+                }
+              } catch (e) {
+                usErrors.push({
+                  index: entry.index,
+                  error:
+                    'font "' +
+                    font.family +
+                    ' ' +
+                    font.style +
+                    '" unavailable; value not applied (newName/description were updated): ' +
+                    String(e),
+                })
+                continue
+              }
+            } else if (style.type === 'EFFECT') {
+              ;(style as EffectStyle).effects = [
+                entry.value as Effect,
+              ]
+            } else if (style.type === 'GRID') {
+              ;(style as GridStyle).layoutGrids = [
+                entry.value as LayoutGrid,
+              ]
+            }
+          }
+          usResults.push({
+            id: style.id,
+            index: entry.index,
+          })
+        } catch (e) {
+          usErrors.push({
+            index: entry.index,
+            error: String(e),
+          })
+        }
+      }
+      return { results: usResults, errors: usErrors }
     }
 
     // apply_style: bind a style to a node field via the matching async setter.

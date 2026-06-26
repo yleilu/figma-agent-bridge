@@ -888,11 +888,12 @@ export const createMockPlugin = (
         break
       }
 
-      // update_component: echo {id, propertyDefinitions, added, warnings}. An
+      // update_component: echo {id, properties, warnings}. `properties` is the
+      // catalogue ARRAY of {id,name,type,defaultValue,variantOptions?}. An
       // `expose` list degrades (warn, never error) — exposeNestedInstances is
       // gated. addComponentProperty returns a CANONICAL id (`<name>#<suffix>`)
       // that agents need for later setProperties, so the mock mirrors the real
-      // plugin by keying defs on that id and surfacing `added: [{name,id}]`.
+      // plugin by carrying it inside each `properties` entry's `id` field.
       // Genuine {error} boundaries (mirroring the real plugin):
       //  - componentId `err:` → {error:'Component not found: …'} (not-found).
       //  - componentId `notcomp:` → {error:'Node is not a component …'} (the
@@ -918,16 +919,20 @@ export const createMockPlugin = (
           | string[]
           | undefined
         const ucWarnings: string[] = []
-        const defs: Record<string, unknown> = {}
-        const added: { name: string; id: string }[] = []
+        const properties: {
+          id: string
+          name: string
+          type: string
+          defaultValue: string | boolean
+        }[] = []
         if (ucAdd) {
           for (const p of ucAdd) {
-            const propId = `${p.name}#1:0`
-            defs[propId] = {
+            properties.push({
+              id: `${p.name}#1:0`,
+              name: p.name,
               type: p.type,
               defaultValue: p.defaultValue,
-            }
-            added.push({ name: p.name, id: propId })
+            })
           }
         }
         if (ucExpose && ucExpose.length > 0) {
@@ -937,8 +942,7 @@ export const createMockPlugin = (
         }
         result = {
           id: ucId,
-          propertyDefinitions: defs,
-          added,
+          properties,
           warnings: ucWarnings,
         }
         break
@@ -1349,53 +1353,95 @@ export const createMockPlugin = (
         break
       }
 
-      // create_styles: the server has CONVERTED the value atom (paint→Paint,
-      // text→FontName, effect→Effect, grid→LayoutGrid). Echo it back + mirror
-      // the real reply { id, key, name, type }.
+      // create_styles: array-create with PARTIAL SUCCESS. The server has
+      // CONVERTED each entry's value atom (paint→Paint, text→FontName,
+      // effect→Effect, grid→LayoutGrid). Loop, mirroring the real plugin's
+      // { results:[{id,key,name,type,index}], errors:[{index,error}] }. A style
+      // `name` prefixed `err:` models a per-entry create failure (degrade, not
+      // abort). Each result carries the entry's `value` as `echo` so conversion
+      // assertions still round-trip.
       case 'create_styles': {
-        result = {
-          id: 'S:new',
-          key: 'style-key',
-          name: cmd.params?.name as string,
-          type: cmd.params?.type as string,
-          echo: cmd.params?.value,
+        const csEntries =
+          (cmd.params?.styles as
+            | {
+                index: number
+                type: string
+                name: string
+                value: unknown
+                description?: string
+              }[]
+            | undefined) ?? []
+        const csResults: unknown[] = []
+        const csErrors: { index: number; error: string }[] =
+          []
+        for (const e of csEntries) {
+          if (e.name.startsWith('err:')) {
+            csErrors.push({
+              index: e.index,
+              error: `create${e.type}Style unavailable`,
+            })
+            continue
+          }
+          csResults.push({
+            id: `S:${e.index}`,
+            key: 'style-key',
+            name: e.name,
+            type: e.type,
+            index: e.index,
+            echo: e.value,
+          })
         }
+        result = { results: csResults, errors: csErrors }
         break
       }
 
-      // update_styles: a styleId starting with `err:` → {error}; `degrade:` →
-      // success-with-warning; `fontfail:` → PARTIAL SUCCESS (name/description
-      // committed, the TEXT value branch's loadFontAsync threw → warned, NOT
-      // {error}). Else echo {id,warnings:[]} + the converted value.
+      // update_styles: array-edit with PARTIAL SUCCESS. Each entry is keyed by
+      // its `id` (mirrors the real plugin's lookup). Per-entry models:
+      //  - id `err:` → {index,error} not-found (does NOT abort the rest).
+      //  - id `degrade:` → {index,error} category mismatch (value not applied;
+      //    newName/description were).
+      //  - id `fontfail:` → {index,error} partial write (newName/description
+      //    committed, the TEXT value branch's loadFontAsync threw).
+      //  - else → {id,index} success.
       case 'update_styles': {
-        const sId = cmd.params?.styleId as string
-        if (sId.startsWith('err:')) {
-          error = `Style not found: ${sId}`
-        } else if (sId.startsWith('degrade:')) {
-          result = {
-            id: sId,
-            warnings: [
-              'value looks like a paint atom but the style is text; value not applied',
-            ],
-          }
-        } else if (sId.startsWith('fontfail:')) {
-          const ufFont = cmd.params?.value as
-            | { family?: string; style?: string }
-            | undefined
-          result = {
-            id: sId,
-            warnings: [
-              `font "${ufFont?.family} ${ufFont?.style}" unavailable; value not applied (name/description were updated)`,
-            ],
-          }
-        } else {
-          result = {
-            id: sId,
-            warnings: [],
-            echo: cmd.params?.value,
-            valueType: cmd.params?.valueType,
+        const usEntries =
+          (cmd.params?.styles as
+            | {
+                index: number
+                id?: string
+                name?: string
+                value?: { family?: string; style?: string }
+              }[]
+            | undefined) ?? []
+        const usResults: { id: string; index: number }[] =
+          []
+        const usErrors: {
+          index: number
+          error: string
+        }[] = []
+        for (const e of usEntries) {
+          const sId = e.id ?? e.name ?? ''
+          if (sId.startsWith('err:')) {
+            usErrors.push({
+              index: e.index,
+              error: `Style not found: ${sId}`,
+            })
+          } else if (sId.startsWith('degrade:')) {
+            usErrors.push({
+              index: e.index,
+              error:
+                'value looks like a paint atom but the style is text; value not applied (newName/description were updated)',
+            })
+          } else if (sId.startsWith('fontfail:')) {
+            usErrors.push({
+              index: e.index,
+              error: `font "${e.value?.family} ${e.value?.style}" unavailable; value not applied (newName/description were updated)`,
+            })
+          } else {
+            usResults.push({ id: sId, index: e.index })
           }
         }
+        result = { results: usResults, errors: usErrors }
         break
       }
 

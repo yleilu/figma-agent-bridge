@@ -1165,85 +1165,118 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   })
 
   // 28 — create_styles: a paint atom is parsed server-side to a SOLID Paint
-  // before the plugin creates the style.
+  // before the plugin creates the style (array-create, partial-success envelope).
   it('create_styles parses a paint atom to a SOLID Paint over the relay', async () => {
     const result = await handleCreateStyles(
       {
-        type: 'paint',
-        name: 'Brand/Primary',
-        value: '#3B82F6',
+        styles: [
+          {
+            type: 'paint',
+            name: 'Brand/Primary',
+            value: '#3B82F6',
+          },
+        ],
       },
       client,
     )
     const out = JSON.parse(result.content[0].text) as {
-      id: string
-      key: string
-      type: string
-      echo: { type: string; color: unknown }
+      results: {
+        id: string
+        type: string
+        index: number
+        echo: { type: string; color: unknown }
+      }[]
+      errors: unknown[]
     }
-    expect(out.id).toBe('S:new')
-    expect(out.type).toBe('paint')
+    expect(out.errors).toEqual([])
+    expect(out.results).toHaveLength(1)
+    expect(out.results[0].type).toBe('paint')
+    expect(out.results[0].index).toBe(0)
     // The atom was parsed to a Figma Paint before the plugin saw it.
-    expect(out.echo.type).toBe('SOLID')
-    expect(out.echo.color).toEqual({
+    expect(out.results[0].echo.type).toBe('SOLID')
+    expect(out.results[0].echo.color).toEqual({
       r: 0.231,
       g: 0.51,
       b: 0.965,
     })
   })
 
-  // 29 — create_styles: a font atom is parsed to a FontName over the relay.
-  it('create_styles parses a font atom to a FontName over the relay', async () => {
+  // 29 — create_styles: multiple atoms parsed + created in one batch over the
+  // relay; partial success keeps each entry's index.
+  it('create_styles parses a font atom to a FontName over the relay (batch)', async () => {
     const result = await handleCreateStyles(
       {
-        type: 'text',
-        name: 'Heading/H1',
-        value: 'font(Inter,Bold,32,{lh=40})',
+        styles: [
+          {
+            type: 'paint',
+            name: 'Brand/Primary',
+            value: '#3B82F6',
+          },
+          {
+            type: 'text',
+            name: 'Heading/H1',
+            value: 'font(Inter,Bold,32,{lh=40})',
+          },
+        ],
       },
       client,
     )
     const out = JSON.parse(result.content[0].text) as {
-      type: string
-      echo: {
-        family: string
-        size: number
-        lineHeight: { value: number; unit: string }
-      }
+      results: {
+        type: string
+        index: number
+        echo: {
+          family?: string
+          size?: number
+          lineHeight?: { value: number; unit: string }
+        }
+      }[]
+      errors: unknown[]
     }
-    expect(out.type).toBe('text')
-    expect(out.echo.family).toBe('Inter')
-    expect(out.echo.size).toBe(32)
-    expect(out.echo.lineHeight).toEqual({
+    expect(out.errors).toEqual([])
+    const text = out.results.find(r => r.type === 'text')!
+    expect(text.index).toBe(1)
+    expect(text.echo.family).toBe('Inter')
+    expect(text.echo.size).toBe(32)
+    expect(text.echo.lineHeight).toEqual({
       value: 40,
       unit: 'PIXELS',
     })
   })
 
-  // 29a — update_styles partial write (T7): name/description commit, then the
+  // 29a — update_styles partial write: newName/description commit, then the
   // value branch (loadFontAsync for a TEXT style) throws for an unavailable
-  // font. The plugin must report PARTIAL SUCCESS + a warning (the name was
-  // already applied), NOT a total {error}. The mock keys the font-load failure
-  // off a styleId prefixed `fontfail:`.
-  it('update_styles reports partial success + warning when the value branch fails', async () => {
+  // font. With the array envelope this becomes THAT entry's {index,error}
+  // (naming that newName/description WERE applied) — an honest partial write,
+  // never a silent no-op, and it does not abort other entries. Tool-level
+  // success (no top-level "Error:"). The mock keys the font-load failure off an
+  // id prefixed `fontfail:`.
+  it('update_styles reports the failed entry in errors[] when the value branch fails (partial write)', async () => {
     const result = await handleUpdateStyles(
       {
-        styleId: 'fontfail:S',
-        name: 'Heading/H1',
-        value: 'font(Nonexistent,Bold,32)',
+        styles: [
+          {
+            id: 'fontfail:S',
+            newName: 'Heading/H1',
+            value: 'font(Nonexistent,Bold,32)',
+          },
+        ],
       },
       client,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const out = JSON.parse(result.content[0].text) as {
-      id: string
-      warnings: string[]
+      results: unknown[]
+      errors: { index: number; error: string }[]
     }
-    expect(out.id).toBe('fontfail:S')
-    expect(
-      out.warnings.some(w =>
-        w.toLowerCase().includes('font'),
-      ),
-    ).toBe(true)
+    expect(out.results).toEqual([])
+    expect(out.errors[0].index).toBe(0)
+    expect(out.errors[0].error.toLowerCase()).toContain(
+      'font',
+    )
+    expect(out.errors[0].error.toLowerCase()).toContain(
+      'newname/description were updated',
+    )
   })
 
   // 30 — apply_style happy path reports success (no error) over the relay.

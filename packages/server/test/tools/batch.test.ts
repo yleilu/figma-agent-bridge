@@ -335,21 +335,30 @@ describe('handleBatch', () => {
         ops: [
           {
             op: 'create_styles',
-            type: 'paint',
-            name: 'Brand/Primary',
-            value: '#3B82F6',
+            styles: [
+              {
+                type: 'paint',
+                name: 'Brand/Primary',
+                value: '#3B82F6',
+              },
+            ],
           },
         ],
       },
       stubClient({ sent }),
     )
     const forwarded = sent[0].params?.ops as SentOp[]
-    const value = forwarded[0].params.value as {
+    const styles = forwarded[0].params.styles as {
+      index: number
       type: string
-      color: { r: number; g: number; b: number }
-    }
-    expect(value.type).toBe('SOLID')
-    expect(value.color.r).toBeCloseTo(0.231, 2)
+      value: {
+        type: string
+        color: { r: number; g: number; b: number }
+      }
+    }[]
+    expect(styles[0].index).toBe(0)
+    expect(styles[0].value.type).toBe('SOLID')
+    expect(styles[0].value.color.r).toBeCloseTo(0.231, 2)
   })
 
   it('a server-side conversion failure is isolated to its entry (not sent to the plugin)', async () => {

@@ -177,25 +177,27 @@ export const handleUpdateVariables = async (
 
 // ─── create_styles ────────────────────────────────────────────────────────────
 
+type CreateStyleSpec = {
+  type: StyleCategory
+  name: string
+  value: string
+  description?: string
+}
+
 /**
- * Create one paint/text/effect/grid style from a grammar atom value. The SERVER
- * parses the atom for the given `type` (paint→atomToPaint, text→atomToFont,
- * effect→atomToEffect, grid→atomToGrid) and forwards the converted object; the
- * plugin creates the style and assigns it (loadFontAsync first for text).
- * Returns { id, key, name, type }.
+ * Batch-create paint/text/effect/grid styles from grammar atom values with
+ * PARTIAL SUCCESS (T5). The SERVER parses each entry's atom for its `type`
+ * (paint→atomToPaint, text→atomToFont, effect→atomToEffect, grid→atomToGrid)
+ * and forwards the converted array; the plugin loops, creating each style
+ * (loadFontAsync first for text) and collecting a per-entry result/error so one
+ * failure does NOT abort the rest. A SERVER-side conversion failure (a malformed
+ * atom) is isolated to that entry's error and NOT sent to the plugin; a
+ * placeholder keeps the sent array index-aligned with the plugin's replies, and
+ * every result/error carries its ORIGINAL index. Returns
+ * { results:[{id,key,name,type,index}], errors:[{index,error}] }.
  */
 export const handleCreateStyles = async (
-  {
-    type,
-    name,
-    value,
-    description,
-  }: {
-    type: StyleCategory
-    name: string
-    value: string
-    description?: string
-  },
+  { styles }: { styles: CreateStyleSpec[] },
   client: FigmaClient,
 ): Promise<ToolResult> => {
   const guard = requireConnected(client)
@@ -203,15 +205,69 @@ export const handleCreateStyles = async (
     return guard
   }
 
+  // Convert each entry's atom server-side, in array order. A malformed atom is
+  // recorded as that entry's error and NOT sent to the plugin.
+  const converted: ({
+    index: number
+    type: StyleCategory
+    name: string
+    value: unknown
+    description?: string
+  } | null)[] = []
+  const preErrors: { index: number; error: string }[] = []
+
+  styles.forEach((style, index) => {
+    try {
+      converted[index] = {
+        index,
+        type: style.type,
+        name: style.name,
+        value: styleValueToFigma(style.type, style.value),
+        description: style.description,
+      }
+    } catch (err) {
+      converted[index] = null
+      preErrors.push({ index, error: errorMessage(err) })
+    }
+  })
+
   try {
-    const converted = styleValueToFigma(type, value)
-    const result = (await client.sendCommand(
+    const sendable = converted.filter(
+      (c): c is NonNullable<(typeof converted)[number]> =>
+        c !== null,
+    )
+    const reply = (await client.sendCommand(
       COMMANDS.CREATE_STYLES,
-      { type, name, value: converted, description },
-    )) as { error?: string } | null
-    return formatMutationResult(
-      result,
-      'Failed to create style.',
+      { styles: sendable },
+    )) as {
+      results?: {
+        id: string
+        key: string
+        name: string
+        type: StyleCategory
+        index: number
+      }[]
+      errors?: { index: number; error: string }[]
+      error?: string
+    } | null
+
+    if (reply === null) {
+      return textResult('Failed to create styles.')
+    }
+    if (reply.error !== undefined) {
+      return textResult(`Error: ${reply.error}`)
+    }
+
+    // Merge the plugin's per-entry results/errors with the server-side
+    // conversion errors, keeping each entry's ORIGINAL index.
+    const results = reply.results ?? []
+    const errors = [
+      ...preErrors,
+      ...(reply.errors ?? []),
+    ].sort((a, b) => a.index - b.index)
+
+    return textResult(
+      JSON.stringify({ results, errors }, null, 2),
     )
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
@@ -220,27 +276,33 @@ export const handleCreateStyles = async (
 
 // ─── update_styles ────────────────────────────────────────────────────────────
 
+type UpdateStyleSpec = {
+  id?: string
+  name?: string
+  type?: StyleCategory
+  value?: string
+  newName?: string
+  description?: string
+}
+
 /**
- * Edit an existing style's value / name / description. The style's category is
- * not in the params (the id determines it), so when a `value` is supplied the
- * SERVER infers the category from the atom syntax, parses the value to a Figma
- * object, and forwards both the converted value and the inferred `valueType`.
- * The plugin resolves the style, validates the inferred category against the
- * style's actual type (warns on mismatch, T7), and assigns. name/description
- * apply directly. Returns { id, warnings[] }.
+ * BATCH-edit existing styles' value / name / description with PARTIAL SUCCESS
+ * (T2). Each entry is looked up by `id` OR by `name` + `type` (the plugin
+ * resolves). When a `value` is supplied the SERVER infers the category from the
+ * atom syntax, parses it to a Figma object, and forwards both the converted
+ * value and the inferred `valueType`; the plugin validates the inferred category
+ * against the resolved style's actual type and assigns. `newName`/`description`
+ * apply directly. One entry's failure does NOT abort the rest. A SERVER-side
+ * conversion failure (a malformed atom) is isolated to that entry's error and
+ * NOT sent to the plugin (a placeholder keeps the sent array index-aligned), and
+ * every result/error carries its ORIGINAL index. The partial-write contract is
+ * preserved per entry: a TEXT entry whose name/description committed but whose
+ * font value load failed becomes THAT entry's error (the plugin reports the
+ * applied name/description in the message). Returns
+ * { results:[{id,index}], errors:[{index,error}] }.
  */
 export const handleUpdateStyles = async (
-  {
-    styleId,
-    value,
-    name,
-    description,
-  }: {
-    styleId: string
-    value?: string
-    name?: string
-    description?: string
-  },
+  { styles }: { styles: UpdateStyleSpec[] },
   client: FigmaClient,
 ): Promise<ToolResult> => {
   const guard = requireConnected(client)
@@ -248,26 +310,66 @@ export const handleUpdateStyles = async (
     return guard
   }
 
-  try {
-    let convertedValue: unknown
-    let valueType: StyleCategory | undefined
-    if (value !== undefined) {
-      valueType = inferStyleCategory(value)
-      convertedValue = styleValueToFigma(valueType, value)
-    }
-    const result = (await client.sendCommand(
-      COMMANDS.UPDATE_STYLES,
-      {
-        styleId,
+  // Convert each entry's value atom (if any) server-side, in array order. A
+  // malformed atom is recorded as that entry's error and NOT sent to the plugin.
+  const converted: (Record<string, unknown> | null)[] = []
+  const preErrors: { index: number; error: string }[] = []
+
+  styles.forEach((style, index) => {
+    try {
+      let convertedValue: unknown
+      let valueType: StyleCategory | undefined
+      if (style.value !== undefined) {
+        valueType = inferStyleCategory(style.value)
+        convertedValue = styleValueToFigma(
+          valueType,
+          style.value,
+        )
+      }
+      converted[index] = {
+        index,
+        id: style.id,
+        name: style.name,
+        type: style.type,
         value: convertedValue,
         valueType,
-        name,
-        description,
-      },
-    )) as { error?: string } | null
-    return formatMutationResult(
-      result,
-      'Failed to update style.',
+        newName: style.newName,
+        description: style.description,
+      }
+    } catch (err) {
+      converted[index] = null
+      preErrors.push({ index, error: errorMessage(err) })
+    }
+  })
+
+  try {
+    const sendable = converted.filter(
+      (c): c is Record<string, unknown> => c !== null,
+    )
+    const reply = (await client.sendCommand(
+      COMMANDS.UPDATE_STYLES,
+      { styles: sendable },
+    )) as {
+      results?: { id: string; index: number }[]
+      errors?: { index: number; error: string }[]
+      error?: string
+    } | null
+
+    if (reply === null) {
+      return textResult('Failed to update styles.')
+    }
+    if (reply.error !== undefined) {
+      return textResult(`Error: ${reply.error}`)
+    }
+
+    const results = reply.results ?? []
+    const errors = [
+      ...preErrors,
+      ...(reply.errors ?? []),
+    ].sort((a, b) => a.index - b.index)
+
+    return textResult(
+      JSON.stringify({ results, errors }, null, 2),
     )
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)

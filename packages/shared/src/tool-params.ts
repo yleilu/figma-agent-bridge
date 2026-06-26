@@ -533,12 +533,11 @@ export const styleTypeSchema = z.enum([
 ])
 
 /**
- * Params for `create_styles`: create one paint/text/effect/grid style from a
- * grammar atom value. paint → atomToPaint, text → atomToFont (+loadFont in the
- * plugin), effect → atomToEffect, grid → the grid head. Returns
- * { id, key, name, type }.
+ * One style to create: a paint/text/effect/grid style from a grammar atom value.
+ * paint → atomToPaint, text → atomToFont (+loadFont in the plugin), effect →
+ * atomToEffect, grid → the grid head.
  */
-export const createStylesParamsSchema = z.object({
+export const createStyleSpecSchema = z.object({
   type: styleTypeSchema.describe(
     'Style category: paint | text | effect | grid.',
   ),
@@ -555,21 +554,45 @@ export const createStylesParamsSchema = z.object({
 })
 
 /**
- * Params for `update_styles`: edit an existing style's parsed value, name,
- * and/or description. The style's category is resolved plugin-side from its id.
- * Returns { id, warnings[] }.
+ * Params for `create_styles`: BATCH-create paint/text/effect/grid styles from
+ * grammar atom values with PARTIAL SUCCESS — one entry's failure does not abort
+ * the rest. Returns { results:[{id,key,name,type,index}], errors:[{index,error}] }.
  */
-export const updateStylesParamsSchema = z.object({
-  styleId: z
+export const createStylesParamsSchema = z.object({
+  styles: z
+    .array(createStyleSpecSchema)
+    .describe('The styles to create (partial success).'),
+})
+
+/**
+ * One style to edit: looked up by `id` OR by `name` + `type`. A supplied `value`
+ * is parsed per the style's category; `newName`/`description` apply directly.
+ */
+export const updateStyleSpecSchema = z.object({
+  id: z
     .string()
-    .describe('ID of the style to update.'),
+    .optional()
+    .describe(
+      'ID of the style to update (or look it up by name + type).',
+    ),
+  name: z
+    .string()
+    .optional()
+    .describe(
+      'Style name to look up (with `type`) when no `id` is given.',
+    ),
+  type: styleTypeSchema
+    .optional()
+    .describe(
+      'Style category for name lookup: paint | text | effect | grid.',
+    ),
   value: z
     .string()
     .optional()
     .describe(
       'New style VALUE as a grammar atom (parsed per the style category).',
     ),
-  name: z
+  newName: z
     .string()
     .optional()
     .describe('New name for the style.'),
@@ -577,6 +600,17 @@ export const updateStylesParamsSchema = z.object({
     .string()
     .optional()
     .describe('New description for the style.'),
+})
+
+/**
+ * Params for `update_styles`: BATCH-edit existing styles' parsed value, name,
+ * and/or description with PARTIAL SUCCESS — one entry's failure does not abort
+ * the rest. Returns { results:[{id,index}], errors:[{index,error}] }.
+ */
+export const updateStylesParamsSchema = z.object({
+  styles: z
+    .array(updateStyleSpecSchema)
+    .describe('The styles to edit (partial success).'),
 })
 
 /**

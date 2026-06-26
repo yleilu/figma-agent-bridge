@@ -9,7 +9,9 @@
 //   node). → COMMANDS.CREATE_COMPONENT → {id,key,name,type}.
 // update_component: add/edit/delete componentPropertyDefinitions, set the
 //   description, expose nested instances (T7-gated). → COMMANDS.UPDATE_COMPONENT
-//   → {id,propertyDefinitions,warnings}.
+//   → {id,properties,warnings} where `properties` is the catalogue ARRAY of
+//   {id,name,type,defaultValue,variantOptions?} (round-trips get_components; each
+//   entry's `id` is the canonical property id added properties need).
 // combine_variants: combine ≥2 components into a variant set (handler-guarded
 //   <2). → COMMANDS.COMBINE_VARIANTS → {id,name,type,variantAxes}.
 // swap_component: point an instance at a different main component (T7-gated swap

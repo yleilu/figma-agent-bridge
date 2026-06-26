@@ -101,41 +101,66 @@ const convertUpdateNode = (
 const convertCreateStyles = (
   params: Record<string, unknown>,
 ): Record<string, unknown> => {
-  const { type, name, value, description } = params as {
-    type: StyleCategory
-    name: string
-    value: string
-    description?: string
+  // create_styles is an array-create: convert each entry's value atom and carry
+  // the original index (matching the standalone handler's plugin protocol so the
+  // plugin loops with partial success).
+  const { styles } = params as {
+    styles: {
+      type: StyleCategory
+      name: string
+      value: string
+      description?: string
+    }[]
   }
   return {
-    type,
-    name,
-    value: styleValueToFigma(type, value),
-    description,
+    styles: styles.map((s, index) => ({
+      index,
+      type: s.type,
+      name: s.name,
+      value: styleValueToFigma(s.type, s.value),
+      description: s.description,
+    })),
   }
 }
 
 const convertUpdateStyles = (
   params: Record<string, unknown>,
 ): Record<string, unknown> => {
-  const { styleId, value, name, description } = params as {
-    styleId: string
-    value?: string
-    name?: string
-    description?: string
-  }
-  let convertedValue: unknown
-  let valueType: StyleCategory | undefined
-  if (value !== undefined) {
-    valueType = inferStyleCategory(value)
-    convertedValue = styleValueToFigma(valueType, value)
+  // update_styles is an array-edit: infer + convert each entry's value atom and
+  // carry the original index (matching the standalone handler's plugin protocol
+  // so the plugin loops with partial success).
+  const { styles } = params as {
+    styles: {
+      id?: string
+      name?: string
+      type?: StyleCategory
+      value?: string
+      newName?: string
+      description?: string
+    }[]
   }
   return {
-    styleId,
-    value: convertedValue,
-    valueType,
-    name,
-    description,
+    styles: styles.map((s, index) => {
+      let convertedValue: unknown
+      let valueType: StyleCategory | undefined
+      if (s.value !== undefined) {
+        valueType = inferStyleCategory(s.value)
+        convertedValue = styleValueToFigma(
+          valueType,
+          s.value,
+        )
+      }
+      return {
+        index,
+        id: s.id,
+        name: s.name,
+        type: s.type,
+        value: convertedValue,
+        valueType,
+        newName: s.newName,
+        description: s.description,
+      }
+    }),
   }
 }
 

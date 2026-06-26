@@ -283,24 +283,23 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
       result.content[0].text,
     ) as Record<string, unknown>
     expect(data.id).toBe('c:1')
-    const defs = data.propertyDefinitions as Record<
-      string,
-      unknown
-    >
-    // componentPropertyDefinitions is keyed by the CANONICAL id (e.g.
-    // "Label#1:0"), not the bare name — that is the ground-truth return.
-    expect(defs['Label#1:0']).toBeDefined()
-    expect((data.warnings as unknown[]).length).toBe(1)
-    // The canonical property id (e.g. "Label#1:0") that agents need for later
-    // setProperties is surfaced, not discarded.
-    const added = data.added as {
-      name: string
+    // The catalogue return key is `properties` — an ARRAY of
+    // {id,name,type,defaultValue,variantOptions?}. Each entry's `id` is the
+    // CANONICAL property id (e.g. "Label#1:0") agents need for later
+    // setProperties, so it carries the added id WITHIN the shape (no separate
+    // `added` array).
+    const properties = data.properties as {
       id: string
+      name: string
+      type: string
+      defaultValue: string | boolean
     }[]
-    expect(Array.isArray(added)).toBe(true)
-    expect(added).toHaveLength(1)
-    expect(added[0].name).toBe('Label')
-    expect(added[0].id).toContain('Label#')
+    expect(Array.isArray(properties)).toBe(true)
+    const label = properties.find(p => p.name === 'Label')!
+    expect(label).toBeDefined()
+    expect(label.id).toContain('Label#')
+    expect(label.type).toBe('TEXT')
+    expect((data.warnings as unknown[]).length).toBe(1)
   })
 
   // Genuine T7 {error} boundary #1: an unresolvable componentId is a not-found

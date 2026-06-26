@@ -6,6 +6,7 @@
 // {id,warnings:[...]} degrade (T7 feature-detect/warn) is success-with-warning.
 
 import { describe, expect, it } from 'bun:test'
+import YAML from 'yaml'
 import {
   handleBindVariable,
   handleGetVariables,
@@ -144,6 +145,60 @@ describe('handleGetVariables', () => {
       'Brand/Primary',
     )
     expect(result.content[0].text).toContain('v:9')
+  })
+
+  // Rule-A list envelope (D1): get_variables wraps its collections in the SAME
+  // { results, truncated: false } shape as the shipped sibling reads
+  // (get_styles / get_components / list_fonts) — NOT a Markdown header followed
+  // by a bare top-level YAML array. Bounded read → no cursor input or output.
+  it('wraps collections in the Rule-A { results, truncated:false } envelope', async () => {
+    const result = await handleGetVariables(
+      {},
+      stubClient({
+        reply: {
+          results: [
+            {
+              id: 'col:1',
+              name: 'Brand',
+              modes: [{ modeId: 'm1', name: 'Light' }],
+              variables: [
+                {
+                  id: 'v:9',
+                  name: 'Brand/Primary',
+                  resolvedType: 'COLOR',
+                  valuesByMode: {
+                    m1: { r: 1, g: 0, b: 0 },
+                  },
+                  scopes: ['ALL_SCOPES'],
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    )
+    const { text } = result.content[0]
+    // No leading Markdown header line (the dropped "# N collections, …").
+    expect(text.startsWith('#')).toBe(false)
+    // The whole payload parses as the Rule-A envelope OBJECT, not a bare array.
+    const out = YAML.parse(text) as {
+      results: {
+        id: string
+        name: string
+        variables: { id: string; name: string }[]
+      }[]
+      truncated: boolean
+    }
+    expect(Array.isArray(out)).toBe(false)
+    expect(out.truncated).toBe(false)
+    // No cursor key (bounded read, consistent with the shipped siblings).
+    expect('cursor' in out).toBe(false)
+    // Collection/variable DATA unchanged — only the wrapper.
+    expect(out.results).toHaveLength(1)
+    expect(out.results[0].id).toBe('col:1')
+    expect(out.results[0].variables[0].name).toBe(
+      'Brand/Primary',
+    )
   })
 
   it('renders COLOR valuesByMode to hex atoms and surfaces scopes/codeSyntax/hiddenFromPublishing', async () => {

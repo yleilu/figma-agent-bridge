@@ -209,7 +209,7 @@ describe('handleUpdateComponent', () => {
         sent,
         reply: {
           id: 'c:1',
-          propertyDefinitions: {},
+          properties: [],
           warnings: [],
         },
       }),
@@ -227,30 +227,55 @@ describe('handleUpdateComponent', () => {
     })
   })
 
-  it('emits {id,propertyDefinitions,warnings} from the reply', async () => {
+  // The catalogue return key is `properties` (an ARRAY of
+  // {id,name,type,defaultValue,variantOptions?}), NOT the raw
+  // `propertyDefinitions` object map — round-trips get_components, which projects
+  // the same array shape.
+  it('emits {id,properties,warnings} from the reply', async () => {
     const result = await handleUpdateComponent(
       { componentId: 'c:1' },
       stubClient({
         reply: {
           id: 'c:1',
-          propertyDefinitions: {
-            Label: { type: 'TEXT', defaultValue: 'Hi' },
-          },
+          properties: [
+            {
+              id: 'Label#1:0',
+              name: 'Label',
+              type: 'TEXT',
+              defaultValue: 'Hi',
+            },
+          ],
           warnings: [],
         },
       }),
     )
     const out = JSON.parse(result.content[0].text) as {
       id: string
-      propertyDefinitions: Record<string, unknown>
+      properties: {
+        id: string
+        name: string
+        type: string
+        defaultValue: string | boolean
+      }[]
       warnings: string[]
     }
     expect(out.id).toBe('c:1')
-    expect(out.propertyDefinitions.Label).toBeDefined()
+    expect(Array.isArray(out.properties)).toBe(true)
+    expect(out.properties[0].name).toBe('Label')
     expect(out.warnings).toEqual([])
+    // The legacy keys are GONE (renamed to `properties`).
+    expect(
+      'propertyDefinitions' in
+        (out as Record<string, unknown>),
+    ).toBe(false)
+    expect(
+      'added' in (out as Record<string, unknown>),
+    ).toBe(false)
   })
 
-  it('surfaces the added property ids ({name,id}) from the reply', async () => {
+  // The canonical property id agents need for later setProperties lives INSIDE
+  // each `properties` entry (the `id` field) — no separate `added` array.
+  it('carries the added property canonical ids within `properties`', async () => {
     const result = await handleUpdateComponent(
       {
         componentId: 'c:1',
@@ -265,23 +290,25 @@ describe('handleUpdateComponent', () => {
       stubClient({
         reply: {
           id: 'c:1',
-          propertyDefinitions: {
-            'Label#1:0': {
+          properties: [
+            {
+              id: 'Label#1:0',
+              name: 'Label',
               type: 'TEXT',
               defaultValue: 'Hi',
             },
-          },
-          added: [{ name: 'Label', id: 'Label#1:0' }],
+          ],
           warnings: [],
         },
       }),
     )
     const out = JSON.parse(result.content[0].text) as {
-      added: { name: string; id: string }[]
+      properties: { id: string; name: string }[]
     }
-    expect(out.added).toEqual([
-      { name: 'Label', id: 'Label#1:0' },
-    ])
+    const label = out.properties.find(
+      p => p.name === 'Label',
+    )!
+    expect(label.id).toBe('Label#1:0')
   })
 
   it('T7: a reply with warnings surfaces on SUCCESS (not Error)', async () => {
@@ -290,7 +317,7 @@ describe('handleUpdateComponent', () => {
       stubClient({
         reply: {
           id: 'c:1',
-          propertyDefinitions: {},
+          properties: [],
           warnings: [
             'exposeNestedInstances unavailable in this Figma version; expose skipped',
           ],
