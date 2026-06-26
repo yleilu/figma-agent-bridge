@@ -1333,29 +1333,19 @@ const handleCommand = async (
           ]),
         )
 
+      // T7 resilience: a ComponentSet with conflicting/incomplete variants makes
+      // Figma THROW ("Component set for node has existing errors") when reading
+      // variantProperties / componentPropertyDefinitions. Guard EACH set (and
+      // each standalone component) individually so one malformed node degrades to
+      // a warnings[] entry — naming the node + reason — and every other component
+      // still returns, instead of sinking the whole read into {error}.
+      const componentWarnings: string[] = []
+
       const setMap: Record<string, unknown> = {}
       for (const cs of componentSets) {
-        const variantAxes: Record<string, string[]> = {}
-        if (cs.children) {
-          for (const variant of cs.children) {
-            const props = (variant as ComponentNode)
-              .variantProperties
-            if (props) {
-              for (const pkey of Object.keys(props)) {
-                if (!variantAxes[pkey]) {
-                  variantAxes[pkey] = []
-                }
-                if (
-                  !variantAxes[pkey].includes(props[pkey])
-                ) {
-                  variantAxes[pkey].push(props[pkey])
-                }
-              }
-            }
-          }
-        }
-        const csDefs = cs.componentPropertyDefinitions || {}
-        setMap[cs.id] = {
+        // Base identity is read with cheap props that don't throw; the variant
+        // projection (which can throw) is layered on inside the try.
+        const base = {
           id: cs.id,
           name: cs.name,
           key: cs.key,
@@ -1364,12 +1354,49 @@ const handleCommand = async (
             cs.parent && cs.parent.type === 'PAGE'
               ? cs.parent.name
               : null,
-          properties: projectComponentDefs(csDefs),
-          variantAxes:
-            Object.keys(variantAxes).length > 0
-              ? variantAxes
-              : undefined,
-          defaults: defaultsOf(csDefs),
+        }
+        try {
+          const variantAxes: Record<string, string[]> = {}
+          if (cs.children) {
+            for (const variant of cs.children) {
+              const props = (variant as ComponentNode)
+                .variantProperties
+              if (props) {
+                for (const pkey of Object.keys(props)) {
+                  if (!variantAxes[pkey]) {
+                    variantAxes[pkey] = []
+                  }
+                  if (
+                    !variantAxes[pkey].includes(props[pkey])
+                  ) {
+                    variantAxes[pkey].push(props[pkey])
+                  }
+                }
+              }
+            }
+          }
+          const csDefs =
+            cs.componentPropertyDefinitions || {}
+          setMap[cs.id] = {
+            ...base,
+            properties: projectComponentDefs(csDefs),
+            variantAxes:
+              Object.keys(variantAxes).length > 0
+                ? variantAxes
+                : undefined,
+            defaults: defaultsOf(csDefs),
+          }
+        } catch (e) {
+          // Degrade: include the set WITHOUT its variant info and warn.
+          setMap[cs.id] = base
+          componentWarnings.push(
+            'component set "' +
+              cs.name +
+              '" (' +
+              cs.id +
+              ') skipped variant projection: ' +
+              String(e),
+          )
         }
       }
 
@@ -1381,20 +1408,42 @@ const handleCommand = async (
         ) {
           continue
         }
-        const compDefs =
-          comp.componentPropertyDefinitions || {}
-        standaloneComponents.push({
-          id: comp.id,
-          name: comp.name,
-          key: comp.key,
-          type: comp.type,
-          page:
-            comp.parent && comp.parent.type === 'PAGE'
-              ? comp.parent.name
-              : null,
-          properties: projectComponentDefs(compDefs),
-          defaults: defaultsOf(compDefs),
-        })
+        try {
+          const compDefs =
+            comp.componentPropertyDefinitions || {}
+          standaloneComponents.push({
+            id: comp.id,
+            name: comp.name,
+            key: comp.key,
+            type: comp.type,
+            page:
+              comp.parent && comp.parent.type === 'PAGE'
+                ? comp.parent.name
+                : null,
+            properties: projectComponentDefs(compDefs),
+            defaults: defaultsOf(compDefs),
+          })
+        } catch (e) {
+          // Degrade: include the component WITHOUT its property info and warn.
+          standaloneComponents.push({
+            id: comp.id,
+            name: comp.name,
+            key: comp.key,
+            type: comp.type,
+            page:
+              comp.parent && comp.parent.type === 'PAGE'
+                ? comp.parent.name
+                : null,
+          })
+          componentWarnings.push(
+            'component "' +
+              comp.name +
+              '" (' +
+              comp.id +
+              ') skipped property projection: ' +
+              String(e),
+          )
+        }
       }
 
       const instances = figma.root.findAllWithCriteria({
@@ -1433,7 +1482,15 @@ const handleCommand = async (
       )
       const remoteAll = Object.values(remoteMap)
 
-      return { local: localAll, remote: remoteAll }
+      // warnings[] rides on the success reply only when a node degraded (T7);
+      // a clean read carries no `warnings` key — same shape the server expects.
+      return componentWarnings.length > 0
+        ? {
+            local: localAll,
+            remote: remoteAll,
+            warnings: componentWarnings,
+          }
+        : { local: localAll, remote: remoteAll }
     }
 
     // search (Rule A): the plugin SCANS the requested scope and returns the RAW
