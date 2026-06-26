@@ -1,402 +1,282 @@
 ---
-title: figma-agent-bridge MCP Tool Surface — Design (M4 harvest)
-created: 2026-06-22T15:30:00+08:00
-tags: [figma-bridge, mcp, tool-surface, m4, design, autoresearch-harvest]
+title: figma-agent-bridge — Tool Surface Spec
+created: 2026-06-26T19:00:00+08:00
+tags:
+  - spec
+  - figma-bridge
+  - tool-surface
 type: spec
+related:
+  - "[[figma-bridge/docs/principles]]"
+  - "[[figma-bridge/docs/specs/expression-formats]]"
+  - "[[figma-bridge/docs/milestones/README]]"
 ---
 
-# figma-agent-bridge — MCP Tool Surface (Recommended / Unified)
+# figma-agent-bridge — Tool Surface
 
-> ⚠️ **SUPERSEDED — old-spec (M4 "harvest", 45 tools).** Replaced by the clean-start **47-tool**
-> surface: see [[figma-bridge/docs/milestones/README|the milestones index]] (M2 / M3) and the
-> active design at `docs/scratch/tool-surface-design.md`. Kept for history; **not** the build target.
+> **Status — spec of record.** This is the shipped **47-tool** surface (M1–M3, on
+> `dev`) — the contract of record for the MCP tool layer. The implementation matches
+> it: server handlers in `packages/server/src/tools/*`, param schemas in
+> `packages/shared/src/tool-params.ts`, plugin commands in
+> `packages/figma-plugin/src/code.ts`. Governed by `docs/principles.md` (T1–T9, B1,
+> P1).
 
-> Governed by [[figma-bridge/docs/principles|the principles]].
+> The tool layer only — opinions (design-system-first, audit verdicts, layout
+> inference) are skill-layer (P1) and deliberately absent.
 
-The implementation-ready tool surface for figma-agent-bridge: the trimmed + feasibility-fixed harvest of the autoresearch R36 spec (94 tools → **45 tools**). This unifies the three lens proposals: **coherence** as the base (round-trip symmetry as the organizing law, aggressive field-name standardization, the granular setters kept as aliases), with two grafts from **coverage** (annotations included; text ranges as a dedicated tool) and the naming discipline of **ergonomics**.
+## Overview
 
-**Final tool count: 45** (15 shipped → ~30 net-new, incl. one generic `batch` tool — see Finalized decisions F-A). Within the brief's 35–46 envelope.
+The surface is **47 tools**: read/write pairs over five concept groups (session, nodes,
+structure, design-system, handoff) **+ one generic `batch`**. It is the lean facade base plus
+the capabilities the coverage verify pass proved were over-deferred — reactions,
+boolean/flatten, image fill, plugin-data, page tools, variable-mode lifecycle, viewport focus.
+Not the 56-tool dump: every tool maps to one distinct `figma.*` capability, no convenience
+aliases.
 
----
+How it embodies the six principles:
 
-## Resolved decisions (design review — 2026-06-22)
+1. **Agent-first** — one value grammar learned once (T8); reads default to the compact lossy view so a whole tree fits the context budget (T4); ids returned by every read feed straight into writes.
+2. **Symmetric & round-trippable** — one canonical name per concept; every *editable* concept has a read+write path, and the few read-only tools are **deliberate, documented** asymmetries (T2 — see *Deliberate read-only tools*). The **edit** read (`get_node`) writes straight back through `create_node`/`update_node` losslessly (T1, T2).
+3. **Inspect ≠ edit** — **two separate node readers**: `inspect` (compact view, lossy, scan many) and `get_node` (faithful edit form, round-trips, one node to change). No mode flag — the split is in the principle (T3), so it is in the surface.
+4. **Reading scales — one rule per output shape, learned once** — **list reads** all share one shape (`{results, truncated}`; only `search` paginates, via an **opaque cursor**); **tree reads** all share **depth + budget + truncation-receipt** drill-by-id (with `get_node` the fidelity-first exception below); `fields`/`profile` projection + `match` filter apply where the shape allows. The same contract holds across *every* API of that shape — never per-API (T1, T4).
+5. **Figma-native composition effortless** — components (props/variants/slots), auto-layout (the `layout` struct of every node spec), and design-system (styles/variables/binding) are first-class and no harder than the naive literal path (T9). Tool makes it easy; skill prefers it (P1).
+6. **Writes composable & honest** — `create_tree` nests, `clone_node` clones, ref-pool reuses; one generic `batch` (agent's choice); feature-detect + degrade (slots, paint-binding, annotations, reactions, expose); warn on silent no-ops (e.g. x/y on an auto-layout child).
 
-Six questions surfaced by the design panel were resolved at review. They are **binding** for implementation:
+## Read model
 
-1. **`bind_variable` paint binding** — Ship **scalar binding** this phase (opacity, strokeWeight, itemSpacing, padding, cornerRadius, …) via `node.setBoundVariable(field, variable)`. Paint binding for fills/strokes (`figma.variables.setBoundVariableForPaint`) has **no in-repo precedent** → gate it behind a runtime feature-detect that warns if unavailable; do not depend on it until smoke-tested in-sandbox.
-2. **`set_text_ranges` property scope** — Ship **font ranging** (`setRangeFontName`, fork-verified) as proven. The other range props (`setRangeFills` / `setRangeTextDecoration` / `setRangeTextCase` / `setRangeLetterSpacing` / `setRangeLineHeight`) are real but unverified in-repo → each behind a **per-property feature-detect-and-warn**.
-3. **`get_node` INSTANCE `component.key`** — **In scope.** Add `component.key` to the INSTANCE read shape (plugin `get_node` serializer + `ParsedNode` type in `shared`) so INSTANCE round-trip works. Required by the round-trip law.
-4. **`constraints` write-side** — **Add now.** `constraints` is already read by `ParsedNode` but not accepted by write-side `NodeSpec`; add it to restore round-trip symmetry.
-5. **Style text-value grammar** — **Extend `docs/specs/expression-formats.md`** to canonically document the style-creation font-value variant (`/LineHeight` and `?ls=` suffixes), rather than a separate mini-grammar.
-6. **Immutable API reference** — **Extend `docs/reference/figma-plugin-api.md`** to itemize the verified-real APIs (`listAvailableFontsAsync`, `setRangeFontName`, `figma.annotations.*`) with verification notes, so future work treats them as part of the capability ceiling.
+### Inspect vs edit (two tools, T3)
 
-### Suggested implementation phasing (for the plan)
+| Tool | Format | Lossy? | Round-trips? | Use |
+|---|---|---|---|---|
+| `inspect` | view (compact YAML, atoms+structs) | yes | no | understand large trees within the context budget |
+| `get_node` | edit (faithful `NodeSpec`) | no | yes → `create_node`/`update_node` | fetch a node to change it |
 
-1. **Mutation core** — `update_node` + the 6 setter aliases, `delete_node`, `clone_node`, `reparent_node`, `reorder_children`, `set_selection`, `set_current_page`, `create_page`. Closes the biggest gap (no edit capability today).
-2. **Design system** — `get_local_styles` / `get_local_variables` (refit), `create_styles` / `update_styles` / `apply_style`, `create_variables` / `update_variables` / `bind_variable` (scalar).
-3. **Components & instances** — `update_component`, `combine_variants`, `swap_component` (remote-fixed), `detach_instance`, `reset_instance`, `set_instance_properties`; plus the `get_node` `component.key` read-side fix.
-4. **Handoff & text** — `list_fonts`, `set_text_ranges`, `get_annotations` / `set_annotation`; plus the two doc extensions (decisions 5 & 6).
+Separate tools, not one tool with a `format` flag — different jobs, different defaults, and a
+separate name makes intent explicit and the round-trip contract auditable. A view stub at a
+depth boundary keeps its `id`, so drilling deep = re-`inspect` that id.
 
-Read/query refits (`get_node`/`get_nodes`/`search`/etc. async fixes) land alongside whichever phase first needs them.
+### The two reading rules (D1 — one rule per output shape, applied to every API of that shape)
 
-## Finalized decisions — semantics, contract & scope (review round 2, 2026-06-22)
+**Rule A — list reads → one uniform `{results, truncated}` shape.** Any read returning a **flat
+list** (`search`, `list_pages`, `get_styles`, `get_variables`, `get_components`, `list_fonts`,
+`get_reactions`, `get_annotations`) returns `{ results, truncated }`. The contract is
+**uniform** so the agent learns one list shape everywhere.
 
-A second design-review pass (lenses: runtime semantics, schema/contract, scope) surfaced ~24 further decisions not covered by the six Resolved decisions above. All are now resolved and **binding**. Four were product/architecture forks decided with the user; the rest take the recommended default.
+Pagination is carried by **`search` alone**: the naturally-bounded readers
+(`list_pages`/`list_fonts`/`get_styles`/`get_variables`/`get_components`/`get_reactions`/`get_annotations`)
+are small by construction — they **always return `{ truncated: false }` and take no `cursor`
+input**, keeping the same shape so it is identical everywhere. `search` is the one finder that
+can outgrow a response, so it carries the **opaque, self-contained cursor token** (+ `limit`):
+the agent passes the token back verbatim to continue the *same* query; the token encodes the
+resume position + a tree-version hash, so if the data changed under it the server says
+**re-query** rather than returning garbage (T7). No offset/limit, no client-tracked position.
+`search` returns `cursor` only when `truncated` is true.
 
-### Product forks (user-decided)
+**Rule B — tree reads → depth + budget + receipt.** Any read returning a **node tree**
+(`inspect`, page reads) is shaped by:
+- **`depth`** — level cap; `-1` = all. At the boundary a node collapses to an **id-stub**
+  `{id, name, type, size, childCount}` — the agent **drills by re-reading the stub's id**.
+- **`budget`** — always-on hard cap on response size (token estimate). Even a wide level at
+  shallow depth can't blow context.
+- **truncation receipt** — `truncated: [{id, childCount}]` names exactly which subtrees were
+  cut and how big, so "continue" = "drill into id X" (the drill-by-id replacement for a cursor).
+- **wide nodes narrow, don't paginate** — a node with hundreds of children returns a capped
+  chunk + `childCount`; the agent gets the specific ones via `search` (`match`),
+  not a page scan.
 
-- **F-A · Multi-node editing → ADD one generic `batch` tool.** All single-target setters and `update_node` stay single-node. A new `batch` tool applies one operation across many targets — `{ op: 'update_node'|'delete_node'|'set_fills'|…, entries: [{ nodeId, …params }] }` → `{ results, errors[] }` (partial success). This is the **only** multi-target mutation path (no per-tool `batch_*` twins). **Surface becomes 45 tools.**
-- **F-B · Errors → server-side typed `{ error, code }`.** The server maps connection state + known plugin error strings to the `ErrorCode` enum and emits the envelope as one JSON `text` block. **The plugin is unchanged this phase** (it keeps returning `{ error: string }`; the server adds the code). No plugin churn.
-- **F-C · Variable binding → `bind_variable` only; `var()` read-only this phase.** `bind_variable` is the sole field-binding path, limited to verified scalar fields (opacity/strokeWeight/spacing/padding/radius). `var()` appears in read output but resolves to a **literal** on write. `expression-formats.md` is updated to scope `var()` to reads for now. The unverified `setBoundVariableForPaint` is **not** used this phase.
-- **F-D · Release → ship all 45 atomically.** The 4 build phases are an internal build/test order only; tools are exposed to agents together, one minor version bump, so the round-trip guarantee always holds.
+**`get_node`/`get_nodes` are the fidelity exception (T2).** As the edit readers they are
+**never silently budget-truncated** — they return the node's complete faithful spec at the
+requested `depth` (default 0 = just that node; deeper children are id-stubs that themselves
+round-trip via drill-by-id). They take only the **reduced** read params (`depth`, `fields`,
+`profile`) — **no `budget`, no `match`** (a budget-capped edit read would break round-trip; the
+edit reader returns the faithful spec, it does not filter at the source). For a large subtree
+the agent raises `depth` deliberately; the read never drops a field behind the agent's back.
 
-### Contract defaults (recommended, decided)
+**Projection (D2), on any node-returning read** — `fields: [...]` allow-list (precise
+token-saver) **+ presets** `profile: "minimal"|"layout"|"style"|"text"|"full"` for common
+scans. No deny-list (it grows silently as the grammar grows, a T4 regression).
 
-- **`update_node` schema:** hand-author `updateNodeSpecSchema` — every field optional, **no `type`**, excludes create-only fields (`pointCount`, `vectorPaths`, `booleanOperation`, …). Not `nodeSpecSchema.partial()`.
-- **Merge vs replace → REPLACE-only.** Every array (`fills`/`effects`/`strokes`) and nested object (`text`/`layout`) is wholesale-assigned. Partial edits = read-whole, modify, write-whole (matches the plugin + round-trip law). Documented in each tool description.
-- **`layout` is partial-editable:** in `updateNodeSpecSchema` the `layout` sub-fields are optional and `mode` accepts `NONE` (turn auto-layout off). Create-side `layout` keeps its required fields.
-- **`create_styles` font value:** new `parseStyleFontValue()` — strip `?ls=<v>` first, then `Family/Style/Size[/LineHeight]`. Does **not** touch the load-bearing 3-part `parseFontExpression`. Documented in `expression-formats.md` (Resolved decision #5).
-- **`set_text_ranges`:** range font split into `font` (`Family/Style`, 2-part) + optional `fontSize`. `setRangeFontName` proven; the other `setRange*` props each feature-detect-and-warn.
-- **Text enums → Figma raw superset everywhere** (node text + ranges): `decoration: NONE|UNDERLINE|STRIKETHROUGH`, `case: ORIGINAL|UPPER|LOWER|TITLE|SMALL_CAPS|SMALL_CAPS_FORCED`. Lets `update_node` reset decoration/case too.
-- **Component ref:** add `key` to the write schema (`createComponentRefSchema`) with strip-unknown-keys; `get_node` emits the richer `{ key, name, id, variant, overrides }`; write consumes only `key` + `properties`.
-- **`constraints` write-side:** enum tuple `[MIN|MAX|CENTER|STRETCH|SCALE, …]`; plugin skips + warns when the node is an auto-layout child.
-- **Depth contract:** declare defaults in each zod schema — `get_node`/`get_nodes`/`inspect` = 3, `find_children` = -1, page overviews = 0. Canonical stub (depth 0) = `{ id, name, type, size, position, childCount }`, children omitted.
-- **Variable modes:** `modes[]` (first = default) defines modes on collection creation; an unknown mode name on update = per-row `INVALID_PARAM` in `errors[]`; adding modes to an existing collection is deferred.
-- **`search`/`find_children`:** one shared `filterFieldsSchema` (`name`/`type`/`componentKey`/`styleId`, AND-combined); `search` adds `pageId`/`selection`/`limit`, `find_children` adds `nodeId`/`depth`/`limit`. `componentKey` matches INSTANCEs whose `mainComponent.key` equals the value.
-- **`create_component` un-overloaded:** single-node promote only; `combine_variants` is the sole variant-combining tool (migrate the shipped multi-mode schema).
-- **Return shape:** every node-write returns at minimum `{ id, name, type }` plus operation-salient fields; an optional `warning?: string` on success is the canonical channel for non-fatal notes (createSlot-unavailable, auto-layout no-ops).
+**`match` filter, on list/tree node reads (`inspect`/`search`)** — `{name?, regex?, type?(value|array), componentKey?, styleId?, variableId?, instancesOf?}` filters at the source. `type` accepts an array (multi-type in one pass). The fidelity readers (`get_node`/`get_nodes`) carry no `match`.
 
-### Semantics defaults (recommended, decided)
+### Defaults by job (D4)
 
-- **`clone_node`:** raw `clone()` (no auto-offset); returns the N new nodes only, in creation order. Reposition via `set_position`/`reparent_node`.
-- **`delete_node` on a page:** auto-switch off `currentPage` to a sibling before removal; deleting the **last** page → `INVALID_PARAM`.
-- **`reorder_children`:** requires the **full** child set; validate set-equality (missing/extra/duplicate ids → `INVALID_PARAM`).
-- **`reparent_node`:** `index` = child-list index (= layout order in auto-layout, z-order otherwise); Figma derives geometry. Documented.
-- **Mixed fonts on write:** non-text updates skip font loading (recolor a mixed-font node freely); a whole-node text-content write on a mixed-font node → `FONT_LOAD_FAILED`, use `set_text_ranges`.
-- **`update_node` apply order / atomicity:** fixed order (structure/size → `textAutoResize` → `resize` → positioning); all expressions validated/converted server-side first; **best-effort, not transactional** (Figma has no rollback) — documented.
-- **`set_position`/`resize_node` no-ops:** emit `warning?` when ignored (auto-layout-managed position; HUG/FILL axis on resize); never error.
-- **Timeouts:** 30s standard; 120s for `export` and `create_tree`; optional override param on `export`.
+- **`get_node`/`get_nodes`** → `depth=0` (the node you'll edit; children as id-stubs). `depth=-1` for a full subtree to round-trip; fidelity-first (no budget truncation).
+- **`inspect`** →
+  - **`budget` given** → fill **level-by-level** (breadth-first) until the budget is hit, then stub the rest + receipt. Budget drives depth adaptively.
+  - **no budget, no depth** → `depth=0` (minimal: node + child stubs).
+  - **`depth=-1`** → print all (explicit "dangerous" opt-in).
+  - explicit `depth=n` → exactly n levels (still budget-capped).
 
-### Scope defaults (recommended, decided)
+### Deliberate read-only tools (documented asymmetry, T2)
 
-- **Variable aliasing → supported both directions.** A variable value may reference another variable: read emits `var(Coll/Name)`, write uses `setValueForMode` with a `VariableAlias` (real API, smoke-tested before ship). Required so design systems don't flatten on round-trip. *(Distinct from F-C, which is about binding a node field.)*
-- **`update_component.editProperties`** expanded to `{ name, newName?, defaultValue?, options?, preferredValues? }` (covers rename/default/INSTANCE_SWAP edits, not just variants).
-- **`node.locked`** added to both read and write (mirrors `visible`).
-- **`grid` (layout grids on a node)** → read-only this phase; added to DEFER explicitly (documented asymmetry, like `set_text_ranges`).
-- **Remote/library styles & variables** → LOCAL only this phase; remote import (`importStyleByKeyAsync`/`importVariableByKeyAsync`) added to DEFER (stated asymmetry vs components).
-- **Boolean/group ops on existing nodes** remain DEFERRED but are flagged the **#1 next-phase candidate** — the "covered by `create_tree`" rationale is acknowledged as lossy for already-positioned nodes.
+Not every read has a same-named write twin — and that is deliberate, not silent:
+- `inspect` / `get_node` / `get_nodes` / `search` — query/projection reads; their write side is `create_node`/`update_node` (round-trip by **content**, not a same-named twin).
+- `list_fonts` — fonts are host-provided, not agent-created.
+- `status` / `connect` — session/transport (B1), not design data.
+- `export` — render/asset output (image/SVG), not a writable design field; read-only by nature.
+- Viewport is read via `status` and written via `set_focus`.
+- Twinned reads (do have a writer): `get_selection`↔`set_selection`, `get_styles`↔`create/update_styles`, `get_variables`↔`create/update_variables`, `get_components`↔`create/update_component`, `get_annotations`↔`set_annotations`, `get_reactions`↔`set_reactions`, `get_plugin_data`↔`set_plugin_data`, `list_pages`↔`create_page`/`set_current_page`.
 
-### Acceptance gate (for the plan)
+### Read tools at a glance
 
-- Per-handler zod + cross-validation tests (TDD), reusing existing expression-parser tests.
-- **In-sandbox smoke-test** is the go/defer gate for the flagged-unverified write paths: non-font `setRange*`, the `VariableAlias` write, `swap_component` remote import. (`createSlot` already degrades via warning.)
-- Update downstream: the `figma-mcp` skill tool list, the Notion M3 API-coverage checklist, `docs/specs/expression-formats.md` (replace semantics, style-font grammar, `var()` read-scope), and `docs/reference/figma-plugin-api.md` (itemize verified APIs) per Resolved decisions #5/#6.
+`inspect` · `get_node` · `get_nodes` · `export` · `search` · `list_pages` · `get_selection`
+· `get_styles` · `get_variables` · `get_components` · `list_fonts` · `get_reactions` ·
+`get_plugin_data`. Trees follow Rule B; lists follow Rule A; node-returning reads honor `fields`/`profile` (+ `match` on `inspect`/`search`).
 
----
+## Write model
 
-## Design principles
+### Create / update
 
-1. **Round-trip symmetry is the organizing law.** `get_node` output (`ParsedNode`) is structurally identical to `create_node`/`update_node` input (`CreateNodeSpec`). Mirrored for the design system: `get_local_styles.value` → `create_styles`/`update_styles`; `get_local_variables.valuesByMode` → `create_variables`/`update_variables`; `get_selection` → `set_selection`.
-2. **One concept, one canonical name, everywhere.** A component identifier is `key` on read AND write (never `componentKey` as an identifier). Variable mode maps are `valuesByMode` keyed by mode *name* (never raw modeId). Node identity is `id` in output, `nodeId`/`parentId` in input; styles `styleId`/`id`; variables `variableId`/`id`. The sole documented exception is the `search`/`find_children` filter predicate `componentKey` ("instances whose backing component has this key"), which is a predicate, not an identifier.
-3. **One mutation vocabulary.** `update_node(Partial<NodeSpec>)` is the canonical single-target mutation. The six granular setters (`set_fills`/`set_strokes`/`set_effects`/`set_text_content`/`set_position`/`resize_node`) are KEPT per the brief but defined as **thin pre-validated aliases** sharing update_node's exact field semantics and the same server expression parser — convenience entry points, not a divergent API.
-4. **One path per operation.** One reparent path (`reparent_node`), one reorder path (`reorder_children`), one instance-override path (`set_instance_properties`), one machine reader + one human reader per primitive. `move_node` is cut. `update_node` drops the nested instance-override branch.
-5. **Expression grammar is the backbone — reused, never reinvented.** Colors `#RRGGBB`/`#RRGGBBAA` (6/8-char uppercase, no shorthand — commit 8d9a299); `style(Name)`/`var(Coll/Name)` prefixes; gradients linear|radial|angular|diamond; effects shadow/inner-shadow/blur/bg-blur; fonts `Family/Style/Size`; layout YAML. Server parses expressions → Figma objects BEFORE `sendCommand`; the plugin only assigns.
-6. **Async everywhere.** All node resolution is `await figma.getNodeByIdAsync(id)`; all style/variable/component reads use the Async forms. No sync `getNodeById` exists in this sandbox.
-7. **Uniform result envelope** with a typed error code. See "Result and error shape".
+- **`create_node(spec, {parentId?})`** — one node; `spec` === `get_node` output (round-trip anchor, T2). Appends under `parentId`, else the current page.
+- **`create_tree(tree, {parentId?, refs?})`** — recursive + sibling-array create; the legitimate batch-create envelope (one round-trip for a subtree, T5). **ref-pool**: repeated instances/clones reference a shared spec by key; `{ id }` clone-by-id is also supported in the tree.
+- **`create_from_svg(parentId, svg, {name?, size?})`** — vector import.
+- **`create_image({url|bytes}) → {hash}`** — server-side `createImageAsync`/`createImage`; the hash flows into an `image(hash)` paint (image fill decision below). Supply EXACTLY ONE of `url` or `bytes` (the handler validates).
+- **`update_node(nodeId, patch)`** — THE single-target mutation. `patch` is a **partial NodeSpec**: a **supplied** field is **replaced wholesale** (`fills=` overwrites the whole array, never appends); an **omitted** field is **left untouched** — reconciling lossless writes (T2) with partial/token-efficient input (T4). Absorbs every former setter (`set_fills`, `set_strokes`, `set_text_content`, `set_position`, `resize_node`, …) — T6: one mutation vocabulary, no twins.
 
----
+### The one generic batch (D3 — both shapes, one tool, T5)
 
-## Cross-cutting feasibility fixes (applied to every relevant tool)
+```
+batch({ op?, ops: [ {op?, ...params}, ... ] }) -> { results, errors[] }
+```
+- **Homogeneous** (common, token-cheap): set `op` once at top level; entries omit it.
+- **Heterogeneous**: each entry sets its own `op` (overrides the default).
+- Executes **in array order**; **partial success** (each entry reports its own error);
+  **best-effort, not transactional** (Figma has no multi-step rollback — only `commitUndo`).
+- Returns `{ results:[{index, op, ok, result|error}], errors:[{index, op, error}] }`.
+- **Ordering scope:** the server's ordering guarantees (below) apply **within a single op's
+  param set**; across batch entries, ops run in array order, so cross-entry dependencies
+  (append before FILL) are the agent's to sequence. Each entry emits the same `warnings[]` as
+  a single call (T7).
+- **Scope is WRITE ops over EXISTING targets** (D3). New-node creation (`create_node`,
+  `create_tree`, `create_from_svg`, `create_image`, `create_component`) is deliberately
+  **excluded** — chaining new nodes stays `create_tree`'s job (ref-pool). The fan-out op set:
+  `update_node`, `delete_node`, `set_selection`, `set_focus`, `reparent_node`,
+  `reorder_children`, `clone_node`, `boolean_op`, `flatten`, `apply_style`,
+  `update_component`, `combine_variants`, `swap_component`, `set_instance`, `bind_variable`,
+  `create_styles`, `update_styles`, `create_variables`, `update_variables`, `set_plugin_data`,
+  `set_reactions`, `set_annotations`, `create_page`, `set_current_page`, `duplicate_page`.
 
-- **F1 Node resolution:** `await figma.getNodeByIdAsync(id)` — never sync.
-- **F2 Component-by-key:** `await figma.importComponentByKeyAsync(key)` (remote-capable; already shipped, code.ts:593). Local enumeration via `figma.root.findAllWithCriteria({ types: ['COMPONENT'] })` / `['COMPONENT_SET']` (code.ts:984-987). `getLocalComponents()` does **not** exist and is never used.
-- **F3 swap_component is REMOTE-capable** via importComponentByKeyAsync. The R36 "local-only" limitation is false and removed.
-- **F4 createSlot feature-detected:** `if (component.createSlot) {...} else warn` (code.ts:1292). Component properties added BEFORE slots.
-- **F5 Styles Async forms:** `getLocalPaintStylesAsync`/`getLocalTextStylesAsync`/`getLocalEffectStylesAsync`/`getLocalGridStylesAsync`/`getStyleByIdAsync`; apply via `node.setFillStyleIdAsync`/`setStrokeStyleIdAsync`/`setTextStyleIdAsync`/`setEffectStyleIdAsync`.
-- **F6 Variables Async forms:** `getLocalVariablesAsync`/`getLocalVariableCollectionsAsync`/`getVariableByIdAsync`/`getVariableCollectionByIdAsync`.
-- **F7 bind_variable split paths:** scalar fields (opacity/strokeWeight/itemSpacing/padding*/*Radius) → `node.setBoundVariable(field, variable)` (in reference + SDK). Paint fields (fills/strokes) → `figma.variables.setBoundVariableForPaint(paint, 'color', variable)` then assign the bound paint — **CAVEAT: this paint API has no in-repo precedent (not in the shipped plugin or the working fork); smoke-test before shipping the paint branch (see Resolved decisions).**
-- **F8 Text writes load fonts first:** `await figma.loadFontAsync(fontName)` BEFORE characters/font. On read of an existing TEXT node, load the current `fontName` (reject or load-all when `figma.mixed`). Set `textAutoResize` BEFORE `resize()`.
-- **F9 Guard `figma.mixed`:** any reader touching `fontName`/`fontSize`/`*StyleId`/`cornerRadius`/`fills` must guard `figma.mixed` and emit a sentinel rather than crash.
-- **F10 editorType gating:** components/styles/variables/slots/annotations guard non-Figma editors → `WRONG_EDITOR`.
-- **F11 Geometry guards:** feature-detect every property write (`'resize' in node`, `'layoutMode' in node`, `'cornerRadius' in node`) — SECTION/GROUP/PAGE lack many geometry props (commit a7faf58).
+Family-specific array envelopes (`create_tree`, `get_nodes`, `create_styles`,
+`create_variables`) create a coherent unit and stay distinct from the generic `batch`
+(N ops over existing targets).
 
----
+### Ordering constraints (load-bearing, enforced server-side within one op)
 
-## Result and error shape
+- Set `layoutSizing:FILL` / `layoutPositioning:ABSOLUTE` only **after** `appendChild` to an auto-layout parent → the server orders the property sets within one call.
+- `loadFontAsync` resolves **before** any `text.content`/`font` write → the server loads first.
+- `textAutoResize` set before `resize()`.
 
-Transport returns the MCP `ToolResult` = `{ content: ({ type:'text'; text:string } | { type:'image'; data:string; mimeType:string })[] }`.
+### Honesty / warn-on-no-op (T7)
 
-- **Success (writes):** `JSON.stringify(result, null, 2)` of a plain serializable object (`{ id, name, type, ... }` or an array). Never node references.
-- **Success (reads):** machine readers (`get_*`) emit JSON `ParsedNode`/arrays; human readers (`inspect`, `inspect_page_layout`, `list_pages`) emit YAML.
-- **`export`** returns an `image` block (PNG/JPG/PDF) or a `text` block (SVG).
-- **Error (uniform):** `{ error: string, code: ErrorCode }`.
-  - `ErrorCode = 'NODE_NOT_FOUND' | 'INVALID_PARAM' | 'FONT_LOAD_FAILED' | 'DISCONNECTED' | 'TIMEOUT' | 'UNSUPPORTED_NODE_TYPE' | 'API_UNAVAILABLE' | 'WRONG_EDITOR'`.
-  - `DISCONNECTED` replaces today's free-text "Not connected" string. `API_UNAVAILABLE` is the feature-detect degrade (e.g. createSlot). `WRONG_EDITOR` guards design-only APIs.
-  - **The server owns this mapping** (connection state + known plugin error strings → code) and emits `{ error, code }` as one JSON `text` block; the plugin is unchanged this phase (fork F-B).
-- **Partial success** (the generic `batch` tool + the legitimate array-envelope tools: `create_tree` sibling-array form, `create_styles`, `create_variables`, `update_styles`, `update_variables`, and `get_nodes`): payload includes `results` and `errors[]` (`{ index, error, code }`). Other single-target tools never partially succeed.
+- Feature-detected + degraded: slots (`create_component`), paint variable-binding (`bind_variable`), annotations (editorType-gated), reactions, expose-nested-prop, `swap_component` remote `key` import. Each **warns and continues** — emits a `warnings[]` entry naming what was skipped, never a silent no-op or a hallucinated success.
+- **Warn on silent no-op**: x/y on an auto-layout child → `warnings[]` entry naming the dropped field; same for `reorder_children` set-equality and overrides surviving a `swap_component`.
 
-Handler order (per brief + commit 39832e0): input cross-validation → `if (!client.isConnected())` → convert expressions server-side → `await client.sendCommand('<command>', {...})` → `result === null` → `result.error !== undefined` → success. Cross-field validation lives in the **handler**, not the zod schema. Plugin command strings may differ from tool names (tool `inspect` → command `get_node`; setters → command `update_node` with field-scoped payloads). Pass a larger `timeoutMs` for `export` and large `create_tree`.
+## Expression integration
 
----
+One grammar, two faces (T8, expression-formats.md):
+
+- **Reads emit the view face.** `inspect` renders **structs as YAML** (`node`, `layout`, `text`, `css-grid`) and every leaf as **one atom** — `[style(N)|var(N)] value [{…}]` — so binding *and* appearance ride in one token-cheap string.
+- **Writes consume the edit face.** `create_node`/`update_node`/`create_tree` take the same `NodeSpec` + atom grammar; the write parser also accepts friendlier notations (`rgb()`, `rgba()`) the view never emits. View is the lossy subset of edit.
+- **Image fills (both — two capabilities not two paths):** a paint atom **`image(url|hash){scale?,rot?,…}`** sits in `fills[]` alongside `solid`/`linear`/…; on write `image(url)` makes the hash server-side (deduped by URL), `image(hash)` reuses one; reads emit `image(hash)` (round-trips). **`create_image`** is the *only* path for **raw bytes** and for **pre-creating a reusable hash**; `image(url)` is inline sugar for the URL case.
+- **The one documented asymmetry (T2):** `var()` is read-only this phase — on write it resolves to a literal; binding is applied through **`bind_variable`**. Named here and in the grammar doc.
+- **Styles vs variables routing:** `apply_style` binds a *style* id; `bind_variable` binds a *variable*. Both surface on reads as `style(...)`/`var(...)` so the route is visible on read-back.
 
 ## Tool catalogue
 
-45 tools across 12 categories (the generic `batch` tool from fork F-A is specified under Finalized decisions). `[shipped]` = exists today; `[fix]` = exists but needs a feasibility fix; `[new]` = net-new.
-
-### 1. Connection / session (2)
-
-#### `connect` [shipped]
-Pair the MCP server with the Figma plugin over a WebSocket channel.
-- `channel: z.string().min(1)`
-- → `{ status, channel }` · **API:** WebSocket pairing (no figma.*) · *Round-trip: `channel` is reusable as input.*
-
-#### `status` [shipped]
-Report connection state.
-- (no params) → `{ connected: boolean, channel: string | null }` · **API:** socket state · *`channel` feeds `connect`.*
-
-### 2. Read / query — machine + human (10)
-
-> One machine `get_*` (JSON, round-trippable) and one human `inspect*` (YAML, lossy) per primitive. `get_nodes` is the multi-id read primitive (a legitimate array envelope, NOT a batch twin). Cut readers `inspect_styles`/`inspect_components`/`inspect_variables`/`get_style_by_id`/`get_variable_by_id` are absorbed into the machine readers.
-
-#### `inspect` [shipped, fix F1]
-Human YAML of a node, or current selection if `nodeId` omitted.
-- `nodeId?: string` → YAML tree · **API:** command `get_node` (+`get_selection` fallback) → `getNodeByIdAsync` → `parseNode` → `toInspectTree` · *Human companion to `get_node`.*
-
-#### `inspect_page_layout` [shipped]
-Overview of all top-level frames on the current page.
-- (no params) → YAML `[{ name, id, x, y, width, height }]` · **API:** command `get_page_layout` → `figma.currentPage.children`.
-
-#### `get_node` [shipped, fix F1/F9 + INSTANCE key]
-Machine `ParsedNode` JSON — the round-trip anchor.
-- `nodeId: string`; `depth?: number` (0=stubs, 3=default, -1=unlimited) → `ParsedNode`.
-- **API:** `await figma.getNodeByIdAsync(nodeId)` → recursive property read. **FIX:** async; guard `figma.mixed` on `styleId`/`fontName`; **emit `component.key` for INSTANCE nodes** (the read shape currently lacks it — required for INSTANCE round-trip; see NodeSpec note + Resolved decisions #3). · *Output === `create_node`/`update_node` input.*
-
-#### `get_nodes` [shipped, fix F1/F9]
-Multi-id read primitive.
-- `nodeIds: string[]`; `depth?: number` → `{ results: ParsedNode[], errors: { index, error, code }[] }` · **API:** per-id `getNodeByIdAsync` · *Each element feeds `create_node`/`update_node`.*
-
-#### `get_page_nodes` [fix F1]
-Top-level children of ANY page by id, without switching the current page.
-- `pageId: string`; `depth?: number` (default 0) → `[{ id, name, type, x, y, width, height }]` · **API:** `(await getNodeByIdAsync(pageId)).children`. **FIX:** async; reject non-PAGE (`INVALID_PARAM`). New plugin command `get_page_nodes`. · *Each `id` → `parentId`/`nodeId`.*
-
-#### `list_pages` [shipped]
-Enumerate all pages.
-- (no params) → YAML `[{ id, name, isCurrent, childCount }]` · **API:** `figma.root.children` · *`id` → `pageId`/`parentId`.*
-
-#### `get_document_info` [shipped, fix]
-Document metadata + page list + current page.
-- (no params) → `{ name, pageCount, currentPage: { id, name }, pages: [{ id, name }] }` · **API:** `figma.root.name`/`figma.root.children`/`figma.currentPage`. **FIX:** promote the shipped command to also return the page list. · *`pages[].id` → `pageId`.*
-
-#### `get_selection` [shipped]
-Read the current selection.
-- (no params) → `[{ id, name, type }]` · **API:** `figma.currentPage.selection` · *Output `id[]` feeds `set_selection`.*
-
-#### `search` [shipped, fix F9]
-Document-wide node finder.
-- `name?: string` (`*` wildcards); `type?: string`; `componentKey?: string` (**filter predicate — kept long deliberately**); `styleId?: string`; `pageId?: string`; `selection?: boolean` (default false); `limit?: number` (default 50) → `{ results: [{ id, name, type, page, parent, width, height }], truncated }` · **API:** per-page `node.findAll(cb)`. **FIX:** guard `figma.mixed` on style slots before compare. · *Each `id` → any NodeRef tool; `componentKey` matches `get_local_components.key`.*
-
-#### `find_children` [fix F1/F9]
-Subtree-scoped finder (same filters as `search`, rooted at one node).
-- `nodeId: string`; `name?`/`type?`/`componentKey?`/`styleId?`; `depth?: number` (default -1); `limit?: number` (default 50) → `{ results: [{ id, name, type, parentId }], truncated }` · **API:** `(await getNodeByIdAsync(nodeId)).findAll(cb)`. **FIX:** async root; same mixed guard. New plugin command `find_children`. · *Pairs with `search` (doc-wide vs subtree).*
-
-### 3. Design-system readers — single machine reader per kind (3)
-
-#### `get_local_components` [shipped, fix F2/F10]
-Machine component reader; the source of component `key`s.
-- `query?: string`; `id?: string` (direct lookup; absorbs `get_*_by_id`) → `[{ id, name, key, description, variantProperties: Record<string,string> }]` · **API:** `figma.root.findAllWithCriteria({ types: ['COMPONENT'] })` + `['COMPONENT_SET']`. **FIX:** hallucinated `getLocalComponents()` removed; `WRONG_EDITOR` guard. Absorbs `inspect_components`. · *`key` → `create_node` INSTANCE / `swap_component` / `search.componentKey`; `id` → `update_component`.*
-
-#### `get_local_styles` [fix F5/F9]
-Single machine style reader with resolved expression values.
-- `id?: string`; `type?: 'paint'|'text'|'effect'|'grid'` → `[{ id, name, type, value }]` (`value` in `create_styles` expression format) · **API:** `getLocal*StylesAsync` (filtered) / `getStyleByIdAsync(id)`. **FIX:** Async forms; `WRONG_EDITOR`. New resolved-value plugin command (the shipped `get_styles` returns an unresolved shape). Absorbs `inspect_styles` + `get_style_by_id`. · *`value` → `create_styles`/`update_styles`; `name` → `style(Name)`.*
-
-#### `get_local_variables` [fix F6]
-Single machine variable reader, collection-grouped, mode-resolved.
-- `id?: string`; `collectionId?: string`; `type?: 'COLOR'|'FLOAT'|'STRING'|'BOOLEAN'` → `[{ id, name, type, collectionId, collectionName, valuesByMode: Record<modeName, value> }]` (COLOR as `#RRGGBBAA`) · **API:** `getLocalVariablesAsync`/`getLocalVariableCollectionsAsync` (+ `getVariableByIdAsync`/`getVariableCollectionByIdAsync` when filtered); modeIds → mode names. **FIX:** Async; `WRONG_EDITOR`. Absorbs `inspect_variables` + `get_variable_by_id`. · *`valuesByMode` (mode-name keyed) → `create_variables`/`update_variables`; `name` → `var(Collection/Name)`.*
-
-### 4. Pages / navigation (2)
-
-#### `create_page` [new]
-- `name: string`; `isCurrent?: boolean` (default false) → `{ id, name }` · **API:** `figma.createPage()` → `.name` (+ `figma.currentPage = page` if `isCurrent`). New plugin command `create_page`. · *`id` → `parentId`/`pageId`.*
-
-#### `set_current_page` [fix F1]
-- `pageId?: string` XOR `name?: string` (handler validates exactly one) → `{ id, name }` · **API:** `figma.currentPage = await getNodeByIdAsync(pageId)` or `root.children.find(name)`. **FIX:** async; reject non-PAGE. New plugin command `set_current_page`.
-
-### 5. Create (3)
-
-#### `create_node` [shipped, fix F2/F8]
-Create a single node of any type.
-- `parentId: string`; `node: NodeSpec` (same structure as `get_node` output) → `{ id, name, type }` (INSTANCE also returns `key`) · **API:** `figma.create*()`; INSTANCE via `await importComponentByKeyAsync(node.component.key)` → `createInstance()` (code.ts:593); TEXT → `await loadFontAsync(...)` before characters/font. **FIX:** async parent; remote-capable INSTANCE. · *`node` === `get_node` output.*
-
-#### `create_tree` [shipped, fix F2/F8]
-Recursive hierarchy + sibling-array form (legitimate built-in batch-create envelope). Supports clone refs `{ id }`.
-- Single-root: `parentId`, `node: TreeNodeSpec` (recursive `children[]`). Sibling: `parentId`, `nodes: TreeNodeSpec[]` → single `{ id, name, type }` or `{ results, errors }`; INSTANCE entries include `key`.
-- **API:** 4-phase per node (create → set props except FILL-sizing/`layoutPositioning:ABSOLUTE` → `appendChild` → set deferred sizing/positioning). Clone ref → `node.clone()`; component ref → `importComponentByKeyAsync` + `createInstance()`. **FIX:** async; keep 4-phase ordering (code.ts:1198). · *A `get_node(depth:-1)` subtree feeds straight back.*
-
-#### `create_from_svg` [shipped, fix F1]
-- `parentId: string`; `svg: string`; `name?: string` (default "SVG"); `size?: [number, number]` → `{ id, name, type, childCount }` · **API:** `figma.createNodeFromSvg(svg)` → name/resize → `appendChild`. **FIX:** async parent.
-
-### 6. Mutation / update (9)
-
-> `update_node(Partial<NodeSpec>)` is the canonical single-target mutation. The six setters are KEPT (brief mandate) as **thin pre-validated aliases** sharing update_node's exact field semantics and parser — one mutation vocabulary, convenience entry points. All route to a single new plugin command `update_node` with a field-scoped payload (≈6 zod schemas + thin server shells, not 6 plugin cases).
-
-#### `update_node` [new, fix F1/F8/F9]
-Central single-target mutation; accepts any subset of NodeSpec.
-- `nodeId: string`; `props: Partial<NodeSpec>` — `fills`, `strokes`, `strokeWeight`, `strokeAlign`, `strokeDash`, `radius`, `opacity`, `effects`, `blendMode`, `rotation`, `visible`, `clipsContent`, `size`, `position`, `layout`, `sizing`, `layoutPositioning`, `min/maxWidth/Height`, `constraints` (now in scope — see Resolved decisions #4), `text`, `textAutoResize`, `name`. → `{ id, name, type }` · **API:** new plugin command `update_node` — `getNodeByIdAsync`, server converts expressions, then per-field assignment; TEXT → `loadFontAsync` (handle `figma.mixed`) before text props, `textAutoResize` before `resize`. **FIX:** async; mixed/styleId guards; **DROP the nested instance-override branch** (route via `set_instance_properties`). · *`props` is `Partial<get_node output>` — full read-modify-write.*
-
-#### `set_fills` [new] *(alias of update_node)*
-- `nodeId: string`; `fills: string[]` (hex/gradient/`style()`/`var()`/`image()`) → `{ id, name, type }` · **API:** server `parseFillExpressions` → `update_node` `{ fills }`. · *`fills` === `ParsedNode.fills`.*
-
-#### `set_strokes` [new] *(alias)*
-- `nodeId: string`; `strokes: string[]` → `{ id, name, type }` · **API:** `parseFillExpressions` → `update_node` `{ strokes }`.
-
-#### `set_effects` [new] *(alias)*
-- `nodeId: string`; `effects: string[]` (`shadow()`/`inner-shadow()`/`blur()`/`bg-blur()`/`style()`) → `{ id, name, type }` · **API:** `parseEffectExpressions` → `update_node` `{ effects }`.
-
-#### `set_text_content` [new, fix F8] *(alias; whole-node text only)*
-- `nodeId: string` (must be TEXT); `content: string` → `{ id, name, type }` · **API:** plugin loads current `fontName` (`loadFontAsync`, reject `figma.mixed` → `FONT_LOAD_FAILED`) then `node.characters = content`. `update_node` text-content payload. · *Per-substring styling is `set_text_ranges` (§11), not here.*
-
-#### `set_position` [new] *(alias)*
-- `nodeId: string`; `x: number`; `y: number` → `{ id, name, type, x, y }` · **API:** `node.x`/`node.y` → `update_node` `{ position: [x, y] }`. No-op caveat under auto-layout (surfaced as `warning`).
-
-#### `resize_node` [new, fix F8] *(alias)*
-- `nodeId: string`; `width: number`; `height: number` → `{ id, name, type, width, height }` · **API:** `node.resize(w, h)` → `update_node` `{ size: [w, h] }`; TEXT sets `textAutoResize` first. Guard `'resize' in node`.
-
-#### `delete_node` [new, fix F1]
-- `nodeId: string` → `{ id, name, type }` (captured before removal) · **API:** `(await getNodeByIdAsync(nodeId)).remove()` (works on pages; Figma keeps ≥1). New plugin command `delete_node`.
-
-#### `clone_node` [new, fix F1]
-- `nodeId: string`; `parentId?: string` (defaults to same parent); `count?: number` (default 1) → `[{ id, name, type }]` (always an array) · **API:** `node.clone()` ×count (+ `parent.appendChild` if reparenting). New plugin command `clone_node`.
-
-### 7. Structure (3)
-
-> One reparent path + one reorder path. `move_node` CUT (parentId branch == `reparent_node`; index branch == `reorder_children`).
-
-#### `reparent_node` [new, fix F1]
-- `nodeId: string`; `parentId: string`; `index?: number` (omit to append) → `{ id, name, type, parentId }` · **API:** `parent.insertChild(index, node)` / `parent.appendChild(node)`. **FIX:** async both; guard `'appendChild' in parent`. New plugin command `reparent_node`.
-
-#### `reorder_children` [new, fix F1]
-- `parentId: string`; `nodeIds: string[]` (desired order) → `{ parentId, childCount, order: string[] }` · **API:** sequential `parent.insertChild(i, node)` for i=0..N-1 (each insert shifts indices). New plugin command `reorder_children`.
-
-#### `set_selection` [new, fix F1]
-- `nodeIds: string[]` → `{ selectedCount, nodeIds }` · **API:** `figma.currentPage.selection = [resolved]`. New plugin command `set_selection`. · *Consumes `get_selection` output directly.*
-
-### 8. Components & instances (7)
-
-> One instance-override path: `set_instance_properties` (flat).
-
-#### `create_component` [shipped, fix F4/F10]
-Promote a node to a Component; add properties (before slots); slots feature-detected.
-- `nodeId: string`; `componentProperties?: [{ name, type: 'BOOLEAN'|'TEXT'|'INSTANCE_SWAP'|'SLOT', default? }]`; `slots?: string[]` → `{ id, name, type, key }` (+ `warning` if `createSlot` unavailable) · **API:** `createComponentFromNode`; `addComponentProperty`; then `createSlot(child)` feature-detected (code.ts:1292). **FIX:** async; properties before slots; `WRONG_EDITOR`. Handler validation per commit 39832e0. · *`key` → INSTANCE creation / `swap_component`.*
-
-#### `update_component` [new, fix F1/F10]
-Edit/delete/add component properties (round-trips `create_component`).
-- `nodeId: string`; `addProperties?: [...]` (same shape as `create_component.componentProperties`); `editProperties?: [{ name, options }]`; `deleteProperties?: string[]` → `{ id, name, type, key }` · **API:** `editComponentProperty`/`deleteComponentProperty`/`addComponentProperty`. New plugin command `update_component`.
-
-#### `combine_variants` [new, fix F1]
-- `nodeIds: string[]` (≥2; handler validates → `INVALID_PARAM`) → `{ id, name, type, key }` · **API:** `combineAsVariants(nodes, firstParent)`. New plugin command `combine_variants`.
-
-#### `swap_component` [new, fix F1/F3]
-Swap an instance's backing component — **remote/library capable**.
-- `nodeId: string` (the INSTANCE); `key: string` (**identifier — standardized from R36 `componentKey`**) → `{ id, name, type, key }` · **API:** `instance.swapComponent(await importComponentByKeyAsync(key))`. **FIX:** false local-only limitation removed. · *`key` === `get_local_components.key`.*
-
-#### `detach_instance` [new, fix F1]
-- `nodeId: string` → `{ id, name, type }` (resulting FrameNode) · **API:** `instance.detachInstance()`. **FIX:** reject non-INSTANCE (`UNSUPPORTED_NODE_TYPE`).
-
-#### `reset_instance` [new, fix F1]
-- `nodeId: string` → `{ id, name, type }` · **API:** `instance.resetOverrides()`. Reject non-INSTANCE.
-
-#### `set_instance_properties` [new, fix F1]
-The single instance-override path.
-- `nodeId: string` (must be INSTANCE); `properties: Record<string, string | boolean>` → `{ id, name, type }` · **API:** `instance.setProperties(properties)` (pass-through). New plugin command. · *`update_node` deliberately does NOT carry nested overrides.*
-
-### 9. Styles — authoring (3)
-
-#### `create_styles` [new, fix F5/F10]
-Batch-create paint/text/effect/grid styles (array envelope, not a twin).
-- `styles: [{ type: 'paint'|'text'|'effect'|'grid', name, value }]` — `value` uses canonical grammar (paint hex/gradient; text `Family/Style/Size`, with optional `/LineHeight`+`?ls=` style-value extension — see Resolved decisions; effect `shadow()`/`blur()`; grid `columns()/rows()/grid()`) → `{ results: [{ type, name, id }], errors }` · **API:** `createPaintStyle`/`createTextStyle`/`createEffectStyle`/`createGridStyle` + set value. **FIX:** `WRONG_EDITOR`. New plugin command `create_styles`. · *`name` → `style(Name)`; `id` → `update_styles`/`apply_style`.*
-
-#### `update_styles` [new, fix F5]
-- `styles: [{ id?, type?, name?, value, newName? }]` (handler enforces `id` XOR `name`+`type`) → `{ results: [{ type, name, id }], errors }` · **API:** `getStyleByIdAsync(id)` / `getLocal*StylesAsync().find(name)` → set value + optional `.name`. New plugin command `update_styles`. · *`value` round-trips from `get_local_styles`.*
-
-#### `apply_style` [new, fix F5]
-- `nodeId: string`; `styleId: string`; `field: 'fill'|'stroke'|'text'|'effect'` → `{ id, name, type }` · **API:** `node.setFillStyleIdAsync`/`setStrokeStyleIdAsync`/`setTextStyleIdAsync`/`setEffectStyleIdAsync`. New plugin command `apply_style`.
-
-### 10. Variables — authoring (3)
-
-#### `create_variables` [new, fix F6/F10]
-Create a collection + variables + per-mode values (array envelope), or add to an existing collection.
-- `collection?: string` (required if no `collectionId`); `modes?: string[]` (required if no `collectionId`); `collectionId?: string`; `variables: [{ name, type: 'COLOR'|'FLOAT'|'STRING'|'BOOLEAN', valuesByMode: Record<modeName, value> }]` → `{ collectionId, modeIds: Record<modeName, modeId>, variables: [{ id, name, type }] }` · **API:** `createVariableCollection` (unless `collectionId`) → `createVariable` → `setValueForMode` (modeName→modeId). **FIX:** `WRONG_EDITOR`; handler enforces `collectionId` XOR (`collection`+`modes`). New plugin command. · *`valuesByMode` (mode-name keyed) round-trips with `get_local_variables`/`update_variables`.*
-
-#### `update_variables` [new, fix F6]
-- `variables: [{ id, valuesByMode: Record<modeName, value> }]` (only listed modes change) → `{ results: [{ id, name, type }], errors }` · **API:** `getVariableByIdAsync(id)` + `getVariableCollectionByIdAsync` (modeName→modeId) → `setValueForMode`. New plugin command.
-
-#### `bind_variable` [new, fix F6/F7]
-Bind a variable to a node field (paint vs scalar paths).
-- `nodeId: string`; `variableId: string`; `field: 'fills'|'strokes'|'opacity'|'strokeWeight'|'itemSpacing'|'paddingTop'|'paddingRight'|'paddingBottom'|'paddingLeft'|'topLeftRadius'|'topRightRadius'|'bottomLeftRadius'|'bottomRightRadius'` → `{ id, name, type }` · **API:** `getVariableByIdAsync(variableId)`; **scalar fields** → `node.setBoundVariable(field, variable)` (in reference + SDK); **fills/strokes** → `figma.variables.setBoundVariableForPaint(paint, 'color', variable)` then assign — **paint path has no in-repo precedent; smoke-test or defer (see Resolved decisions).** New plugin command `bind_variable`. · *`variableId` from `get_local_variables`/`create_variables`.*
-
-### 11. Text-range styling + Fonts + Export (3)
-
-#### `set_text_ranges` [new] *(dedicated — keeps whole-node text writes round-trippable)*
-Style substrings of a TEXT node — the one realistic editing need `set_text_content`/`update_node` (whole-node only) cannot express.
-- `nodeId: string` (must be TEXT); `ranges: [{ start: number (inclusive), end: number (exclusive), font?: string (Family/Style/Size), fills?: string[], textStyleId?: string, decoration?: 'UNDERLINE'|'STRIKETHROUGH'|'NONE', case?: 'UPPER'|'LOWER'|'TITLE'|'SMALL_CAPS'|'ORIGINAL', letterSpacing?: string, lineHeight?: string }]` → `{ id, name, type, rangeCount }`
-- **API:** per range, after `loadFontAsync(font)` — `node.setRangeFontName(start, end, {family,style})` (+ `setRangeFontSize`), `setRangeFills`, `setRangeTextStyleIdAsync`, `setRangeTextDecoration`, `setRangeTextCase`, `setRangeLetterSpacing`, `setRangeLineHeight`. Server parses font/fill/spacing via existing parsers. New plugin command `set_text_ranges`.
-- **VERIFICATION:** `setRangeFontName` is confirmed in the working fork (code.js:1592/2376/2482). The other `setRange*` properties are real Figma APIs but appear NOWHERE in the fork or reference — ship font ranging as proven, others behind a per-property feature-detect-and-warn (see Resolved decisions).
-- *Decision: a dedicated tool, NOT a folded `ranges[]` field — `getStyledTextSegments` is absent from the fork, so `get_node` cannot read styled runs back; folding would create a non-round-trippable write-only field. Range styling is write-only this phase (documented asymmetry).*
-
-#### `list_fonts` [new]
-Enumerate available font families/styles so agents stop guessing names that fail at write time.
-- `query?: string` (case-insensitive family filter, server-side) → `[{ family, styles: string[] }]` · **API:** `await figma.listAvailableFontsAsync()` → group `{ fontName: { family, style } }` by family. **VERIFIED real** (working fork code.js:1625). New plugin command `list_fonts`. · *`family`/`style` compose every `Family/Style/Size` expression in `create_node`/`update_node`/`create_styles`/`set_text_ranges`.*
-
-#### `export` [shipped, fix F1]
-Export a node as PNG/SVG/PDF/JPG.
-- `nodeId: string`; `format?: 'PNG'|'SVG'|'PDF'|'JPG'` (default PNG); `scale?: number` (default 1) → `image` block (raster/PDF) or `text` block (SVG) · **API:** `node.exportAsync({ format, scale })`. **FIX:** async; larger `sendCommand` timeout for big exports.
-
-### 12. Annotations — dev-handoff (2)
-
-> INCLUDED (grafted from the coverage lens). **VERIFICATION:** the working fork (the implementation reference) fully implements these — `figma.annotations.getAnnotationCategoriesAsync()` (code.js:3228) and read/write of `node.annotations` (code.js:3284-3404, write shape `node.annotations = [{ labelMarkdown, categoryId?, properties? }]`). The capability ceiling doc omits them, but it is a curated subset that also omits `getNodeByIdAsync`/`importComponentByKeyAsync`/`findAllWithCriteria` the shipped plugin uses — so its silence is not disqualifying. Both tools are isolated (own commands, `editorType`-gated) and add no risk to the core surface.
-
-#### `get_annotations` [new, fix F10]
-- `nodeId?: string` (omit → scan current page) → `{ categories: [{ id, label, color }], annotations: [{ nodeId, name, annotations: [{ labelMarkdown, categoryId?, properties? }] }] }` · **API:** `figma.annotations.getAnnotationCategoriesAsync()` + read `node.annotations`. New plugin command `get_annotations`. · *Round-trips with `set_annotation` (read shape == write shape).*
-
-#### `set_annotation` [new, fix F10]
-- `nodeId: string`; `labelMarkdown: string`; `categoryId?: string`; `properties?: [{ type: string }]` → `{ id, name, type, annotations }` · **API:** `node.annotations = [{ labelMarkdown, categoryId?, properties? }]` (overwrite). New plugin command `set_annotation`.
-
----
-
-## NodeSpec / ParsedNode (the shared vocabulary)
-
-`create_node`/`create_tree` input, `update_node.props` (as `Partial`), and `get_node` output all use one schema (`packages/shared/src/create-schemas.ts` `nodeSpecSchema`, mirrored in `create-types.ts`). The shipped schema is reused verbatim. **Two read-side adjustments are required for true round-trip** (both in scope — see Resolved decisions #3 and #4):
-
-1. **`get_node` must emit `component.key` for INSTANCE nodes.** The read shape is currently `component: { name, id, variant?, overrides? }` (expression-formats.md:320-325) with NO `key`, while the write side (`createComponentRefSchema`, create-schemas.ts:92) requires `{ key, properties? }`. Without this, INSTANCE round-trip is impossible. Touches the plugin's `get_node` serializer + the `ParsedNode` type.
-2. **`constraints` should be added to the write-side NodeSpec.** `ParsedNode` already emits `constraints` (expression-formats.md:289) but `nodeSpecSchema` does not accept it — so constraints currently read but cannot be written back. Adding it restores symmetry. (This corrects the coverage proposal's inverted rationale.)
-
-No `ranges[]` field is added to `NodeSpec.text` — range styling lives in the dedicated `set_text_ranges` tool (write-only this phase). No other new NodeSpec fields are added (`layoutGrids`/`exportSettings`/per-side stroke weights deferred until `get_node` emits them).
-
-## Expression grammar
-
-Reused verbatim from `docs/specs/expression-formats.md` + `expression-parser.ts`. Colors `#RRGGBB`/`#RRGGBBAA` (6/8-char uppercase, no shorthand — commit 8d9a299); `style(Name)`/`var(Coll/Name)` prefixes; gradients linear|radial|angular|diamond; effects shadow/inner-shadow/blur/bg-blur; font `Family/Style/Size`; layout YAML. Server parses → Figma objects BEFORE `sendCommand`; the plugin only assigns. (One open extension: the `create_styles` text-value `/LineHeight`+`?ls=` suffix — see Resolved decisions.)
-
----
-
-## Explicitly cut / deferred
-
-### CUT (do not build)
-- **All 32 `batch_*` twins** (`batch_create_page`, `batch_export`, `batch_update_node`, `batch_set_fills`, `batch_set_strokes`, `batch_set_effects`, `batch_set_position`, `batch_resize_nodes`, `batch_set_text_content`, `batch_reparent_nodes`, `batch_reorder_children`, `batch_clone_nodes`, `batch_delete_nodes`, `batch_apply_style`, `batch_bind_variable`, `batch_create_component`, `batch_update_component`, `batch_combine_variants`, `batch_swap_component`, `batch_detach_instance`, `batch_reset_instance`, `batch_set_instance_properties`, `batch_group_nodes`, `batch_ungroup_node`, `batch_flatten_node`, `batch_create_from_svg`, `batch_create_slice`, `batch_create_text_path`, `batch_transform_group`, `batch_read_reactions`, `batch_set_reactions`, `batch_create_variables`). One generic `batch` tool (fork F-A) **replaces** all of them — it applies a single operation across many targets. Legitimate non-twin array envelopes also survive: `create_tree`, `create_styles`, `create_variables`, `get_nodes`.
-- **Redundant readers:** `inspect_styles`, `inspect_components`, `inspect_variables`, `get_style_by_id`, `get_variable_by_id` — absorbed into the three `get_local_*` readers (id/type filters).
-- **`move_node`** — parentId branch == `reparent_node`; index branch == `reorder_children`.
-- **`create_image`** — image fills already work via the `image(url)` expression.
-
-### DEFER (later phase — listed, not built)
-- **Prototyping** (`read_reactions`/`set_reactions`) — `node.setReactionsAsync` exists in the reference, but the `Reaction` input shape (trigger/action/transition) must be validated against the real SDK first (brief fix #9). Read shape must equal write shape for round-trip.
-- **`group_nodes`/`ungroup_node`/`flatten_node`** — vector/structure niche (creation-side GROUP/BOOLEAN_OPERATION already covered by `create_tree`).
-- **`create_slice`, `create_text_path`, `transform_group`** — `transform_group` needs a validated `modifiers` schema; the others are export/path niche.
-- **`duplicate_styles`** — achievable via `get_local_styles` → `create_styles`.
-- **NodeSpec field expansion** beyond the in-scope fixes (`exportSettings`, per-side stroke weights) — defer until `get_node` emits them.
-- **`grid` (layout grids on a node)** — read-only this phase (already emitted on read; write deferred — documented asymmetry, see Finalized decisions).
-- **Remote/library styles & variables** — LOCAL only this phase; `importStyleByKeyAsync`/`importVariableByKeyAsync` deferred (stated asymmetry vs components, which support remote).
-- **Boolean / group ops on existing nodes** — deferred, but flagged the #1 next-phase candidate (recreating positioned nodes via `create_tree` is lossy).
-
-## Coverage summary
-- **45 tools** = 15 shipped (KEEP/FIX) + ~30 net-new/refit (incl. the generic `batch` tool). Within the brief's 35–46 target.
-- Every read has a symmetric write; every write maps to a real `figma.*` API confirmed in the plugin code or working fork. Verified-real-but-not-in-the-reference-doc: `listAvailableFontsAsync`, `setRangeFontName`, `figma.annotations.getAnnotationCategoriesAsync` + `node.annotations`. Real-but-unverified-in-repo (flagged): `setBoundVariableForPaint`, the non-font `setRange*` family.
-- Round-trip pairs: `get_node`↔`create_node`/`update_node` (requires INSTANCE `component.key` read-side fix); `get_nodes`↔`create_tree`; `get_local_styles`↔`create_styles`/`update_styles`; `get_local_variables`↔`create_variables`/`update_variables`; `get_local_components`↔`create_component`/`update_component`; `get_selection`↔`set_selection`; `get_annotations`↔`set_annotation`. Write-only this phase (documented asymmetry): `set_text_ranges` (no `getStyledTextSegments` for read-back).
+Format: `name(params) → returns` — purpose · principle/checklist need.
+
+**Count = 47** (auditable per group): Session 2 · Read-nodes 4 · Read-query 3 · Read-DS 4 · Read-meta 2 · Write-nodes 5 · Write-structure 8 · Write-pages 3 · Write-components 5 · Write-DS 6 · Write-meta 2 · Handoff 2 · Batch 1 = **47**.
+
+### Session (2)
+- `connect(channel) → {channel, connected}` — pair MCP server to the Figma plugin · B1; §2 connect.
+- `status() → {connected, channel, currentPage, selection[], viewport}` — connection + live context in one read (live context is best-effort; failures degrade, they don't throw) · B1, T4; §2 read-what-user-sees.
+
+### Read — nodes (4)
+- `inspect({nodeId?, pageId?, depth?, budget?, fields?, profile?, match?}) → {view, truncated[]}` — compact lossy view, drill-by-id (Rule B); omit both ids to inspect the current selection (multi-select returns a `SELECTION` forest) · **T3 inspect**, T4; §1 human view, §3 deep/large trees, §13 CSS-handoff data.
+- `get_node(nodeId, {depth?=0, fields?, profile?}) → NodeSpec` — faithful edit form, round-trips; **fidelity-first, never budget-truncated**, **no budget/match** (children past `depth` are id-stubs that round-trip via drill-by-id). `NodeSpec` carries `layoutPositioning`, instance `componentProperties`/`variantProperties`/`overrides` — so override-reads (§6/§11) and the §7 absolute-positioning audit ride on this read · **T3 edit**, T2; §1 read-exact-to-write, §6 instance overrides.
+- `get_nodes(nodeIds[], {depth?, fields?, profile?}) → {results, errors[]}` — multi-id read (faithful spec per id; same reduced params + fidelity-first contract as `get_node`) · T4, T5; §1 read-many.
+- `export(nodeId, {format?, scale?}) → image|svg-text` — render-to-see + one-off asset export (`format`: PNG|JPG|SVG|PDF, default PNG; `scale` ignored for SVG/PDF) · T6; §1 visual-confirm, §13 export-assets. *(Persistent `exportSettings` is a `NodeSpec` field — round-trips via `get_node`/`update_node`.)*
+
+### Read — query & document (3)
+- `search({scope?, pageId?, nodeId?, depth?, match?, cursor?, limit?, fields?, profile?}) → {results, truncated, cursor?}` — the one finder (`scope`: document(default)|page|node|selection; `match` incl. `type` array, `instancesOf`, `styleId`/`variableId`); `depth` bounds the **scan scope** (how deep the plugin traverses each root: -1/omitted = whole subtree, 0 = roots only, N = N levels), results stay a flat list (Rule A); `cursor` is the opaque pagination token (returned only when `truncated`); `fields` can project `characters` (text-copy inventory) · T1 (the one finder); §4 all find + text inventory. 🟠 reverse-lookup returns only matching ids — any usage/orphan/audit interpretation is skill-layer (P1).
+- `list_pages() → {docName, results:pages[{id,name,isCurrent,childCount}], truncated:false}` — document + page enumeration (Rule A; bounded, no cursor) · §2 list-pages.
+- `get_selection() → [{id,name,type}]` — read selection; twin of `set_selection` · T2; §1 selection.
+
+### Read — design system (4)
+- `get_styles({type?, id?}) → {results, truncated:false}` — paint/text/effect/grid styles, resolved to grammar atoms (`results:[{id,name,type,value}]`); Rule A, bounded (no cursor) · T1; §5 list-styles.
+- `get_variables({collectionId?}) → {results, truncated:false}` — collection-grouped, mode-resolved, alias chains (`results:[{id,name,modes,variables[{id,name,type,valuesByMode,aliases,scopes,codeSyntax,hiddenFromPublishing}]}]`); Rule A, bounded (no cursor) · §5 variables/tiers, §6 per-mode, §12 export-planning data.
+- `get_components({query?}) → {results, truncated:false}` — components/sets, keys, all 4 property types (unified `properties:[{id,name,type,defaultValue,variantOptions?}]` — same shape `update_component` writes), variant axes, defaults; Rule A, bounded (no cursor); `query` is a case-insensitive name substring · T1; §5 discover/variant-axes, §7 variant-count data (verdict skill).
+- `list_fonts({query?}) → {results, truncated:false}` — loadable fonts so writes don't guess (`results:[{family,styles[]}]`); Rule A, bounded (no cursor); `query` filters family-name substring · T7; §5 know-fonts.
+
+### Read — node metadata & prototype (2 · restored)
+- `get_plugin_data(nodeId, {namespace?}) → {nodeId, pluginData, sharedPluginData?, warnings?}` — agent metadata (plugin + shared namespaced); plain read (not a Rule-A list — it returns the data maps directly) · T2; §1 read agent-state.
+- `get_reactions(nodeId) → {results, truncated:false, warnings?}` — prototype flow/wiring read; **Rule-A list envelope** (per D1 — uniform with every other list read; `warnings` carry the T7 feature-detect degrade); twin of `set_reactions` · T2, T4, T7; §13 read-prototype.
+
+### Write — nodes (5)
+- `create_node(spec, {parentId?}) → {id,name,type,…}` — create one node; `spec` === `get_node` output (round-trip anchor) · T2, T9; §8 build tasks.
+- `create_tree(tree, {parentId?, refs?}) → {root, ids[]}` — recursive/sibling batch-create + ref-pool + `{id}` clone-by-id · T5, T9; §8 build screen/card/grid.
+- `create_from_svg(parentId, svg, {name?, size?}) → {id,…}` — vector import · §8 add-icon.
+- `create_image({url|bytes}) → {hash}` — the **only** path for raw bytes + pre-creating a reusable hash; its hash feeds an `image(hash)` paint (inline `image(url)` is sugar for the URL case); supply exactly one of `url`/`bytes` · T9; §8/§9 image fill.
+- `update_node(nodeId, patch) → {id,…,warnings[]}` — the single mutation; `patch` is a partial NodeSpec (supplied field replaces wholesale, omitted untouched); warns on no-op · T1/T6, T7; §9 all restyle/bulk-edit, §8 ABSOLUTE/constraints, basic props (name/lock/visible/opacity/blend/rotation).
+
+### Write — structure (8)
+- `clone_node(nodeId, {parentId?, index?, count?}) → [{id,…}]` — raw duplication (one entry per clone) · T6; §10 duplicate, §8 grid.
+- `delete_node(nodeId) → {id,name,type}` — page-aware remove (captures node info before removal) · §9 cleanup.
+- `reparent_node(nodeId, parentId, {index?}) → {id,…,parentId}` — the one reparent path; re-flows under new parent · §10 move-into-frame.
+- `reorder_children(parentId, nodeIds[]) → {parentId, order, warnings[]}` — set-equality validated; warns on mismatch (never throws) · T7; §10 reorder.
+- `set_selection(nodeIds[]) → {selectedCount}` — twin of `get_selection`; **selection only** (does NOT scroll the canvas — pair with `set_focus`); empty array clears the selection · T2; §2.
+- `set_focus(nodeIds[]) → {viewport}` — scroll + zoom the canvas to nodes (`figma.viewport.scrollAndZoomIntoView`); the viewport writer (`status` reads viewport); unresolvable ids are skipped · T7; §2 focus/scroll-to-node.
+- `boolean_op(op, nodeIds[], {parentId?}) → {id,…}` — union/subtract/intersect/exclude → BooleanOperationNode (`op`: UNION|SUBTRACT|INTERSECT|EXCLUDE; ≥2 nodes; `parentId` defaults to the first node's parent) · T6; §10 combine-shapes (restored).
+- `flatten(nodeIds[], {parentId?}) → {id,…}` — flatten to one vector (≥1 node; `parentId` defaults to the first node's parent) · T6; §10 flatten/icon-prep (restored).
+
+### Write — pages (3 · restored)
+- `create_page(name) → {id,name}` — new page; write twin of `list_pages` · §2 create-page.
+- `set_current_page(pageId) → {currentPage}` — switch page (current-page write; naming exception to get_/set_, documented under D5) · T2; §2 switch-page.
+- `duplicate_page(pageId, {name?}) → {id,name}` — `page.clone()` backup/variant · §2 backup-before-bulk-edit.
+
+### Write — components & instances (5)
+- `create_component(nodeId, {name?, description?}) → {id,key,…}` — **promote-only**: componentize an existing node via `createComponentFromNode()`, optionally rename / set description; slots/properties are added afterward via `update_component`. To build a node first, use `create_node`/`create_tree` then promote the returned id (no spec/parentId overload) · T7, T9; §11 componentize.
+- `update_component(componentId, {add?, edit?, delete?, description?, expose?}) → {id, properties, warnings[]}` — add/edit/delete all 4 property types, set description, **expose nested-instance property (🟠: feature-detected; on unavailability emits a `warnings[]` entry naming the dropped expose, never a silent no-op, T7)**; returns `properties` in the unified `[{id,name,type,defaultValue,variantOptions?}]` shape (same as `get_components`); round-trips create_component · T2, T7; §11 add-properties/description/expose, slot lifecycle (gated).
+- `combine_variants(componentIds[], {parentId?, name?}) → {id,key, warnings[]}` — combine ≥2 into a variant set; sole variant-combiner; warns if a variant name packs multiple axes into one property (e.g. `Style=PrimaryLarge`), nudging one-property-per-axis (T7/T9) · T6; §11 states/axes.
+- `swap_component(instanceId, {mainComponentId?, key?}) → {id, warnings[]}` — point an instance at a different main; accepts EITHER a LOCAL `mainComponentId` (node id, resolved directly) OR a remote `key` (resolved via `importComponentByKeyAsync`, T7-gated — degrades with a warning if the import fails); if both are given the LOCAL `mainComponentId` wins; warns on dropped overrides · T7; §11 migrate/swap.
+- `set_instance(instanceId, {properties?, overrides?}) → {id,…, warnings[]}` — the one instance-state path (set variant + BOOLEAN/TEXT/INSTANCE_SWAP via `setProperties`, plus per-node `overrides`); never auto-detaches; **read instance state via `get_node`** (NodeSpec `componentProperties`/`overrides` — the read twin); per-node `overrides` currently degrade with a warning (not yet applied) · T6, T9; §6/§11 configure + read-overrides.
+- *(instance placement = `create_node`(INSTANCE) by key/id — no separate tool, T6.)*
+
+### Write — design system (6)
+- `create_styles([{type, name, value, description?}]) → {results, errors}` — array-create paint/text/effect/grid styles from grammar atom values; partial success (`results:[{id,key,name,type,index}]`, `errors:[{index,error}]`) · T5; §12.
+- `update_styles([{id|name+type, value?, newName?, description?}]) → {results, errors}` — array-edit styles' parsed value/name/description; partial success (`results:[{id,index}]`, `errors:[{index,error}]`); round-trips get_styles · T2; §9 brand recolor.
+- `apply_style(nodeId, styleId, field) → {id, warnings?}` — bind a style to a field (`field`: fill|stroke|text|effect|grid) · T9; §9/§12.
+- `create_variables({collection, modes?, variables[]}) → {collectionId, modes, variables[{id,name}], warnings?}` — create a collection (+ optional extra modes) then its variables; each variable sets per-mode values + `aliases` + `scopes` + `codeSyntax` + `hiddenFromPublishing` on create (parity with update; each gated member feature-detect + T7-degrade) · T9; §12 3-tier/modes/scales/export.
+- `update_variables({collectionId, addModes?, removeModes?, renameModes?:[{from,to}], variables?:[{id, valuesByMode?, scopes?, codeSyntax?, hiddenFromPublishing?}]}) → {collectionId, modes, warnings[]}` — **one collection**: full mode lifecycle (`addModes`/`removeModes`/`renameModes`) + per-variable value/scopes/codeSyntax/hiddenFromPublishing edits; round-trips get_variables. Returns `{…, warnings[]}` (T7 degrade), **not** `{results, errors}` — it's a single-collection op, not a heterogeneous batch · T2, T7; §9 recolor-by-token, §12 modes (restored: mode lifecycle).
+- `bind_variable(nodeId, variableId, field) → {id,…,warnings[]}` — bind a variable to a field (scalar proven, paint feature-detected) + frame mode via `setExplicitVariableModeForCollection` · T7, T8; §9 token-fill, §12 bind + switch-frame-to-mode.
+
+### Write — node metadata & prototype (2 · restored)
+- `set_plugin_data(nodeId, key, value, {namespace?}) → {id,…}` — twin of `get_plugin_data`; empty-string value clears the key · T2; §1 persist agent-state.
+- `set_reactions(nodeId, reactions[]) → {id, warnings?}` — `setReactionsAsync`; twin of `get_reactions`; feature-detected · T2, T7; §13 wire-prototype (restored).
+
+### Handoff (2 — read/write twin) + Batch (1)
+- `get_annotations({nodeId?}) → {results, truncated:false, warnings?}` / `set_annotations(nodeId, annotations[]) → {id, warnings?}` — read/overwrite spec notes; matched plural twin; read shape (Rule-A list) == write shape; `get_annotations` omits `nodeId` to read the selection; editorType-gated · T2, T7; §13 annotate.
+- `batch({op?, ops:[{op?, …params}]}) → {results, errors[]}` — one or mixed WRITE ops over N existing targets, in order, partial success; the only multi-target mutation path (op set listed under *The one generic batch*) · T5; §9/§11 all "N-call loop" tasks.
+
+## Resolved decisions
+
+- **D1 — Reading (cursor vs depth), one rule per output shape.** List reads → uniform `{results, truncated}`; only `search` paginates (opaque self-contained cursor token + `limit`, returned when truncated). The bounded readers always return `{truncated:false}` and take no cursor. Tree reads → **depth + always-on budget + truncation receipt + drill-by-id stubs** (no cursor). `get_node`/`get_nodes` are the **fidelity-first exception** (never budget-truncated, no budget/match, T2). Uniform across every API of its shape — learned once.
+- **D2 — Projection.** `fields:[...]` allow-list **+ presets** (`minimal/layout/style/text/full`); no deny-list. Same param on every node-returning read.
+- **D3 — Batch.** One `batch` tool, one shape `{op?, ops:[{op?,…}]}` — top-level `op` default (homogeneous, compact) or per-entry `op` (heterogeneous); in-order, partial-success, best-effort; ordering guarantees are within-op only (cross-entry deps are the agent's to sequence); entries warn like single calls. Scope is WRITE ops over existing targets (create-* excluded).
+- **D4 — Defaults.** `get_node`/`get_nodes` depth=0 (fidelity-first); `inspect` budget-adaptive level-fill (no budget → depth=0; `depth=-1` → all). Same rule, job-tuned defaults.
+- **D5 — Naming.** `get_X` / `create_X`+`update_X`; `set_X` only for whole-state writes; `inspect`/`get_node` the one deliberate two-name split (encodes T3). **Documented naming exceptions** (read-many vs write-one, or operation-shaped): `list_pages`↔`create_page`/`set_current_page` and `get_components`↔`create_component`/`update_component` (plural enumeration read vs singular promote/edit-one write); `set_focus` (viewport writer). Genuinely **operational** capabilities use verb names (`boolean_op`, `flatten`, `combine_variants`, `swap_component`, `clone_node`, `reparent_node`, `reorder_children`, `apply_style`, `bind_variable`, `create_from_svg`) — the get/create/update/set scheme governs CRUD-shaped tools, not every tool.
+- **Image fills — both.** `image(url|hash){…}` grammar atom (one-step, server-creates-for-url, deduped) **and** `create_image({url|bytes})→{hash}` tool (the only raw-bytes / reuse path). Two capabilities, not two paths.
+- **Coverage restorations (6 + review).** Added: `get_reactions`/`set_reactions`; `boolean_op`+`flatten`; image-fill (atom + `create_image`); `get_plugin_data`/`set_plugin_data`; `create_page`/`set_current_page`/`duplicate_page`; variable **mode lifecycle** on `update_variables`. Review pass added: `set_focus` (scroll-to-node), `search` `characters` projection (text inventory), `match.type` array, expose-nested-prop gated on `update_component` (🟠).
+
+## Coverage (verified 89/89)
+
+Verified against `figma-task-checklist.md` over multiple passes:
+- The lean draft covered **81/89**; the six restorations + two review fixes (`set_focus` for
+  scroll-to-node, `search` projecting `characters`) closed the ✅ gaps.
+- A final **adversarial** pass caught that instance `overrides`/`componentProperties` and
+  `layoutPositioning` were not surfaced on reads — sinking §6 "see overrides", §7
+  absolute-positioning audit, and two §11 instance 🟡 tasks. Fixed by adding those fields to
+  the `NodeSpec` node struct (read via `get_node`/`inspect`; written via `update_node`/`set_instance`).
+
+**89/89** — every ✅ task has a tool, every 🟡 rides on an existing read (verdict is
+skill-layer, P1), every 🟠 is gated+degrade.
