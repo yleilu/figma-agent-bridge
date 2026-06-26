@@ -302,6 +302,16 @@ describe('font: atomToFont(fontToAtom(f)) deep-equals f', () => {
         letterSpacing: { value: 0.5, unit: 'PIXELS' },
       },
     },
+    {
+      name: 'with percent letter spacing',
+      f: {
+        family: 'Inter',
+        style: 'Bold',
+        size: 32,
+        // PERCENT must round-trip as PERCENT, not silently become PIXELS.
+        letterSpacing: { value: 5, unit: 'PERCENT' },
+      },
+    },
   ]
   for (const { name, f } of cases) {
     it(name, () => {

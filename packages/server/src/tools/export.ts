@@ -42,6 +42,7 @@ export const handleExport = async (
       format: string
       scale: number
       data: string
+      error?: string
     } | null
 
     if (result === null) {
@@ -53,6 +54,12 @@ export const handleExport = async (
           },
         ],
       }
+    }
+
+    // The plugin resolves (does not reject) a genuine not-found as {error};
+    // surface it honestly (T7) rather than masking it as "Unexpected response".
+    if (typeof result.error === 'string') {
+      return textResult(`Error: ${result.error}`)
     }
 
     if (typeof result.data !== 'string') {

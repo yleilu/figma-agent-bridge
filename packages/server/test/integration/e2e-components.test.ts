@@ -165,7 +165,20 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
     expect(result.content[0].text).toContain('at least 2')
   })
 
-  it('set_instance sets properties', async () => {
+  // The genuine plugin-side {error} boundary: the handler's raw-length <2 guard
+  // PASSES 2 ids, but the plugin drops the invalid `bad:` id leaving 1 survivor
+  // → {error:'Need at least 2 components'}. Distinct from the handler guard
+  // above (which never sends the command).
+  it('combine_variants surfaces a plugin {error} when dropping invalids leaves <2 survivors', async () => {
+    const result = await handleCombineVariants(
+      { componentIds: ['c:1', 'bad:9'] },
+      client,
+    )
+    expect(result.content[0].text).toContain('Error')
+    expect(result.content[0].text).toContain('at least 2')
+  })
+
+  it('set_instance sets properties (echo is the real NESTED Figma shape)', async () => {
     const result = await handleSetInstance(
       {
         instanceId: 'i:1',
@@ -177,13 +190,45 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
       result.content[0].text,
     ) as Record<string, unknown>
     expect(data.id).toBe('i:1')
+    // The real plugin returns inst2.componentProperties — a NESTED map
+    // { [name]: { value, type } }, not the flat input. The mock now mirrors
+    // that, so the round-trip is asserted against the true plugin shape.
     const props = data.componentProperties as Record<
       string,
-      unknown
+      { value: string | boolean; type: string }
     >
-    expect(props.Size).toBe('Large')
+    expect(props.Size).toEqual({
+      value: 'Large',
+      type: 'VARIANT',
+    })
+    expect(props.Disabled).toEqual({
+      value: true,
+      type: 'BOOLEAN',
+    })
     expect(Array.isArray(data.warnings)).toBe(true)
     expect((data.warnings as unknown[]).length).toBe(0)
+  })
+
+  // T7: a pure-read set_instance call (no properties, no overrides) mutates
+  // nothing — it must WARN rather than return a silent no-op success that an
+  // agent reads as a successful write.
+  it('set_instance warns on a no-op call (no properties, no overrides)', async () => {
+    const result = await handleSetInstance(
+      { instanceId: 'i:1' },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const data = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    const warnings = data.warnings as string[]
+    expect(
+      warnings.some(
+        w =>
+          w.toLowerCase().includes('nothing') ||
+          w.toLowerCase().includes('no properties'),
+      ),
+    ).toBe(true)
   })
 
   it('swap_component degrades (T7) — warning on success, reports the ORIGINAL main', async () => {
@@ -256,5 +301,31 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
     expect(added).toHaveLength(1)
     expect(added[0].name).toBe('Label')
     expect(added[0].id).toContain('Label#')
+  })
+
+  // Genuine T7 {error} boundary #1: an unresolvable componentId is a not-found
+  // error (distinct from a degrade) — surfaced as 'Error:', not a warning.
+  it('update_component surfaces a {error} when the component is not found', async () => {
+    const result = await handleUpdateComponent(
+      { componentId: 'err:gone' },
+      client,
+    )
+    expect(result.content[0].text).toContain('Error')
+    expect(result.content[0].text).toContain(
+      'Component not found',
+    )
+  })
+
+  // Genuine T7 {error} boundary #2: a node that resolves but is NOT a component
+  // / component set is an invalid-target error, not a degrade.
+  it('update_component surfaces a {error} when the node is not a component', async () => {
+    const result = await handleUpdateComponent(
+      { componentId: 'notcomp:1' },
+      client,
+    )
+    expect(result.content[0].text).toContain('Error')
+    expect(result.content[0].text).toContain(
+      'not a component',
+    )
   })
 })

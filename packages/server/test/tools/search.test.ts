@@ -212,4 +212,25 @@ describe('handleSearch (rebuilt — Rule A)', () => {
     expect(out.results).toHaveLength(0)
     expect(out.truncated).toBe(false)
   })
+
+  it('surfaces a plugin-side {error} (unresolvable scope) instead of empty results (T7)', async () => {
+    const errorClient: FigmaClient = {
+      joinChannel: async () => 'ch',
+      sendCommand: async () => ({
+        error: 'Node not found: 1:99',
+      }),
+      disconnect: () => {},
+      isConnected: () => true,
+      currentChannel: () => 'ch',
+    }
+    const result = await handleSearch(
+      { scope: 'node', nodeId: '1:99' },
+      errorClient,
+    )
+    const { text } = result.content[0]
+    expect(text).toContain('Error')
+    expect(text).toContain('Node not found: 1:99')
+    // A typo'd id must not read as a clean zero-match.
+    expect(text).not.toContain('results: []')
+  })
 })

@@ -128,4 +128,44 @@ describe('handleSetSelection', () => {
       'Node not found',
     )
   })
+
+  // Empty array is the documented CLEAR-selection path: still sends the command
+  // and reports selectedCount:0.
+  it('forwards an empty nodeIds array (clear selection) and reports selectedCount:0', async () => {
+    const sent: Sent[] = []
+    const result = await handleSetSelection(
+      { nodeIds: [] },
+      stubClient({ sent, reply: { selectedCount: 0 } }),
+    )
+    expect(sent[0].command).toBe(COMMANDS.SET_SELECTION)
+    expect(sent[0].params?.nodeIds).toEqual([])
+    const out = JSON.parse(result.content[0].text) as {
+      selectedCount: number
+    }
+    expect(out.selectedCount).toBe(0)
+  })
+
+  // Dropped/unresolved ids ride back in warnings[] (surfaced through the JSON).
+  it('surfaces dropped ids reported by the plugin in warnings[]', async () => {
+    const result = await handleSetSelection(
+      { nodeIds: ['1:1', 'missing:1'] },
+      stubClient({
+        reply: {
+          selectedCount: 1,
+          warnings: [
+            'skipped 1 unresolved id(s): missing:1',
+          ],
+        },
+      }),
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const out = JSON.parse(result.content[0].text) as {
+      selectedCount: number
+      warnings: string[]
+    }
+    expect(out.selectedCount).toBe(1)
+    expect(
+      out.warnings.some(w => w.includes('missing:1')),
+    ).toBe(true)
+  })
 })

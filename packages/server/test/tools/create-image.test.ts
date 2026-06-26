@@ -111,6 +111,26 @@ describe('handleCreateImage', () => {
     expect(result.content[0].text).not.toContain('Error:')
   })
 
+  it('T7 degrade (bytes path): surfaces a {warnings} reply as success, NEVER an error', async () => {
+    const result = await handleCreateImage(
+      { bytes: [] },
+      stubClient({
+        reply: {
+          warnings: [
+            'createImage failed (invalid bytes/feature unavailable)',
+          ],
+        },
+      }),
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      hash?: string
+      warnings?: string[]
+    }
+    expect(out.hash).toBeUndefined()
+    expect(out.warnings).toBeDefined()
+    expect(result.content[0].text).not.toContain('Error:')
+  })
+
   it('returns failure text on a null reply', async () => {
     const result = await handleCreateImage(
       { url: 'https://x/y.png' },

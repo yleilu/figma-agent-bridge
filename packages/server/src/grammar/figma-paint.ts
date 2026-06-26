@@ -642,6 +642,18 @@ const parseLineHeight = (
   return { value: Number(raw), unit: 'PIXELS' }
 }
 
+const parseLetterSpacing = (
+  raw: string,
+): NonNullable<FigmaFontName['letterSpacing']> => {
+  if (raw.endsWith('%')) {
+    return {
+      value: Number(raw.slice(0, -1)),
+      unit: 'PERCENT',
+    }
+  }
+  return { value: Number(raw), unit: 'PIXELS' }
+}
+
 export const atomToFont = (s: string): FigmaFontName => {
   const ast = parseAtom(s)
   if (ast.kind !== 'head' || ast.head !== 'font') {
@@ -658,8 +670,8 @@ export const atomToFont = (s: string): FigmaFontName => {
   if (attrs?.lh !== undefined) {
     out.lineHeight = parseLineHeight(String(attrs.lh))
   }
-  if (typeof attrs?.ls === 'number') {
-    out.letterSpacing = { value: attrs.ls, unit: 'PIXELS' }
+  if (attrs?.ls !== undefined) {
+    out.letterSpacing = parseLetterSpacing(String(attrs.ls))
   }
   return out
 }
@@ -679,7 +691,10 @@ const fontToAst = (f: FigmaFontName): AtomAST => {
     f.letterSpacing !== undefined &&
     f.letterSpacing.value !== 0
   ) {
-    attrs.ls = f.letterSpacing.value
+    attrs.ls =
+      f.letterSpacing.unit === 'PERCENT'
+        ? `${f.letterSpacing.value}%`
+        : f.letterSpacing.value
   }
   return {
     kind: 'head',

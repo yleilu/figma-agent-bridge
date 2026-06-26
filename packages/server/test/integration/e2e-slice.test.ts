@@ -48,6 +48,7 @@ import {
   handleCreateVariables,
   handleUpdateVariables,
   handleCreateStyles,
+  handleUpdateStyles,
   handleApplyStyle,
 } from '@figma-agent-bridge/server/tools/design-system-authoring'
 import { handleExport } from '@figma-agent-bridge/server/tools/export'
@@ -192,8 +193,87 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     })
   })
 
-  // 4 — bind_variable degrade path (success-with-warning, not error)
-  it('bind_variable degrade path reports success-with-warning', async () => {
+  // 3a — warn-on-no-op (T7): a patched property that does not apply to the
+  // target node type is reported in warnings[], not silently dropped. The mock
+  // models an incompatible target via a nodeId prefixed `incompat:` (no
+  // layoutMode capability) — mirroring the real plugin's `'layoutMode' in node`
+  // guard which previously skipped silently.
+  it('update_node warns when a patched property does not apply to the node type', async () => {
+    const result = await handleUpdateNode(
+      {
+        nodeId: 'incompat:1',
+        patch: {
+          layout: {
+            mode: 'V',
+            gap: 8,
+            pad: [0, 0, 0, 0],
+            align: ['MIN', 'MIN'],
+          },
+        },
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const reply = JSON.parse(result.content[0].text) as {
+      warnings: string[]
+    }
+    expect(
+      reply.warnings.some(w => w.includes('layout')),
+    ).toBe(true)
+  })
+
+  // 3b — degrade consistency (T7): sizing/layoutPositioning on an incompatible
+  // node must warn-and-continue (success), NOT throw → {error}. The mock keys
+  // the incompatible target off the same `incompat:` prefix.
+  it('update_node degrades (warns) on sizing for an incompatible node instead of erroring', async () => {
+    const result = await handleUpdateNode(
+      {
+        nodeId: 'incompat:1',
+        patch: { sizing: ['FILL', 'FILL'] },
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const reply = JSON.parse(result.content[0].text) as {
+      warnings: string[]
+    }
+    expect(
+      reply.warnings.some(w => w.includes('sizing')),
+    ).toBe(true)
+  })
+
+  // 3c — mock fidelity: the incompat warning includes `opacity` (in the real
+  // plugin's capability list) and INTERPOLATES the actual node type rather than
+  // hardcoding "SLICE" — the warning's type matches the reply's `type` field.
+  it('update_node incompat warning covers opacity and interpolates the node type', async () => {
+    const result = await handleUpdateNode(
+      {
+        nodeId: 'incompat:1',
+        patch: { opacity: 0.5 },
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const reply = JSON.parse(result.content[0].text) as {
+      type: string
+      warnings: string[]
+    }
+    const opacityWarning = reply.warnings.find(w =>
+      w.includes('opacity'),
+    )
+    expect(opacityWarning).toBeDefined()
+    // The warning interpolates the SAME node type the reply reports — proof the
+    // type is interpolated, not a hardcoded "SLICE" string divorced from the
+    // reply.
+    expect(opacityWarning).toContain(
+      'not supported on a ' + reply.type + ' node',
+    )
+  })
+
+  // 4 — bind_variable PAINT degrade (success-with-warning, not error). A paint
+  // field (fills/strokes) binds via setBoundVariableForPaint, so the degrade
+  // message names THAT API — the field-aware mock mirrors the real plugin.
+  it('bind_variable paint-field degrade names setBoundVariableForPaint (success-with-warning)', async () => {
     const result = await handleBindVariable(
       {
         nodeId: '1:42',
@@ -204,8 +284,47 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     )
     expect(result.content[0].text).not.toContain('Error:')
     expect(result.content[0].text).toContain(
-      'setBoundVariable unavailable',
+      'setBoundVariableForPaint unavailable',
     )
+  })
+
+  // 4a — bind_variable SCALAR degrade. A scalar field (itemSpacing) binds via
+  // setBoundVariable, so the degrade message names THAT API — proving the mock
+  // is field-aware, not field-agnostic.
+  it('bind_variable scalar-field degrade names setBoundVariable (success-with-warning)', async () => {
+    const result = await handleBindVariable(
+      {
+        nodeId: '1:42',
+        variableId: 'degrade:var',
+        field: 'itemSpacing',
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const { text } = result.content[0]
+    expect(text).toContain('setBoundVariable unavailable')
+    expect(text).not.toContain('ForPaint')
+  })
+
+  // 4b — bind_variable SCALAR happy path: a genuinely-scalar field
+  // (VariableBindableNodeField) binds with no warning — the proven-scalar
+  // contract, which the all-paint tests never exercised.
+  it('bind_variable binds a scalar field with no warning', async () => {
+    const result = await handleBindVariable(
+      {
+        nodeId: '1:42',
+        variableId: 'var:123',
+        field: 'itemSpacing',
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const data = JSON.parse(result.content[0].text) as {
+      id: string
+      warnings: string[]
+    }
+    expect(data.id).toBe('1:42')
+    expect(data.warnings).toEqual([])
   })
 
   // 5 — bind_variable error vs success
@@ -306,6 +425,28 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(result.content[0].text).toContain('create_tree')
   })
 
+  // 8a — create_node SLOT degrades to a FRAME placeholder WITH a warning (T7):
+  // the agent asked for a SLOT, gets a FRAME, and is told. The mock mirrors the
+  // real plugin: SLOT is created as a FRAME and a downgrade warning rides back.
+  it('create_node SLOT degrades to a FRAME placeholder with a warning', async () => {
+    const result = await handleCreateNode(
+      {
+        spec: { type: 'SLOT', name: 'Slot' },
+        parentId: 'page:1',
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const reply = JSON.parse(result.content[0].text) as {
+      type: string
+      warnings: string[]
+    }
+    expect(reply.type).toBe('FRAME')
+    expect(
+      reply.warnings.some(w => w.includes('SLOT')),
+    ).toBe(true)
+  })
+
   // 9 — search with a server-side match (name glob) over the relay.
   it('search applies the name match server-side', async () => {
     const result = await handleSearch(
@@ -365,6 +506,18 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(ids1.some(id => ids2.includes(id))).toBe(false)
   })
 
+  // 11a — search scope=node with an unresolvable id → {error} over the relay.
+  it('search surfaces a plugin-side {error} for an unresolvable scope=node id', async () => {
+    const result = await handleSearch(
+      { scope: 'node', nodeId: 'nope:1' },
+      client,
+    )
+    const { text } = result.content[0]
+    expect(text).toContain('Error')
+    expect(text).toContain('Node not found: nope:1')
+    expect(text).not.toContain('results: []')
+  })
+
   // 12 — get_nodes multi-id read → { results, errors } over the relay.
   it('get_nodes returns NodeSpec results over the relay', async () => {
     const result = await handleGetNodes(
@@ -401,6 +554,62 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(Array.isArray(list)).toBe(true)
     expect(list[0]).toHaveProperty('id')
     expect(list[0]).toHaveProperty('type')
+  })
+
+  // 13a — set_selection empty array is the CLEAR path: selectedCount:0.
+  it('set_selection with an empty array clears (selectedCount:0)', async () => {
+    const set = await handleSetSelection(
+      { nodeIds: [] },
+      client,
+    )
+    expect(set.content[0].text).not.toContain('Error:')
+    const out = JSON.parse(set.content[0].text) as {
+      selectedCount: number
+    }
+    expect(out.selectedCount).toBe(0)
+  })
+
+  // 13b — partial-skip (T7): an id that doesn't resolve is reported in
+  // warnings[] and selectedCount diverges from the requested count, rather than
+  // being a silent partial. The mock models resolution (an id prefixed
+  // `missing:` does not resolve).
+  it('set_selection surfaces unresolved ids as a warning (count diverges)', async () => {
+    const set = await handleSetSelection(
+      { nodeIds: ['1:42', 'missing:1'] },
+      client,
+    )
+    expect(set.content[0].text).not.toContain('Error:')
+    const out = JSON.parse(set.content[0].text) as {
+      selectedCount: number
+      warnings: string[]
+    }
+    expect(out.selectedCount).toBe(1)
+    expect(
+      out.warnings.some(w => w.includes('missing:1')),
+    ).toBe(true)
+  })
+
+  // 13c — cross-page degrade (T7): a valid id that lives on another page must
+  // degrade with a warning, NOT throw → {error}. The mock models a cross-page
+  // id via an `xpage:` prefix.
+  it('set_selection degrades (warns) on a cross-page id instead of erroring', async () => {
+    const set = await handleSetSelection(
+      { nodeIds: ['1:42', 'xpage:9'] },
+      client,
+    )
+    expect(set.content[0].text).not.toContain('Error:')
+    const out = JSON.parse(set.content[0].text) as {
+      selectedCount: number
+      warnings: string[]
+    }
+    expect(out.selectedCount).toBe(1)
+    expect(
+      out.warnings.some(
+        w =>
+          w.includes('xpage:9') &&
+          w.toLowerCase().includes('page'),
+      ),
+    ).toBe(true)
   })
 
   // 14 — list_pages returns the Rule A document + page shape over the relay.
@@ -540,6 +749,24 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(sharedOut.sharedPluginData?.baz).toBe('qux')
   })
 
+  // 21a — get_plugin_data on a missing node degrades to empty pluginData + a
+  // 'Node not found' warning over the relay (T7), never a silent empty/error.
+  it('get_plugin_data forwards a node-not-found warning over the relay', async () => {
+    const result = await handleGetPluginData(
+      { nodeId: 'degrade:gone' },
+      client,
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      pluginData: Record<string, string>
+      warnings?: string[]
+    }
+    expect(result.content[0].text).not.toContain('Error')
+    expect(out.pluginData).toEqual({})
+    expect(out.warnings?.[0]).toContain(
+      'Node not found: degrade:gone',
+    )
+  })
+
   // 22 — get_annotations returns the Rule-A handoff shape over the relay.
   it('get_annotations returns { results, truncated } over the relay', async () => {
     const result = await handleGetAnnotations(
@@ -552,6 +779,53 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     }
     expect(out.truncated).toBe(false)
     expect(out.results[0].label).toBe('Check spacing')
+  })
+
+  // 22a — get_annotations on an unresolvable explicit nodeId degrades to an
+  // empty result WITH a 'Node not found' warning (T7), never a silent empty.
+  it('get_annotations surfaces a not-found warning for an unresolvable nodeId over the relay', async () => {
+    const result = await handleGetAnnotations(
+      { nodeId: 'degrade:gone' },
+      client,
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: unknown[]
+      warnings?: string[]
+    }
+    expect(result.content[0].text).not.toContain('Error')
+    expect(out.results).toHaveLength(0)
+    expect(out.warnings?.[0]).toContain(
+      'Node not found: degrade:gone',
+    )
+  })
+
+  // 22b — a selection-based multi-read (NO explicit nodeId) tags each annotation
+  // with its source nodeId so the flat result stays attributable /
+  // round-trippable to the single-node set_annotations writer (T2). The real
+  // plugin tags only on this no-explicit-id selection path — so the read passes
+  // no nodeId, NOT a sentinel.
+  it('get_annotations tags each annotation with its source nodeId on a selection-based multi-read (no explicit nodeId)', async () => {
+    const result = await handleGetAnnotations({}, client)
+    const out = YAML.parse(result.content[0].text) as {
+      results: { label: string; nodeId: string }[]
+    }
+    expect(out.results).toHaveLength(2)
+    expect(out.results[0].nodeId).toBe('1:42')
+    expect(out.results[1].nodeId).toBe('1:45')
+  })
+
+  // 22c — an EXPLICIT nodeId read returns BARE annotations (no nodeId tag),
+  // confirming the mock tags on the selection path only, mirroring the plugin.
+  it('get_annotations returns bare annotations (no nodeId tag) for an explicit nodeId', async () => {
+    const result = await handleGetAnnotations(
+      { nodeId: '1:42' },
+      client,
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { label: string; nodeId?: string }[]
+    }
+    expect(out.results).toHaveLength(1)
+    expect(out.results[0].nodeId).toBeUndefined()
   })
 
   // 23 — set_annotations happy path reports success (no error) over the relay.
@@ -775,6 +1049,26 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     )
   })
 
+  // 27a1 — update_variables: a renameMode FAILURE (e.g. a duplicate / invalid
+  // target name) degrades to a warning-on-success, never a throw → whole-call
+  // {error} (T7). The mock keys this off a renameModes entry whose `from` is
+  // prefixed `degrade:`.
+  it('update_variables renameMode failure degrades to success-with-warning over the relay', async () => {
+    const result = await handleUpdateVariables(
+      {
+        collectionId: 'col:1',
+        renameModes: [
+          { from: 'degrade:Light', to: 'Dark' },
+        ],
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    expect(result.content[0].text).toContain(
+      'renameMode failed',
+    )
+  })
+
   // 27a — update_variables: a setValueForMode REJECTION (e.g. a type-incompatible
   // value reaching a COLOR variable) degrades to a warning-on-success, never a
   // throw / never {error} (T7). The mock keys this off a variable id prefixed
@@ -848,6 +1142,28 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     )
   })
 
+  // 27d — create_variables: when renameMode is feature-detected ABSENT, the
+  // default mode can't be renamed — T7 requires a warning (not a silent no-op
+  // that then orphans every value keyed to the requested mode). The mock keys
+  // renameMode-unavailable off a collection name prefixed `norename:`.
+  it('create_variables warns when renameMode is unavailable (default mode not renamed)', async () => {
+    const result = await handleCreateVariables(
+      {
+        collection: 'norename:Brand',
+        modes: ['Light'],
+        variables: [],
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const out = JSON.parse(result.content[0].text) as {
+      warnings: string[]
+    }
+    expect(
+      out.warnings.some(w => w.includes('renameMode')),
+    ).toBe(true)
+  })
+
   // 28 — create_styles: a paint atom is parsed server-side to a SOLID Paint
   // before the plugin creates the style.
   it('create_styles parses a paint atom to a SOLID Paint over the relay', async () => {
@@ -903,6 +1219,33 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     })
   })
 
+  // 29a — update_styles partial write (T7): name/description commit, then the
+  // value branch (loadFontAsync for a TEXT style) throws for an unavailable
+  // font. The plugin must report PARTIAL SUCCESS + a warning (the name was
+  // already applied), NOT a total {error}. The mock keys the font-load failure
+  // off a styleId prefixed `fontfail:`.
+  it('update_styles reports partial success + warning when the value branch fails', async () => {
+    const result = await handleUpdateStyles(
+      {
+        styleId: 'fontfail:S',
+        name: 'Heading/H1',
+        value: 'font(Nonexistent,Bold,32)',
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const out = JSON.parse(result.content[0].text) as {
+      id: string
+      warnings: string[]
+    }
+    expect(out.id).toBe('fontfail:S')
+    expect(
+      out.warnings.some(w =>
+        w.toLowerCase().includes('font'),
+      ),
+    ).toBe(true)
+  })
+
   // 30 — apply_style happy path reports success (no error) over the relay.
   it('apply_style reports success over the relay', async () => {
     const result = await handleApplyStyle(
@@ -929,5 +1272,41 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     )
     expect(result.content[0].text).not.toContain('Error:')
     expect(result.content[0].text).toContain('not applied')
+  })
+
+  // 31a — apply_style with a NON-EXISTENT styleId is a GENUINE failure → {error}
+  // (T7 boundary: a missing style is not a degrade). The mock models this via a
+  // styleId prefixed `missing:`.
+  it('apply_style surfaces a non-existent styleId as an error (not a swallowed warning)', async () => {
+    const result = await handleApplyStyle(
+      {
+        nodeId: '1:42',
+        styleId: 'missing:S',
+        field: 'fill',
+      },
+      client,
+    )
+    expect(result.content[0].text).toContain('Error')
+    expect(result.content[0].text).toContain(
+      'Style not found',
+    )
+  })
+
+  // 31b — apply_style with a WRONG-CATEGORY style (e.g. a PAINT style applied
+  // via field:'text') is a genuine invalid → {error}, not a warning. Modeled via
+  // a styleId prefixed `wrongcat:`.
+  it('apply_style surfaces a wrong-category style as an error', async () => {
+    const result = await handleApplyStyle(
+      {
+        nodeId: '1:42',
+        styleId: 'wrongcat:S',
+        field: 'text',
+      },
+      client,
+    )
+    expect(result.content[0].text).toContain('Error')
+    expect(result.content[0].text.toLowerCase()).toContain(
+      'category',
+    )
   })
 })

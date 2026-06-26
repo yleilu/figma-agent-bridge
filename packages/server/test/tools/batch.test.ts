@@ -276,6 +276,58 @@ describe('handleBatch', () => {
     expect(spec.fills[0].color.r).toBeCloseTo(1, 5)
   })
 
+  // D3/T7: a batched update_node emits the SAME server-side writer warnings a
+  // direct update_node would (e.g. per-side stroke collapse). Each entry gains
+  // an optional warnings[] surfacing them.
+  it('surfaces per-op server-side writer warnings on a batched update_node entry', async () => {
+    const result = await handleBatch(
+      {
+        ops: [
+          {
+            op: 'update_node',
+            nodeId: '1:1',
+            patch: { stroke: 'stroke([1,2,3,4])' },
+          },
+        ],
+      },
+      stubClient({}),
+    )
+    const out = parse(
+      result.content[0].text,
+    ) as BatchOut & {
+      results: { warnings?: string[] }[]
+    }
+    expect(out.results[0].ok).toBe(true)
+    expect(
+      (out.results[0].warnings ?? []).some(w =>
+        w.includes('collapsed to a single strokeWeight'),
+      ),
+    ).toBe(true)
+  })
+
+  it('does not attach an empty warnings[] when an update_node entry is clean', async () => {
+    const result = await handleBatch(
+      {
+        ops: [
+          {
+            op: 'update_node',
+            nodeId: '1:1',
+            patch: { opacity: 0.5 },
+          },
+        ],
+      },
+      stubClient({}),
+    )
+    const out = parse(
+      result.content[0].text,
+    ) as BatchOut & {
+      results: { warnings?: string[] }[]
+    }
+    // No server-side warnings → no warnings key (or an empty one is fine, but
+    // the clean path should not invent warnings).
+    expect(out.results[0].warnings ?? []).toEqual([])
+  })
+
   it('converts COLOR style values server-side (create_styles atom → Paint)', async () => {
     const sent: Sent[] = []
     await handleBatch(

@@ -122,4 +122,37 @@ describe('handleUpdateNode', () => {
       'auto-layout child',
     )
   })
+
+  // 3c: a server-side writer warning (per-side stroke collapse) is MERGED into
+  // the reply's structured warnings[] — one concept, one surface — rather than
+  // appended as loose trailing text after the JSON.
+  it('merges server-side writer warnings into the structured warnings[]', async () => {
+    const result = await handleUpdateNode(
+      {
+        nodeId: '1:42',
+        patch: { stroke: 'stroke([1,2,3,4])' },
+      },
+      stubClient({
+        reply: {
+          id: '1:42',
+          name: 'Card',
+          type: 'FRAME',
+          warnings: ['a plugin warning'],
+        },
+      }),
+    )
+    // The whole result is still parseable JSON (no loose "Warning:" tail).
+    const out = JSON.parse(result.content[0].text) as {
+      id: string
+      warnings: string[]
+    }
+    expect(out.id).toBe('1:42')
+    // Both the plugin warning and the server collapse warning live in warnings[].
+    expect(out.warnings).toContain('a plugin warning')
+    expect(
+      out.warnings.some(w =>
+        w.includes('collapsed to a single strokeWeight'),
+      ),
+    ).toBe(true)
+  })
 })

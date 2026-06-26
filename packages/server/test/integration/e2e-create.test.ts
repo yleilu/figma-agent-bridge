@@ -291,6 +291,46 @@ describe('M2 chunk D writes e2e', () => {
     expect(data.viewport.zoom).toBe(1)
   })
 
+  // T7: an unresolved id is surfaced as a warning, not silently dropped. The
+  // mock mirrors the real plugin's resolution (an id prefixed `missing:` does
+  // not resolve to a scene node) and reports requested/focused/warnings.
+  it('set_focus warns about (and reports) ids that do not resolve', async () => {
+    const result = await handleSetFocus(
+      { nodeIds: ['1:42', 'missing:1'] },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const data = JSON.parse(result.content[0].text) as {
+      requested: number
+      focused: number
+      warnings: string[]
+    }
+    expect(data.requested).toBe(2)
+    expect(data.focused).toBe(1)
+    expect(
+      data.warnings.some(w => w.includes('missing:1')),
+    ).toBe(true)
+  })
+
+  // T7: when NOTHING resolves, set_focus must still warn (not a hallucinated
+  // success with an unchanged viewport and zero signal).
+  it('set_focus warns when no id resolves (focused:0)', async () => {
+    const result = await handleSetFocus(
+      { nodeIds: ['missing:1', 'missing:2'] },
+      client,
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      requested: number
+      focused: number
+      warnings: string[]
+    }
+    expect(data.focused).toBe(0)
+    expect(data.warnings.length).toBeGreaterThan(0)
+    expect(
+      data.warnings.some(w => w.includes('missing:1')),
+    ).toBe(true)
+  })
+
   it('create_page echoes the new page id + name', async () => {
     const result = await handleCreatePage(
       { name: 'Specs' },
@@ -349,6 +389,25 @@ describe('M2 chunk D writes e2e', () => {
     expect(data.hash).toBeUndefined()
     expect(data.warnings).toBeDefined()
     expect(result.content[0].text).not.toContain('Error:')
+  })
+
+  it('create_image T7 degrade (bytes path) → warnings, success NOT error', async () => {
+    const result = await handleCreateImage(
+      { bytes: [] },
+      client,
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      hash?: string
+      warnings?: string[]
+    }
+    expect(data.hash).toBeUndefined()
+    expect(data.warnings).toBeDefined()
+    expect(result.content[0].text).not.toContain('Error:')
+    // The bytes-degrade message keeps the real plugin's `: <reason>` suffix
+    // (mirrors `... unavailable): ` + String(e)) — not a bare generic message.
+    expect(data.warnings?.[0]).toContain(
+      'createImage failed (invalid bytes/feature unavailable): ',
+    )
   })
 
   it('set_plugin_data echoes {id}', async () => {

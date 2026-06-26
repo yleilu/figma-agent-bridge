@@ -97,10 +97,42 @@ export const createMockPlugin = (
         ]
         break
 
-      // set_selection: echo {selectedCount} = the number of ids passed.
+      // set_selection: model the real plugin's resolution + T7 honesty. An id
+      // prefixed `missing:` does not resolve (skipped); `xpage:` resolves but
+      // lives on another page (cross-page degrade — warned, NOT thrown); the
+      // rest select. selectedCount is the count actually selected, and dropped
+      // ids ride back in warnings[] so a partial is never silent.
       case 'set_selection': {
         const ids = (cmd.params?.nodeIds as string[]) ?? []
-        result = { selectedCount: ids.length }
+        const ssSkipped = ids.filter(id =>
+          id.startsWith('missing:'),
+        )
+        const ssOffPage = ids.filter(id =>
+          id.startsWith('xpage:'),
+        )
+        const ssSelected =
+          ids.length - ssSkipped.length - ssOffPage.length
+        const ssWarnings: string[] = []
+        if (ssSkipped.length > 0) {
+          ssWarnings.push(
+            'skipped ' +
+              ssSkipped.length +
+              ' unresolved id(s): ' +
+              ssSkipped.join(', '),
+          )
+        }
+        if (ssOffPage.length > 0) {
+          ssWarnings.push(
+            'skipped ' +
+              ssOffPage.length +
+              ' cross-page id(s) not on the current page: ' +
+              ssOffPage.join(', '),
+          )
+        }
+        result = {
+          selectedCount: ssSelected,
+          warnings: ssWarnings,
+        }
         break
       }
 
@@ -288,33 +320,118 @@ export const createMockPlugin = (
         }
         break
 
-      // get_plugin_data: pluginData always; sharedPluginData only with a namespace.
-      case 'get_plugin_data':
-        result = {
-          nodeId: cmd.params?.nodeId as string,
-          pluginData: { foo: 'bar' },
-          sharedPluginData: cmd.params?.namespace
-            ? { baz: 'qux' }
-            : undefined,
+      // get_plugin_data: pluginData always; sharedPluginData only with a
+      // namespace. Faithful to the real plugin: a `degrade:` nodeId models a
+      // node-not-found degrade — empty pluginData + a 'Node not found' warning
+      // (RESOLVES, never a WS reject), so the warnings-forwarding branch is
+      // exercised over the relay (T7).
+      case 'get_plugin_data': {
+        const pdNodeId = cmd.params?.nodeId as string
+        if (pdNodeId?.startsWith('degrade:')) {
+          result = {
+            nodeId: pdNodeId,
+            pluginData: {},
+            warnings: ['Node not found: ' + pdNodeId],
+          }
+        } else {
+          result = {
+            nodeId: pdNodeId,
+            pluginData: { foo: 'bar' },
+            sharedPluginData: cmd.params?.namespace
+              ? { baz: 'qux' }
+              : undefined,
+          }
         }
         break
+      }
 
-      // get_annotations: happy path (Rule A). The degrade path is covered by the
-      // metadata unit test with a stub client.
-      case 'get_annotations':
-        result = {
-          results: [
-            { label: 'Check spacing', categoryId: 'cat:1' },
-          ],
-          truncated: false,
+      // get_annotations: happy path (Rule A). Faithful to the real plugin:
+      //   • an explicit, unresolvable nodeId (`degrade:` prefix) RESOLVES to a
+      //     {results:[], warnings:['Node not found: …']} not-found degrade (T7);
+      //   • per-node nodeId TAGGING happens ONLY on a selection-based multi-read
+      //     (NO explicit nodeId, 2+ selected nodes) — the plugin tags each
+      //     annotation with its source node so the flat result stays
+      //     attributable. An EXPLICIT nodeId read returns bare annotations.
+      //     (Previously the mock keyed tagging off an explicit `multi:` nodeId,
+      //     the OPPOSITE of the real plugin.)
+      case 'get_annotations': {
+        const annNodeId = cmd.params?.nodeId as
+          | string
+          | undefined
+        if (annNodeId?.startsWith('degrade:')) {
+          result = {
+            results: [],
+            truncated: false,
+            warnings: ['Node not found: ' + annNodeId],
+          }
+        } else if (annNodeId === undefined) {
+          // No explicit id → read the current selection. Model a >1-node
+          // selection: each annotation is TAGGED with its source nodeId.
+          result = {
+            results: [
+              {
+                label: 'Check spacing',
+                categoryId: 'cat:1',
+                nodeId: '1:42',
+              },
+              {
+                label: 'Align icon',
+                categoryId: 'cat:2',
+                nodeId: '1:45',
+              },
+            ],
+            truncated: false,
+          }
+        } else {
+          // Explicit single nodeId → bare annotations (no nodeId tag).
+          result = {
+            results: [
+              {
+                label: 'Check spacing',
+                categoryId: 'cat:1',
+              },
+            ],
+            truncated: false,
+          }
         }
         break
+      }
 
       // search (Rule A): the plugin returns RAW candidate nodes; the SERVER
       // applies match + fields + limit + cursor. We echo a small mixed-type
       // candidate set so e2e can exercise the server-side match (incl. type
-      // array) and pagination.
-      case 'search':
+      // array) and pagination. Faithful to the real plugin: an unresolvable
+      // scope=node/page qualifier returns {error} (T7), not a zero-match.
+      case 'search': {
+        const searchScope =
+          (cmd.params?.scope as string) || 'document'
+        const knownIds = new Set([
+          '1:42',
+          '1:43',
+          '1:44',
+          '1:45',
+        ])
+        const knownPages = new Set(['0:1'])
+        // The real plugin RESOLVES a not-found as a handler {error} (rides in
+        // command-result.result, NOT a WS-level reject), so set result.error.
+        if (
+          searchScope === 'node' &&
+          !knownIds.has(cmd.params?.nodeId as string)
+        ) {
+          result = {
+            error: 'Node not found: ' + cmd.params?.nodeId,
+          }
+          break
+        }
+        if (
+          searchScope === 'page' &&
+          !knownPages.has(cmd.params?.pageId as string)
+        ) {
+          result = {
+            error: 'Page not found: ' + cmd.params?.pageId,
+          }
+          break
+        }
         result = {
           results: [
             {
@@ -344,6 +461,7 @@ export const createMockPlugin = (
           ],
         }
         break
+      }
 
       case 'export': {
         const fmt = (cmd.params?.format as string) || 'PNG'
@@ -360,15 +478,64 @@ export const createMockPlugin = (
       // back so e2e/round-trip tests prove the server parsed and the plugin
       // only assigned. Mirrors the real plugin's {id,name,type,warnings} reply.
       case 'update_node': {
+        const unId = cmd.params?.nodeId as string
         const spec = (cmd.params?.spec ?? {}) as Record<
           string,
           unknown
         >
+        // Mirror the real plugin's warn-on-no-op + degrade behavior on an
+        // INCOMPATIBLE target (modeled by an `incompat:` nodeId — a node that
+        // lacks layoutMode/fills/etc. capability). 3a: a patched property that
+        // the node type doesn't support is reported in warnings[]. 3b: a sizing/
+        // layoutPositioning patch warns-and-continues (never throws → {error}).
+        // The incompatible target is reported as a SLICE (a node lacking these
+        // capabilities); the warnings INTERPOLATE that actual type and the
+        // capability list MATCHES the real plugin's (incl. `opacity`) rather
+        // than hardcoding "SLICE" / omitting opacity.
+        const unWarnings: string[] = []
+        const unIncompat = unId.startsWith('incompat:')
+        const unType = unIncompat ? 'SLICE' : 'FRAME'
+        if (unIncompat) {
+          // capability key → spec key, matching the plugin's capabilityChecks.
+          const capChecks: [string, string][] = [
+            ['layoutMode', 'layout'],
+            ['fills', 'fills'],
+            ['strokes', 'strokes'],
+            ['effects', 'effects'],
+            ['opacity', 'opacity'],
+            ['cornerRadius', 'radius'],
+            ['clipsContent', 'clipsContent'],
+          ]
+          for (const [, label] of capChecks) {
+            if (spec[label] !== undefined) {
+              unWarnings.push(
+                label +
+                  ' ignored — not supported on a ' +
+                  unType +
+                  ' node',
+              )
+            }
+          }
+          if (spec.sizing !== undefined) {
+            unWarnings.push(
+              'sizing not applicable on this node (' +
+                unType +
+                '): incompatible context',
+            )
+          }
+          if (spec.layoutPositioning !== undefined) {
+            unWarnings.push(
+              'layoutPositioning not applicable on this node (' +
+                unType +
+                '): incompatible context',
+            )
+          }
+        }
         result = {
-          id: cmd.params?.nodeId as string,
+          id: unId,
           name: (spec.name as string) ?? 'Card',
-          type: 'FRAME',
-          warnings: [],
+          type: unType,
+          warnings: unWarnings,
           // Echo the converted spec so the e2e can assert the parsed paint
           // arrived intact.
           spec,
@@ -380,18 +547,30 @@ export const createMockPlugin = (
       // the variableId so the e2e can drive each contract. A degrade/unknown
       // reply NEVER returns {error} — it returns {id,warnings} so the server's
       // formatMutationResult reports success-with-warning, not failure.
+      //
+      // FIELD-AWARE (mirrors the real plugin): paint fields (fills/strokes) bind
+      // via setBoundVariableForPaint, scalar fields via setBoundVariable. The two
+      // routes degrade with DIFFERENT messages, so the mock must branch on the
+      // field the same way the plugin does — not echo a field-agnostic success.
       case 'bind_variable': {
         const variableId = cmd.params?.variableId as string
+        const bvField = cmd.params?.field as string
+        const isPaintField =
+          bvField === 'fills' || bvField === 'strokes'
         if (variableId.startsWith('err:')) {
           error = `Variable not found: ${variableId}`
         } else if (variableId.startsWith('degrade:')) {
           result = {
             id: cmd.params?.nodeId as string,
             warnings: [
-              'setBoundVariable unavailable in this Figma version; binding skipped',
+              isPaintField
+                ? 'setBoundVariableForPaint unavailable in this Figma version; paint binding skipped'
+                : 'setBoundVariable unavailable in this Figma version; binding skipped',
             ],
           }
         } else {
+          // Happy path: a paint field binds via setBoundVariableForPaint and a
+          // scalar field via setBoundVariable — both succeed with no warning.
           result = {
             id: cmd.params?.nodeId as string,
             warnings: [],
@@ -448,13 +627,23 @@ export const createMockPlugin = (
           ...(nodeSpec ?? {}),
         }
         delete echo.children
+        // Mirror the real plugin's SLOT degrade (T7): a SLOT is created as a
+        // FRAME placeholder and a downgrade warning rides back on success.
+        const cnWarnings: string[] = []
+        let createdType = nodeType
+        if (nodeType === 'SLOT') {
+          createdType = 'FRAME'
+          cnWarnings.push(
+            'SLOT requested via create_node was created as a FRAME placeholder; real SLOT promotion happens in create_component via component.createSlot()',
+          )
+        }
         result = {
           ...echo,
           id: `created:${Math.random().toString(36).slice(2, 8)}`,
           name: (nodeSpec?.name as string) ?? nodeType,
-          type: nodeType,
+          type: createdType,
           parentId,
-          warnings: [],
+          warnings: cnWarnings,
         }
         break
       }
@@ -476,16 +665,34 @@ export const createMockPlugin = (
         const treeRefs = cmd.params?.refs as
           | Record<string, Record<string, unknown>>
           | undefined
+        // refStack mirrors the real plugin's cycle guard: a cyclic { ref } pool
+        // (a→b→a, or a self-ref) throws 'Cyclic ref in pool: …' instead of
+        // recursing forever — so the mock surfaces a clean {error} the same way
+        // the plugin does, never hanging the e2e.
         const countNodes = (
           node: Record<string, unknown>,
+          refStack: string[] = [],
         ): number => {
           // { ref }: rebuild refs[key] FRESH each reuse.
           if (
             node.ref !== undefined &&
             node.type === undefined
           ) {
-            const refSpec = treeRefs?.[node.ref as string]
-            return refSpec ? countNodes(refSpec) : 1
+            const refKey = node.ref as string
+            const refSpec = treeRefs?.[refKey]
+            if (!refSpec) {
+              return 1
+            }
+            if (refStack.includes(refKey)) {
+              throw new Error(
+                'Cyclic ref in pool: ' +
+                  [...refStack, refKey].join(' -> '),
+              )
+            }
+            return countNodes(refSpec, [
+              ...refStack,
+              refKey,
+            ])
           }
           // { id } clone: a single realized node.
           if (
@@ -500,33 +707,57 @@ export const createMockPlugin = (
             | undefined
           if (children) {
             for (const child of children) {
-              count += countNodes(child)
+              count += countNodes(child, refStack)
             }
           }
           return count
         }
-        const totalNodes = treeSpec
-          ? countNodes(treeSpec)
-          : 1
-        result = {
-          ...(treeSpec ?? {}),
-          id: `created:${Math.random().toString(36).slice(2, 8)}`,
-          name:
-            (treeSpec?.name as string) ??
-            (treeSpec?.type as string),
-          type: treeSpec?.type as string,
-          parentId: treeParentId,
-          refs: treeRefs,
-          totalNodes,
+        try {
+          const totalNodes = treeSpec
+            ? countNodes(treeSpec)
+            : 1
+          result = {
+            ...(treeSpec ?? {}),
+            id: `created:${Math.random().toString(36).slice(2, 8)}`,
+            name:
+              (treeSpec?.name as string) ??
+              (treeSpec?.type as string),
+            type: treeSpec?.type as string,
+            parentId: treeParentId,
+            refs: treeRefs,
+            totalNodes,
+          }
+        } catch (e) {
+          error = String(e instanceof Error ? e.message : e)
         }
         break
       }
 
       // clone_node: echo one {id,name,type} per requested clone (count, default
-      // 1) so the count + index/parent forwarding is assertable.
+      // 1) so the count + index/parent forwarding is assertable. An out-of-range
+      // `index` returns a clean {error} mirroring the real plugin's up-front
+      // range guard (parent has a fixed child count of 3), rather than the raw
+      // RangeError it used to degrade to.
       case 'clone_node': {
         const cloneCount =
           (cmd.params?.count as number) ?? 1
+        const cloneIndex = cmd.params?.index as
+          | number
+          | undefined
+        const cloneParentChildCount = 3
+        if (
+          cloneIndex !== undefined &&
+          (cloneIndex < 0 ||
+            cloneIndex > cloneParentChildCount)
+        ) {
+          error =
+            'clone_node index ' +
+            cloneIndex +
+            ' is out of range for the parent (0..' +
+            cloneParentChildCount +
+            ')'
+          break
+        }
         const cloneArr: {
           id: string
           name: string
@@ -555,7 +786,11 @@ export const createMockPlugin = (
 
       // reorder_children: set-equality validate the requested ids against the
       // mock parent's fixed child set ['1:1','1:2','1:3']. A mismatch WARNS
-      // (T7) and never errors; `order` echoes the requested ids that match.
+      // (T7) and never errors. `order` mirrors the REAL plugin: it returns the
+      // FULL post-reorder child list (parent.children.map(c=>c.id)) — i.e. the
+      // requested ids that ARE children (in order) followed by the omitted
+      // children in their original relative order. (Was: only the matched
+      // subset — an infidelity the e2e asserted against.)
       case 'reorder_children': {
         const parentId = cmd.params?.parentId as string
         const requested =
@@ -582,7 +817,10 @@ export const createMockPlugin = (
         }
         result = {
           parentId,
-          order: requested.filter(id => actualSet.has(id)),
+          order: [
+            ...requested.filter(id => actualSet.has(id)),
+            ...actual.filter(id => !requestedSet.has(id)),
+          ],
           warnings,
         }
         break
@@ -655,8 +893,20 @@ export const createMockPlugin = (
       // gated. addComponentProperty returns a CANONICAL id (`<name>#<suffix>`)
       // that agents need for later setProperties, so the mock mirrors the real
       // plugin by keying defs on that id and surfacing `added: [{name,id}]`.
+      // Genuine {error} boundaries (mirroring the real plugin):
+      //  - componentId `err:` → {error:'Component not found: …'} (not-found).
+      //  - componentId `notcomp:` → {error:'Node is not a component …'} (the
+      //    node resolves but is the wrong type).
       case 'update_component': {
         const ucId = cmd.params?.componentId as string
+        if (ucId.startsWith('err:')) {
+          error = `Component not found: ${ucId}`
+          break
+        }
+        if (ucId.startsWith('notcomp:')) {
+          error = `Node is not a component or component set: ${ucId}`
+          break
+        }
         const ucAdd = cmd.params?.add as
           | {
               name: string
@@ -772,7 +1022,13 @@ export const createMockPlugin = (
       }
 
       // set_instance: echo {id, componentProperties, warnings}. overrides → warn
-      // (not applied); properties echoed back as componentProperties.
+      // (not applied). The real plugin returns the RAW Figma
+      // inst2.componentProperties — a NESTED map { [name]: { value, type } }
+      // (VARIANT and non-VARIANT props mixed, value wrapped) — NOT the flat
+      // input. Mirror that nested shape here so the echo is faithful (the
+      // flatten-to-read-twin fix is a DEFERRED spec item; the mock only needs to
+      // match the plugin's CURRENT echo). Infer type from the value kind:
+      // boolean → BOOLEAN, string → VARIANT (the common case in tests).
       case 'set_instance': {
         const siId = cmd.params?.instanceId as string
         const siProps = cmd.params?.properties as
@@ -782,6 +1038,16 @@ export const createMockPlugin = (
           | unknown[]
           | undefined
         const siWarnings: string[] = []
+        // Mirror the real plugin's T7 no-op warning: a call with neither
+        // properties nor overrides mutates nothing and must warn.
+        if (
+          (!siProps || Object.keys(siProps).length === 0) &&
+          (!siOverrides || siOverrides.length === 0)
+        ) {
+          siWarnings.push(
+            'no properties or overrides supplied; nothing changed',
+          )
+        }
         if (siOverrides && siOverrides.length > 0) {
           siWarnings.push(
             'Per-node overrides are not yet applied; ' +
@@ -789,9 +1055,24 @@ export const createMockPlugin = (
               ' override(s) skipped',
           )
         }
+        const siNested: Record<
+          string,
+          { value: string | boolean; type: string }
+        > = {}
+        for (const [k, v] of Object.entries(
+          siProps ?? {},
+        )) {
+          siNested[k] = {
+            value: v,
+            type:
+              typeof v === 'boolean'
+                ? 'BOOLEAN'
+                : 'VARIANT',
+          }
+        }
         result = {
           id: siId,
-          componentProperties: siProps ?? {},
+          componentProperties: siNested,
           warnings: siWarnings,
         }
         break
@@ -818,12 +1099,32 @@ export const createMockPlugin = (
         }
         break
 
-      // set_focus: CANVAS only — echo a viewport snapshot.
-      case 'set_focus':
+      // set_focus: CANVAS only — echo a viewport snapshot. Models the real
+      // plugin's resolution + T7 honesty: an id that does not resolve to a scene
+      // node (mirrored here by a `missing:` prefix) is reported in warnings[]
+      // rather than silently dropped, and requested/focused expose the counts.
+      case 'set_focus': {
+        const sfIds =
+          (cmd.params?.nodeIds as string[]) ?? []
+        const sfMissing = sfIds.filter(id =>
+          id.startsWith('missing:'),
+        )
+        const sfFocused = sfIds.length - sfMissing.length
         result = {
           viewport: { center: { x: 0, y: 0 }, zoom: 1 },
+          requested: sfIds.length,
+          focused: sfFocused,
+          warnings:
+            sfMissing.length > 0
+              ? [
+                  'set_focus: ' +
+                    sfMissing.join(', ') +
+                    ' did not resolve to a scene node and were skipped',
+                ]
+              : [],
         }
         break
+      }
 
       // create_page: echo the new page id + the requested name.
       case 'create_page':
@@ -852,7 +1153,9 @@ export const createMockPlugin = (
         break
 
       // create_image: a url starting with `degrade:` exercises the T7 degrade
-      // (warnings, NO hash, NO error → success-with-warning); else a hash.
+      // (warnings, NO hash, NO error → success-with-warning); an empty `bytes`
+      // array models the bytes-path degrade (invalid bytes/feature unavailable)
+      // faithfully to the real plugin's own bytes try/catch; else a hash.
       case 'create_image': {
         const imgUrl = cmd.params?.url as string | undefined
         const imgBytes = cmd.params?.bytes as
@@ -862,6 +1165,18 @@ export const createMockPlugin = (
           result = {
             warnings: [
               'createImageAsync failed (network/feature unavailable): degrade requested',
+            ],
+          }
+        } else if (
+          imgBytes !== undefined &&
+          imgBytes.length === 0
+        ) {
+          // Mirror the real plugin's bytes-path degrade, which appends the
+          // underlying reason (`: ` + String(e)) — keep the suffix so the mock
+          // is byte-faithful to the plugin's actual message shape.
+          result = {
+            warnings: [
+              'createImage failed (invalid bytes/feature unavailable): empty byte array',
             ],
           }
         } else if (
@@ -940,6 +1255,17 @@ export const createMockPlugin = (
         const modeNames =
           reqModes.length > 0 ? reqModes : ['Mode 1']
         const warnings: string[] = []
+        // Mirror the real plugin's T7 renameMode-unavailable warning: a
+        // collection name prefixed `norename:` models renameMode being absent,
+        // so the default mode keeps its name and a warning rides back.
+        if (
+          collectionName.startsWith('norename:') &&
+          reqModes.length > 0
+        ) {
+          warnings.push(
+            `renameMode unavailable in this Figma version; default mode not renamed to "${reqModes[0]}"`,
+          )
+        }
         const created: { id: string; name: string }[] = []
         inVars.forEach((v, i) => {
           if (v.name.startsWith('degrade:')) {
@@ -987,6 +1313,20 @@ export const createMockPlugin = (
               | { id: string }[]
               | undefined) ?? []
           const warnings: string[] = []
+          // Mirror the real plugin's T7 renameMode-failure degrade: a
+          // renameModes entry whose `from` is prefixed `degrade:` models a
+          // duplicate/invalid rename throwing — warned, never {error}.
+          const renameModes =
+            (cmd.params?.renameModes as
+              | { from: string; to: string }[]
+              | undefined) ?? []
+          for (const rename of renameModes) {
+            if (rename.from.startsWith('degrade:')) {
+              warnings.push(
+                `renameMode failed for "${rename.from}" → "${rename.to}": duplicate mode name`,
+              )
+            }
+          }
           for (const edit of editVars) {
             if (edit.id.startsWith('degrade:')) {
               warnings.push(
@@ -1024,7 +1364,9 @@ export const createMockPlugin = (
       }
 
       // update_styles: a styleId starting with `err:` → {error}; `degrade:` →
-      // success-with-warning. Else echo {id,warnings:[]} + the converted value.
+      // success-with-warning; `fontfail:` → PARTIAL SUCCESS (name/description
+      // committed, the TEXT value branch's loadFontAsync threw → warned, NOT
+      // {error}). Else echo {id,warnings:[]} + the converted value.
       case 'update_styles': {
         const sId = cmd.params?.styleId as string
         if (sId.startsWith('err:')) {
@@ -1034,6 +1376,16 @@ export const createMockPlugin = (
             id: sId,
             warnings: [
               'value looks like a paint atom but the style is text; value not applied',
+            ],
+          }
+        } else if (sId.startsWith('fontfail:')) {
+          const ufFont = cmd.params?.value as
+            | { family?: string; style?: string }
+            | undefined
+          result = {
+            id: sId,
+            warnings: [
+              `font "${ufFont?.family} ${ufFont?.style}" unavailable; value not applied (name/description were updated)`,
             ],
           }
         } else {
@@ -1047,12 +1399,24 @@ export const createMockPlugin = (
         break
       }
 
-      // apply_style: a nodeId starting with `err:` → {error}; `degrade:` →
-      // success-with-warning ({id,warnings}, NEVER {error}); else {id,[]}.
+      // apply_style boundary (mirrors the real plugin):
+      //  - nodeId `err:` → {error} node-not-found.
+      //  - styleId `missing:` → {error} style-not-found (a GENUINE invalid, not
+      //    a degrade).
+      //  - styleId `wrongcat:` → {error} category mismatch (genuine invalid).
+      //  - nodeId `degrade:` → success-with-warning (setter unavailable on the
+      //    node type — a true degrade), NEVER {error}.
+      //  - else {id,[]} happy.
       case 'apply_style': {
         const apNodeId = cmd.params?.nodeId as string
+        const apStyleId = cmd.params?.styleId as string
+        const apField = cmd.params?.field as string
         if (apNodeId.startsWith('err:')) {
           error = `Node not found: ${apNodeId}`
+        } else if (apStyleId.startsWith('missing:')) {
+          error = `Style not found: ${apStyleId}`
+        } else if (apStyleId.startsWith('wrongcat:')) {
+          error = `Style category mismatch: field "${apField}" expects a TEXT style but ${apStyleId} is a PAINT style`
         } else if (apNodeId.startsWith('degrade:')) {
           result = {
             id: apNodeId,

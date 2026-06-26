@@ -94,6 +94,18 @@ describe('handleGetNode (rebuilt — NodeSpec)', () => {
     expect(result.content[0].text).toContain('not found')
   })
 
+  it('emits position so get_node→create_node/update_node round-trips x/y', async () => {
+    const result = await handleGetNode(
+      { nodeId: '1:42', depth: 0 },
+      stubClient({ reply: cardFixture }),
+    )
+    const spec = YAML.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    // relativeTransform [[1,0,100],[0,1,200]] → [100,200].
+    expect(spec.position).toEqual([100, 200])
+  })
+
   it('applies a fields projection', async () => {
     const result = await handleGetNode(
       { nodeId: '1:42', fields: ['type', 'name'] },

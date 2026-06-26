@@ -108,6 +108,41 @@ const sizeOf = (raw: RawNode): [number, number] => {
   return [w ?? 0, h ?? 0]
 }
 
+/**
+ * Node position [x,y]. The WRITER maps spec.position → node.x/node.y, which in
+ * Figma is parent-relative, so the relativeTransform translation `[[a,b,x],
+ * [c,d,y]] → [x,y]` is the authoritative source. Falls back to the absolute
+ * bounding box origin (the root has no parent-relative frame). Returns undefined
+ * only when neither is present, so the field stays out of the spec.
+ */
+const positionOf = (
+  raw: RawNode,
+): [number, number] | undefined => {
+  const tf = raw.relativeTransform as number[][] | undefined
+  if (
+    Array.isArray(tf) &&
+    tf.length === 2 &&
+    Array.isArray(tf[0]) &&
+    Array.isArray(tf[1]) &&
+    typeof tf[0][2] === 'number' &&
+    typeof tf[1][2] === 'number'
+  ) {
+    return [tf[0][2], tf[1][2]]
+  }
+  const bbox = raw.absoluteBoundingBox as
+    | { x?: number; y?: number }
+    | undefined
+  if (
+    bbox !== undefined &&
+    bbox !== null &&
+    typeof bbox.x === 'number' &&
+    typeof bbox.y === 'number'
+  ) {
+    return [bbox.x, bbox.y]
+  }
+  return undefined
+}
+
 // ─── paint: raw → FigmaPaint → atom (with var() wrapper) ──────────────────────
 
 /** Convert a JSON_REST_V1 paint to the grammar's FigmaPaint shape. */
@@ -561,6 +596,11 @@ const buildNode = (
   }
 
   out.size = sizeOf(raw)
+
+  const position = positionOf(raw)
+  if (position !== undefined) {
+    out.position = position
+  }
 
   const layoutPositioning = str(raw.layoutPositioning)
   if (
