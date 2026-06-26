@@ -38,7 +38,7 @@ export const handleUpdateNode = async (
     const result = (await client.sendCommand(
       COMMANDS.UPDATE_NODE,
       { nodeId, spec },
-    )) as { error?: string } | null
+    )) as { error?: string; warnings?: string[] } | null
     const mutation = formatMutationResult(
       result,
       `Failed to update node: ${nodeId}`,
@@ -49,12 +49,14 @@ export const handleUpdateNode = async (
     ) {
       return mutation
     }
-    const warningText = warnings
-      .map(w => `Warning: ${w}`)
-      .join('\n')
-    return textResult(
-      `${mutation.content[0].text}\n\n${warningText}`,
-    )
+    // Merge the server-side writer warnings INTO the reply's structured
+    // warnings[] (one concept, one surface) rather than appending loose text
+    // after the JSON. The success reply is always a JSON object here.
+    const merged = {
+      ...result,
+      warnings: [...(result?.warnings ?? []), ...warnings],
+    }
+    return textResult(JSON.stringify(merged, null, 2))
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }

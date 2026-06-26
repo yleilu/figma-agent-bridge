@@ -191,4 +191,29 @@ describe('handleCreateNode (rebuilt — single NodeSpec)', () => {
       'Error: plugin exploded',
     )
   })
+
+  // An unsupported `type` is rejected cleanly at the SERVER boundary with an
+  // {error} that lists valid types — NOT forwarded to the plugin where it would
+  // throw a deep, generic "Unsupported node type" error.
+  it('rejects an unsupported type with a clean validation error before sending', async () => {
+    const sent: Sent[] = []
+    const result = await handleCreateNode(
+      { spec: { type: 'BUTTON' } },
+      stubClient({ sent }),
+    )
+    expect(sent).toHaveLength(0)
+    expect(result.content[0].text).toContain('Error')
+    expect(result.content[0].text).toContain('BUTTON')
+    // The message self-documents the valid surface.
+    expect(result.content[0].text).toContain('FRAME')
+  })
+
+  it('still forwards a supported type', async () => {
+    const sent: Sent[] = []
+    await handleCreateNode(
+      { spec: { type: 'RECTANGLE' } },
+      stubClient({ sent }),
+    )
+    expect(sent).toHaveLength(1)
+  })
 })

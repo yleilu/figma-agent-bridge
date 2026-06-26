@@ -29,6 +29,25 @@ const CHILDREN_WARNING =
   'spec.children ignored — create_node creates a SINGLE node in M2; ' +
   'use create_tree for nested creation (M3).'
 
+// The node types create_node can build (mirrors the plugin's createSingleNode
+// switch). Validated at the SERVER boundary so an unsupported type returns a
+// clean {error} listing the valid surface, not a deep generic plugin throw.
+const CREATABLE_TYPES = [
+  'FRAME',
+  'RECTANGLE',
+  'ELLIPSE',
+  'TEXT',
+  'LINE',
+  'POLYGON',
+  'STAR',
+  'VECTOR',
+  'SECTION',
+  'SLICE',
+  'INSTANCE',
+  'TEXT_PATH',
+  'SLOT',
+] as const
+
 export const handleCreateNode = async (
   { spec, parentId }: { spec: NodeSpec; parentId?: string },
   client: FigmaClient,
@@ -36,6 +55,16 @@ export const handleCreateNode = async (
   const guard = requireConnected(client)
   if (guard) {
     return guard
+  }
+
+  if (
+    !(CREATABLE_TYPES as readonly string[]).includes(
+      spec.type,
+    )
+  ) {
+    return textResult(
+      `Error: Unsupported node type "${spec.type}". Valid types: ${CREATABLE_TYPES.join(', ')}.`,
+    )
   }
 
   try {

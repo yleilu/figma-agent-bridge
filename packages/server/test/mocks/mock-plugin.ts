@@ -97,10 +97,42 @@ export const createMockPlugin = (
         ]
         break
 
-      // set_selection: echo {selectedCount} = the number of ids passed.
+      // set_selection: model the real plugin's resolution + T7 honesty. An id
+      // prefixed `missing:` does not resolve (skipped); `xpage:` resolves but
+      // lives on another page (cross-page degrade — warned, NOT thrown); the
+      // rest select. selectedCount is the count actually selected, and dropped
+      // ids ride back in warnings[] so a partial is never silent.
       case 'set_selection': {
         const ids = (cmd.params?.nodeIds as string[]) ?? []
-        result = { selectedCount: ids.length }
+        const ssSkipped = ids.filter(id =>
+          id.startsWith('missing:'),
+        )
+        const ssOffPage = ids.filter(id =>
+          id.startsWith('xpage:'),
+        )
+        const ssSelected =
+          ids.length - ssSkipped.length - ssOffPage.length
+        const ssWarnings: string[] = []
+        if (ssSkipped.length > 0) {
+          ssWarnings.push(
+            'skipped ' +
+              ssSkipped.length +
+              ' unresolved id(s): ' +
+              ssSkipped.join(', '),
+          )
+        }
+        if (ssOffPage.length > 0) {
+          ssWarnings.push(
+            'skipped ' +
+              ssOffPage.length +
+              ' cross-page id(s) not on the current page: ' +
+              ssOffPage.join(', '),
+          )
+        }
+        result = {
+          selectedCount: ssSelected,
+          warnings: ssWarnings,
+        }
         break
       }
 
@@ -439,15 +471,50 @@ export const createMockPlugin = (
       // back so e2e/round-trip tests prove the server parsed and the plugin
       // only assigned. Mirrors the real plugin's {id,name,type,warnings} reply.
       case 'update_node': {
+        const unId = cmd.params?.nodeId as string
         const spec = (cmd.params?.spec ?? {}) as Record<
           string,
           unknown
         >
+        // Mirror the real plugin's warn-on-no-op + degrade behavior on an
+        // INCOMPATIBLE target (modeled by an `incompat:` nodeId — a node that
+        // lacks layoutMode/fills/etc. capability). 3a: a patched property that
+        // the node type doesn't support is reported in warnings[]. 3b: a sizing/
+        // layoutPositioning patch warns-and-continues (never throws → {error}).
+        const unWarnings: string[] = []
+        if (unId.startsWith('incompat:')) {
+          const capChecks: [string, string][] = [
+            ['layout', 'layout'],
+            ['fills', 'fills'],
+            ['strokes', 'strokes'],
+            ['effects', 'effects'],
+            ['radius', 'radius'],
+            ['clipsContent', 'clipsContent'],
+          ]
+          for (const [key, label] of capChecks) {
+            if (spec[key] !== undefined) {
+              unWarnings.push(
+                label +
+                  ' ignored — not supported on a SLICE node',
+              )
+            }
+          }
+          if (spec.sizing !== undefined) {
+            unWarnings.push(
+              'sizing not applicable on this node (SLICE): incompatible context',
+            )
+          }
+          if (spec.layoutPositioning !== undefined) {
+            unWarnings.push(
+              'layoutPositioning not applicable on this node (SLICE): incompatible context',
+            )
+          }
+        }
         result = {
-          id: cmd.params?.nodeId as string,
+          id: unId,
           name: (spec.name as string) ?? 'Card',
           type: 'FRAME',
-          warnings: [],
+          warnings: unWarnings,
           // Echo the converted spec so the e2e can assert the parsed paint
           // arrived intact.
           spec,
@@ -527,13 +594,23 @@ export const createMockPlugin = (
           ...(nodeSpec ?? {}),
         }
         delete echo.children
+        // Mirror the real plugin's SLOT degrade (T7): a SLOT is created as a
+        // FRAME placeholder and a downgrade warning rides back on success.
+        const cnWarnings: string[] = []
+        let createdType = nodeType
+        if (nodeType === 'SLOT') {
+          createdType = 'FRAME'
+          cnWarnings.push(
+            'SLOT requested via create_node was created as a FRAME placeholder; real SLOT promotion happens in create_component via component.createSlot()',
+          )
+        }
         result = {
           ...echo,
           id: `created:${Math.random().toString(36).slice(2, 8)}`,
           name: (nodeSpec?.name as string) ?? nodeType,
-          type: nodeType,
+          type: createdType,
           parentId,
-          warnings: [],
+          warnings: cnWarnings,
         }
         break
       }
@@ -861,6 +938,16 @@ export const createMockPlugin = (
           | unknown[]
           | undefined
         const siWarnings: string[] = []
+        // Mirror the real plugin's T7 no-op warning: a call with neither
+        // properties nor overrides mutates nothing and must warn.
+        if (
+          (!siProps || Object.keys(siProps).length === 0) &&
+          (!siOverrides || siOverrides.length === 0)
+        ) {
+          siWarnings.push(
+            'no properties or overrides supplied; nothing changed',
+          )
+        }
         if (siOverrides && siOverrides.length > 0) {
           siWarnings.push(
             'Per-node overrides are not yet applied; ' +
@@ -897,12 +984,32 @@ export const createMockPlugin = (
         }
         break
 
-      // set_focus: CANVAS only — echo a viewport snapshot.
-      case 'set_focus':
+      // set_focus: CANVAS only — echo a viewport snapshot. Models the real
+      // plugin's resolution + T7 honesty: an id that does not resolve to a scene
+      // node (mirrored here by a `missing:` prefix) is reported in warnings[]
+      // rather than silently dropped, and requested/focused expose the counts.
+      case 'set_focus': {
+        const sfIds =
+          (cmd.params?.nodeIds as string[]) ?? []
+        const sfMissing = sfIds.filter(id =>
+          id.startsWith('missing:'),
+        )
+        const sfFocused = sfIds.length - sfMissing.length
         result = {
           viewport: { center: { x: 0, y: 0 }, zoom: 1 },
+          requested: sfIds.length,
+          focused: sfFocused,
+          warnings:
+            sfMissing.length > 0
+              ? [
+                  'set_focus: ' +
+                    sfMissing.join(', ') +
+                    ' did not resolve to a scene node and were skipped',
+                ]
+              : [],
         }
         break
+      }
 
       // create_page: echo the new page id + the requested name.
       case 'create_page':
@@ -1030,6 +1137,17 @@ export const createMockPlugin = (
         const modeNames =
           reqModes.length > 0 ? reqModes : ['Mode 1']
         const warnings: string[] = []
+        // Mirror the real plugin's T7 renameMode-unavailable warning: a
+        // collection name prefixed `norename:` models renameMode being absent,
+        // so the default mode keeps its name and a warning rides back.
+        if (
+          collectionName.startsWith('norename:') &&
+          reqModes.length > 0
+        ) {
+          warnings.push(
+            `renameMode unavailable in this Figma version; default mode not renamed to "${reqModes[0]}"`,
+          )
+        }
         const created: { id: string; name: string }[] = []
         inVars.forEach((v, i) => {
           if (v.name.startsWith('degrade:')) {
@@ -1077,6 +1195,20 @@ export const createMockPlugin = (
               | { id: string }[]
               | undefined) ?? []
           const warnings: string[] = []
+          // Mirror the real plugin's T7 renameMode-failure degrade: a
+          // renameModes entry whose `from` is prefixed `degrade:` models a
+          // duplicate/invalid rename throwing — warned, never {error}.
+          const renameModes =
+            (cmd.params?.renameModes as
+              | { from: string; to: string }[]
+              | undefined) ?? []
+          for (const rename of renameModes) {
+            if (rename.from.startsWith('degrade:')) {
+              warnings.push(
+                `renameMode failed for "${rename.from}" → "${rename.to}": duplicate mode name`,
+              )
+            }
+          }
           for (const edit of editVars) {
             if (edit.id.startsWith('degrade:')) {
               warnings.push(
@@ -1114,7 +1246,9 @@ export const createMockPlugin = (
       }
 
       // update_styles: a styleId starting with `err:` → {error}; `degrade:` →
-      // success-with-warning. Else echo {id,warnings:[]} + the converted value.
+      // success-with-warning; `fontfail:` → PARTIAL SUCCESS (name/description
+      // committed, the TEXT value branch's loadFontAsync threw → warned, NOT
+      // {error}). Else echo {id,warnings:[]} + the converted value.
       case 'update_styles': {
         const sId = cmd.params?.styleId as string
         if (sId.startsWith('err:')) {
@@ -1124,6 +1258,16 @@ export const createMockPlugin = (
             id: sId,
             warnings: [
               'value looks like a paint atom but the style is text; value not applied',
+            ],
+          }
+        } else if (sId.startsWith('fontfail:')) {
+          const ufFont = cmd.params?.value as
+            | { family?: string; style?: string }
+            | undefined
+          result = {
+            id: sId,
+            warnings: [
+              `font "${ufFont?.family} ${ufFont?.style}" unavailable; value not applied (name/description were updated)`,
             ],
           }
         } else {
@@ -1137,12 +1281,24 @@ export const createMockPlugin = (
         break
       }
 
-      // apply_style: a nodeId starting with `err:` → {error}; `degrade:` →
-      // success-with-warning ({id,warnings}, NEVER {error}); else {id,[]}.
+      // apply_style boundary (mirrors the real plugin):
+      //  - nodeId `err:` → {error} node-not-found.
+      //  - styleId `missing:` → {error} style-not-found (a GENUINE invalid, not
+      //    a degrade).
+      //  - styleId `wrongcat:` → {error} category mismatch (genuine invalid).
+      //  - nodeId `degrade:` → success-with-warning (setter unavailable on the
+      //    node type — a true degrade), NEVER {error}.
+      //  - else {id,[]} happy.
       case 'apply_style': {
         const apNodeId = cmd.params?.nodeId as string
+        const apStyleId = cmd.params?.styleId as string
+        const apField = cmd.params?.field as string
         if (apNodeId.startsWith('err:')) {
           error = `Node not found: ${apNodeId}`
+        } else if (apStyleId.startsWith('missing:')) {
+          error = `Style not found: ${apStyleId}`
+        } else if (apStyleId.startsWith('wrongcat:')) {
+          error = `Style category mismatch: field "${apField}" expects a TEXT style but ${apStyleId} is a PAINT style`
         } else if (apNodeId.startsWith('degrade:')) {
           result = {
             id: apNodeId,

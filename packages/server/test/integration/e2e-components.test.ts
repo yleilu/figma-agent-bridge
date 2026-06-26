@@ -186,6 +186,28 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
     expect((data.warnings as unknown[]).length).toBe(0)
   })
 
+  // T7: a pure-read set_instance call (no properties, no overrides) mutates
+  // nothing — it must WARN rather than return a silent no-op success that an
+  // agent reads as a successful write.
+  it('set_instance warns on a no-op call (no properties, no overrides)', async () => {
+    const result = await handleSetInstance(
+      { instanceId: 'i:1' },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const data = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    const warnings = data.warnings as string[]
+    expect(
+      warnings.some(
+        w =>
+          w.toLowerCase().includes('nothing') ||
+          w.toLowerCase().includes('no properties'),
+      ),
+    ).toBe(true)
+  })
+
   it('swap_component degrades (T7) — warning on success, reports the ORIGINAL main', async () => {
     // A genuinely-failed swap leaves the instance on its ORIGINAL main: the
     // real plugin re-reads getMainComponentAsync() (the original), so the mock

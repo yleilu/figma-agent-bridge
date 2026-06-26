@@ -382,26 +382,49 @@ const applyCommonProperties = async (
 const applyPostAppendProperties = (
   node: SceneNode,
   spec: Record<string, unknown>,
+  warnings?: string[],
 ): void => {
-  // These must be set AFTER appendChild to auto-layout parent
+  // These must be set AFTER appendChild to auto-layout parent. On update_node
+  // the target is an arbitrary pre-existing node, so an incompatible context
+  // (e.g. layoutSizing on a child of a non-auto-layout parent) would THROW.
+  // T7: degrade with a warning and continue rather than throwing → {error},
+  // matching the x/y warn-and-continue path.
 
   // Sizing
   if (spec.sizing !== undefined) {
     const [h, v] = spec.sizing as [string, string]
-    ;(node as FrameNode).layoutSizingHorizontal = h as
-      | 'FIXED'
-      | 'HUG'
-      | 'FILL'
-    ;(node as FrameNode).layoutSizingVertical = v as
-      | 'FIXED'
-      | 'HUG'
-      | 'FILL'
+    try {
+      ;(node as FrameNode).layoutSizingHorizontal = h as
+        | 'FIXED'
+        | 'HUG'
+        | 'FILL'
+      ;(node as FrameNode).layoutSizingVertical = v as
+        | 'FIXED'
+        | 'HUG'
+        | 'FILL'
+    } catch (e) {
+      warnings?.push(
+        'sizing not applicable on this node (' +
+          node.type +
+          '): ' +
+          String(e),
+      )
+    }
   }
 
   // Layout positioning (ABSOLUTE)
   if (spec.layoutPositioning !== undefined) {
-    ;(node as FrameNode).layoutPositioning =
-      spec.layoutPositioning as 'AUTO' | 'ABSOLUTE'
+    try {
+      ;(node as FrameNode).layoutPositioning =
+        spec.layoutPositioning as 'AUTO' | 'ABSOLUTE'
+    } catch (e) {
+      warnings?.push(
+        'layoutPositioning not applicable on this node (' +
+          node.type +
+          '): ' +
+          String(e),
+      )
+    }
   }
 }
 
@@ -537,6 +560,7 @@ const applyTextProperties = async (
 const createSingleNode = async (
   spec: Record<string, unknown>,
   parent: ParentNode,
+  warnings?: string[],
 ): Promise<SceneNode> => {
   const type = spec.type as string
   let node: SceneNode
@@ -643,9 +667,13 @@ const createSingleNode = async (
       break
     }
     case 'SLOT': {
-      // SLOT in create_node context: create a FRAME placeholder.
+      // SLOT in create_node context: create a FRAME placeholder and WARN (T7) —
+      // the agent asked for a SLOT and is getting a FRAME, so it must be told.
       // Actual SLOT promotion happens in create_component via component.createSlot().
       node = figma.createFrame()
+      warnings?.push(
+        'SLOT requested via create_node was created as a FRAME placeholder; real SLOT promotion happens in create_component via component.createSlot()',
+      )
       break
     }
     default:
@@ -871,16 +899,54 @@ const handleCommand = async (
     case COMMANDS.SET_SELECTION: {
       const ids = (params.nodeIds as string[]) ?? []
       const nodes: SceneNode[] = []
+      const skipped: string[] = []
+      const offPage: string[] = []
       for (const id of ids) {
         const n = await figma.getNodeByIdAsync(id)
         // Only scene nodes are selectable; `visible` is present on every
         // SceneNode and absent on PAGE/DOCUMENT, so it's a sound guard.
-        if (n && 'visible' in n) {
-          nodes.push(n as SceneNode)
+        if (!n || !('visible' in n)) {
+          skipped.push(id)
+          continue
+        }
+        // getNodeByIdAsync resolves nodes on ANY page, but the selection can
+        // only hold nodes on the current page. T7: a cross-page id degrades to
+        // a warning (skipped) rather than throwing on assignment.
+        const sn = n as SceneNode
+        let onCurrentPage = false
+        let walk: BaseNode | null = sn
+        while (walk !== null) {
+          if (walk === figma.currentPage) {
+            onCurrentPage = true
+            break
+          }
+          walk = walk.parent
+        }
+        if (onCurrentPage) {
+          nodes.push(sn)
+        } else {
+          offPage.push(id)
         }
       }
       figma.currentPage.selection = nodes
-      return { selectedCount: nodes.length }
+      const warnings: string[] = []
+      if (skipped.length > 0) {
+        warnings.push(
+          'skipped ' +
+            skipped.length +
+            ' unresolved id(s): ' +
+            skipped.join(', '),
+        )
+      }
+      if (offPage.length > 0) {
+        warnings.push(
+          'skipped ' +
+            offPage.length +
+            ' cross-page id(s) not on the current page: ' +
+            offPage.join(', '),
+        )
+      }
+      return { selectedCount: nodes.length, warnings }
     }
 
     case COMMANDS.GET_NODE: {
@@ -1347,7 +1413,11 @@ const handleCommand = async (
           'children ignored — create_node creates a single node; use create_tree (M3) for nested creation',
         )
       }
-      const created = await createSingleNode(spec, parent)
+      const created = await createSingleNode(
+        spec,
+        parent,
+        warnings,
+      )
       return {
         id: created.id,
         name: created.name,
@@ -1739,6 +1809,20 @@ const handleCommand = async (
       const siProps = params.properties as
         | Record<string, string | boolean>
         | undefined
+      const siOverridesRaw = params.overrides as
+        | unknown[]
+        | undefined
+      // T7: set_instance is a WRITE path. A call with neither properties nor
+      // overrides mutates nothing — warn rather than returning a silent no-op
+      // success (consistent with the warn-on-no-op convention in update_node).
+      if (
+        (!siProps || Object.keys(siProps).length === 0) &&
+        (!siOverridesRaw || siOverridesRaw.length === 0)
+      ) {
+        siWarnings.push(
+          'no properties or overrides supplied; nothing changed',
+        )
+      }
       if (siProps && Object.keys(siProps).length > 0) {
         try {
           inst2.setProperties(siProps)
@@ -1818,6 +1902,30 @@ const handleCommand = async (
         delete spec.position
       }
 
+      // warn-on-no-op (T7): a patched property that the target node type does
+      // not support is dropped by applyCommonProperties' `'X' in node` guards.
+      // On update_node the target is arbitrary, so name the dropped field rather
+      // than skipping silently. (capability key → spec key)
+      const capabilityChecks: [string, string][] = [
+        ['layoutMode', 'layout'],
+        ['fills', 'fills'],
+        ['strokes', 'strokes'],
+        ['effects', 'effects'],
+        ['opacity', 'opacity'],
+        ['cornerRadius', 'radius'],
+        ['clipsContent', 'clipsContent'],
+      ]
+      for (const [cap, key] of capabilityChecks) {
+        if (spec[key] !== undefined && !(cap in node)) {
+          warnings.push(
+            key +
+              ' ignored — not supported on a ' +
+              node.type +
+              ' node',
+          )
+        }
+      }
+
       await applyCommonProperties(
         node as SceneNode,
         spec,
@@ -1826,7 +1934,11 @@ const handleCommand = async (
       if (node.type === 'TEXT' && spec.text !== undefined) {
         await applyTextProperties(node as TextNode, spec)
       }
-      applyPostAppendProperties(node as SceneNode, spec)
+      applyPostAppendProperties(
+        node as SceneNode,
+        spec,
+        warnings,
+      )
 
       return {
         id: node.id,
@@ -2124,18 +2236,34 @@ const handleCommand = async (
     case COMMANDS.SET_FOCUS: {
       const ids = (params.nodeIds as string[]) ?? []
       const nodes: SceneNode[] = []
+      const missing: string[] = []
       for (const id of ids) {
         const n = await figma.getNodeByIdAsync(id)
         if (n && 'visible' in n) {
           nodes.push(n as SceneNode)
+        } else {
+          missing.push(id)
         }
       }
       figma.viewport.scrollAndZoomIntoView(nodes)
+      // T7: ids that don't resolve to a scene node are surfaced in warnings[]
+      // (never a silent no-op / hallucinated success). requested/focused let the
+      // agent compare against the input even when nothing resolved.
       return {
         viewport: {
           center: figma.viewport.center,
           zoom: figma.viewport.zoom,
         },
+        requested: ids.length,
+        focused: nodes.length,
+        warnings:
+          missing.length > 0
+            ? [
+                'set_focus: ' +
+                  missing.join(', ') +
+                  ' did not resolve to a scene node and were skipped',
+              ]
+            : [],
       }
     }
 
@@ -2645,9 +2773,29 @@ const handleCommand = async (
         (params.modes as string[] | undefined) ?? []
       if (requestedModes.length > 0) {
         if (typeof collection.renameMode === 'function') {
-          collection.renameMode(
-            collection.modes[0].modeId,
-            requestedModes[0],
+          // T7: a duplicate/invalid rename degrades to a warning rather than
+          // throwing the whole call into {error}.
+          try {
+            collection.renameMode(
+              collection.modes[0].modeId,
+              requestedModes[0],
+            )
+          } catch (e) {
+            warnings.push(
+              'renameMode failed for default mode → "' +
+                requestedModes[0] +
+                '": ' +
+                String(e),
+            )
+          }
+        } else {
+          // T7: feature-detected absent is NOT a silent no-op — warn so the
+          // agent knows the default mode kept its original name (and any value
+          // keyed to the requested mode will then fall through as 'unknown mode').
+          warnings.push(
+            'renameMode unavailable in this Figma version; default mode not renamed to "' +
+              requestedModes[0] +
+              '"',
           )
         }
         for (const modeName of requestedModes.slice(1)) {
@@ -2838,7 +2986,21 @@ const handleCommand = async (
         } else if (
           typeof collection.renameMode === 'function'
         ) {
-          collection.renameMode(modeId, rename.to)
+          // T7: a duplicate/invalid rename throws — degrade to a warning rather
+          // than letting the throw turn the whole call into {error} (discarding
+          // addModes/values already applied).
+          try {
+            collection.renameMode(modeId, rename.to)
+          } catch (e) {
+            warnings.push(
+              'renameMode failed for "' +
+                rename.from +
+                '" → "' +
+                rename.to +
+                '": ' +
+                String(e),
+            )
+          }
         } else {
           warnings.push(
             'renameMode unavailable; mode "' +
@@ -3170,21 +3332,37 @@ const handleCommand = async (
             lineHeight?: LineHeight
             letterSpacing?: LetterSpacing
           }
-          await figma.loadFontAsync({
-            family: font.family,
-            style: font.style,
-          })
-          const ts = style as TextStyle
-          ts.fontName = {
-            family: font.family,
-            style: font.style,
-          }
-          ts.fontSize = font.size
-          if (font.lineHeight !== undefined) {
-            ts.lineHeight = font.lineHeight
-          }
-          if (font.letterSpacing !== undefined) {
-            ts.letterSpacing = font.letterSpacing
+          // T7 partial-success: name/description were ALREADY committed above.
+          // loadFontAsync throws for an unavailable font — degrade to a warning
+          // and still return {id,warnings} so the applied name/description are
+          // honestly reported, rather than letting the throw turn the whole call
+          // into {error} (a silent partial write masquerading as a no-op).
+          try {
+            await figma.loadFontAsync({
+              family: font.family,
+              style: font.style,
+            })
+            const ts = style as TextStyle
+            ts.fontName = {
+              family: font.family,
+              style: font.style,
+            }
+            ts.fontSize = font.size
+            if (font.lineHeight !== undefined) {
+              ts.lineHeight = font.lineHeight
+            }
+            if (font.letterSpacing !== undefined) {
+              ts.letterSpacing = font.letterSpacing
+            }
+          } catch (e) {
+            warnings.push(
+              'font "' +
+                font.family +
+                ' ' +
+                font.style +
+                '" unavailable; value not applied (name/description were updated): ' +
+                String(e),
+            )
           }
         } else if (style.type === 'EFFECT') {
           ;(style as EffectStyle).effects = [
@@ -3200,8 +3378,12 @@ const handleCommand = async (
     }
 
     // apply_style: bind a style to a node field via the matching async setter.
-    // T7: feature-detect the setter on the node and degrade with a warning when
-    // it is unavailable (NEVER {error}); only a missing node yields {error}.
+    // T7 boundary:
+    //  - a missing node or a non-existent / wrong-CATEGORY styleId is a GENUINE
+    //    invalid → {error} (validated up front, never swallowed).
+    //  - a setter that is feature-unavailable on the node type degrades to a
+    //    warning on success (NEVER {error}); the remaining catch covers a true
+    //    feature-unavailability rejection.
     case COMMANDS.APPLY_STYLE: {
       const nodeId = params.nodeId as string
       const node = await figma.getNodeByIdAsync(nodeId)
@@ -3215,6 +3397,35 @@ const handleCommand = async (
         | 'text'
         | 'effect'
         | 'grid'
+      // A genuinely invalid styleId is NOT a degrade — surface {error} up front
+      // (mirrors the node-not-found guard above).
+      const style = await figma.getStyleByIdAsync(styleId)
+      if (!style) {
+        return { error: 'Style not found: ' + styleId }
+      }
+      // Wrong-category binding (e.g. a PAINT style via field:'text') is a
+      // genuine invalid → {error}, not a warning.
+      const expectedType = {
+        fill: 'PAINT',
+        stroke: 'PAINT',
+        text: 'TEXT',
+        effect: 'EFFECT',
+        grid: 'GRID',
+      }[field]
+      if (style.type !== expectedType) {
+        return {
+          error:
+            'Style category mismatch: field "' +
+            field +
+            '" expects a ' +
+            expectedType +
+            ' style but ' +
+            styleId +
+            ' is a ' +
+            style.type +
+            ' style',
+        }
+      }
       const setterName = {
         fill: 'setFillStyleIdAsync',
         stroke: 'setStrokeStyleIdAsync',

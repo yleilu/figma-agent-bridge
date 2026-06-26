@@ -48,6 +48,7 @@ import {
   handleCreateVariables,
   handleUpdateVariables,
   handleCreateStyles,
+  handleUpdateStyles,
   handleApplyStyle,
 } from '@figma-agent-bridge/server/tools/design-system-authoring'
 import { handleExport } from '@figma-agent-bridge/server/tools/export'
@@ -192,6 +193,55 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     })
   })
 
+  // 3a — warn-on-no-op (T7): a patched property that does not apply to the
+  // target node type is reported in warnings[], not silently dropped. The mock
+  // models an incompatible target via a nodeId prefixed `incompat:` (no
+  // layoutMode capability) — mirroring the real plugin's `'layoutMode' in node`
+  // guard which previously skipped silently.
+  it('update_node warns when a patched property does not apply to the node type', async () => {
+    const result = await handleUpdateNode(
+      {
+        nodeId: 'incompat:1',
+        patch: {
+          layout: {
+            mode: 'V',
+            gap: 8,
+            pad: [0, 0, 0, 0],
+            align: ['MIN', 'MIN'],
+          },
+        },
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const reply = JSON.parse(result.content[0].text) as {
+      warnings: string[]
+    }
+    expect(
+      reply.warnings.some(w => w.includes('layout')),
+    ).toBe(true)
+  })
+
+  // 3b — degrade consistency (T7): sizing/layoutPositioning on an incompatible
+  // node must warn-and-continue (success), NOT throw → {error}. The mock keys
+  // the incompatible target off the same `incompat:` prefix.
+  it('update_node degrades (warns) on sizing for an incompatible node instead of erroring', async () => {
+    const result = await handleUpdateNode(
+      {
+        nodeId: 'incompat:1',
+        patch: { sizing: ['FILL', 'FILL'] },
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const reply = JSON.parse(result.content[0].text) as {
+      warnings: string[]
+    }
+    expect(
+      reply.warnings.some(w => w.includes('sizing')),
+    ).toBe(true)
+  })
+
   // 4 — bind_variable degrade path (success-with-warning, not error)
   it('bind_variable degrade path reports success-with-warning', async () => {
     const result = await handleBindVariable(
@@ -306,6 +356,28 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(result.content[0].text).toContain('create_tree')
   })
 
+  // 8a — create_node SLOT degrades to a FRAME placeholder WITH a warning (T7):
+  // the agent asked for a SLOT, gets a FRAME, and is told. The mock mirrors the
+  // real plugin: SLOT is created as a FRAME and a downgrade warning rides back.
+  it('create_node SLOT degrades to a FRAME placeholder with a warning', async () => {
+    const result = await handleCreateNode(
+      {
+        spec: { type: 'SLOT', name: 'Slot' },
+        parentId: 'page:1',
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const reply = JSON.parse(result.content[0].text) as {
+      type: string
+      warnings: string[]
+    }
+    expect(reply.type).toBe('FRAME')
+    expect(
+      reply.warnings.some(w => w.includes('SLOT')),
+    ).toBe(true)
+  })
+
   // 9 — search with a server-side match (name glob) over the relay.
   it('search applies the name match server-side', async () => {
     const result = await handleSearch(
@@ -413,6 +485,62 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(Array.isArray(list)).toBe(true)
     expect(list[0]).toHaveProperty('id')
     expect(list[0]).toHaveProperty('type')
+  })
+
+  // 13a — set_selection empty array is the CLEAR path: selectedCount:0.
+  it('set_selection with an empty array clears (selectedCount:0)', async () => {
+    const set = await handleSetSelection(
+      { nodeIds: [] },
+      client,
+    )
+    expect(set.content[0].text).not.toContain('Error:')
+    const out = JSON.parse(set.content[0].text) as {
+      selectedCount: number
+    }
+    expect(out.selectedCount).toBe(0)
+  })
+
+  // 13b — partial-skip (T7): an id that doesn't resolve is reported in
+  // warnings[] and selectedCount diverges from the requested count, rather than
+  // being a silent partial. The mock models resolution (an id prefixed
+  // `missing:` does not resolve).
+  it('set_selection surfaces unresolved ids as a warning (count diverges)', async () => {
+    const set = await handleSetSelection(
+      { nodeIds: ['1:42', 'missing:1'] },
+      client,
+    )
+    expect(set.content[0].text).not.toContain('Error:')
+    const out = JSON.parse(set.content[0].text) as {
+      selectedCount: number
+      warnings: string[]
+    }
+    expect(out.selectedCount).toBe(1)
+    expect(
+      out.warnings.some(w => w.includes('missing:1')),
+    ).toBe(true)
+  })
+
+  // 13c — cross-page degrade (T7): a valid id that lives on another page must
+  // degrade with a warning, NOT throw → {error}. The mock models a cross-page
+  // id via an `xpage:` prefix.
+  it('set_selection degrades (warns) on a cross-page id instead of erroring', async () => {
+    const set = await handleSetSelection(
+      { nodeIds: ['1:42', 'xpage:9'] },
+      client,
+    )
+    expect(set.content[0].text).not.toContain('Error:')
+    const out = JSON.parse(set.content[0].text) as {
+      selectedCount: number
+      warnings: string[]
+    }
+    expect(out.selectedCount).toBe(1)
+    expect(
+      out.warnings.some(
+        w =>
+          w.includes('xpage:9') &&
+          w.toLowerCase().includes('page'),
+      ),
+    ).toBe(true)
   })
 
   // 14 — list_pages returns the Rule A document + page shape over the relay.
@@ -839,6 +967,26 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     )
   })
 
+  // 27a1 — update_variables: a renameMode FAILURE (e.g. a duplicate / invalid
+  // target name) degrades to a warning-on-success, never a throw → whole-call
+  // {error} (T7). The mock keys this off a renameModes entry whose `from` is
+  // prefixed `degrade:`.
+  it('update_variables renameMode failure degrades to success-with-warning over the relay', async () => {
+    const result = await handleUpdateVariables(
+      {
+        collectionId: 'col:1',
+        renameModes: [
+          { from: 'degrade:Light', to: 'Dark' },
+        ],
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    expect(result.content[0].text).toContain(
+      'renameMode failed',
+    )
+  })
+
   // 27a — update_variables: a setValueForMode REJECTION (e.g. a type-incompatible
   // value reaching a COLOR variable) degrades to a warning-on-success, never a
   // throw / never {error} (T7). The mock keys this off a variable id prefixed
@@ -912,6 +1060,28 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     )
   })
 
+  // 27d — create_variables: when renameMode is feature-detected ABSENT, the
+  // default mode can't be renamed — T7 requires a warning (not a silent no-op
+  // that then orphans every value keyed to the requested mode). The mock keys
+  // renameMode-unavailable off a collection name prefixed `norename:`.
+  it('create_variables warns when renameMode is unavailable (default mode not renamed)', async () => {
+    const result = await handleCreateVariables(
+      {
+        collection: 'norename:Brand',
+        modes: ['Light'],
+        variables: [],
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const out = JSON.parse(result.content[0].text) as {
+      warnings: string[]
+    }
+    expect(
+      out.warnings.some(w => w.includes('renameMode')),
+    ).toBe(true)
+  })
+
   // 28 — create_styles: a paint atom is parsed server-side to a SOLID Paint
   // before the plugin creates the style.
   it('create_styles parses a paint atom to a SOLID Paint over the relay', async () => {
@@ -967,6 +1137,33 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     })
   })
 
+  // 29a — update_styles partial write (T7): name/description commit, then the
+  // value branch (loadFontAsync for a TEXT style) throws for an unavailable
+  // font. The plugin must report PARTIAL SUCCESS + a warning (the name was
+  // already applied), NOT a total {error}. The mock keys the font-load failure
+  // off a styleId prefixed `fontfail:`.
+  it('update_styles reports partial success + warning when the value branch fails', async () => {
+    const result = await handleUpdateStyles(
+      {
+        styleId: 'fontfail:S',
+        name: 'Heading/H1',
+        value: 'font(Nonexistent,Bold,32)',
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const out = JSON.parse(result.content[0].text) as {
+      id: string
+      warnings: string[]
+    }
+    expect(out.id).toBe('fontfail:S')
+    expect(
+      out.warnings.some(w =>
+        w.toLowerCase().includes('font'),
+      ),
+    ).toBe(true)
+  })
+
   // 30 — apply_style happy path reports success (no error) over the relay.
   it('apply_style reports success over the relay', async () => {
     const result = await handleApplyStyle(
@@ -993,5 +1190,41 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     )
     expect(result.content[0].text).not.toContain('Error:')
     expect(result.content[0].text).toContain('not applied')
+  })
+
+  // 31a — apply_style with a NON-EXISTENT styleId is a GENUINE failure → {error}
+  // (T7 boundary: a missing style is not a degrade). The mock models this via a
+  // styleId prefixed `missing:`.
+  it('apply_style surfaces a non-existent styleId as an error (not a swallowed warning)', async () => {
+    const result = await handleApplyStyle(
+      {
+        nodeId: '1:42',
+        styleId: 'missing:S',
+        field: 'fill',
+      },
+      client,
+    )
+    expect(result.content[0].text).toContain('Error')
+    expect(result.content[0].text).toContain(
+      'Style not found',
+    )
+  })
+
+  // 31b — apply_style with a WRONG-CATEGORY style (e.g. a PAINT style applied
+  // via field:'text') is a genuine invalid → {error}, not a warning. Modeled via
+  // a styleId prefixed `wrongcat:`.
+  it('apply_style surfaces a wrong-category style as an error', async () => {
+    const result = await handleApplyStyle(
+      {
+        nodeId: '1:42',
+        styleId: 'wrongcat:S',
+        field: 'text',
+      },
+      client,
+    )
+    expect(result.content[0].text).toContain('Error')
+    expect(result.content[0].text.toLowerCase()).toContain(
+      'category',
+    )
   })
 })

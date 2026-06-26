@@ -16,8 +16,11 @@
 // collecting a per-op result/error. So N relay round-trips collapse to 1.
 //
 // PARTIAL-SUCCESS SHAPE (documented):
-//   results: [{ index, op, ok, result? , error? }]   — one entry per op, in order
+//   results: [{ index, op, ok, result?, error?, warnings? }] — one per op, in order
 //   errors:  [{ index, op, error }]                   — the failures, summarized
+// `warnings?` carries the SAME server-side writer warnings a direct call would
+// emit (e.g. update_node per-side stroke collapse), so a batched op is not a
+// silent lossy conversion (D3/T7).
 // A SERVER-side conversion failure (e.g. a malformed atom) or a missing op is
 // recorded as that entry's error WITHOUT being sent to the plugin, and the entry
 // is sent as a no-op marker so the plugin's results array stays index-aligned.
@@ -47,6 +50,8 @@ type BatchEntry = Record<string, unknown> & { op?: string }
 type ConvertedOp = {
   op: string
   params: Record<string, unknown>
+  /** Server-side lossy-conversion warnings (e.g. per-side stroke collapse). */
+  warnings?: string[]
 }
 
 /** The per-entry result the server returns to the agent. */
@@ -56,6 +61,8 @@ type EntryResult = {
   ok: boolean
   result?: unknown
   error?: string
+  /** Server-side writer warnings for this op (D3/T7), when any. */
+  warnings?: string[]
 }
 
 // ─── per-op param conversion (grammar WRITE face) ──────────────────────────────
@@ -76,15 +83,19 @@ const opParams = (
 
 const convertUpdateNode = (
   params: Record<string, unknown>,
+  warnings?: string[],
 ): Record<string, unknown> => {
   const { nodeId, patch } = params as {
     nodeId?: string
     patch?: Partial<NodeSpec>
   }
-  // NOTE: per-op warnings (e.g. per-side stroke collapse) are intentionally not
-  // surfaced here — the batch result shape ({results, errors}) has no per-op
-  // warnings channel (D3). A direct update_node surfaces them; a batched one does not.
-  return { nodeId, spec: specToFigma(patch ?? {}) }
+  // D3/T7: thread the writer warnings sink so a batched update_node surfaces the
+  // SAME per-op warnings (e.g. per-side stroke collapse) a direct update_node
+  // does — no longer a silent lossy conversion.
+  return {
+    nodeId,
+    spec: specToFigma(patch ?? {}, warnings),
+  }
 }
 
 const convertCreateStyles = (
@@ -206,11 +217,16 @@ const convertUpdateVariables = (
   }
 }
 
-/** Ops that need grammar atom → Figma object conversion before the plugin runs. */
+/**
+ * Ops that need grammar atom → Figma object conversion before the plugin runs.
+ * Each converter takes an optional warnings sink so a lossy conversion (e.g.
+ * per-side stroke collapse on update_node) surfaces per-op (D3/T7).
+ */
 const CONVERTERS: Record<
   string,
   (
     params: Record<string, unknown>,
+    warnings?: string[],
   ) => Record<string, unknown>
 > = {
   [COMMANDS.UPDATE_NODE]: convertUpdateNode,
@@ -223,7 +239,8 @@ const CONVERTERS: Record<
 /**
  * Convert one entry's params for `op`. Pass-through for ops with no server-side
  * grammar conversion; the CONVERTERS map handles the atom-consuming ones. Throws
- * on a malformed atom (the caller records it as that entry's error).
+ * on a malformed atom (the caller records it as that entry's error). Collects
+ * any server-side writer warnings onto the returned op (D3/T7).
  */
 const convertOp = (
   op: string,
@@ -231,7 +248,15 @@ const convertOp = (
 ): ConvertedOp => {
   const params = opParams(entry)
   const convert = CONVERTERS[op]
-  return { op, params: convert ? convert(params) : params }
+  const warnings: string[] = []
+  const converted = convert
+    ? convert(params, warnings)
+    : params
+  return {
+    op,
+    params: converted,
+    warnings: warnings.length > 0 ? warnings : undefined,
+  }
 }
 
 // ─── handler ───────────────────────────────────────────────────────────────────
@@ -348,6 +373,9 @@ export const handleBatch = async (
             }
           | undefined
         const op = effectiveOps[index] ?? null
+        // Server-side writer warnings for this op (e.g. update_node per-side
+        // stroke collapse), collected during conversion (D3/T7).
+        const opWarnings = converted[index]?.warnings
         if (reply === undefined) {
           return {
             index,
@@ -356,9 +384,19 @@ export const handleBatch = async (
             error: 'No result returned for this op.',
           }
         }
-        return reply.ok
-          ? { index, op, ok: true, result: reply.result }
-          : { index, op, ok: false, error: reply.error }
+        if (reply.ok) {
+          const entry: EntryResult = {
+            index,
+            op,
+            ok: true,
+            result: reply.result,
+          }
+          if (opWarnings !== undefined) {
+            entry.warnings = opWarnings
+          }
+          return entry
+        }
+        return { index, op, ok: false, error: reply.error }
       },
     )
 
