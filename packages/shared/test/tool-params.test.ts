@@ -16,6 +16,7 @@ import {
   createTreeParamsSchema,
   bindVariableParamsSchema,
   getVariablesParamsSchema,
+  getComponentsParamsSchema,
   batchParamsSchema,
 } from '@figma-agent-bridge/shared/tool-params'
 
@@ -509,6 +510,52 @@ describe('getVariablesParamsSchema', () => {
         collectionId: 'VariableCollectionId:1',
       }).success,
     ).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// getComponentsParamsSchema — T10: query + includeRemote gate + list mixin
+// (cursor/limit). includeRemote defaults off (the live timeout fix).
+// ---------------------------------------------------------------------------
+describe('getComponentsParamsSchema', () => {
+  it('accepts an empty payload (local-only, default page)', () => {
+    expect(
+      getComponentsParamsSchema.safeParse({}).success,
+    ).toBe(true)
+  })
+
+  it('accepts a query filter', () => {
+    expect(
+      getComponentsParamsSchema.safeParse({
+        query: 'Button',
+      }).success,
+    ).toBe(true)
+  })
+
+  it('accepts includeRemote (the opt-in remote-discovery gate)', () => {
+    const parsed = getComponentsParamsSchema.safeParse({
+      includeRemote: true,
+    })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect(parsed.data.includeRemote).toBe(true)
+    }
+  })
+
+  it('accepts cursor + limit (list mixin fields)', () => {
+    expect(
+      getComponentsParamsSchema.safeParse({
+        cursor: 'eyJwb3MiOjQyfQ==',
+        limit: 50,
+      }).success,
+    ).toBe(true)
+  })
+
+  it('rejects a non-positive limit', () => {
+    expect(
+      getComponentsParamsSchema.safeParse({ limit: 0 })
+        .success,
+    ).toBe(false)
   })
 })
 

@@ -6,15 +6,16 @@
 //   • match     — buildMatcher predicate (name glob / regex / type array / …)
 //   • fields    — projectNode allow-list projection
 //   • limit     — page size (default 50)
-//   • cursor    — opaque resume token (encodeCursor/decodeCursor) over the
-//                 post-match list, version-stamped so a stale cursor (the
-//                 candidate set changed between calls) is reported, not silently
-//                 resumed at the wrong position.
+//   • cursor    — opaque resume token over the post-match list, version-stamped
+//                 so a stale cursor (the candidate set changed between calls) is
+//                 reported, not silently resumed at the wrong position.
+//
+// limit+cursor are applied by the shared `paginateList` helper (read/paginate),
+// the one implementation behind every bounded list read (T10).
 //
 // Emits { results, truncated, cursor? } as YAML. `cursor` is present only when
 // more results remain after this page.
 
-import { createHash } from 'node:crypto'
 import YAML from 'yaml'
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import type {
@@ -25,12 +26,13 @@ import type { NodeSpec } from '@figma-agent-bridge/shared/node-spec'
 import type { FigmaClient } from '../figma-client'
 import { buildMatcher } from '../read/match'
 import { projectNode } from '../read/project'
-import { encodeCursor, decodeCursor } from '../read/cursor'
+import { paginateList, CursorError } from '../read/paginate'
 import {
   type ToolResult,
   textResult,
   requireConnected,
   errorMessage,
+  cursorRejected,
 } from './shared'
 
 const DEFAULT_LIMIT = 50
@@ -40,17 +42,6 @@ type SearchScope =
   | 'page'
   | 'node'
   | 'selection'
-
-/**
- * Version-stamp for the candidate list. A cursor minted against one candidate
- * set must not silently resume against a different one — we hash the ordered
- * ids so a changed set yields a different treeVersion (→ decodeCursor STALE).
- */
-const versionOf = (candidates: { id?: string }[]): string =>
-  createHash('sha1')
-    .update(candidates.map(c => c.id ?? '').join('\n'))
-    .digest('base64url')
-    .slice(0, 12)
 
 /**
  * Conditional-collection hints for the plugin scan (B3 + B4).
@@ -162,30 +153,26 @@ export const handleSearch = async (
           )
     ) as { id?: string }[]
 
-    // 2 — cursor: resolve the resume position over the matched list.
-    const treeVersion = versionOf(matched)
-    let start = 0
-    if (params.cursor !== undefined) {
-      const decoded = decodeCursor(
-        params.cursor,
-        treeVersion,
-      )
-      if (!decoded.ok) {
-        return textResult(
-          `Cursor rejected (${decoded.reason}) — re-run the search to get a fresh cursor.`,
-        )
+    // 2/3 — cursor + limit: bound the matched list to one page via the shared
+    // paginateList helper (the one implementation behind every list read, T10).
+    // It version-stamps the matched id-set and rejects a STALE/MALFORMED cursor
+    // with a typed CursorError, which we surface (search keeps its own default
+    // limit of 50; paginateList defaults to 100 for other list reads).
+    let bounded
+    try {
+      bounded = paginateList(matched, {
+        limit: params.limit ?? DEFAULT_LIMIT,
+        cursor: params.cursor,
+      })
+    } catch (err) {
+      if (err instanceof CursorError) {
+        return textResult(cursorRejected(err))
       }
-      start = decoded.pos
+      throw err
     }
 
-    // 3 — limit: slice the page.
-    const limit = params.limit ?? DEFAULT_LIMIT
-    const end = start + limit
-    const page = matched.slice(start, end)
-    const truncated = end < matched.length
-
     // 4 — fields/profile projection over the page.
-    const projected = page.map(n =>
+    const projected = bounded.page.map(n =>
       projectNode(n as unknown as NodeSpec, {
         fields: params.fields,
         profile: params.profile,
@@ -196,9 +183,9 @@ export const handleSearch = async (
       results: unknown[]
       truncated: boolean
       cursor?: string
-    } = { results: projected, truncated }
-    if (truncated) {
-      out.cursor = encodeCursor({ pos: end, treeVersion })
+    } = { results: projected, truncated: bounded.truncated }
+    if (bounded.cursor !== undefined) {
+      out.cursor = bounded.cursor
     }
 
     return textResult(YAML.stringify(out))

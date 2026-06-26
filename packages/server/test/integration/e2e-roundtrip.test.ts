@@ -281,7 +281,7 @@ describe('M2 read tools e2e', () => {
   })
 
   it('list_pages returns the document + pages in YAML (Rule A)', async () => {
-    const result = await handleListPages(client)
+    const result = await handleListPages({}, client)
 
     expect(result.content).toHaveLength(1)
     expect(result.content[0].type).toBe('text')

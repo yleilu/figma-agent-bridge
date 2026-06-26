@@ -215,7 +215,7 @@ server.tool(
 server.tool(
   'list_pages',
   listPagesParamsSchema.shape,
-  async () => handleListPages(client),
+  async params => handleListPages(params, client),
 )
 
 server.tool(

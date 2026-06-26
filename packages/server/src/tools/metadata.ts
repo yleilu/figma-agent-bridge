@@ -9,12 +9,14 @@
 import YAML from 'yaml'
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { FigmaClient } from '../figma-client'
+import { paginateList, CursorError } from '../read/paginate'
 import {
   type ToolResult,
   textResult,
   requireConnected,
   formatMutationResult,
   errorMessage,
+  cursorRejected,
 } from './shared'
 
 // ─── get_reactions ────────────────────────────────────────────────────────────
@@ -22,12 +24,18 @@ import {
 /**
  * Read a node's prototype reactions. The plugin returns
  * { nodeId, reactions[], warnings? } (a degrade with empty reactions + a warning
- * when the node is missing or has no reactions API). The server emits the
- * Rule-A list shape { results, truncated:false } and includes `warnings` when
- * present so the degrade is machine-readable, never thrown.
+ * when the node is missing or has no reactions API). The plugin returns the full
+ * doc-bounded list cheaply; the SERVER bounds the AGENT-CONTEXT by paginating it
+ * through paginateList (T10) — `limit` defaults to 100, an opaque `cursor`
+ * continues when truncated. The degrade `warnings` still ride on the SUCCESS
+ * envelope (T7), machine-readable and never thrown.
  */
 export const handleGetReactions = async (
-  { nodeId }: { nodeId: string },
+  {
+    nodeId,
+    limit,
+    cursor,
+  }: { nodeId: string; limit?: number; cursor?: string },
   client: FigmaClient,
 ): Promise<ToolResult> => {
   const guard = requireConnected(client)
@@ -54,14 +62,34 @@ export const handleGetReactions = async (
       return textResult(`Error: ${raw.error}`)
     }
 
-    const results = Array.isArray(raw.reactions)
-      ? raw.reactions
-      : []
+    const results = (
+      Array.isArray(raw.reactions) ? raw.reactions : []
+    ) as { id?: string }[]
+
+    // T10 — bound the AGENT-CONTEXT: slice the reactions list to one page.
+    let bounded
+    try {
+      bounded = paginateList(results, { limit, cursor })
+    } catch (err) {
+      if (err instanceof CursorError) {
+        return textResult(cursorRejected(err))
+      }
+      throw err
+    }
+
     const out: {
       results: unknown[]
       truncated: boolean
+      cursor?: string
       warnings?: string[]
-    } = { results, truncated: false }
+    } = {
+      results: bounded.page,
+      truncated: bounded.truncated,
+    }
+    if (bounded.cursor !== undefined) {
+      out.cursor = bounded.cursor
+    }
+    // T7 — the degrade warnings ride on the SUCCESS envelope, even when paged.
     if (raw.warnings !== undefined) {
       out.warnings = raw.warnings
     }
@@ -139,12 +167,19 @@ export const handleGetPluginData = async (
 /**
  * Read a node's (or the current selection's) annotations. The annotations API
  * is editorType-gated, so the plugin degrades to
- * { results:[], truncated:false, warnings:['Annotations API unavailable…'] }
- * rather than throwing when it is absent. The server emits the Rule-A shape and
- * surfaces the warning, NEVER throwing on the degrade.
+ * { results:[], warnings:['Annotations API unavailable…'] } rather than throwing
+ * when it is absent. The plugin returns the full doc-bounded list cheaply; the
+ * SERVER bounds the AGENT-CONTEXT by paginating it through paginateList (T10) —
+ * `limit` defaults to 100, an opaque `cursor` continues when truncated. The
+ * editorType-gated degrade `warnings` still ride on the SUCCESS envelope (T7),
+ * NEVER thrown.
  */
 export const handleGetAnnotations = async (
-  { nodeId }: { nodeId?: string },
+  {
+    nodeId,
+    limit,
+    cursor,
+  }: { nodeId?: string; limit?: number; cursor?: string },
   client: FigmaClient,
 ): Promise<ToolResult> => {
   const guard = requireConnected(client)
@@ -171,14 +206,34 @@ export const handleGetAnnotations = async (
       return textResult(`Error: ${raw.error}`)
     }
 
-    const results = Array.isArray(raw.results)
-      ? raw.results
-      : []
+    const results = (
+      Array.isArray(raw.results) ? raw.results : []
+    ) as { id?: string }[]
+
+    // T10 — bound the AGENT-CONTEXT: slice the annotations list to one page.
+    let bounded
+    try {
+      bounded = paginateList(results, { limit, cursor })
+    } catch (err) {
+      if (err instanceof CursorError) {
+        return textResult(cursorRejected(err))
+      }
+      throw err
+    }
+
     const out: {
       results: unknown[]
       truncated: boolean
+      cursor?: string
       warnings?: string[]
-    } = { results, truncated: false }
+    } = {
+      results: bounded.page,
+      truncated: bounded.truncated,
+    }
+    if (bounded.cursor !== undefined) {
+      out.cursor = bounded.cursor
+    }
+    // T7 — the editorType-gated degrade warnings ride on success, even when paged.
     if (raw.warnings !== undefined) {
       out.warnings = raw.warnings
     }

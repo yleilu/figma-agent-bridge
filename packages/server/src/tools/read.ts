@@ -13,11 +13,13 @@ import { toNodeSpec } from '../serialize/node-spec-reader'
 import { truncateTree, isStub } from '../read/truncate-tree'
 import { buildMatcher } from '../read/match'
 import { projectNode } from '../read/project'
+import { paginateList, CursorError } from '../read/paginate'
 import {
   type ToolResult,
   textResult,
   requireConnected,
   errorMessage,
+  cursorRejected,
 } from './shared'
 
 type ReadSelectors = {
@@ -297,11 +299,14 @@ export const handleGetNodes = async (
 
 /**
  * Enumerate the document's pages. Sends COMMANDS.LIST_PAGES; the plugin returns
- * { docName, results:[{id,name,isCurrent,childCount}] }. The page set is
- * naturally bounded, so the Rule A receipt is always { truncated:false } with
- * no cursor — the uniform list shape is kept for contract symmetry.
+ * { docName, results:[{id,name,isCurrent,childCount}] }. The plugin returns the
+ * full doc-bounded page list cheaply; the SERVER bounds the AGENT-CONTEXT by
+ * paginating it through paginateList (T10) — `limit` defaults to 100, an opaque
+ * `cursor` continues when truncated. `docName` stays on the envelope alongside
+ * the bounded page.
  */
 export const handleListPages = async (
+  { limit, cursor }: { limit?: number; cursor?: string },
   client: FigmaClient,
 ): Promise<ToolResult> => {
   const guard = requireConnected(client)
@@ -326,13 +331,34 @@ export const handleListPages = async (
       return textResult('Failed to get pages from plugin.')
     }
 
-    return textResult(
-      YAML.stringify({
-        docName: raw.docName,
-        results: raw.results,
-        truncated: false,
-      }),
-    )
+    // T10 — bound the AGENT-CONTEXT: slice the page list to one page.
+    let bounded
+    try {
+      bounded = paginateList(raw.results ?? [], {
+        limit,
+        cursor,
+      })
+    } catch (err) {
+      if (err instanceof CursorError) {
+        return textResult(cursorRejected(err))
+      }
+      throw err
+    }
+
+    const out: {
+      docName: string
+      results: unknown[]
+      truncated: boolean
+      cursor?: string
+    } = {
+      docName: raw.docName,
+      results: bounded.page,
+      truncated: bounded.truncated,
+    }
+    if (bounded.cursor !== undefined) {
+      out.cursor = bounded.cursor
+    }
+    return textResult(YAML.stringify(out))
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }

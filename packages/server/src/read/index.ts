@@ -8,6 +8,12 @@ export {
   toStub,
 } from './truncate-tree'
 export { encodeCursor, decodeCursor } from './cursor'
+export {
+  paginateList,
+  CursorError,
+  DEFAULT_LIMIT,
+} from './paginate'
+export type { Page } from './paginate'
 export { PROFILES, projectNode } from './project'
 export { buildMatcher } from './match'
 

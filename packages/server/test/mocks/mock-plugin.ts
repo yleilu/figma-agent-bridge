@@ -305,14 +305,23 @@ export const createMockPlugin = (
             Disabled: false,
           },
         }
-        const remote = [
-          {
-            key: 'remote-key',
-            name: 'Icon',
-            library: 'Lib',
-            instancesCount: 3,
-          },
-        ]
+        // T10 (the live timeout fix): the remote/library scan walks EVERY
+        // instance's mainComponent — O(document) — and the real plugin SKIPS it
+        // entirely unless includeRemote is set. Model that faithfully: default
+        // (includeRemote falsy) → remote is empty (no scan ran); includeRemote
+        // true → the library components are discovered.
+        const includeRemote =
+          cmd.params?.includeRemote === true
+        const remote = includeRemote
+          ? [
+              {
+                key: 'remote-key',
+                name: 'Icon',
+                library: 'Lib',
+                instancesCount: 3,
+              },
+            ]
+          : []
         // Faithful degrade model (Bug A): with componentSetError, the document
         // contains a ComponentSet whose per-set variant projection THROWS in the
         // real plugin ("Component set for node has existing errors"). The fixed

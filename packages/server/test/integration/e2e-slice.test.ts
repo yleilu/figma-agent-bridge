@@ -695,7 +695,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
 
   // 14 — list_pages returns the Rule A document + page shape over the relay.
   it('list_pages returns { docName, results, truncated } over the relay', async () => {
-    const result = await handleListPages(client)
+    const result = await handleListPages({}, client)
     const out = YAML.parse(result.content[0].text) as {
       docName: string
       results: {
@@ -759,6 +759,82 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(button.variantAxes).toEqual({
       Variant: ['Primary', 'Secondary'],
     })
+  })
+
+  // 17a — get_components is LOCAL-ONLY by default (the live timeout fix). The
+  // plugin skips the O(document) all-instances remote-discovery scan unless
+  // includeRemote is set, so the default reply carries NO remote components.
+  it('get_components returns only local components by default (no remote scan)', async () => {
+    const result = await handleGetComponents({}, client)
+    const out = YAML.parse(result.content[0].text) as {
+      results: { name: string }[]
+      truncated: boolean
+    }
+    // The local Button is present; the remote "Icon" is NOT discovered.
+    expect(out.results.some(r => r.name === 'Button')).toBe(
+      true,
+    )
+    expect(out.results.some(r => r.name === 'Icon')).toBe(
+      false,
+    )
+  })
+
+  // 17a' — includeRemote:true opts into the remote-discovery scan; the library
+  // components then appear over the relay.
+  it('get_components adds remote components when includeRemote is true', async () => {
+    const result = await handleGetComponents(
+      { includeRemote: true },
+      client,
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { name: string }[]
+    }
+    expect(out.results.some(r => r.name === 'Icon')).toBe(
+      true,
+    )
+  })
+
+  // 17a'' — get_components is bounded by T10: a tight limit truncates the
+  // flattened list and yields a resumable cursor over the relay. With
+  // includeRemote the reply carries Button (local) + Icon (remote) = 2 entries;
+  // limit:1 pages them.
+  it('get_components paginates with limit + cursor across the relay', async () => {
+    const page1 = await handleGetComponents(
+      { includeRemote: true, limit: 1 },
+      client,
+    )
+    const out1 = YAML.parse(page1.content[0].text) as {
+      results: { name: string }[]
+      truncated: boolean
+      cursor: string
+    }
+    expect(out1.results).toHaveLength(1)
+    expect(out1.truncated).toBe(true)
+    expect(typeof out1.cursor).toBe('string')
+
+    const page2 = await handleGetComponents(
+      {
+        includeRemote: true,
+        limit: 1,
+        cursor: out1.cursor,
+      },
+      client,
+    )
+    const out2 = YAML.parse(page2.content[0].text) as {
+      results: { name: string }[]
+      truncated: boolean
+      cursor?: string
+    }
+    expect(out2.results).toHaveLength(1)
+    expect(out2.truncated).toBe(false)
+    expect(out2).not.toHaveProperty('cursor')
+    // The two pages together cover both the local + remote entries.
+    const names = [
+      ...out1.results.map(r => r.name),
+      ...out2.results.map(r => r.name),
+    ]
+    expect(names).toContain('Button')
+    expect(names).toContain('Icon')
   })
 
   // 17b — get_components degrades a malformed component set to a warning over

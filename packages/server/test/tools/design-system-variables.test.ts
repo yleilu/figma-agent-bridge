@@ -286,4 +286,101 @@ describe('handleGetVariables', () => {
     // alias ref preserved (not rendered to a hex atom).
     expect(text).toContain('VARIABLE_ALIAS')
   })
+
+  // T10 — server-side pagination over the top-level COLLECTIONS list. The plugin
+  // returns all collections; the SERVER bounds the AGENT-CONTEXT via paginateList.
+  const manyCollections = (n: number) => ({
+    results: Array.from({ length: n }, (_, i) => ({
+      id: `col:${i}`,
+      name: `Collection ${i}`,
+      modes: [{ modeId: 'm1', name: 'Default' }],
+      variables: [
+        {
+          id: `v:${i}`,
+          name: `var ${i}`,
+          resolvedType: 'FLOAT',
+          valuesByMode: { m1: i },
+        },
+      ],
+    })),
+  })
+
+  it('paginates with limit: page 1 truncated + cursor', async () => {
+    const result = await handleGetVariables(
+      { limit: 2 },
+      stubClient({ reply: manyCollections(5) }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { id: string }[]
+      truncated: boolean
+      cursor?: string
+    }
+    expect(out.results).toHaveLength(2)
+    expect(out.results[0].id).toBe('col:0')
+    expect(out.truncated).toBe(true)
+    expect(typeof out.cursor).toBe('string')
+  })
+
+  it('resumes from a cursor on the next page', async () => {
+    const page1 = await handleGetVariables(
+      { limit: 2 },
+      stubClient({ reply: manyCollections(4) }),
+    )
+    const out1 = YAML.parse(page1.content[0].text) as {
+      cursor: string
+    }
+    const page2 = await handleGetVariables(
+      { limit: 2, cursor: out1.cursor },
+      stubClient({ reply: manyCollections(4) }),
+    )
+    const out2 = YAML.parse(page2.content[0].text) as {
+      results: { id: string }[]
+      truncated: boolean
+      cursor?: string
+    }
+    expect(out2.results).toHaveLength(2)
+    expect(out2.results[0].id).toBe('col:2')
+    expect(out2.truncated).toBe(false)
+    expect(out2).not.toHaveProperty('cursor')
+  })
+
+  it('reports a STALE cursor without throwing when the set changed', async () => {
+    const page1 = await handleGetVariables(
+      { limit: 2 },
+      stubClient({ reply: manyCollections(5) }),
+    )
+    const out1 = YAML.parse(page1.content[0].text) as {
+      cursor: string
+    }
+    const stale = await handleGetVariables(
+      { limit: 2, cursor: out1.cursor },
+      stubClient({ reply: manyCollections(2) }),
+    )
+    const { text } = stale.content[0]
+    expect(text).toContain('Cursor rejected (STALE)')
+    expect(text.toLowerCase()).toContain('re-run')
+  })
+
+  it('single-page behavior unchanged: no cursor when it fits', async () => {
+    const result = await handleGetVariables(
+      {},
+      stubClient({
+        reply: {
+          results: [
+            {
+              id: 'col:1',
+              name: 'Brand',
+              modes: [{ modeId: 'm1', name: 'Light' }],
+              variables: [],
+            },
+          ],
+        },
+      }),
+    )
+    const out = YAML.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(out.truncated).toBe(false)
+    expect(out).not.toHaveProperty('cursor')
+  })
 })
