@@ -242,8 +242,38 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     ).toBe(true)
   })
 
-  // 4 — bind_variable degrade path (success-with-warning, not error)
-  it('bind_variable degrade path reports success-with-warning', async () => {
+  // 3c — mock fidelity: the incompat warning includes `opacity` (in the real
+  // plugin's capability list) and INTERPOLATES the actual node type rather than
+  // hardcoding "SLICE" — the warning's type matches the reply's `type` field.
+  it('update_node incompat warning covers opacity and interpolates the node type', async () => {
+    const result = await handleUpdateNode(
+      {
+        nodeId: 'incompat:1',
+        patch: { opacity: 0.5 },
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const reply = JSON.parse(result.content[0].text) as {
+      type: string
+      warnings: string[]
+    }
+    const opacityWarning = reply.warnings.find(w =>
+      w.includes('opacity'),
+    )
+    expect(opacityWarning).toBeDefined()
+    // The warning interpolates the SAME node type the reply reports — proof the
+    // type is interpolated, not a hardcoded "SLICE" string divorced from the
+    // reply.
+    expect(opacityWarning).toContain(
+      'not supported on a ' + reply.type + ' node',
+    )
+  })
+
+  // 4 — bind_variable PAINT degrade (success-with-warning, not error). A paint
+  // field (fills/strokes) binds via setBoundVariableForPaint, so the degrade
+  // message names THAT API — the field-aware mock mirrors the real plugin.
+  it('bind_variable paint-field degrade names setBoundVariableForPaint (success-with-warning)', async () => {
     const result = await handleBindVariable(
       {
         nodeId: '1:42',
@@ -254,8 +284,47 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     )
     expect(result.content[0].text).not.toContain('Error:')
     expect(result.content[0].text).toContain(
-      'setBoundVariable unavailable',
+      'setBoundVariableForPaint unavailable',
     )
+  })
+
+  // 4a — bind_variable SCALAR degrade. A scalar field (itemSpacing) binds via
+  // setBoundVariable, so the degrade message names THAT API — proving the mock
+  // is field-aware, not field-agnostic.
+  it('bind_variable scalar-field degrade names setBoundVariable (success-with-warning)', async () => {
+    const result = await handleBindVariable(
+      {
+        nodeId: '1:42',
+        variableId: 'degrade:var',
+        field: 'itemSpacing',
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const { text } = result.content[0]
+    expect(text).toContain('setBoundVariable unavailable')
+    expect(text).not.toContain('ForPaint')
+  })
+
+  // 4b — bind_variable SCALAR happy path: a genuinely-scalar field
+  // (VariableBindableNodeField) binds with no warning — the proven-scalar
+  // contract, which the all-paint tests never exercised.
+  it('bind_variable binds a scalar field with no warning', async () => {
+    const result = await handleBindVariable(
+      {
+        nodeId: '1:42',
+        variableId: 'var:123',
+        field: 'itemSpacing',
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const data = JSON.parse(result.content[0].text) as {
+      id: string
+      warnings: string[]
+    }
+    expect(data.id).toBe('1:42')
+    expect(data.warnings).toEqual([])
   })
 
   // 5 — bind_variable error vs success
@@ -730,20 +799,33 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     )
   })
 
-  // 22b — a multi-selection read tags each annotation with its source nodeId so
-  // the flat result stays attributable / round-trippable to the single-node
-  // set_annotations writer (T2).
-  it('get_annotations tags each annotation with its source nodeId on a multi-selection read', async () => {
-    const result = await handleGetAnnotations(
-      { nodeId: 'multi:' },
-      client,
-    )
+  // 22b — a selection-based multi-read (NO explicit nodeId) tags each annotation
+  // with its source nodeId so the flat result stays attributable /
+  // round-trippable to the single-node set_annotations writer (T2). The real
+  // plugin tags only on this no-explicit-id selection path — so the read passes
+  // no nodeId, NOT a sentinel.
+  it('get_annotations tags each annotation with its source nodeId on a selection-based multi-read (no explicit nodeId)', async () => {
+    const result = await handleGetAnnotations({}, client)
     const out = YAML.parse(result.content[0].text) as {
       results: { label: string; nodeId: string }[]
     }
     expect(out.results).toHaveLength(2)
     expect(out.results[0].nodeId).toBe('1:42')
     expect(out.results[1].nodeId).toBe('1:45')
+  })
+
+  // 22c — an EXPLICIT nodeId read returns BARE annotations (no nodeId tag),
+  // confirming the mock tags on the selection path only, mirroring the plugin.
+  it('get_annotations returns bare annotations (no nodeId tag) for an explicit nodeId', async () => {
+    const result = await handleGetAnnotations(
+      { nodeId: '1:42' },
+      client,
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { label: string; nodeId?: string }[]
+    }
+    expect(out.results).toHaveLength(1)
+    expect(out.results[0].nodeId).toBeUndefined()
   })
 
   // 23 — set_annotations happy path reports success (no error) over the relay.

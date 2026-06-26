@@ -403,6 +403,11 @@ describe('M2 chunk D writes e2e', () => {
     expect(data.hash).toBeUndefined()
     expect(data.warnings).toBeDefined()
     expect(result.content[0].text).not.toContain('Error:')
+    // The bytes-degrade message keeps the real plugin's `: <reason>` suffix
+    // (mirrors `... unavailable): ` + String(e)) — not a bare generic message.
+    expect(data.warnings?.[0]).toContain(
+      'createImage failed (invalid bytes/feature unavailable): ',
+    )
   })
 
   it('set_plugin_data echoes {id}', async () => {

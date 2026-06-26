@@ -222,8 +222,9 @@ const applyCommonProperties = async (
       spec.strokeDash as number[]
   }
 
-  // Corner radius
-  if (spec.radius !== undefined) {
+  // Corner radius — guard on capability so an incompatible node (e.g. a SLICE)
+  // warns-and-continues in update_node rather than throwing → {error}.
+  if (spec.radius !== undefined && 'cornerRadius' in node) {
     if (Array.isArray(spec.radius)) {
       const [tl, tr, br, bl] = spec.radius as [
         number,
@@ -256,7 +257,10 @@ const applyCommonProperties = async (
   }
   if (spec.visible !== undefined)
     node.visible = spec.visible as boolean
-  if (spec.clipsContent !== undefined) {
+  if (
+    spec.clipsContent !== undefined &&
+    'clipsContent' in node
+  ) {
     ;(node as FrameNode).clipsContent =
       spec.clipsContent as boolean
   }
@@ -701,6 +705,10 @@ const createTreeNode = async (
   spec: Record<string, unknown>,
   parent: ParentNode,
   refs?: Record<string, Record<string, unknown>>,
+  // refStack tracks the chain of { ref } keys currently being resolved so a
+  // cyclic pool (a→b→a, or a self-ref) is caught and rejected as a clean
+  // {error} instead of recursing forever and freezing the Figma UI.
+  refStack: string[] = [],
 ): Promise<SceneNode> => {
   const type = spec.type as string
 
@@ -712,7 +720,16 @@ const createTreeNode = async (
     if (!refSpec) {
       throw new Error('Ref not found in pool: ' + refKey)
     }
-    return createTreeNode(refSpec, parent, refs)
+    if (refStack.includes(refKey)) {
+      throw new Error(
+        'Cyclic ref in pool: ' +
+          [...refStack, refKey].join(' -> '),
+      )
+    }
+    return createTreeNode(refSpec, parent, refs, [
+      ...refStack,
+      refKey,
+    ])
   }
 
   // Clone reference: { id } with no type
@@ -763,6 +780,7 @@ const createTreeNode = async (
         childSpec,
         parent,
         refs,
+        refStack,
       )
       childNodes.push(child)
     }
@@ -787,6 +805,7 @@ const createTreeNode = async (
         childSpec,
         parent,
         refs,
+        refStack,
       )
       childNodes.push(child)
     }
@@ -819,6 +838,7 @@ const createTreeNode = async (
         childSpec,
         parent,
         refs,
+        refStack,
       )
       childNodes.push(child)
     }
@@ -865,6 +885,7 @@ const createTreeNode = async (
         childSpec,
         node as ParentNode,
         refs,
+        refStack,
       )
     }
   }
@@ -1480,6 +1501,10 @@ const handleCommand = async (
         | string
         | undefined
       let sourceNode: SceneNode
+      // Track whether we built the source from a spec — if the subsequent
+      // promote throws, only a spec-built node is an orphan we must clean up
+      // (a pre-existing nodeId node must be left untouched).
+      let ccSpecBuilt = false
       const ccSpec = params.spec as
         | Record<string, unknown>
         | undefined
@@ -1500,6 +1525,7 @@ const handleCommand = async (
           ccSpec,
           ccParent,
         )
+        ccSpecBuilt = true
       } else {
         const found = await figma.getNodeByIdAsync(
           params.nodeId as string,
@@ -1511,7 +1537,17 @@ const handleCommand = async (
         }
         sourceNode = found as SceneNode
       }
-      const comp = figma.createComponentFromNode(sourceNode)
+      let comp: ComponentNode
+      try {
+        comp = figma.createComponentFromNode(sourceNode)
+      } catch (e) {
+        // The spec-built source was placed on the canvas but never promoted;
+        // remove the orphan so a failed create_component leaves no stray node.
+        if (ccSpecBuilt) {
+          sourceNode.remove()
+        }
+        throw e
+      }
       if (ccName !== undefined) comp.name = ccName
       if (ccDescription !== undefined)
         comp.description = ccDescription
@@ -1718,6 +1754,19 @@ const handleCommand = async (
       if (cvParentNode && 'appendChild' in cvParentNode) {
         cvParent = cvParentNode as BaseNode & ChildrenMixin
       } else {
+        // Fall back to the first component's parent — but only if it can host
+        // children. A parentless first component (parent === null) would make
+        // combineAsVariants throw an opaque exception, so return a clean
+        // {error} instead of casting null to a non-null parent.
+        const fallbackParent = cvComps[0].parent
+        if (
+          !fallbackParent ||
+          !('appendChild' in fallbackParent)
+        ) {
+          return {
+            error: 'No valid parent for the variant set',
+          }
+        }
         if (params.parentId !== undefined) {
           cvWarnings.push(
             'Requested parent "' +
@@ -1725,7 +1774,7 @@ const handleCommand = async (
               '" cannot contain the variant set; used the first component\'s parent instead.',
           )
         }
-        cvParent = cvComps[0].parent as BaseNode &
+        cvParent = fallbackParent as BaseNode &
           ChildrenMixin
       }
       const cs = figma.combineAsVariants(cvComps, cvParent)
@@ -1966,6 +2015,82 @@ const handleCommand = async (
       }
       const field = params.field as string
       const warnings: string[] = []
+
+      // Paint fields (fills/strokes) are NOT members of VariableBindableNodeField,
+      // so node.setBoundVariable('fills', v) would throw. They bind per-paint via
+      // figma.variables.setBoundVariableForPaint(paint,'color',variable), then the
+      // paint array is re-assigned. Feature-detect it (T7): warn+skip if absent.
+      if (field === 'fills' || field === 'strokes') {
+        const paintHost = node as SceneNode & {
+          fills?: readonly Paint[] | typeof figma.mixed
+          strokes?: readonly Paint[]
+        }
+        if (!(field in node)) {
+          warnings.push(
+            'field "' +
+              field +
+              '" is not bindable on ' +
+              node.type,
+          )
+          return { id: node.id, warnings }
+        }
+        const setForPaint = (
+          figma.variables as {
+            setBoundVariableForPaint?: (
+              paint: Paint,
+              f: 'color',
+              v: Variable,
+            ) => Paint
+          }
+        ).setBoundVariableForPaint
+        if (typeof setForPaint !== 'function') {
+          warnings.push(
+            'setBoundVariableForPaint unavailable in this Figma version; paint binding skipped',
+          )
+          return { id: node.id, warnings }
+        }
+        const current =
+          field === 'fills'
+            ? paintHost.fills
+            : paintHost.strokes
+        if (
+          current === figma.mixed ||
+          !Array.isArray(current)
+        ) {
+          warnings.push(
+            field +
+              ' has no bindable paints on ' +
+              node.type +
+              '; paint binding skipped',
+          )
+          return { id: node.id, warnings }
+        }
+        try {
+          const bound = (current as Paint[]).map(paint =>
+            paint.type === 'SOLID'
+              ? setForPaint(paint, 'color', variable)
+              : paint,
+          )
+          if (field === 'fills') {
+            ;(node as GeometryMixin & SceneNode).fills =
+              bound
+          } else {
+            ;(node as GeometryMixin & SceneNode).strokes =
+              bound
+          }
+        } catch (e) {
+          warnings.push(
+            'binding ' +
+              field +
+              ' on ' +
+              node.type +
+              ' failed: ' +
+              String(e),
+          )
+        }
+        return { id: node.id, warnings }
+      }
+
       const bindable = node as SceneNode & {
         setBoundVariable?: (
           f: VariableBindableNodeField,
@@ -2302,6 +2427,27 @@ const handleCommand = async (
       }
       const count = (params.count as number) ?? 1
       const index = params.index as number | undefined
+      // Validate index up front so an out-of-range value returns a clean,
+      // actionable {error} instead of degrading to a raw RangeError string from
+      // insertChild. The first clone inserts at `index`; each later clone grows
+      // the list by 1, so `index+i` stays in range once `index` itself is valid.
+      if (index !== undefined) {
+        const childCount = (
+          dest as ParentNode & {
+            children: readonly SceneNode[]
+          }
+        ).children.length
+        if (index < 0 || index > childCount) {
+          return {
+            error:
+              'clone_node index ' +
+              index +
+              ' is out of range for the parent (0..' +
+              childCount +
+              ')',
+          }
+        }
+      }
       const clones: {
         id: string
         name: string
@@ -2698,11 +2844,7 @@ const handleCommand = async (
             nodeId?: string
           })[]
         const cleaned = incoming.map(a => {
-          if (
-            a &&
-            typeof a === 'object' &&
-            'nodeId' in a
-          ) {
+          if (a && typeof a === 'object' && 'nodeId' in a) {
             const { nodeId: _drop, ...rest } = a
             return rest as Annotation
           }

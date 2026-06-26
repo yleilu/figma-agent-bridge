@@ -151,6 +151,53 @@ describe('M3 compose tools e2e (mock plugin over real relay)', () => {
     expect(data.totalNodes).toBe(5)
   })
 
+  it('create_tree rejects a cyclic { ref } pool with a clean {error} (no hang)', async () => {
+    // refs.a → { ref: b }, refs.b → { ref: a }: resolving the tree would recurse
+    // forever. The cycle guard must surface a clean create_tree {error}
+    // ('Cyclic ref in pool: …'), never freeze (a hang here fails the test by
+    // timeout, proving the guard works).
+    const result = await handleCreateTree(
+      {
+        parentId: 'page:1',
+        tree: {
+          type: 'FRAME',
+          name: 'Root',
+          children: [{ ref: 'a' }],
+        },
+        refs: {
+          a: { ref: 'b' },
+          b: { ref: 'a' },
+        },
+      },
+      client,
+    )
+    expect(result.content[0].text).toContain('Error')
+    expect(result.content[0].text).toContain(
+      'Cyclic ref in pool',
+    )
+  })
+
+  it('create_tree rejects a self-referential { ref } pool with a clean {error}', async () => {
+    const result = await handleCreateTree(
+      {
+        parentId: 'page:1',
+        tree: {
+          type: 'FRAME',
+          name: 'Root',
+          children: [{ ref: 'loop' }],
+        },
+        refs: {
+          loop: { ref: 'loop' },
+        },
+      },
+      client,
+    )
+    expect(result.content[0].text).toContain('Error')
+    expect(result.content[0].text).toContain(
+      'Cyclic ref in pool',
+    )
+  })
+
   it('boolean_op combines nodes into a BooleanOperationNode', async () => {
     const result = await handleBooleanOp(
       { op: 'UNION', nodeIds: ['1:1', '1:2'] },
@@ -194,6 +241,21 @@ describe('M3 compose tools e2e (mock plugin over real relay)', () => {
     expect(data).toHaveLength(3)
   })
 
+  // An out-of-range index returns a clean, actionable {error} (parent has 3
+  // children → valid 0..3), NOT a raw RangeError string from insertChild.
+  it('clone_node surfaces a clean {error} for an out-of-range index', async () => {
+    const result = await handleCloneNode(
+      { nodeId: '1:42', parentId: '1:9', index: 99 },
+      client,
+    )
+    expect(result.content[0].text).toContain('Error')
+    expect(result.content[0].text).toContain('out of range')
+    // The actionable bound is named, not a bare RangeError.
+    expect(result.content[0].text).not.toContain(
+      'RangeError',
+    )
+  })
+
   it('reparent_node echoes {id,…,parentId}', async () => {
     const result = await handleReparentNode(
       { nodeId: '1:42', parentId: '1:9' },
@@ -220,8 +282,9 @@ describe('M3 compose tools e2e (mock plugin over real relay)', () => {
     }
     expect(data.warnings).toHaveLength(1)
     expect(data.warnings[0]).toContain('id set differs')
-    // only the matching ids were reordered.
-    expect(data.order).toEqual(['1:3', '1:1'])
+    // The real plugin returns the FULL post-reorder child list: the requested
+    // ids that are children (in order), then the omitted child (1:2) after.
+    expect(data.order).toEqual(['1:3', '1:1', '1:2'])
   })
 
   it('reorder_children succeeds with no warning on an exact set', async () => {

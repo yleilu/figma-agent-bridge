@@ -523,24 +523,35 @@ describe('handleSetInstance', () => {
     })
   })
 
-  it('emits {id,componentProperties,warnings} from the reply', async () => {
+  it('emits {id,componentProperties,warnings} from the reply (real NESTED shape)', async () => {
+    // The real plugin returns inst2.componentProperties — a NESTED map
+    // { [name]: { value, type } }, not the flat input. The reply models that
+    // true shape so the assertion is against the contract the plugin emits.
     const result = await handleSetInstance(
       { instanceId: 'i:1', properties: { Size: 'Large' } },
       stubClient({
         reply: {
           id: 'i:1',
-          componentProperties: { Size: 'Large' },
+          componentProperties: {
+            Size: { value: 'Large', type: 'VARIANT' },
+          },
           warnings: [],
         },
       }),
     )
     const out = JSON.parse(result.content[0].text) as {
       id: string
-      componentProperties: Record<string, unknown>
+      componentProperties: Record<
+        string,
+        { value: string; type: string }
+      >
       warnings: string[]
     }
     expect(out.id).toBe('i:1')
-    expect(out.componentProperties.Size).toBe('Large')
+    expect(out.componentProperties.Size).toEqual({
+      value: 'Large',
+      type: 'VARIANT',
+    })
     expect(out.warnings).toEqual([])
   })
 

@@ -348,8 +348,12 @@ export const createMockPlugin = (
       // get_annotations: happy path (Rule A). Faithful to the real plugin:
       //   • an explicit, unresolvable nodeId (`degrade:` prefix) RESOLVES to a
       //     {results:[], warnings:['Node not found: …']} not-found degrade (T7);
-      //   • a `multi:` nodeId sentinel models a >1-node selection read, tagging
-      //     each annotation with its source nodeId so it stays attributable.
+      //   • per-node nodeId TAGGING happens ONLY on a selection-based multi-read
+      //     (NO explicit nodeId, 2+ selected nodes) — the plugin tags each
+      //     annotation with its source node so the flat result stays
+      //     attributable. An EXPLICIT nodeId read returns bare annotations.
+      //     (Previously the mock keyed tagging off an explicit `multi:` nodeId,
+      //     the OPPOSITE of the real plugin.)
       case 'get_annotations': {
         const annNodeId = cmd.params?.nodeId as
           | string
@@ -360,7 +364,9 @@ export const createMockPlugin = (
             truncated: false,
             warnings: ['Node not found: ' + annNodeId],
           }
-        } else if (annNodeId === 'multi:') {
+        } else if (annNodeId === undefined) {
+          // No explicit id → read the current selection. Model a >1-node
+          // selection: each annotation is TAGGED with its source nodeId.
           result = {
             results: [
               {
@@ -377,6 +383,7 @@ export const createMockPlugin = (
             truncated: false,
           }
         } else {
+          // Explicit single nodeId → bare annotations (no nodeId tag).
           result = {
             results: [
               {
@@ -481,39 +488,53 @@ export const createMockPlugin = (
         // lacks layoutMode/fills/etc. capability). 3a: a patched property that
         // the node type doesn't support is reported in warnings[]. 3b: a sizing/
         // layoutPositioning patch warns-and-continues (never throws → {error}).
+        // The incompatible target is reported as a SLICE (a node lacking these
+        // capabilities); the warnings INTERPOLATE that actual type and the
+        // capability list MATCHES the real plugin's (incl. `opacity`) rather
+        // than hardcoding "SLICE" / omitting opacity.
         const unWarnings: string[] = []
-        if (unId.startsWith('incompat:')) {
+        const unIncompat = unId.startsWith('incompat:')
+        const unType = unIncompat ? 'SLICE' : 'FRAME'
+        if (unIncompat) {
+          // capability key → spec key, matching the plugin's capabilityChecks.
           const capChecks: [string, string][] = [
-            ['layout', 'layout'],
+            ['layoutMode', 'layout'],
             ['fills', 'fills'],
             ['strokes', 'strokes'],
             ['effects', 'effects'],
-            ['radius', 'radius'],
+            ['opacity', 'opacity'],
+            ['cornerRadius', 'radius'],
             ['clipsContent', 'clipsContent'],
           ]
-          for (const [key, label] of capChecks) {
-            if (spec[key] !== undefined) {
+          for (const [, label] of capChecks) {
+            if (spec[label] !== undefined) {
               unWarnings.push(
                 label +
-                  ' ignored — not supported on a SLICE node',
+                  ' ignored — not supported on a ' +
+                  unType +
+                  ' node',
               )
             }
           }
           if (spec.sizing !== undefined) {
             unWarnings.push(
-              'sizing not applicable on this node (SLICE): incompatible context',
+              'sizing not applicable on this node (' +
+                unType +
+                '): incompatible context',
             )
           }
           if (spec.layoutPositioning !== undefined) {
             unWarnings.push(
-              'layoutPositioning not applicable on this node (SLICE): incompatible context',
+              'layoutPositioning not applicable on this node (' +
+                unType +
+                '): incompatible context',
             )
           }
         }
         result = {
           id: unId,
           name: (spec.name as string) ?? 'Card',
-          type: 'FRAME',
+          type: unType,
           warnings: unWarnings,
           // Echo the converted spec so the e2e can assert the parsed paint
           // arrived intact.
@@ -526,18 +547,30 @@ export const createMockPlugin = (
       // the variableId so the e2e can drive each contract. A degrade/unknown
       // reply NEVER returns {error} — it returns {id,warnings} so the server's
       // formatMutationResult reports success-with-warning, not failure.
+      //
+      // FIELD-AWARE (mirrors the real plugin): paint fields (fills/strokes) bind
+      // via setBoundVariableForPaint, scalar fields via setBoundVariable. The two
+      // routes degrade with DIFFERENT messages, so the mock must branch on the
+      // field the same way the plugin does — not echo a field-agnostic success.
       case 'bind_variable': {
         const variableId = cmd.params?.variableId as string
+        const bvField = cmd.params?.field as string
+        const isPaintField =
+          bvField === 'fills' || bvField === 'strokes'
         if (variableId.startsWith('err:')) {
           error = `Variable not found: ${variableId}`
         } else if (variableId.startsWith('degrade:')) {
           result = {
             id: cmd.params?.nodeId as string,
             warnings: [
-              'setBoundVariable unavailable in this Figma version; binding skipped',
+              isPaintField
+                ? 'setBoundVariableForPaint unavailable in this Figma version; paint binding skipped'
+                : 'setBoundVariable unavailable in this Figma version; binding skipped',
             ],
           }
         } else {
+          // Happy path: a paint field binds via setBoundVariableForPaint and a
+          // scalar field via setBoundVariable — both succeed with no warning.
           result = {
             id: cmd.params?.nodeId as string,
             warnings: [],
@@ -632,16 +665,34 @@ export const createMockPlugin = (
         const treeRefs = cmd.params?.refs as
           | Record<string, Record<string, unknown>>
           | undefined
+        // refStack mirrors the real plugin's cycle guard: a cyclic { ref } pool
+        // (a→b→a, or a self-ref) throws 'Cyclic ref in pool: …' instead of
+        // recursing forever — so the mock surfaces a clean {error} the same way
+        // the plugin does, never hanging the e2e.
         const countNodes = (
           node: Record<string, unknown>,
+          refStack: string[] = [],
         ): number => {
           // { ref }: rebuild refs[key] FRESH each reuse.
           if (
             node.ref !== undefined &&
             node.type === undefined
           ) {
-            const refSpec = treeRefs?.[node.ref as string]
-            return refSpec ? countNodes(refSpec) : 1
+            const refKey = node.ref as string
+            const refSpec = treeRefs?.[refKey]
+            if (!refSpec) {
+              return 1
+            }
+            if (refStack.includes(refKey)) {
+              throw new Error(
+                'Cyclic ref in pool: ' +
+                  [...refStack, refKey].join(' -> '),
+              )
+            }
+            return countNodes(refSpec, [
+              ...refStack,
+              refKey,
+            ])
           }
           // { id } clone: a single realized node.
           if (
@@ -656,33 +707,57 @@ export const createMockPlugin = (
             | undefined
           if (children) {
             for (const child of children) {
-              count += countNodes(child)
+              count += countNodes(child, refStack)
             }
           }
           return count
         }
-        const totalNodes = treeSpec
-          ? countNodes(treeSpec)
-          : 1
-        result = {
-          ...(treeSpec ?? {}),
-          id: `created:${Math.random().toString(36).slice(2, 8)}`,
-          name:
-            (treeSpec?.name as string) ??
-            (treeSpec?.type as string),
-          type: treeSpec?.type as string,
-          parentId: treeParentId,
-          refs: treeRefs,
-          totalNodes,
+        try {
+          const totalNodes = treeSpec
+            ? countNodes(treeSpec)
+            : 1
+          result = {
+            ...(treeSpec ?? {}),
+            id: `created:${Math.random().toString(36).slice(2, 8)}`,
+            name:
+              (treeSpec?.name as string) ??
+              (treeSpec?.type as string),
+            type: treeSpec?.type as string,
+            parentId: treeParentId,
+            refs: treeRefs,
+            totalNodes,
+          }
+        } catch (e) {
+          error = String(e instanceof Error ? e.message : e)
         }
         break
       }
 
       // clone_node: echo one {id,name,type} per requested clone (count, default
-      // 1) so the count + index/parent forwarding is assertable.
+      // 1) so the count + index/parent forwarding is assertable. An out-of-range
+      // `index` returns a clean {error} mirroring the real plugin's up-front
+      // range guard (parent has a fixed child count of 3), rather than the raw
+      // RangeError it used to degrade to.
       case 'clone_node': {
         const cloneCount =
           (cmd.params?.count as number) ?? 1
+        const cloneIndex = cmd.params?.index as
+          | number
+          | undefined
+        const cloneParentChildCount = 3
+        if (
+          cloneIndex !== undefined &&
+          (cloneIndex < 0 ||
+            cloneIndex > cloneParentChildCount)
+        ) {
+          error =
+            'clone_node index ' +
+            cloneIndex +
+            ' is out of range for the parent (0..' +
+            cloneParentChildCount +
+            ')'
+          break
+        }
         const cloneArr: {
           id: string
           name: string
@@ -711,7 +786,11 @@ export const createMockPlugin = (
 
       // reorder_children: set-equality validate the requested ids against the
       // mock parent's fixed child set ['1:1','1:2','1:3']. A mismatch WARNS
-      // (T7) and never errors; `order` echoes the requested ids that match.
+      // (T7) and never errors. `order` mirrors the REAL plugin: it returns the
+      // FULL post-reorder child list (parent.children.map(c=>c.id)) — i.e. the
+      // requested ids that ARE children (in order) followed by the omitted
+      // children in their original relative order. (Was: only the matched
+      // subset — an infidelity the e2e asserted against.)
       case 'reorder_children': {
         const parentId = cmd.params?.parentId as string
         const requested =
@@ -738,7 +817,10 @@ export const createMockPlugin = (
         }
         result = {
           parentId,
-          order: requested.filter(id => actualSet.has(id)),
+          order: [
+            ...requested.filter(id => actualSet.has(id)),
+            ...actual.filter(id => !requestedSet.has(id)),
+          ],
           warnings,
         }
         break
@@ -811,8 +893,20 @@ export const createMockPlugin = (
       // gated. addComponentProperty returns a CANONICAL id (`<name>#<suffix>`)
       // that agents need for later setProperties, so the mock mirrors the real
       // plugin by keying defs on that id and surfacing `added: [{name,id}]`.
+      // Genuine {error} boundaries (mirroring the real plugin):
+      //  - componentId `err:` → {error:'Component not found: …'} (not-found).
+      //  - componentId `notcomp:` → {error:'Node is not a component …'} (the
+      //    node resolves but is the wrong type).
       case 'update_component': {
         const ucId = cmd.params?.componentId as string
+        if (ucId.startsWith('err:')) {
+          error = `Component not found: ${ucId}`
+          break
+        }
+        if (ucId.startsWith('notcomp:')) {
+          error = `Node is not a component or component set: ${ucId}`
+          break
+        }
         const ucAdd = cmd.params?.add as
           | {
               name: string
@@ -928,7 +1022,13 @@ export const createMockPlugin = (
       }
 
       // set_instance: echo {id, componentProperties, warnings}. overrides → warn
-      // (not applied); properties echoed back as componentProperties.
+      // (not applied). The real plugin returns the RAW Figma
+      // inst2.componentProperties — a NESTED map { [name]: { value, type } }
+      // (VARIANT and non-VARIANT props mixed, value wrapped) — NOT the flat
+      // input. Mirror that nested shape here so the echo is faithful (the
+      // flatten-to-read-twin fix is a DEFERRED spec item; the mock only needs to
+      // match the plugin's CURRENT echo). Infer type from the value kind:
+      // boolean → BOOLEAN, string → VARIANT (the common case in tests).
       case 'set_instance': {
         const siId = cmd.params?.instanceId as string
         const siProps = cmd.params?.properties as
@@ -955,9 +1055,24 @@ export const createMockPlugin = (
               ' override(s) skipped',
           )
         }
+        const siNested: Record<
+          string,
+          { value: string | boolean; type: string }
+        > = {}
+        for (const [k, v] of Object.entries(
+          siProps ?? {},
+        )) {
+          siNested[k] = {
+            value: v,
+            type:
+              typeof v === 'boolean'
+                ? 'BOOLEAN'
+                : 'VARIANT',
+          }
+        }
         result = {
           id: siId,
-          componentProperties: siProps ?? {},
+          componentProperties: siNested,
           warnings: siWarnings,
         }
         break
@@ -1056,9 +1171,12 @@ export const createMockPlugin = (
           imgBytes !== undefined &&
           imgBytes.length === 0
         ) {
+          // Mirror the real plugin's bytes-path degrade, which appends the
+          // underlying reason (`: ` + String(e)) — keep the suffix so the mock
+          // is byte-faithful to the plugin's actual message shape.
           result = {
             warnings: [
-              'createImage failed (invalid bytes/feature unavailable)',
+              'createImage failed (invalid bytes/feature unavailable): empty byte array',
             ],
           }
         } else if (
