@@ -84,10 +84,15 @@ const convertFontInto = (
   }
 }
 
-/** Parse the `radius` atom string to a number or [tl,tr,br,bl] tuple. */
+/** Parse the `radius` atom (a bare number, or a string/"[tl,tr,br,bl]" tuple). */
 const parseRadius = (
-  s: string,
+  s: string | number,
 ): number | [number, number, number, number] => {
+  // A bare number is the uniform-radius form (consistent with opacity/rotation
+  // bare literals) — accept it directly rather than crashing on s.trim().
+  if (typeof s === 'number') {
+    return s
+  }
   const trimmed = s.trim()
   if (trimmed.startsWith('[')) {
     // "[8,8,0,0]" → [8, 8, 0, 0]

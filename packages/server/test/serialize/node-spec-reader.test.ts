@@ -230,6 +230,31 @@ describe('toNodeSpec — constraints REST→Plugin vocab', () => {
   })
 })
 
+describe('toNodeSpec — rotation REST radians → Plugin degrees', () => {
+  const rot = (rad: number): NodeSpec['rotation'] =>
+    toNodeSpec(
+      {
+        id: '9:2',
+        name: 'R',
+        type: 'RECTANGLE',
+        rotation: rad,
+      },
+      { depth: -1 },
+    ).rotation
+
+  it('converts -π/6 rad (sign-flipped REST) → 30 deg', () => {
+    expect(rot(-Math.PI / 6)).toBe(30)
+  })
+
+  it('converts π/4 rad → -45 deg', () => {
+    expect(rot(Math.PI / 4)).toBe(-45)
+  })
+
+  it('omits a zero rotation', () => {
+    expect(rot(0)).toBeUndefined()
+  })
+})
+
 // ─── depth + stubs (no budget) ────────────────────────────────────────────────
 
 describe('toNodeSpec — depth + IdStubs', () => {

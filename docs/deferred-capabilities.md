@@ -37,6 +37,11 @@ Surfaced 2026-06-27 during the comprehensive live tool sweep + per-issue spec re
 | **`delete_variables` / `delete_styles`** | `collection.remove()` · `variable.remove()` · `style.remove()` | Missing — `create_*` with no `delete_*` (live sweep left `SweepTokens`/`Sweep/*` stranded) | the two delete tools (+ confirmation/guard semantics) |
 | **`delete_page` handling** | `page.remove()` (via existing `delete_node`) | `delete_node` works on pages but **fails on the current/last page** | a current-page guard in `delete_node` (switch-then-remove, or clear error) — small; arguably a fix, not a new tool |
 
+## Read round-trip limitations (JSON_REST_V1 gaps)
+
+- **Rotated-node size/position read-back.** `JSON_REST_V1` carries only `absoluteBoundingBox` (no `relativeTransform`), so for a ROTATED node the reader returns the axis-aligned bounding box, not the unrotated geometry — e.g. a 60×60 rect rotated 30° reads back size ≈ `[81.96, 81.96]` at a shifted origin. The 2026-06-28 transform-family pass fixed `rotation` units (radians→degrees) and ABSOLUTE-child positioning, but the rotated bbox itself can't be un-rotated without the transform. Durable fix: have the plugin attach `relativeTransform` (or the unrotated width/height + x/y) to the read export, like the parent-relative position approach. Same root cause as the C5 position limitation.
+- **`get_node` `profile` crashes on an unrecognized value.** An invalid `profile` arg throws `"undefined is not an object (evaluating 'keys')"` instead of a clean error; valid values (`minimal`/`layout`/`style`/`text`/`full`) work. T7 robustness — validate the enum and return a clear message (or fall back to `full`).
+
 ## Test-infrastructure (deferred quality)
 
 - **Comprehensive plugin-apply unit-test layer.** The headless suite exercises a **mock stand-in**, never the real plugin — so plugin-side crashes/no-ops were invisible until live (the root reason the conversion-shape/field-strip/constraints class stayed live-only). **Partially realized** by the 2026-06-27 bug-fix pass: the layout-apply and instance-prop-resolver logic were extracted into pure, headlessly-tested modules (`apply-layout.ts`, `resolve-instance-props.ts`). The durable fix is to continue extracting `applyCommonProperties`' field-applies (constraints, grids, effects, sizing) into pure helpers tested against `@figma/plugin-typings`.

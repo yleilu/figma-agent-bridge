@@ -137,6 +137,12 @@ describe('specToFigma — radius', () => {
       radius: [8, 8, 0, 0],
     })
   })
+
+  it('bare number radius is accepted (no s.trim crash)', () => {
+    expect(specToFigma({ radius: 12 })).toEqual({
+      radius: 12,
+    })
+  })
 })
 
 describe('specToFigma — blend', () => {
