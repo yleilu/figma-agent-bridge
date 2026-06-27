@@ -11,17 +11,45 @@ import { renderAtom } from '../render-atom'
 import { hexToRgba, rgbaToHex } from '../figma-paint'
 import type { RGBA } from '../figma-paint'
 
-export type FigmaLayoutGrid = {
-  pattern: 'COLUMNS' | 'ROWS' | 'GRID'
-  alignment?: 'MIN' | 'MAX' | 'CENTER' | 'STRETCH'
-  /** number, or 'auto' for an auto count. */
-  count?: number | 'auto'
-  sectionSize?: number
-  gutterSize?: number
+type GridAlignment = 'MIN' | 'MAX' | 'CENTER' | 'STRETCH'
+
+/**
+ * The square-cell pattern. Figma's GridLayoutGrid REQUIRES pattern + sectionSize.
+ */
+type FigmaGridLayoutGrid = {
+  pattern: 'GRID'
+  /** REQUIRED by Figma. */
+  sectionSize: number
+  visible?: boolean
+  color?: RGBA
+}
+
+/**
+ * The columns/rows pattern. Figma's RowsColsLayoutGrid REQUIRES pattern +
+ * alignment + gutterSize + count, plus sectionSize (unless alignment is STRETCH,
+ * where it's ignored — we still send 0, which is harmless) plus offset.
+ * `count` is a number on the wire, or the STRING 'auto' for an auto count
+ * (JSON can't carry Infinity over the WS transport; the plugin translates
+ * 'auto' → Infinity before assigning to Figma).
+ */
+type FigmaRowsColsLayoutGrid = {
+  pattern: 'COLUMNS' | 'ROWS'
+  /** REQUIRED by Figma. */
+  alignment: GridAlignment
+  /** REQUIRED by Figma. number, or 'auto' for an auto count. */
+  count: number | 'auto'
+  /** REQUIRED by Figma. */
+  gutterSize: number
+  /** REQUIRED by Figma (ignored when alignment is STRETCH). */
+  sectionSize: number
   offset?: number
   color?: RGBA
   visible?: boolean
 }
+
+export type FigmaLayoutGrid =
+  | FigmaGridLayoutGrid
+  | FigmaRowsColsLayoutGrid
 
 const scalar = (
   a: AtomArg | undefined,
@@ -30,19 +58,13 @@ const scalar = (
     ? a.value
     : undefined
 
-const applyGridAttrs = (
+// Apply the shared attrs (color/vis) that both patterns carry.
+const applySharedAttrs = (
   out: FigmaLayoutGrid,
   attrs: Attrs | undefined,
 ): void => {
   if (attrs === undefined) {
     return
-  }
-  if (typeof attrs.align === 'string') {
-    out.alignment =
-      attrs.align as FigmaLayoutGrid['alignment']
-  }
-  if (typeof attrs.offset === 'number') {
-    out.offset = attrs.offset
   }
   if (typeof attrs.color === 'string') {
     out.color = hexToRgba(attrs.color)
@@ -52,23 +74,36 @@ const applyGridAttrs = (
   }
 }
 
+// Apply the columns/rows-only attrs (align/offset) on top of the shared ones.
+// `out.alignment` is pre-seeded to STRETCH by the caller, so an explicit
+// {align=} here overrides the default.
+const applyRowsColsAttrs = (
+  out: FigmaRowsColsLayoutGrid,
+  attrs: Attrs | undefined,
+): void => {
+  applySharedAttrs(out, attrs)
+  if (attrs === undefined) {
+    return
+  }
+  if (typeof attrs.align === 'string') {
+    out.alignment = attrs.align as GridAlignment
+  }
+  if (typeof attrs.offset === 'number') {
+    out.offset = attrs.offset
+  }
+}
+
 const gridToAst = (g: FigmaLayoutGrid): AtomAST => {
   const attrs: Attrs = {}
-  if (g.alignment !== undefined) {
-    attrs.align = g.alignment
-  }
-  if (g.offset !== undefined) {
-    attrs.offset = g.offset
-  }
   if (g.color !== undefined) {
     attrs.color = rgbaToHex(g.color)
   }
   if (g.visible === false) {
     attrs.vis = false
   }
-  const wrap =
-    Object.keys(attrs).length > 0 ? { attrs } : {}
   if (g.pattern === 'GRID') {
+    const wrap =
+      Object.keys(attrs).length > 0 ? { attrs } : {}
     return {
       kind: 'head',
       head: 'grid',
@@ -76,9 +111,28 @@ const gridToAst = (g: FigmaLayoutGrid): AtomAST => {
       ...wrap,
     }
   }
+  // Columns/rows-only attrs. Skip the defaulted STRETCH so a freshly-defaulted
+  // alignment never leaks back into the atom (T4 round-trip identity); an
+  // explicit non-STRETCH alignment is still emitted.
+  if (
+    g.alignment !== undefined &&
+    g.alignment !== 'STRETCH'
+  ) {
+    attrs.align = g.alignment
+  }
+  if (g.offset !== undefined) {
+    attrs.offset = g.offset
+  }
+  const wrap =
+    Object.keys(attrs).length > 0 ? { attrs } : {}
   const head = g.pattern === 'COLUMNS' ? 'columns' : 'rows'
+  // 'auto' on the wire; Figma's READ side may surface Infinity for an auto
+  // count, so translate Infinity → 'auto' here (symmetric with the plugin's
+  // 'auto' → Infinity on assign).
+  const count =
+    g.count === Infinity ? 'auto' : (g.count ?? 'auto')
   const args: AtomArg[] = [
-    { kind: 'scalar', value: g.count ?? 'auto' },
+    { kind: 'scalar', value: count },
     { kind: 'scalar', value: g.sectionSize ?? 0 },
     { kind: 'scalar', value: g.gutterSize ?? 'auto' },
   ]
@@ -92,37 +146,38 @@ export const atomToGrid = (s: string): FigmaLayoutGrid => {
   }
   const { head, args, attrs } = ast
   if (head === 'grid') {
-    const out: FigmaLayoutGrid = { pattern: 'GRID' }
+    // GRID REQUIRES sectionSize; default to 0 when absent.
     const size = scalar(args[0])
-    if (typeof size === 'number') {
-      out.sectionSize = size
+    const out: FigmaGridLayoutGrid = {
+      pattern: 'GRID',
+      sectionSize: typeof size === 'number' ? size : 0,
     }
-    applyGridAttrs(out, attrs)
+    applySharedAttrs(out, attrs)
     return out
   }
   if (head !== 'columns' && head !== 'rows') {
     throw new Error(`atomToGrid: unknown grid "${head}"`)
   }
-  const out: FigmaLayoutGrid = {
-    pattern: head === 'columns' ? 'COLUMNS' : 'ROWS',
-  }
+  // COLUMNS/ROWS REQUIRE alignment + count + gutterSize + sectionSize.
+  // Seed the required fields with Figma-valid defaults; an explicit {align=}
+  // overrides the STRETCH default in applyRowsColsAttrs below. The 'auto'
+  // count stays as the STRING on the wire (plugin maps it → Infinity).
   const c = scalar(args[0])
-  if (c === 'auto') {
-    out.count = 'auto'
-  } else if (typeof c === 'number') {
-    out.count = c
-  }
   const sec = scalar(args[1])
-  if (typeof sec === 'number') {
-    out.sectionSize = sec
-  }
   const gut = scalar(args[2])
-  if (gut === 'auto') {
-    // gutter 'auto' is left implicit
-  } else if (typeof gut === 'number') {
-    out.gutterSize = gut
+  const out: FigmaRowsColsLayoutGrid = {
+    pattern: head === 'columns' ? 'COLUMNS' : 'ROWS',
+    alignment: 'STRETCH',
+    count:
+      c === 'auto'
+        ? 'auto'
+        : typeof c === 'number'
+          ? c
+          : 'auto',
+    gutterSize: typeof gut === 'number' ? gut : 0,
+    sectionSize: typeof sec === 'number' ? sec : 0,
   }
-  applyGridAttrs(out, attrs)
+  applyRowsColsAttrs(out, attrs)
   return out
 }
 

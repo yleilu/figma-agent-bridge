@@ -104,6 +104,23 @@ const bytesToString = (bytes: Uint8Array): string => {
   return result
 }
 
+// The WS wire keeps the STRING 'auto' for an auto column/row count because JSON
+// can't carry Infinity. Translate it back to Figma's Infinity right before any
+// assign to .layoutGrids (the READ side maps Infinity → 'auto' in gridToAst).
+const reviveLayoutGrid = (g: unknown): LayoutGrid => {
+  if (
+    g !== null &&
+    typeof g === 'object' &&
+    (g as { count?: unknown }).count === 'auto'
+  ) {
+    return {
+      ...(g as Record<string, unknown>),
+      count: Infinity,
+    } as unknown as LayoutGrid
+  }
+  return g as LayoutGrid
+}
+
 type ParentNode =
   | FrameNode
   | PageNode
@@ -325,6 +342,25 @@ const applyCommonProperties = async (
     } else {
       warnings?.push(
         'constraints ignored — not supported on a ' +
+          node.type +
+          ' node',
+      )
+    }
+  }
+
+  // Layout grids. The server writer converts grid atoms → COMPLETE Figma
+  // LayoutGrid objects (via atomToGrid) and emits them as spec.grids; the plugin
+  // assigns them to node.layoutGrids. Capability-guard so an incompatible node
+  // warns-and-continues (T7) rather than throwing → {error}. Each grid's auto
+  // count rides the wire as 'auto' (JSON has no Infinity) → revive to Infinity.
+  if (spec.grids !== undefined) {
+    if ('layoutGrids' in node) {
+      ;(node as FrameNode).layoutGrids = (
+        spec.grids as unknown[]
+      ).map(reviveLayoutGrid)
+    } else {
+      warnings?.push(
+        'grids ignored — not supported on a ' +
           node.type +
           ' node',
       )
@@ -1190,7 +1226,10 @@ const handleCommand = async (
                     : undefined,
                 count:
                   'count' in g
-                    ? (g as RowsColsLayoutGrid).count
+                    ? (g as RowsColsLayoutGrid).count ===
+                      Infinity
+                      ? 'auto'
+                      : (g as RowsColsLayoutGrid).count
                     : undefined,
                 sectionSize:
                   'sectionSize' in g
@@ -3744,7 +3783,7 @@ const handleCommand = async (
               throw new Error('createGridStyle unavailable')
             }
             const gs = figma.createGridStyle()
-            gs.layoutGrids = [entry.value as LayoutGrid]
+            gs.layoutGrids = [reviveLayoutGrid(entry.value)]
             style = gs
           }
           style.name = entry.name
@@ -3923,7 +3962,7 @@ const handleCommand = async (
               ]
             } else if (style.type === 'GRID') {
               ;(style as GridStyle).layoutGrids = [
-                entry.value as LayoutGrid,
+                reviveLayoutGrid(entry.value),
               ]
             }
           }
