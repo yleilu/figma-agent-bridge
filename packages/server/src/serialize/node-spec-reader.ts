@@ -96,6 +96,30 @@ const num = (v: unknown): number | undefined =>
 const str = (v: unknown): string | undefined =>
   typeof v === 'string' ? v : undefined
 
+/**
+ * Translate a single REST constraint value (JSON_REST_V1 vocab) to the Plugin-API
+ * vocab used by the spec/writer. REST uses LEFT/RIGHT/TOP/BOTTOM/LEFT_RIGHT/
+ * TOP_BOTTOM, the Plugin API uses MIN/MAX/STRETCH (CENTER and SCALE are shared).
+ * Any unmapped value — including an already-Plugin value like MIN/MAX — passes
+ * through UNCHANGED, since the schema tuple has no enum and we must not corrupt a
+ * value that is already in Plugin vocab.
+ */
+const restConstraintToPlugin = (value: string): string => {
+  switch (value) {
+    case 'LEFT':
+    case 'TOP':
+      return 'MIN'
+    case 'RIGHT':
+    case 'BOTTOM':
+      return 'MAX'
+    case 'LEFT_RIGHT':
+    case 'TOP_BOTTOM':
+      return 'STRETCH'
+    default:
+      return value
+  }
+}
+
 const sizeOf = (raw: RawNode): [number, number] => {
   const bbox = raw.absoluteBoundingBox as
     | { width: number; height: number }
@@ -681,8 +705,8 @@ const buildNode = (
     | undefined
   if (constraints !== undefined && constraints !== null) {
     out.constraints = [
-      constraints.horizontal,
-      constraints.vertical,
+      restConstraintToPlugin(constraints.horizontal),
+      restConstraintToPlugin(constraints.vertical),
     ]
   }
 

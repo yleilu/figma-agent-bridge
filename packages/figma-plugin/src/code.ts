@@ -115,6 +115,7 @@ const applyCommonProperties = async (
   node: SceneNode,
   spec: Record<string, unknown>,
   _parent: ParentNode,
+  warnings?: string[],
 ): Promise<void> => {
   // Name
   if (spec.name !== undefined) {
@@ -308,6 +309,27 @@ const applyCommonProperties = async (
     (node as FrameNode).maxHeight = spec.maxHeight as
       | number
       | null
+
+  // Constraints. The server writer emits the ARRAY form [horizontal, vertical]
+  // (Plugin-API vocab: MIN/MAX/CENTER/STRETCH/SCALE); Figma's setter wants the
+  // OBJECT form {horizontal, vertical}. Capability-guard so an incompatible node
+  // (e.g. a node without ConstraintMixin) warns-and-continues (T7) rather than
+  // throwing → {error}, matching the warn-on-no-op pattern.
+  if (spec.constraints !== undefined) {
+    if ('constraints' in node) {
+      const [h, v] = spec.constraints as [string, string]
+      ;(node as ConstraintMixin & SceneNode).constraints = {
+        horizontal: h as ConstraintType,
+        vertical: v as ConstraintType,
+      }
+    } else {
+      warnings?.push(
+        'constraints ignored — not supported on a ' +
+          node.type +
+          ' node',
+      )
+    }
+  }
 
   // Apply resolved style IDs (server resolves style(name) → styleId)
   if (
@@ -663,7 +685,7 @@ const createSingleNode = async (
   }
 
   // Apply common properties (fills, strokes, effects, etc.)
-  await applyCommonProperties(node, spec, parent)
+  await applyCommonProperties(node, spec, parent, warnings)
 
   // Apply text-specific properties (requires font loading)
   if (type === 'TEXT') {
@@ -2232,6 +2254,7 @@ const handleCommand = async (
         node as SceneNode,
         spec,
         parent as ParentNode,
+        warnings,
       )
       if (node.type === 'TEXT' && spec.text !== undefined) {
         await applyTextProperties(node as TextNode, spec)

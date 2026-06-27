@@ -375,6 +375,12 @@ describe('specToFigma — pass-through fields', () => {
     ).toEqual({ constraints: ['MIN', 'CENTER'] })
   })
 
+  it('constraints [MIN,STRETCH] passes through as the array', () => {
+    expect(
+      specToFigma({ constraints: ['MIN', 'STRETCH'] }),
+    ).toEqual({ constraints: ['MIN', 'STRETCH'] })
+  })
+
   it('component by local id passes through (INSTANCE by-id path)', () => {
     expect(
       specToFigma({ component: { id: '2:10' } }),
