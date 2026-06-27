@@ -32,7 +32,11 @@ const CHILDREN_WARNING =
 // The node types create_node can build (mirrors the plugin's createSingleNode
 // switch). Validated at the SERVER boundary so an unsupported type returns a
 // clean {error} listing the valid surface, not a deep generic plugin throw.
-const CREATABLE_TYPES = [
+// EXPORTED as the single source of truth: create_tree imports the SAME array so
+// the two create APIs accept exactly the same node types (issue #2). This also
+// rejects the unspecced composite-via-children family (BOOLEAN_OPERATION, GROUP,
+// TRANSFORM_GROUP) consistently — booleans are made via the boolean_op tool.
+export const CREATABLE_TYPES = [
   'FRAME',
   'RECTANGLE',
   'ELLIPSE',

@@ -151,9 +151,7 @@ const createdId = (
     return data.id
   }
   const root = data.root as
-    | { id?: string }
-    | string
-    | undefined
+    { id?: string } | string | undefined
   if (typeof root === 'string') {
     return root
   }
@@ -224,8 +222,7 @@ const tier1: Check[] = [
       }
       const cData = asJson(created)
       const collectionId = cData.collectionId as
-        | string
-        | undefined
+        string | undefined
       if (typeof collectionId !== 'string') {
         return fail(
           `create_variables returned no collectionId: ${text(created)}`,
@@ -297,8 +294,7 @@ const tier1: Check[] = [
       }
       const vData = asJson(vars)
       const variable = ((vData.variables as
-        | { id?: string }[]
-        | undefined) ?? [])[0]
+        { id?: string }[] | undefined) ?? [])[0]
       const variableId = variable?.id
       if (typeof variableId !== 'string') {
         return fail(
@@ -349,16 +345,21 @@ const tier1: Check[] = [
     },
   },
   {
-    id: 'T1.c-boolean-tree-refpool',
+    id: 'T1.c-nested-tree-refpool',
     tier: 1,
     tools: ['create_tree'],
-    name: 'create_tree with a BOOLEAN_OPERATION + a {ref} reused twice',
+    name: 'create_tree with a nested FRAME group + a {ref} reused twice',
+    // Issue #2: create_tree only builds CREATABLE_TYPES (the same surface as
+    // create_node) — the unspecced composite-via-children family
+    // (BOOLEAN_OPERATION etc.) is rejected. Booleans have their own coverage via
+    // boolean_op (structure smoke). This check exercises a nested FRAME subtree
+    // plus a {ref} reused twice (re-built fresh on each reuse).
     run: async client => {
       const result = await handleCreateTree(
         {
           tree: {
             type: 'FRAME',
-            name: 'VerifyBoolTree',
+            name: 'VerifyNestedTree',
             size: [200, 120],
             layout: {
               mode: 'H',
@@ -368,8 +369,8 @@ const tier1: Check[] = [
             fills: ['#FFFFFF'],
             children: [
               {
-                type: 'BOOLEAN_OPERATION',
-                name: 'Union',
+                type: 'FRAME',
+                name: 'Pair',
                 children: [
                   {
                     type: 'ELLIPSE',
@@ -408,7 +409,7 @@ const tier1: Check[] = [
       const id = createdId(data)
       const total = data.totalNodes
       return pass(
-        `created tree root=${id ?? '?'} totalNodes=${String(total)} (BOOLEAN_OPERATION + ref reused twice)`,
+        `created tree root=${id ?? '?'} totalNodes=${String(total)} (nested FRAME + ref reused twice)`,
         id ? { nodeIds: [id], exportNodeId: id } : {},
       )
     },
