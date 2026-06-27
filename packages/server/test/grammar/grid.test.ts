@@ -16,14 +16,14 @@ import type { FigmaLayoutGrid } from '@figma-agent-bridge/server/grammar'
 
 // --- shape: atomToGrid emits the Figma-required fields ---
 describe('grid: atomToGrid emits Figma-required fields', () => {
-  it('columns(12,80,20) carries pattern/alignment/count/gutterSize/sectionSize', () => {
+  it('columns(12,80,20) STRETCH carries required fields + offset, no sectionSize', () => {
     const g = atomToGrid('columns(12,80,20)')
     expect(g).toEqual({
       pattern: 'COLUMNS',
       alignment: 'STRETCH',
       count: 12,
       gutterSize: 20,
-      sectionSize: 80,
+      offset: 0,
     })
   })
 
@@ -34,8 +34,20 @@ describe('grid: atomToGrid emits Figma-required fields', () => {
       alignment: 'STRETCH',
       count: 6,
       gutterSize: 8,
-      sectionSize: 40,
+      offset: 0,
     })
+  })
+
+  it('non-STRETCH carries sectionSize; STRETCH omits it', () => {
+    const min = atomToGrid(
+      'columns(4,40,8){align=MIN}',
+    ) as Extract<FigmaLayoutGrid, { pattern: 'COLUMNS' }>
+    expect(min.sectionSize).toBe(40)
+    expect(min.offset).toBe(0)
+    const stretch = atomToGrid(
+      'columns(4,40,8)',
+    ) as Extract<FigmaLayoutGrid, { pattern: 'COLUMNS' }>
+    expect(stretch.sectionSize).toBeUndefined()
   })
 
   it('columns(auto,...) keeps count as the STRING auto', () => {
@@ -46,7 +58,8 @@ describe('grid: atomToGrid emits Figma-required fields', () => {
     expect(g.count).toBe('auto')
     expect(g.alignment).toBe('STRETCH')
     expect(g.gutterSize).toBe(16)
-    expect(g.sectionSize).toBe(60)
+    expect(g.offset).toBe(0)
+    expect(g.sectionSize).toBeUndefined()
   })
 
   it('grid(8) → {pattern:GRID, sectionSize:8}', () => {
@@ -77,7 +90,7 @@ describe('grid: atomToGrid(gridToAtom(g)) deep-equals g', () => {
         alignment: 'STRETCH',
         count: 12,
         gutterSize: 20,
-        sectionSize: 80,
+        offset: 0,
       },
     },
     {
@@ -98,7 +111,7 @@ describe('grid: atomToGrid(gridToAtom(g)) deep-equals g', () => {
         alignment: 'STRETCH',
         count: 'auto',
         gutterSize: 8,
-        sectionSize: 40,
+        offset: 0,
       },
     },
     {

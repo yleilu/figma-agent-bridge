@@ -328,26 +328,6 @@ const applyCommonProperties = async (
       | number
       | null
 
-  // Constraints. The server writer emits the ARRAY form [horizontal, vertical]
-  // (Plugin-API vocab: MIN/MAX/CENTER/STRETCH/SCALE); Figma's setter wants the
-  // OBJECT form {horizontal, vertical}. Capability-guard so an incompatible node
-  // (e.g. a node without ConstraintMixin) warns-and-continues (T7) rather than
-  // throwing → {error}, matching the warn-on-no-op pattern.
-  if (spec.constraints !== undefined) {
-    if ('constraints' in node) {
-      const [h, v] = spec.constraints as [string, string]
-      ;(node as ConstraintMixin & SceneNode).constraints = {
-        horizontal: h as ConstraintType,
-        vertical: v as ConstraintType,
-      }
-    } else {
-      warnings?.push(
-        'constraints ignored — not supported on a ' +
-          node.type +
-          ' node',
-      )
-    }
-  }
 
   // Layout grids. The server writer converts grid atoms → COMPLETE Figma
   // LayoutGrid objects (via atomToGrid) and emits them as spec.grids; the plugin
@@ -443,6 +423,26 @@ const applyPostAppendProperties = (
           node.type +
           '): ' +
           String(e),
+      )
+    }
+  }
+
+  // Constraints — set AFTER appendChild. On create the node isn't parented when
+  // applyCommonProperties runs, so constraints set there don't stick; here the
+  // node is already in the tree. Writer emits the ARRAY [h,v] (Plugin vocab);
+  // Figma's setter wants {horizontal, vertical}. Capability-guard + warn (T7).
+  if (spec.constraints !== undefined) {
+    if ('constraints' in node) {
+      const [h, v] = spec.constraints as [string, string]
+      ;(node as ConstraintMixin & SceneNode).constraints = {
+        horizontal: h as ConstraintType,
+        vertical: v as ConstraintType,
+      }
+    } else {
+      warnings?.push(
+        'constraints ignored — not supported on a ' +
+          node.type +
+          ' node',
       )
     }
   }
