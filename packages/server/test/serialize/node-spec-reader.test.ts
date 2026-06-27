@@ -96,6 +96,46 @@ describe('toNodeSpec — var() binding read-back', () => {
   })
 })
 
+// ─── component read-back (INSTANCE main-component ref) ────────────────────────
+
+describe('toNodeSpec — INSTANCE component read-back', () => {
+  it('emits component {id} from the instance componentId (round-trips to create_node)', () => {
+    const instanceRaw: Record<string, unknown> = {
+      id: '5:6',
+      name: 'Button/Primary',
+      type: 'INSTANCE',
+      componentId: '2:10',
+    }
+    const spec = toNodeSpec(instanceRaw, { depth: -1 })
+    expect(spec.component).toEqual({ id: '2:10' })
+    // The component ref is a valid create_node(INSTANCE) input shape.
+    expect(specToFigma(spec).component).toEqual({
+      id: '2:10',
+    })
+  })
+
+  it('includes component.key when the export carries componentKey', () => {
+    const instanceRaw: Record<string, unknown> = {
+      id: '5:7',
+      name: 'Card',
+      type: 'INSTANCE',
+      componentId: '2:11',
+      componentKey: 'btn-key-123',
+    }
+    const spec = toNodeSpec(instanceRaw, { depth: -1 })
+    expect(spec.component).toEqual({
+      id: '2:11',
+      key: 'btn-key-123',
+    })
+  })
+
+  it('omits component on non-INSTANCE nodes (FRAME carries no main-component ref)', () => {
+    const spec = toNodeSpec(raw, { depth: -1 })
+    expect(spec.type).toBe('FRAME')
+    expect(spec).not.toHaveProperty('component')
+  })
+})
+
 // ─── depth + stubs (no budget) ────────────────────────────────────────────────
 
 describe('toNodeSpec — depth + IdStubs', () => {

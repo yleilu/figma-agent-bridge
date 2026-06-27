@@ -130,12 +130,16 @@ describe('nodeSpecSchema', () => {
     expect(nodeSpecSchema.parse(card)).toStrictEqual(card)
   })
 
-  it('parses an INSTANCE with overrides + component props', () => {
+  it('parses an INSTANCE with component ref + overrides + component props', () => {
     const instance: NodeSpec = {
       type: 'INSTANCE',
       name: 'Button/Primary',
       id: '5:6',
       size: [120, 40],
+      component: {
+        id: '2:10',
+        properties: { Label: 'Save', Disabled: false },
+      },
       componentProperties: {
         Label: 'Save',
         Disabled: false,
@@ -151,6 +155,17 @@ describe('nodeSpecSchema', () => {
           value: 'Save changes',
         },
       ],
+    }
+    expect(nodeSpecSchema.safeParse(instance).success).toBe(
+      true,
+    )
+  })
+
+  it('parses an INSTANCE with a component ref by published key', () => {
+    const instance: NodeSpec = {
+      type: 'INSTANCE',
+      name: 'Card',
+      component: { key: 'btn-key-123' },
     }
     expect(nodeSpecSchema.safeParse(instance).success).toBe(
       true,

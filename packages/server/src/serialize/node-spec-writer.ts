@@ -23,6 +23,8 @@
 //       text.color, text.decoration, text.case, text.paragraphSpacing,
 //       text.lineHeight / text.letterSpacing ({value,unit}), textAutoResize
 //     applyPostAppendProperties — sizing, layoutPositioning
+//     createSingleNode (INSTANCE case) — component { id | key, properties }
+//       (resolves the main component, createInstance(), then setProperties)
 //
 //   EMITTED but NOT YET consumed (reserved for later phases — do not claim
 //   round-trip for these until the plugin reads them):
@@ -301,6 +303,13 @@ export const specToFigma = (
   // ── export / component meta (pass-through) ───────────────────────────────
   if (spec.exportSettings !== undefined) {
     out.exportSettings = spec.exportSettings
+  }
+  // component (INSTANCE main-component ref): passed through so the plugin's
+  // createSingleNode INSTANCE case can resolve it by `id` (local component
+  // node) or `key` (importComponentByKeyAsync), then createInstance() and
+  // apply `properties`. See packages/figma-plugin/src/code.ts.
+  if (spec.component !== undefined) {
+    out.component = spec.component
   }
   if (spec.componentProperties !== undefined) {
     out.componentProperties = spec.componentProperties

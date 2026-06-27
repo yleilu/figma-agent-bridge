@@ -795,6 +795,47 @@ export const createMockPlugin = (
             'SLOT requested via create_node was created as a FRAME placeholder; real SLOT promotion happens in create_component via component.createSlot()',
           )
         }
+        // Mirror the real plugin's INSTANCE main-component resolution
+        // (figma-plugin/src/code.ts): the component ref must carry a local
+        // `id` (getNodeByIdAsync → COMPONENT/COMPONENT_SET) or a published
+        // `key` (importComponentByKeyAsync). Neither present → clean {error}.
+        // An `err:`-prefixed id models a not-found node; a `notcomp:`-prefixed
+        // id models a node that is not a COMPONENT/COMPONENT_SET (same prefix
+        // convention update_component uses), so the by-id error boundary is
+        // assertable without a live Figma document.
+        if (nodeType === 'INSTANCE') {
+          const compRef = nodeSpec?.component as
+            | { id?: string; key?: string }
+            | undefined
+          if (
+            compRef?.id === undefined &&
+            compRef?.key === undefined
+          ) {
+            error =
+              'INSTANCE requires component.id (local component node) or component.key (published/library component)'
+            break
+          }
+          if (compRef.id?.startsWith('err:')) {
+            error =
+              'INSTANCE component.id not found: ' +
+              compRef.id
+            break
+          }
+          if (compRef.id?.startsWith('notcomp:')) {
+            // Mirror the real plugin's "got <found.type>" message. Encode the
+            // simulated type as the middle segment (notcomp:<TYPE>:<id>);
+            // default to FRAME when omitted (notcomp:<id>).
+            const ncParts = compRef.id.split(':')
+            const gotType =
+              ncParts.length >= 3 ? ncParts[1] : 'FRAME'
+            error =
+              'INSTANCE component.id must reference a COMPONENT or COMPONENT_SET, got ' +
+              gotType +
+              ': ' +
+              compRef.id
+            break
+          }
+        }
         result = {
           ...echo,
           id: `created:${Math.random().toString(36).slice(2, 8)}`,

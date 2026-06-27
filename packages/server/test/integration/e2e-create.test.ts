@@ -231,6 +231,90 @@ describe('M3 create tools e2e', () => {
     expect(parsed.type).toBe('SECTION')
     expect(parsed.name).toBe('Test Section')
   })
+
+  // issue #4: create_node(INSTANCE) by LOCAL component id. The writer passes
+  // `component` through; the plugin resolves the local main via
+  // getNodeByIdAsync → createInstance() and applies `properties` verbatim
+  // (exact keys; the friendly-name→name#id resolver is issue #11).
+  it('create_node(INSTANCE) by local component.id round-trips the ref to the plugin', async () => {
+    const result = await handleCreateNode(
+      {
+        parentId: '0:1',
+        spec: {
+          type: 'INSTANCE',
+          name: 'Button/Primary',
+          component: {
+            id: '2:10',
+            properties: { Label: 'Save' },
+          },
+        },
+      },
+      client,
+    )
+    const parsed = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(parsed.type).toBe('INSTANCE')
+    expect(parsed.component).toEqual({
+      id: '2:10',
+      properties: { Label: 'Save' },
+    })
+  })
+
+  // issue #4: create_node(INSTANCE) by published KEY → importComponentByKeyAsync.
+  it('create_node(INSTANCE) by component.key round-trips the ref to the plugin', async () => {
+    const result = await handleCreateNode(
+      {
+        parentId: '0:1',
+        spec: {
+          type: 'INSTANCE',
+          name: 'Card',
+          component: { key: 'btn-key-123' },
+        },
+      },
+      client,
+    )
+    const parsed = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(parsed.type).toBe('INSTANCE')
+    expect(parsed.component).toEqual({ key: 'btn-key-123' })
+  })
+
+  // issue #4: INSTANCE with no component ref → clear {error} (not a silent
+  // mis-create). The plugin throws 'INSTANCE requires component.id or
+  // component.key'; the mock mirrors it byte-faithfully.
+  it('create_node(INSTANCE) with no component ref surfaces a clear error', async () => {
+    const result = await handleCreateNode(
+      {
+        parentId: '0:1',
+        spec: { type: 'INSTANCE', name: 'Orphan' },
+      },
+      client,
+    )
+    const { text } = result.content[0]
+    expect(text).toStartWith('Error')
+    expect(text).toContain('component.id')
+    expect(text).toContain('component.key')
+  })
+
+  // issue #4: an invalid by-id ref (node is not a COMPONENT/COMPONENT_SET) is a
+  // clean target error, not a degrade.
+  it('create_node(INSTANCE) with a non-component id surfaces a clear error', async () => {
+    const result = await handleCreateNode(
+      {
+        parentId: '0:1',
+        spec: {
+          type: 'INSTANCE',
+          component: { id: 'notcomp:9' },
+        },
+      },
+      client,
+    )
+    const { text } = result.content[0]
+    expect(text).toStartWith('Error')
+    expect(text).toContain('COMPONENT')
+  })
 })
 
 // M2 chunk D — simple single-target writes over the REAL relay + mock plugin.
