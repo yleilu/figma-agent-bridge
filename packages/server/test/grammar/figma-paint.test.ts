@@ -222,6 +222,10 @@ describe('paint: atomToPaint(paintToAtom(p)) deep-equals p', () => {
 
 // --- EFFECT round-trip ---
 describe('effect: atomToEffect(effectToAtom(e)) deep-equals e', () => {
+  // Effects are COMPLETE Figma objects: shadows carry blendMode + visible,
+  // blurs carry visible (Figma requires them). effectToAtom drops the
+  // NORMAL/true defaults so atoms stay compact; atomToEffect re-seeds them,
+  // so the round-trip is a true identity.
   const cases: { name: string; e: FigmaEffect }[] = [
     {
       name: 'drop shadow',
@@ -230,6 +234,8 @@ describe('effect: atomToEffect(effectToAtom(e)) deep-equals e', () => {
         offset: { x: 0, y: 4 },
         radius: 8,
         color: { r: 0, g: 0, b: 0, a: 0.251 },
+        blendMode: 'NORMAL',
+        visible: true,
       },
     },
     {
@@ -239,6 +245,8 @@ describe('effect: atomToEffect(effectToAtom(e)) deep-equals e', () => {
         offset: { x: 0, y: 2 },
         radius: 4,
         color: { r: 0, g: 0, b: 0, a: 0.125 },
+        blendMode: 'NORMAL',
+        visible: true,
       },
     },
     {
@@ -250,15 +258,32 @@ describe('effect: atomToEffect(effectToAtom(e)) deep-equals e', () => {
         color: { r: 0, g: 0, b: 0, a: 0.102 },
         spread: 2,
         showShadowBehindNode: true,
+        blendMode: 'NORMAL',
+        visible: true,
+      },
+    },
+    {
+      name: 'drop shadow with explicit blend (MULTIPLY)',
+      e: {
+        type: 'DROP_SHADOW',
+        offset: { x: 0, y: 4 },
+        radius: 8,
+        color: { r: 0, g: 0, b: 0, a: 0.251 },
+        blendMode: 'MULTIPLY',
+        visible: true,
       },
     },
     {
       name: 'layer blur',
-      e: { type: 'LAYER_BLUR', radius: 10 },
+      e: { type: 'LAYER_BLUR', radius: 10, visible: true },
     },
     {
       name: 'background blur',
-      e: { type: 'BACKGROUND_BLUR', radius: 20 },
+      e: {
+        type: 'BACKGROUND_BLUR',
+        radius: 20,
+        visible: true,
+      },
     },
   ]
   for (const { name, e } of cases) {
@@ -266,6 +291,41 @@ describe('effect: atomToEffect(effectToAtom(e)) deep-equals e', () => {
       expect(atomToEffect(effectToAtom(e))).toEqual(e)
     })
   }
+})
+
+// Shape guard (guard-b): atomToEffect must emit the fields Figma REQUIRES on
+// each effect — shadows need blendMode + visible, blurs need visible. Omitting
+// them is exactly the A1 bug Figma rejected at runtime; this catches the drift
+// at the converter (the source) without instrumenting the whole mock.
+describe('effect: atomToEffect emits Figma-required fields', () => {
+  it('drop shadow (default path) carries blendMode + visible', () => {
+    const e = atomToEffect('shadow(0,4,8,#00000040)')
+    expect(e.blendMode).toBe('NORMAL')
+    expect(e.visible).toBe(true)
+  })
+  it('inner shadow carries blendMode + visible', () => {
+    const e = atomToEffect('inner-shadow(0,2,4,#00000020)')
+    expect(e.blendMode).toBe('NORMAL')
+    expect(e.visible).toBe(true)
+  })
+  it('blur carries visible but NOT blendMode', () => {
+    const e = atomToEffect('blur(10)')
+    expect(e.visible).toBe(true)
+    expect(e.blendMode).toBeUndefined()
+  })
+  it('explicit {blend=} overrides the seeded default', () => {
+    const e = atomToEffect(
+      'shadow(0,4,8,#000000){blend=MULTIPLY}',
+    )
+    expect(e.blendMode).toBe('MULTIPLY')
+    expect(e.visible).toBe(true)
+  })
+  it('explicit {vis=false} overrides the seeded default', () => {
+    const e = atomToEffect(
+      'shadow(0,4,8,#000000){vis=false}',
+    )
+    expect(e.visible).toBe(false)
+  })
 })
 
 // --- FONT round-trip ---
