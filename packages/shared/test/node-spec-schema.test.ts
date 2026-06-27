@@ -7,14 +7,12 @@ import {
   treeNodeSpecSchema,
   layoutSpecSchema,
   textSpecSchema,
-  cssGridSpecSchema,
   exportSettingSchema,
 } from '@figma-agent-bridge/shared/node-spec-schema'
 import type {
   NodeSpec,
   LayoutSpec,
   TextSpec,
-  CssGridSpec,
   ExportSetting,
   TreeNodeSpec,
 } from '@figma-agent-bridge/shared/node-spec'
@@ -37,9 +35,6 @@ assertEqual<
 >()
 assertEqual<
   Equal<z.infer<typeof textSpecSchema>, TextSpec>
->()
-assertEqual<
-  Equal<z.infer<typeof cssGridSpecSchema>, CssGridSpec>
 >()
 assertEqual<
   Equal<z.infer<typeof exportSettingSchema>, ExportSetting>
@@ -262,17 +257,6 @@ describe('sub-schemas', () => {
   it('layoutSpecSchema validates a NONE mode (auto-layout off)', () => {
     expect(
       layoutSpecSchema.safeParse({ mode: 'NONE' }).success,
-    ).toBe(true)
-  })
-
-  it('cssGridSpecSchema validates rows/cols', () => {
-    expect(
-      cssGridSpecSchema.safeParse({
-        rows: 2,
-        cols: 3,
-        rowGap: 8,
-        colGap: 8,
-      }).success,
     ).toBe(true)
   })
 

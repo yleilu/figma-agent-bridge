@@ -26,13 +26,6 @@ export const layoutSpecSchema = z.object({
   wrap: z.boolean().optional(),
 })
 
-export const cssGridSpecSchema = z.object({
-  rows: z.number(),
-  cols: z.number(),
-  rowGap: z.number().optional(),
-  colGap: z.number().optional(),
-})
-
 export const textRunSchema = z.object({
   at: z.tuple([z.number(), z.number()]),
   font: atomSchema.optional(),
@@ -96,7 +89,6 @@ const nodeSpecBase = {
 
   // layout
   layout: layoutSpecSchema.optional(),
-  cssGrid: cssGridSpecSchema.optional(),
   sizing: z.tuple([z.string(), z.string()]).optional(),
   constraints: z.tuple([z.string(), z.string()]).optional(),
   minWidth: z.number().nullable().optional(),
