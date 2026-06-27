@@ -28,7 +28,7 @@
 //   round-trip for these until the plugin reads them):
 //     strokeCap, strokeJoin, strokeMiterLimit   (plugin reads only weight/
 //                                                 align/dashPattern today)
-//     grids, cssGrid, constraints,
+//     grids, constraints,
 //     overrides, componentProperties, variantProperties, exportSettings,
 //     id (writer emits it; plugin ignores it on create)
 //
@@ -157,9 +157,6 @@ export const specToFigma = (
   // ── layout ───────────────────────────────────────────────────────────────
   if (spec.layout !== undefined) {
     out.layout = convertLayout(spec.layout)
-  }
-  if (spec.cssGrid !== undefined) {
-    out.cssGrid = spec.cssGrid
   }
   if (spec.sizing !== undefined) {
     out.sizing = spec.sizing

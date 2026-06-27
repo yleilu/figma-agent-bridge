@@ -32,14 +32,6 @@ export type LayoutSpec = {
   wrap?: boolean
 }
 
-/** CSS grid configuration (when `layoutMode` is GRID). */
-export type CssGridSpec = {
-  rows: number
-  cols: number
-  rowGap?: number
-  colGap?: number
-}
-
 /** A per-range text override; same atoms scoped by `at:[start,end]`. */
 export type TextRun = {
   at: [number, number]
@@ -110,7 +102,6 @@ export type NodeSpec = {
 
   // layout
   layout?: LayoutSpec
-  cssGrid?: CssGridSpec
   /** [horizontal, vertical] sizing: FIXED | HUG | FILL. */
   sizing?: [string, string]
   /** [horizontal, vertical] constraints: MIN/MAX/CENTER/STRETCH/SCALE. */
