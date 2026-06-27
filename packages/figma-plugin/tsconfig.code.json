@@ -13,5 +13,5 @@
       ]
     }
   },
-  "include": ["src/code.ts"]
+  "include": ["src/code.ts", "src/apply-layout.ts"]
 }
