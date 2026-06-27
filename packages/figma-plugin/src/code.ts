@@ -768,107 +768,13 @@ const createTreeNode = async (
     return cloned
   }
 
-  // GROUP: create children first, then group
-  if (type === 'GROUP') {
-    const children = spec.children as
-      | Record<string, unknown>[]
-      | undefined
-    if (!children || children.length === 0) {
-      throw new Error('GROUP requires at least one child')
-    }
-    const childNodes: SceneNode[] = []
-    for (const childSpec of children) {
-      const child = await createTreeNode(
-        childSpec,
-        parent,
-        refs,
-        refStack,
-      )
-      childNodes.push(child)
-    }
-    const group = figma.group(childNodes, parent)
-    if (spec.name) group.name = spec.name as string
-    return group
-  }
-
-  // TRANSFORM_GROUP: create children first, then wrap (similar to GROUP)
-  if (type === 'TRANSFORM_GROUP') {
-    const children = spec.children as
-      | Record<string, unknown>[]
-      | undefined
-    if (!children || children.length === 0) {
-      throw new Error(
-        'TRANSFORM_GROUP requires at least one child',
-      )
-    }
-    const childNodes: SceneNode[] = []
-    for (const childSpec of children) {
-      const child = await createTreeNode(
-        childSpec,
-        parent,
-        refs,
-        refStack,
-      )
-      childNodes.push(child)
-    }
-    const modifiers = spec.modifiers as
-      | Record<string, unknown>
-      | undefined
-    const group = figma.group(childNodes, parent)
-    if (spec.name) group.name = spec.name as string
-    // Apply transform modifiers if provided (rotation, scale, skew)
-    if (modifiers) {
-      if (modifiers.rotation !== undefined)
-        group.rotation = modifiers.rotation as number
-    }
-    return group
-  }
-
-  // BOOLEAN_OPERATION: create children first, then combine
-  if (type === 'BOOLEAN_OPERATION') {
-    const children = spec.children as
-      | Record<string, unknown>[]
-      | undefined
-    if (!children || children.length < 2) {
-      throw new Error(
-        'BOOLEAN_OPERATION requires at least 2 children',
-      )
-    }
-    const childNodes: SceneNode[] = []
-    for (const childSpec of children) {
-      const child = await createTreeNode(
-        childSpec,
-        parent,
-        refs,
-        refStack,
-      )
-      childNodes.push(child)
-    }
-    const op = spec.booleanOperation as string
-    let boolNode: BooleanOperationNode
-    switch (op) {
-      case 'UNION':
-        boolNode = figma.union(childNodes, parent)
-        break
-      case 'SUBTRACT':
-        boolNode = figma.subtract(childNodes, parent)
-        break
-      case 'INTERSECT':
-        boolNode = figma.intersect(childNodes, parent)
-        break
-      case 'EXCLUDE':
-        boolNode = figma.exclude(childNodes, parent)
-        break
-      default:
-        // Consistent with the boolean_op tool's strict handling (which returns
-        // { error: 'Unknown boolean op' }): reject an unknown op rather than
-        // silently defaulting to union. createTreeNode's caller surfaces the
-        // throw as the create_tree {error}.
-        throw new Error('Unknown boolean op: ' + op)
-    }
-    if (spec.name) boolNode.name = spec.name as string
-    return boolNode
-  }
+  // NOTE (issue #2): the composite-via-children cases (GROUP, TRANSFORM_GROUP,
+  // BOOLEAN_OPERATION) were removed. The server now rejects these unspecced
+  // types up front in create-tree.ts (against the SAME CREATABLE_TYPES list
+  // create_node uses), so they can never reach this create-type switch. Their
+  // handlers here were unreachable — the ref ({ ref }) and clone ({ id }) paths
+  // above return before this point, so a clone-by-id of an existing
+  // BOOLEAN_OPERATION / GROUP still works. Booleans are authored via boolean_op.
 
   // Regular node: create, apply properties, append
   const node = await createSingleNode(spec, parent)

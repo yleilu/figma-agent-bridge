@@ -132,6 +132,59 @@ describe('convertTree (recursive children + ref-pool)', () => {
     expect(children[2].type).toBe('RECTANGLE')
   })
 
+  // Issue #2: create_tree validates every CREATED node's type against the SAME
+  // CREATABLE_TYPES list create_node uses, so the unspecced composite-via-children
+  // family (BOOLEAN_OPERATION, GROUP, TRANSFORM_GROUP) is rejected consistently.
+  it('throws a clear error for a BOOLEAN_OPERATION node (use boolean_op instead)', () => {
+    expect(() =>
+      convertTree({
+        type: 'BOOLEAN_OPERATION',
+        children: [
+          { type: 'RECTANGLE', size: [4, 4] },
+          { type: 'ELLIPSE', size: [4, 4] },
+        ],
+      } as unknown as Parameters<typeof convertTree>[0]),
+    ).toThrow(/Unsupported node type "BOOLEAN_OPERATION"/)
+  })
+
+  it('throws a clear error for a GROUP node nested inside a tree', () => {
+    expect(() =>
+      convertTree({
+        type: 'FRAME',
+        children: [
+          {
+            type: 'GROUP',
+            children: [{ type: 'RECTANGLE', size: [4, 4] }],
+          },
+        ],
+      } as unknown as Parameters<typeof convertTree>[0]),
+    ).toThrow(/Unsupported node type "GROUP"/)
+  })
+
+  it('throws a clear error for a TRANSFORM_GROUP node', () => {
+    expect(() =>
+      convertTree({
+        type: 'TRANSFORM_GROUP',
+        children: [{ type: 'RECTANGLE', size: [4, 4] }],
+      } as unknown as Parameters<typeof convertTree>[0]),
+    ).toThrow(/Unsupported node type "TRANSFORM_GROUP"/)
+  })
+
+  // { id } / { ref } markers are EXEMPT: they reference/clone an EXISTING node
+  // (not a new type) so they pass through untouched even for a node whose
+  // existing type is a composite (e.g. cloning an existing BOOLEAN_OPERATION).
+  it('does NOT validate the type of an { id } clone marker (clone-of-composite still works)', () => {
+    expect(convertTree({ id: '1:99' })).toEqual({
+      id: '1:99',
+    })
+  })
+
+  it('does NOT validate the type of a { ref } marker', () => {
+    expect(convertTree({ ref: 'btn' })).toEqual({
+      ref: 'btn',
+    })
+  })
+
   it('maps the layout struct to the plugin spacing/padding shape (ordering precursor)', () => {
     const out = convertTree({
       type: 'FRAME',
@@ -191,6 +244,71 @@ describe('handleCreateTree', () => {
     expect(tree.fills[0].type).toBe('SOLID') // atom parsed
     expect(tree.children).toHaveLength(1)
     expect(tree.children[0].type).toBe('RECTANGLE')
+  })
+
+  // Issue #2: a created composite-via-children type is rejected at the SERVER
+  // boundary with a clean { error } and never forwarded to the plugin.
+  it('rejects a BOOLEAN_OPERATION child with a clear error before sending', async () => {
+    const sent: Sent[] = []
+    const result = await handleCreateTree(
+      {
+        tree: {
+          type: 'FRAME',
+          children: [
+            {
+              type: 'BOOLEAN_OPERATION',
+              children: [
+                { type: 'RECTANGLE', size: [4, 4] },
+                { type: 'ELLIPSE', size: [4, 4] },
+              ],
+            } as unknown as { type: string },
+          ],
+        },
+      },
+      stubClient({ sent }),
+    )
+    expect(sent).toHaveLength(0)
+    expect(result.content[0].text).toContain('Error')
+    expect(result.content[0].text).toContain(
+      'BOOLEAN_OPERATION',
+    )
+    // The message points the agent at the right tool + self-documents valids.
+    expect(result.content[0].text).toContain('boolean_op')
+    expect(result.content[0].text).toContain('FRAME')
+  })
+
+  it('rejects a GROUP child with a clear error before sending', async () => {
+    const sent: Sent[] = []
+    const result = await handleCreateTree(
+      {
+        tree: {
+          type: 'GROUP',
+          children: [{ type: 'RECTANGLE', size: [4, 4] }],
+        } as unknown as { type: string },
+      },
+      stubClient({ sent }),
+    )
+    expect(sent).toHaveLength(0)
+    expect(result.content[0].text).toContain('Error')
+    expect(result.content[0].text).toContain('GROUP')
+  })
+
+  it('forwards an { id } clone marker untouched (clone path unaffected)', async () => {
+    const sent: Sent[] = []
+    await handleCreateTree(
+      {
+        tree: {
+          type: 'FRAME',
+          children: [{ id: '1:99' }],
+        },
+      },
+      stubClient({ sent }),
+    )
+    expect(sent).toHaveLength(1)
+    const tree = sent[0].params?.tree as {
+      children: { id: string }[]
+    }
+    expect(tree.children[0]).toEqual({ id: '1:99' })
   })
 
   it('converts the ref-pool and forwards it as { refs }', async () => {

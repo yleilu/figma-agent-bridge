@@ -37,6 +37,7 @@ import {
   specToFigmaForCreate,
   type FigmaWritePayload,
 } from '../serialize/node-spec-writer'
+import { CREATABLE_TYPES } from './create-node'
 import {
   type ToolResult,
   requireConnected,
@@ -81,9 +82,25 @@ export const convertTree = (
     return { id: spec.id }
   }
 
-  // A plain node: convert its own leaves, then recurse into children.
+  // A plain node: validate its type against the SAME CREATABLE_TYPES list
+  // create_node uses (single source of truth — issue #2) so both create APIs
+  // accept exactly the same node types. This rejects the unspecced
+  // composite-via-children family (BOOLEAN_OPERATION, GROUP, TRANSFORM_GROUP)
+  // with one clear error. `{ ref }` / `{ id }` nodes returned ABOVE this guard:
+  // they reference/clone existing nodes (not new types) and pass through.
   const node = spec as NodeSpec & {
     children?: TreeNodeSpec[]
+  }
+  if (
+    !(CREATABLE_TYPES as readonly string[]).includes(
+      node.type,
+    )
+  ) {
+    throw new Error(
+      `Unsupported node type "${node.type}" in create_tree. ` +
+        `Valid types: ${CREATABLE_TYPES.join(', ')}. ` +
+        `(Booleans: create the shapes then use boolean_op.)`,
+    )
   }
   const { children, ...flat } = node
   const converted = specToFigmaForCreate(flat, warnings)
