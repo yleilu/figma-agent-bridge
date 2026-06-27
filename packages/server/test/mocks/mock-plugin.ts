@@ -14,6 +14,64 @@ const MOCK_SVG =
 const MOCK_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
 
+// FAITHFUL mirror of the figma-plugin resolveInstanceProps helper (#11): the
+// real plugin resolves friendly component-property NAMES to the EXACT keys
+// setProperties requires (TEXT/BOOLEAN/INSTANCE_SWAP → "<name>#<id>"; VARIANT →
+// bare name) against the instance's current keys, warning + skipping ambiguous
+// or unknown names. The mock inlines the same logic (it cannot import across
+// packages) keeping the wording byte-faithful so behavioral tests assert the
+// real plugin contract. Default current-keys for a modeled instance: VARIANT
+// "Size" + BOOLEAN "Disabled" pass through bare/exact as today's tests expect;
+// "Label#1:0" lets a friendly "Label" resolve; "Icon#1:0"/"IconColor#2:0"
+// exercise the exact name-segment match (Icon != IconColor).
+const MOCK_INSTANCE_KEYS = [
+  'Size',
+  'Disabled',
+  'Label#1:0',
+  'Icon#1:0',
+  'IconColor#2:0',
+]
+
+const mockResolveInstanceProps = (
+  input: Record<string, string | boolean>,
+  currentKeys: string[],
+): {
+  resolved: Record<string, string | boolean>
+  warnings: string[]
+} => {
+  const resolved: Record<string, string | boolean> = {}
+  const warnings: string[] = []
+  const nameSegment = (key: string): string => {
+    const i = key.indexOf('#')
+    return i >= 0 ? key.slice(0, i) : key
+  }
+  for (const inputKey of Object.keys(input)) {
+    if (currentKeys.includes(inputKey)) {
+      resolved[inputKey] = input[inputKey]
+      continue
+    }
+    const matches = currentKeys.filter(
+      key => nameSegment(key) === inputKey,
+    )
+    if (matches.length === 1) {
+      resolved[matches[0]] = input[inputKey]
+    } else if (matches.length > 1) {
+      warnings.push(
+        "ambiguous property name '" +
+          inputKey +
+          "' — matches " +
+          matches.join(', ') +
+          '; pass the exact key',
+      )
+    } else {
+      warnings.push(
+        "no component property named '" + inputKey + "'",
+      )
+    }
+  }
+  return { resolved, warnings }
+}
+
 type MockPluginOptions = {
   relayUrl: string
   channel: string
@@ -815,7 +873,14 @@ export const createMockPlugin = (
         // assertable without a live Figma document.
         if (nodeType === 'INSTANCE') {
           const compRef = nodeSpec?.component as
-            | { id?: string; key?: string }
+            | {
+                id?: string
+                key?: string
+                properties?: Record<
+                  string,
+                  string | boolean
+                >
+              }
             | undefined
           if (
             compRef?.id === undefined &&
@@ -844,6 +909,17 @@ export const createMockPlugin = (
               ': ' +
               compRef.id
             break
+          }
+          // Mirror the real plugin's #11 name → exact-key resolution for the
+          // create_node INSTANCE path: friendly names that can't be resolved
+          // warn (and are skipped) the same way set_instance does.
+          if (compRef.properties) {
+            const { warnings: cnResolveWarnings } =
+              mockResolveInstanceProps(
+                compRef.properties,
+                MOCK_INSTANCE_KEYS,
+              )
+            cnWarnings.push(...cnResolveWarnings)
           }
         }
         result = {
@@ -1308,13 +1384,22 @@ export const createMockPlugin = (
               ' override(s) skipped',
           )
         }
+        // Mirror the real plugin's #11 name → exact-key resolution: friendly
+        // names resolve to "#id" keys (or warn + skip), and only the resolved
+        // keys are echoed back in componentProperties.
+        const {
+          resolved: siResolved,
+          warnings: siResolveWarnings,
+        } = mockResolveInstanceProps(
+          siProps ?? {},
+          MOCK_INSTANCE_KEYS,
+        )
+        siWarnings.push(...siResolveWarnings)
         const siNested: Record<
           string,
           { value: string | boolean; type: string }
         > = {}
-        for (const [k, v] of Object.entries(
-          siProps ?? {},
-        )) {
+        for (const [k, v] of Object.entries(siResolved)) {
           siNested[k] = {
             value: v,
             type:

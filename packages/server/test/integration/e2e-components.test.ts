@@ -201,6 +201,44 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
     expect((data.warnings as unknown[]).length).toBe(0)
   })
 
+  // #11: a friendly property NAME ("Label") resolves to the EXACT key
+  // setProperties needs ("Label#1:0"); the resolved key is what gets written
+  // and echoed back (no warnings). The server's read-twin split keys by the raw
+  // Figma key, so the resolved "Label#1:0" key surfaces verbatim — proving the
+  // friendly name was upgraded to the exact key before setProperties.
+  it('set_instance resolves a friendly property name to its exact key', async () => {
+    const result = await handleSetInstance(
+      { instanceId: 'i:1', properties: { Label: 'Hi' } },
+      client,
+    )
+    const data = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    // String value → VARIANT bucket in the mock's type inference; the KEY is the
+    // resolved exact key "Label#1:0", NOT the friendly "Label" that was passed.
+    expect(data.variantProperties).toEqual({
+      'Label#1:0': 'Hi',
+    })
+    expect((data.warnings as unknown[]).length).toBe(0)
+  })
+
+  // #11: an unknown property name warns and is skipped (no setProperties write).
+  it('set_instance warns and skips an unknown property name', async () => {
+    const result = await handleSetInstance(
+      { instanceId: 'i:1', properties: { Ghost: 'x' } },
+      client,
+    )
+    const data = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    const warnings = data.warnings as string[]
+    expect(
+      warnings.some(w =>
+        w.includes("no component property named 'Ghost'"),
+      ),
+    ).toBe(true)
+  })
+
   // T7: a pure-read set_instance call (no properties, no overrides) mutates
   // nothing — it must WARN rather than return a silent no-op success that an
   // agent reads as a successful write.

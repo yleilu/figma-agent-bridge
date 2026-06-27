@@ -2,6 +2,7 @@ import { COMMANDS } from '@figma-agent-bridge/shared'
 
 import { applyLayout, type AppliedLayout } from './apply-layout'
 import { projectComponentDefs } from './project-component-defs'
+import { resolveInstanceProps } from './resolve-instance-props'
 
 figma.showUI(__html__, {
   width: 340,
@@ -695,7 +696,21 @@ const createSingleNode = async (
       }
       const instance = component.createInstance()
       if (compRef.properties) {
-        instance.setProperties(compRef.properties)
+        // Figma's setProperties requires EXACT property keys (e.g. "Label#1:0"
+        // for TEXT/BOOLEAN/INSTANCE_SWAP; VARIANT props use the bare name).
+        // Resolve friendly names against the freshly-created instance's keys so
+        // callers may pass "Label" instead of "Label#1:0".
+        const { resolved, warnings: resolveWarnings } =
+          resolveInstanceProps(
+            compRef.properties,
+            Object.keys(instance.componentProperties),
+          )
+        for (const w of resolveWarnings) {
+          warnings?.push(w)
+        }
+        if (Object.keys(resolved).length > 0) {
+          instance.setProperties(resolved)
+        }
       }
       node = instance
       break
@@ -2187,12 +2202,26 @@ const handleCommand = async (
         )
       }
       if (siProps && Object.keys(siProps).length > 0) {
-        try {
-          inst2.setProperties(siProps)
-        } catch (e) {
-          siWarnings.push(
-            'setProperties failed: ' + String(e),
+        // Resolve friendly property names to the EXACT keys setProperties needs
+        // (e.g. "Label" → "Label#1:0"; VARIANT props keep their bare name)
+        // against the instance's current keys. Unknown/ambiguous names warn and
+        // are skipped rather than failing the whole call.
+        const { resolved, warnings: resolveWarnings } =
+          resolveInstanceProps(
+            siProps,
+            Object.keys(inst2.componentProperties),
           )
+        for (const w of resolveWarnings) {
+          siWarnings.push(w)
+        }
+        if (Object.keys(resolved).length > 0) {
+          try {
+            inst2.setProperties(resolved)
+          } catch (e) {
+            siWarnings.push(
+              'setProperties failed: ' + String(e),
+            )
+          }
         }
       }
       const siOverrides = params.overrides as
