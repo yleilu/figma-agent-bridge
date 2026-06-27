@@ -26,8 +26,10 @@ type FigmaGridLayoutGrid = {
 
 /**
  * The columns/rows pattern. Figma's RowsColsLayoutGrid REQUIRES pattern +
- * alignment + gutterSize + count, plus sectionSize (unless alignment is STRETCH,
- * where it's ignored — we still send 0, which is harmless) plus offset.
+ * alignment + gutterSize + count + offset. `sectionSize` is required for
+ * non-STRETCH alignments but is REJECTED under STRETCH (Figma's set_layoutGrids
+ * validation: STRETCH variant disallows sectionSize, all variants require
+ * offset), so it is emitted only when alignment !== STRETCH.
  * `count` is a number on the wire, or the STRING 'auto' for an auto count
  * (JSON can't carry Infinity over the WS transport; the plugin translates
  * 'auto' → Infinity before assigning to Figma).
@@ -40,9 +42,10 @@ type FigmaRowsColsLayoutGrid = {
   count: number | 'auto'
   /** REQUIRED by Figma. */
   gutterSize: number
-  /** REQUIRED by Figma (ignored when alignment is STRETCH). */
-  sectionSize: number
-  offset?: number
+  /** REQUIRED by Figma (always sent — STRETCH still requires it). */
+  offset: number
+  /** Required for non-STRETCH; OMITTED under STRETCH (Figma rejects it there). */
+  sectionSize?: number
   color?: RGBA
   visible?: boolean
 }
@@ -120,7 +123,7 @@ const gridToAst = (g: FigmaLayoutGrid): AtomAST => {
   ) {
     attrs.align = g.alignment
   }
-  if (g.offset !== undefined) {
+  if (g.offset !== undefined && g.offset !== 0) {
     attrs.offset = g.offset
   }
   const wrap =
@@ -175,9 +178,15 @@ export const atomToGrid = (s: string): FigmaLayoutGrid => {
           ? c
           : 'auto',
     gutterSize: typeof gut === 'number' ? gut : 0,
-    sectionSize: typeof sec === 'number' ? sec : 0,
+    offset: 0,
   }
   applyRowsColsAttrs(out, attrs)
+  // sectionSize is required for non-STRETCH alignments but REJECTED under
+  // STRETCH (Figma's set_layoutGrids) — add it only when the final alignment
+  // (after an explicit {align=} override) isn't STRETCH.
+  if (out.alignment !== 'STRETCH') {
+    out.sectionSize = typeof sec === 'number' ? sec : 0
+  }
   return out
 }
 
