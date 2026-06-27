@@ -39,7 +39,7 @@ Everything an agent reads is one of two things:
 
 | Category | What it is | Rendered as | Examples |
 |---|---|---|---|
-| **Struct** | a composite with named fields | **YAML** (readable; prior research shows YAML reads best for agents) | the node, `layout`, `text`, `css-grid` |
+| **Struct** | a composite with named fields | **YAML** (readable; prior research shows YAML reads best for agents) | the node, `layout`, `text` |
 | **Atom** | a single leaf value | a **compact string** (the atom grammar below) | paints, gradients, font, effects, stroke, radius, sizing, constraints, scalars |
 
 - **Structs contain atoms** as their field values (a `text` struct's `font:` and
@@ -183,7 +183,6 @@ exposes:
 
 - **node** — `type, name, id, size, position, layoutPositioning, fills[], strokes[], stroke, effects[], radius, opacity, rotation, blend, visible, clipsContent, exportSettings[], layout, sizing, constraints, text, componentProperties, variantProperties, overrides, children[]` (children are nested node structs).
 - **layout** — `{mode: H|V|NONE, gap, pad: [t,r,b,l], align: [primary, counter], wrap}`. `mode: NONE` turns auto-layout off.
-- **css-grid** — `{rows, cols, rowGap, colGap}` (when `layoutMode` is GRID).
 - **text** — `{content, font, color, align, valign, decoration, case, paragraphSpacing, runs}`. `font`/`color` are atoms; `runs` carries per-range overrides (see below). Line height and letter spacing are canonical on the `font(...)` atom (`font(...){lh=24, ls=0.5}`) — there are no separate top-level `lh`/`ls` text keys.
 - **exportSettings** — array of persistent export presets, each `{format: PNG|JPG|SVG|PDF, suffix?, constraint?: [SCALE|WIDTH|HEIGHT, value]}`. Round-trips via `get_node`/`update_node` (the persistent-presets path; the `export` tool itself is one-off render/asset output).
 - **layoutPositioning** — `AUTO` | `ABSOLUTE` (a child's flow vs absolute participation). Paired with the parent's `layout.mode` it is what distinguishes a true absolute child from a flow child (the §7 absolute-positioning audit reads this — `position` alone can't, since flow children still carry x/y).
