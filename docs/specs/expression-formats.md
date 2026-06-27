@@ -181,13 +181,14 @@ Bare literals: `opacity` `0.5` · `rotation` `45` · `blendMode` `MULTIPLY` ·
 Composite types render as YAML maps; their leaves are atoms. The fields a struct
 exposes:
 
-- **node** — `type, name, id, size, position, layoutPositioning, fills[], strokes[], stroke, effects[], radius, opacity, rotation, blend, visible, clipsContent, exportSettings[], layout, sizing, constraints, text, componentProperties, variantProperties, overrides, children[]` (children are nested node structs).
+- **node** — `type, name, id, size, position, layoutPositioning, fills[], strokes[], stroke, effects[], radius, opacity, rotation, blend, visible, clipsContent, exportSettings[], layout, sizing, constraints, text, component, componentProperties, variantProperties, overrides, children[]` (children are nested node structs).
 - **layout** — `{mode: H|V|NONE, gap, pad: [t,r,b,l], align: [primary, counter], wrap}`. `mode: NONE` turns auto-layout off.
 - **text** — `{content, font, color, align, valign, decoration, case, paragraphSpacing, runs}`. `font`/`color` are atoms; `runs` carries per-range overrides (see below). Line height and letter spacing are canonical on the `font(...)` atom (`font(...){lh=24, ls=0.5}`) — there are no separate top-level `lh`/`ls` text keys.
 - **exportSettings** — array of persistent export presets, each `{format: PNG|JPG|SVG|PDF, suffix?, constraint?: [SCALE|WIDTH|HEIGHT, value]}`. Round-trips via `get_node`/`update_node` (the persistent-presets path; the `export` tool itself is one-off render/asset output).
 - **layoutPositioning** — `AUTO` | `ABSOLUTE` (a child's flow vs absolute participation). Paired with the parent's `layout.mode` it is what distinguishes a true absolute child from a flow child (the §7 absolute-positioning audit reads this — `position` alone can't, since flow children still carry x/y).
 - **componentProperties / variantProperties** *(on INSTANCE / variant nodes)* — the instance's current property values and variant selection. The `componentPropertyDefinitions` (the schema) live on the component/set and are read via `get_components`.
 - **overrides** — the structured override delta on an instance: which fields / nested instances differ from the main component, so the agent can **read, replay, or report** surviving overrides (the read side of `set_instance`; read via `get_node`).
+- **component** *(on INSTANCE; write + read)* — the instance's main-component reference for `create_node(INSTANCE)`: `{ key }` for a published/library component (imported via `importComponentByKeyAsync`) **or** `{ id }` for a local component node, plus optional `properties` (component-property values by name). Read back via `get_node` so an instance round-trips (T2). Resolves the `tool-surface.md` "instance placement = create_node(INSTANCE) by key/id" capability to a concrete field.
 
 ## The `{…}` attribute catalogue (completeness)
 
