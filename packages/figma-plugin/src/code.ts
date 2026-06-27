@@ -1,5 +1,6 @@
 import { COMMANDS } from '@figma-agent-bridge/shared'
 
+import { applyLayout, type AppliedLayout } from './apply-layout'
 import { projectComponentDefs } from './project-component-defs'
 
 figma.showUI(__html__, {
@@ -283,57 +284,11 @@ const applyCommonProperties = async (
     )
   }
 
-  // Layout (FRAME only)
+  // Layout (FRAME only). Partial layouts are honored: each field is applied
+  // only when present, mirroring the server writer's PURE contract (see
+  // apply-layout.ts).
   if (spec.layout !== undefined && 'layoutMode' in node) {
-    const layout = spec.layout as {
-      mode: string
-      spacing: number
-      padding: [number, number, number, number]
-      align: [string, string]
-      wrap?: boolean
-      counterAxisSpacing?: number
-      counterAxisAlignContent?: string
-      primaryAxisSizingMode?: string
-      counterAxisSizingMode?: string
-    }
-    const frame = node as FrameNode
-    frame.layoutMode =
-      layout.mode === 'H' ? 'HORIZONTAL' : 'VERTICAL'
-    frame.itemSpacing = layout.spacing
-    frame.paddingTop = layout.padding[0]
-    frame.paddingRight = layout.padding[1]
-    frame.paddingBottom = layout.padding[2]
-    frame.paddingLeft = layout.padding[3]
-    frame.primaryAxisAlignItems = layout.align[0] as
-      | 'MIN'
-      | 'MAX'
-      | 'CENTER'
-      | 'SPACE_BETWEEN'
-    frame.counterAxisAlignItems = layout.align[1] as
-      | 'MIN'
-      | 'MAX'
-      | 'CENTER'
-      | 'BASELINE'
-    if (layout.wrap) {
-      frame.layoutWrap = 'WRAP'
-    }
-    if (layout.counterAxisSpacing !== undefined) {
-      frame.counterAxisSpacing = layout.counterAxisSpacing
-    }
-    if (layout.counterAxisAlignContent !== undefined) {
-      frame.counterAxisAlignContent =
-        layout.counterAxisAlignContent as
-          | 'AUTO'
-          | 'SPACE_BETWEEN'
-    }
-    if (layout.primaryAxisSizingMode !== undefined) {
-      frame.primaryAxisSizingMode =
-        layout.primaryAxisSizingMode as 'FIXED' | 'AUTO'
-    }
-    if (layout.counterAxisSizingMode !== undefined) {
-      frame.counterAxisSizingMode =
-        layout.counterAxisSizingMode as 'FIXED' | 'AUTO'
-    }
+    applyLayout(node as FrameNode, spec.layout as AppliedLayout)
   }
 
   // Min/max sizing
