@@ -151,7 +151,9 @@ const createdId = (
     return data.id
   }
   const root = data.root as
-    { id?: string } | string | undefined
+    | { id?: string }
+    | string
+    | undefined
   if (typeof root === 'string') {
     return root
   }
@@ -222,7 +224,8 @@ const tier1: Check[] = [
       }
       const cData = asJson(created)
       const collectionId = cData.collectionId as
-        string | undefined
+        | string
+        | undefined
       if (typeof collectionId !== 'string') {
         return fail(
           `create_variables returned no collectionId: ${text(created)}`,
@@ -294,7 +297,8 @@ const tier1: Check[] = [
       }
       const vData = asJson(vars)
       const variable = ((vData.variables as
-        { id?: string }[] | undefined) ?? [])[0]
+        | { id?: string }[]
+        | undefined) ?? [])[0]
       const variableId = variable?.id
       if (typeof variableId !== 'string') {
         return fail(

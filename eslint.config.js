@@ -12,6 +12,7 @@ export default [
       'node_modules/',
       'dist/',
       'packages/figma-plugin/**',
+      '.claude/**',
     ],
   },
   plugins.stylistic,
