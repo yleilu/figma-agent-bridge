@@ -633,12 +633,53 @@ const createSingleNode = async (
       node = figma.createSlice()
       break
     case 'INSTANCE': {
-      const compRef = spec.component as {
-        key: string
-        properties?: Record<string, string | boolean>
+      const compRef = spec.component as
+        | {
+            key?: string
+            id?: string
+            properties?: Record<string, string | boolean>
+          }
+        | undefined
+      // Resolve the main component either by LOCAL node id or by published
+      // KEY. A COMPONENT_SET resolves to its defaultVariant (you instance a
+      // variant, not the set itself).
+      let component: ComponentNode | undefined
+      if (compRef?.id !== undefined) {
+        const found = await figma.getNodeByIdAsync(
+          compRef.id,
+        )
+        if (found === null) {
+          throw new Error(
+            'INSTANCE component.id not found: ' + compRef.id,
+          )
+        }
+        if (found.type === 'COMPONENT') {
+          component = found
+        } else if (found.type === 'COMPONENT_SET') {
+          component = found.defaultVariant ?? undefined
+          if (component === undefined) {
+            throw new Error(
+              'INSTANCE component.id is a COMPONENT_SET with no default variant: ' +
+                compRef.id,
+            )
+          }
+        } else {
+          throw new Error(
+            'INSTANCE component.id must reference a COMPONENT or COMPONENT_SET, got ' +
+              found.type +
+              ': ' +
+              compRef.id,
+          )
+        }
+      } else if (compRef?.key !== undefined) {
+        component = await figma.importComponentByKeyAsync(
+          compRef.key,
+        )
+      } else {
+        throw new Error(
+          'INSTANCE requires component.id (local component node) or component.key (published/library component)',
+        )
       }
-      const component =
-        await figma.importComponentByKeyAsync(compRef.key)
       const instance = component.createInstance()
       if (compRef.properties) {
         instance.setProperties(compRef.properties)

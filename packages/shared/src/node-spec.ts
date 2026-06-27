@@ -134,6 +134,19 @@ export type NodeSpec = {
   exportSettings?: ExportSetting[]
 
   // component / instance — full override read/write surface
+  /**
+   * Main-component reference for create_node(INSTANCE) (write) and the
+   * instance round-trip (read): `{ key }` for a published/library component
+   * (imported via importComponentByKeyAsync) OR `{ id }` for a local
+   * component node, plus optional `properties` (component-property values by
+   * name). Read back from the instance so a locally-created instance
+   * round-trips through get_node → create_node (T2).
+   */
+  component?: {
+    key?: string
+    id?: string
+    properties?: Record<string, string | boolean>
+  }
   /** Current instance property values. */
   componentProperties?: Record<string, string | boolean>
   /** Current variant selection. */

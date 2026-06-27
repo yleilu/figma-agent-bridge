@@ -100,6 +100,51 @@ describe('handleCreateNode (rebuilt — single NodeSpec)', () => {
     expect(spec.name).toBe('ELLIPSE')
   })
 
+  it('forwards an INSTANCE component ref by LOCAL id (by-id create path)', async () => {
+    const sent: Sent[] = []
+    await handleCreateNode(
+      {
+        spec: {
+          type: 'INSTANCE',
+          component: {
+            id: '2:10',
+            properties: { Label: 'Save' },
+          },
+        },
+      },
+      stubClient({ sent }),
+    )
+    const spec = sent[0].params?.spec as {
+      type: string
+      component: unknown
+    }
+    expect(spec.type).toBe('INSTANCE')
+    // The writer passes `component` through verbatim so the plugin can resolve
+    // the local main component via getNodeByIdAsync and createInstance().
+    expect(spec.component).toEqual({
+      id: '2:10',
+      properties: { Label: 'Save' },
+    })
+  })
+
+  it('forwards an INSTANCE component ref by published KEY (by-key create path)', async () => {
+    const sent: Sent[] = []
+    await handleCreateNode(
+      {
+        spec: {
+          type: 'INSTANCE',
+          component: { key: 'btn-key-123' },
+        },
+      },
+      stubClient({ sent }),
+    )
+    const spec = sent[0].params?.spec as {
+      component: unknown
+    }
+    // The plugin imports the published component via importComponentByKeyAsync.
+    expect(spec.component).toEqual({ key: 'btn-key-123' })
+  })
+
   it('warns (M2 single-node) and does NOT recurse when spec.children is present', async () => {
     const sent: Sent[] = []
     const result = await handleCreateNode(

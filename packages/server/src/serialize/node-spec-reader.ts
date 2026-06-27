@@ -542,10 +542,14 @@ const componentMeta = (
   raw: RawNode,
 ): Pick<
   NodeSpec,
-  'componentProperties' | 'variantProperties' | 'overrides'
+  | 'component'
+  | 'componentProperties'
+  | 'variantProperties'
+  | 'overrides'
 > => {
   const out: Pick<
     NodeSpec,
+    | 'component'
     | 'componentProperties'
     | 'variantProperties'
     | 'overrides'
@@ -555,6 +559,28 @@ const componentMeta = (
         | Record<string, RawComponentProp>
         | undefined,
     ),
+  }
+  // component (INSTANCE main-component ref): emit `{ id }` from the instance's
+  // componentId and `{ key }` from componentKey when present, so a locally-
+  // created instance round-trips through get_node → create_node (T2). Only
+  // INSTANCE nodes carry a main-component reference.
+  if (str(raw.type) === 'INSTANCE') {
+    const componentId = str(raw.componentId)
+    const componentKey = str(raw.componentKey)
+    if (
+      componentId !== undefined ||
+      componentKey !== undefined
+    ) {
+      const component: NonNullable<NodeSpec['component']> =
+        {}
+      if (componentId !== undefined) {
+        component.id = componentId
+      }
+      if (componentKey !== undefined) {
+        component.key = componentKey
+      }
+      out.component = component
+    }
   }
   const rawOverrides = raw.overrides
   if (
@@ -710,6 +736,9 @@ const buildNode = (
   }
 
   const meta = componentMeta(raw)
+  if (meta.component !== undefined) {
+    out.component = meta.component
+  }
   if (meta.variantProperties !== undefined) {
     out.variantProperties = meta.variantProperties
   }

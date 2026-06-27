@@ -116,6 +116,15 @@ const nodeSpecBase = {
   exportSettings: z.array(exportSettingSchema).optional(),
 
   // component / instance
+  component: z
+    .object({
+      key: z.string().optional(),
+      id: z.string().optional(),
+      properties: z
+        .record(z.union([z.string(), z.boolean()]))
+        .optional(),
+    })
+    .optional(),
   componentProperties: z
     .record(z.union([z.string(), z.boolean()]))
     .optional(),

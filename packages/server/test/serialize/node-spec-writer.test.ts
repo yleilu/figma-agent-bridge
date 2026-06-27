@@ -374,6 +374,34 @@ describe('specToFigma — pass-through fields', () => {
       specToFigma({ constraints: ['MIN', 'CENTER'] }),
     ).toEqual({ constraints: ['MIN', 'CENTER'] })
   })
+
+  it('component by local id passes through (INSTANCE by-id path)', () => {
+    expect(
+      specToFigma({ component: { id: '2:10' } }),
+    ).toEqual({ component: { id: '2:10' } })
+  })
+
+  it('component by published key passes through (INSTANCE by-key path)', () => {
+    expect(
+      specToFigma({ component: { key: 'btn-key-123' } }),
+    ).toEqual({ component: { key: 'btn-key-123' } })
+  })
+
+  it('component with properties passes through verbatim (exact keys; #11 resolver out of scope)', () => {
+    expect(
+      specToFigma({
+        component: {
+          id: '2:10',
+          properties: { Label: 'Save', Disabled: false },
+        },
+      }),
+    ).toEqual({
+      component: {
+        id: '2:10',
+        properties: { Label: 'Save', Disabled: false },
+      },
+    })
+  })
 })
 
 // ─── specToFigmaForCreate ─────────────────────────────────────────────────────
