@@ -560,6 +560,11 @@ export const atomToEffect = (s: string): FigmaEffect => {
       offset: { x, y },
       radius: r,
       color,
+      // Figma requires blendMode + visible on shadow effects; seed defaults so
+      // the common path (no {blend=}/{vis=}) yields a valid effect. Explicit
+      // attrs still override below.
+      blendMode: 'NORMAL',
+      visible: true,
     }
     applyEffectAttrs(out, attrs)
     return out
@@ -570,6 +575,8 @@ export const atomToEffect = (s: string): FigmaEffect => {
     const out: FigmaEffect = {
       type: EFFECT_HEAD[head],
       radius: r,
+      // Figma requires visible on blur effects (blurs have no blendMode).
+      visible: true,
     }
     applyEffectAttrs(out, attrs)
     return out
