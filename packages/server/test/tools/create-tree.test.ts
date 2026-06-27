@@ -173,7 +173,7 @@ describe('convertTree (recursive children + ref-pool)', () => {
   // Issue #3: TEXT_PATH (figma.createTextPath) is real but was never specced/wired
   // (vectorNodeId/startSegment/startPosition), so it is honest-rejected against the
   // SAME CREATABLE_TYPES list — deferred to the spec-completeness phase. See
-  // docs/scratch/deferred-capabilities.md.
+  // docs/deferred-capabilities.md.
   it('throws a clear error for a TEXT_PATH node (deferred, not creatable)', () => {
     expect(() =>
       convertTree({ type: 'TEXT_PATH' }),

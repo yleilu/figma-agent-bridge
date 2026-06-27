@@ -39,7 +39,7 @@ const CHILDREN_WARNING =
 // TEXT_PATH is likewise excluded (issue #3): figma.createTextPath is real but its
 // fields (vectorNodeId/startSegment/startPosition) were never specced/wired, so it
 // is honest-rejected here pending the spec-completeness phase — see
-// docs/scratch/deferred-capabilities.md.
+// docs/deferred-capabilities.md.
 export const CREATABLE_TYPES = [
   'FRAME',
   'RECTANGLE',

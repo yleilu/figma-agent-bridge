@@ -692,7 +692,7 @@ const createSingleNode = async (
     // never specced/wired, so the server now rejects type:'TEXT_PATH' up front
     // against CREATABLE_TYPES (shared by create_node and create_tree) — this
     // handler was unreachable. Deferred to the spec-completeness phase; see
-    // docs/scratch/deferred-capabilities.md.
+    // docs/deferred-capabilities.md.
     case 'SLOT': {
       // SLOT in create_node context: create a FRAME placeholder and WARN (T7) —
       // the agent asked for a SLOT and is getting a FRAME, so it must be told.

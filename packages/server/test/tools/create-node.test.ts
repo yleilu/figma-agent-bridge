@@ -256,7 +256,7 @@ describe('handleCreateNode (rebuilt — single NodeSpec)', () => {
   // Issue #3: TEXT_PATH (figma.createTextPath) is real but was never specced/wired
   // (vectorNodeId/startSegment/startPosition), so it is honest-rejected at the
   // SERVER boundary just like any unsupported type — never forwarded to the plugin.
-  // Deferred to the spec-completeness phase; see docs/scratch/deferred-capabilities.md.
+  // Deferred to the spec-completeness phase; see docs/deferred-capabilities.md.
   it('rejects TEXT_PATH with a clean validation error before sending (deferred)', async () => {
     const sent: Sent[] = []
     const result = await handleCreateNode(
