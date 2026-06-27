@@ -417,6 +417,22 @@ const applyPostAppendProperties = (
     try {
       ;(node as FrameNode).layoutPositioning =
         spec.layoutPositioning as 'AUTO' | 'ABSOLUTE'
+      // An ABSOLUTE child escapes the auto-layout flow, but its x/y were set in
+      // applyCommonProperties BEFORE appendChild — where the parent's auto-layout
+      // overwrote them with a flow slot. Now that the node is ABSOLUTE, re-apply
+      // the intended position so it lands where the spec asked.
+      if (
+        spec.layoutPositioning === 'ABSOLUTE' &&
+        Array.isArray(spec.position)
+      ) {
+        const [px, py] = spec.position as [number, number]
+        if (typeof px === 'number') {
+          ;(node as LayoutMixin).x = px
+        }
+        if (typeof py === 'number') {
+          ;(node as LayoutMixin).y = py
+        }
+      }
     } catch (e) {
       warnings?.push(
         'layoutPositioning not applicable on this node (' +

@@ -764,9 +764,17 @@ const buildNode = (
   if (opacity !== undefined && opacity < 1) {
     out.opacity = opacity
   }
-  const rotation = num(raw.rotation)
-  if (rotation !== undefined && rotation !== 0) {
-    out.rotation = rotation
+  // JSON_REST_V1 carries rotation in RADIANS, sign-flipped relative to the
+  // Plugin API's node.rotation (which the writer uses, in DEGREES). Convert so
+  // the value round-trips with the writer (set 30 → read 30, not -0.5236).
+  const rotationRad = num(raw.rotation)
+  if (rotationRad !== undefined) {
+    const deg =
+      Math.round(((-rotationRad * 180) / Math.PI) * 1000) /
+      1000
+    if (deg !== 0) {
+      out.rotation = deg
+    }
   }
   const blend = str(raw.blendMode)
   if (
