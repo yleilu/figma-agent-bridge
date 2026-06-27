@@ -646,32 +646,12 @@ const createSingleNode = async (
       node = instance
       break
     }
-    case 'TEXT_PATH': {
-      // TEXT_PATH requires an existing VectorNode and path segment info
-      const vectorNodeId = spec.vectorNodeId as string
-      const startSegment =
-        (spec.startSegment as number) !== undefined
-          ? (spec.startSegment as number)
-          : 0
-      const startPosition =
-        (spec.startPosition as number) !== undefined
-          ? (spec.startPosition as number)
-          : 0
-      const vectorNode =
-        await figma.getNodeByIdAsync(vectorNodeId)
-      if (!vectorNode || vectorNode.type !== 'VECTOR') {
-        throw new Error(
-          'TEXT_PATH requires a valid VectorNode ID, got: ' +
-            vectorNodeId,
-        )
-      }
-      node = figma.createTextPath(
-        vectorNode as VectorNode,
-        startSegment,
-        startPosition,
-      )
-      break
-    }
+    // NOTE (issue #3): the TEXT_PATH case was removed here. figma.createTextPath
+    // is a real API but its fields (vectorNodeId/startSegment/startPosition) were
+    // never specced/wired, so the server now rejects type:'TEXT_PATH' up front
+    // against CREATABLE_TYPES (shared by create_node and create_tree) — this
+    // handler was unreachable. Deferred to the spec-completeness phase; see
+    // docs/scratch/deferred-capabilities.md.
     case 'SLOT': {
       // SLOT in create_node context: create a FRAME placeholder and WARN (T7) —
       // the agent asked for a SLOT and is getting a FRAME, so it must be told.

@@ -54,7 +54,7 @@ Total: 18 types for Figma Design + 1 asset pipeline.
 | BOOLEAN_OPERATION | `figma.union/subtract/intersect/exclude()` | 🔧 M3 | Create children first, then combine — agent specifies UNION/SUBTRACT/INTERSECT/EXCLUDE |
 | SECTION | `figma.createSection()` | 🔧 M3 | Canvas organization, unique: `sectionContentsHidden` |
 | SLICE | `figma.createSlice()` | 🔧 M3 | Export regions |
-| TEXT_PATH | `figma.createTextPath(node, seg, pos)` | 🔧 M3 | Text along a vector path, requires existing VectorNode |
+| TEXT_PATH | `figma.createTextPath(node, seg, pos)` | ⏳ | **Deferred / not creatable** (issue #3) — real API but `vectorNodeId`/`startSegment`/`startPosition` were never specced/wired; removed from `CREATABLE_TYPES`, so `create_node`/`create_tree` honest-reject it. See `docs/scratch/deferred-capabilities.md` |
 | TRANSFORM_GROUP | `figma.transformGroup(nodes, parent, idx, modifiers)` | 🔧 M3 | Transform wrapper for existing nodes |
 | SLOT | `component.createSlot(childName)` | 🔧 M3 | **Undocumented** — real node type found via runtime introspection. Created inside components via `create_component` |
 | SVG → FrameNode | `figma.createNodeFromSvg(svgString)` | 🔧 M3 | Icons, decorative shapes — `create_from_svg` tool |
@@ -391,7 +391,7 @@ section of [[figma-bridge/docs/specs/tool-surface]].
 - [ ] INSTANCE — `createInstance()` — `componentKey` + `setProperties()`
 - [ ] SECTION — `createSection()` — `sectionContentsHidden`
 - [ ] SLICE — `createSlice()` — export regions
-- [ ] TEXT_PATH — `createTextPath()` — text along vector path
+- [~] TEXT_PATH — `createTextPath()` — **deferred / not creatable** (issue #3): honest-rejected, removed from `CREATABLE_TYPES`. See `docs/scratch/deferred-capabilities.md`
 - [ ] SLOT — `component.createSlot()` — undocumented, via `create_component`
 
 **Via create_component:**

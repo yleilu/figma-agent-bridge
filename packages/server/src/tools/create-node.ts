@@ -36,6 +36,10 @@ const CHILDREN_WARNING =
 // the two create APIs accept exactly the same node types (issue #2). This also
 // rejects the unspecced composite-via-children family (BOOLEAN_OPERATION, GROUP,
 // TRANSFORM_GROUP) consistently — booleans are made via the boolean_op tool.
+// TEXT_PATH is likewise excluded (issue #3): figma.createTextPath is real but its
+// fields (vectorNodeId/startSegment/startPosition) were never specced/wired, so it
+// is honest-rejected here pending the spec-completeness phase — see
+// docs/scratch/deferred-capabilities.md.
 export const CREATABLE_TYPES = [
   'FRAME',
   'RECTANGLE',
@@ -48,7 +52,6 @@ export const CREATABLE_TYPES = [
   'SECTION',
   'SLICE',
   'INSTANCE',
-  'TEXT_PATH',
   'SLOT',
 ] as const
 

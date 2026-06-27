@@ -170,6 +170,16 @@ describe('convertTree (recursive children + ref-pool)', () => {
     ).toThrow(/Unsupported node type "TRANSFORM_GROUP"/)
   })
 
+  // Issue #3: TEXT_PATH (figma.createTextPath) is real but was never specced/wired
+  // (vectorNodeId/startSegment/startPosition), so it is honest-rejected against the
+  // SAME CREATABLE_TYPES list — deferred to the spec-completeness phase. See
+  // docs/scratch/deferred-capabilities.md.
+  it('throws a clear error for a TEXT_PATH node (deferred, not creatable)', () => {
+    expect(() =>
+      convertTree({ type: 'TEXT_PATH' }),
+    ).toThrow(/Unsupported node type "TEXT_PATH"/)
+  })
+
   // { id } / { ref } markers are EXEMPT: they reference/clone an EXISTING node
   // (not a new type) so they pass through untouched even for a node whose
   // existing type is a composite (e.g. cloning an existing BOOLEAN_OPERATION).
