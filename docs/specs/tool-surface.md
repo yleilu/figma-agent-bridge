@@ -238,7 +238,7 @@ Format: `name(params) → returns` — purpose · principle/checklist need.
 ### Write — structure (8)
 - `clone_node(nodeId, {parentId?, index?, count?}) → [{id,…}]` — raw duplication (one entry per clone) · T6; §10 duplicate, §8 grid.
 - `delete_node(nodeId) → {id,name,type}` — page-aware remove (captures node info before removal) · §9 cleanup.
-- `reparent_node(nodeId, parentId, {index?}) → {id,…,parentId}` — the one reparent path; re-flows under new parent · §10 move-into-frame.
+- `reparent_node(nodeId, parentId, {index?}) → {id,…,parentId}` — the one reparent path; an **auto-layout** parent governs position (re-flows into the layout), a **non-auto-layout** parent **preserves the node's visual position** (its absolute spot is kept, not its raw relative x/y) · §10 move-into-frame.
 - `reorder_children(parentId, nodeIds[]) → {parentId, order, warnings[]}` — set-equality validated; warns on mismatch (never throws) · T7; §10 reorder.
 - `set_selection(nodeIds[]) → {selectedCount}` — twin of `get_selection`; **selection only** (does NOT scroll the canvas — pair with `set_focus`); empty array clears the selection · T2; §2.
 - `set_focus(nodeIds[]) → {viewport}` — scroll + zoom the canvas to nodes (`figma.viewport.scrollAndZoomIntoView`); the viewport writer (`status` reads viewport); unresolvable ids are skipped · T7; §2 focus/scroll-to-node.
