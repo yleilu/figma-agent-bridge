@@ -53,11 +53,51 @@ describe('toNodeSpec — atom-grammar leaves', () => {
     expect(spec.position).toEqual([100, 200])
   })
 
-  it('falls back to absoluteBoundingBox.x/y when relativeTransform is absent', () => {
+  it('derives a parent-relative position from the bbox hierarchy when relativeTransform is absent', () => {
     const spec = toNodeSpec(raw, { depth: -1 })
-    const title = (spec.children as NodeSpec[])[0]
-    // Title carries no relativeTransform; absoluteBoundingBox {x:116,y:216}.
-    expect(title.position).toEqual([116, 216])
+    const children = spec.children as NodeSpec[]
+    // None of the children carry a relativeTransform. JSON_REST_V1 only emits
+    // absoluteBoundingBox, so position = child.bbox − parent.bbox (Card bbox
+    // origin is {x:100,y:200}); the writer applies position parent-relative.
+    // Title bbox {x:116,y:216} → [16, 16]
+    expect(children[0].position).toEqual([16, 16])
+    // Body bbox {x:116,y:252} → [16, 52]
+    expect(children[1].position).toEqual([16, 52])
+    // Action Button bbox {x:116,y:312} → [16, 112]
+    expect(children[2].position).toEqual([16, 112])
+  })
+
+  it('computes parent-relative position from the bbox difference (inline)', () => {
+    const parentRaw: Record<string, unknown> = {
+      id: 'p:1',
+      name: 'Parent',
+      type: 'FRAME',
+      absoluteBoundingBox: {
+        x: 300,
+        y: 300,
+        width: 400,
+        height: 400,
+      },
+      children: [
+        {
+          id: 'c:1',
+          name: 'Child',
+          type: 'FRAME',
+          absoluteBoundingBox: {
+            x: 320,
+            y: 330,
+            width: 50,
+            height: 50,
+          },
+        },
+      ],
+    }
+    const spec = toNodeSpec(parentRaw, { depth: -1 })
+    // Root has no parent → its own bbox origin.
+    expect(spec.position).toEqual([300, 300])
+    const child = (spec.children as NodeSpec[])[0]
+    // Child position = [320−300, 330−300] = [20, 30].
+    expect(child.position).toEqual([20, 30])
   })
 
   it('position survives the reader→writer round-trip', () => {

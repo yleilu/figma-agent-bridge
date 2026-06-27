@@ -2745,8 +2745,11 @@ const handleCommand = async (
       return clones
     }
 
-    // reparent_node: move a node under a new parent (re-flows in the new
-    // parent's layout). insertChild at index when given, else appendChild.
+    // reparent_node: move a node under a new parent. insertChild at index when
+    // given, else appendChild. For a NON-auto-layout new parent we preserve the
+    // child's VISUAL (absolute) position across the move — appendChild keeps the
+    // raw relative x/y, which otherwise makes the node jump. For an auto-layout
+    // new parent we leave x/y so the node re-flows in the layout.
     // Missing node/parent → {error}.
     case COMMANDS.REPARENT_NODE: {
       const nodeId = params.nodeId as string
@@ -2766,11 +2769,48 @@ const handleCommand = async (
       }
       const parent = newParent as ParentNode
       const child = node as SceneNode
+      // Capture the child's absolute position BEFORE the move. absoluteTransform
+      // is [[a,b,tx],[c,d,ty]]; the translation [tx,ty] is the page-absolute
+      // origin of the (unrotated) node.
+      const childAbs =
+        'absoluteTransform' in child
+          ? (child as SceneNode & {
+              absoluteTransform: Transform
+            }).absoluteTransform
+          : undefined
       const index = params.index as number | undefined
       if (index !== undefined) {
         parent.insertChild(index, child)
       } else {
         parent.appendChild(child)
+      }
+      // Recompute the child's parent-relative x/y so its absolute position is
+      // unchanged — ONLY when the new parent is not auto-layout. An auto-layout
+      // parent owns child placement, so leave x/y for the re-flow.
+      const parentLayoutMode =
+        'layoutMode' in parent
+          ? (parent as FrameNode).layoutMode
+          : 'NONE'
+      const newParentAbs =
+        'absoluteTransform' in parent
+          ? (parent as BaseNode & {
+              absoluteTransform: Transform
+            }).absoluteTransform
+          : undefined
+      if (
+        parentLayoutMode === 'NONE' &&
+        childAbs !== undefined &&
+        newParentAbs !== undefined &&
+        'x' in child &&
+        'y' in child
+      ) {
+        // child.x/y in the new parent = childAbsoluteOrigin − newParentOrigin.
+        const targetX = childAbs[0][2] - newParentAbs[0][2]
+        const targetY = childAbs[1][2] - newParentAbs[1][2]
+        ;(child as SceneNode & { x: number; y: number }).x =
+          targetX
+        ;(child as SceneNode & { x: number; y: number }).y =
+          targetY
       }
       return {
         id: child.id,

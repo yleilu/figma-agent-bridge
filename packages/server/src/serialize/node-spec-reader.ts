@@ -132,15 +132,40 @@ const sizeOf = (raw: RawNode): [number, number] => {
   return [w ?? 0, h ?? 0]
 }
 
+type RawBBox = { x?: number; y?: number }
+
+const bboxOf = (raw: RawNode): RawBBox | undefined => {
+  const bbox = raw.absoluteBoundingBox as
+    | RawBBox
+    | undefined
+  if (
+    bbox !== undefined &&
+    bbox !== null &&
+    typeof bbox.x === 'number' &&
+    typeof bbox.y === 'number'
+  ) {
+    return bbox
+  }
+  return undefined
+}
+
 /**
  * Node position [x,y]. The WRITER maps spec.position → node.x/node.y, which in
- * Figma is parent-relative, so the relativeTransform translation `[[a,b,x],
- * [c,d,y]] → [x,y]` is the authoritative source. Falls back to the absolute
- * bounding box origin (the root has no parent-relative frame). Returns undefined
- * only when neither is present, so the field stays out of the spec.
+ * Figma is PARENT-RELATIVE. The authoritative source is the relativeTransform
+ * translation `[[a,b,x],[c,d,y]] → [x,y]`, but JSON_REST_V1 does not emit a
+ * relativeTransform (only absoluteBoundingBox), so we derive parent-relative
+ * position from the bbox hierarchy: `child.bbox − parent.bbox`. When no parent
+ * bbox is threaded in (the export ROOT), fall back to the absolute bbox origin —
+ * the root has no parent-relative frame. Returns undefined only when neither a
+ * transform nor a bbox is present, so the field stays out of the spec.
+ *
+ * NOTE: the bbox-difference is correct for UNROTATED nodes only. For a rotated
+ * node the bbox corner is not the node origin, and JSON_REST_V1 lacks the
+ * transform that would recover it — this is a known limitation.
  */
 const positionOf = (
   raw: RawNode,
+  parentBBox: RawBBox | undefined,
 ): [number, number] | undefined => {
   const tf = raw.relativeTransform as number[][] | undefined
   if (
@@ -153,18 +178,21 @@ const positionOf = (
   ) {
     return [tf[0][2], tf[1][2]]
   }
-  const bbox = raw.absoluteBoundingBox as
-    | { x?: number; y?: number }
-    | undefined
-  if (
-    bbox !== undefined &&
-    bbox !== null &&
-    typeof bbox.x === 'number' &&
-    typeof bbox.y === 'number'
-  ) {
-    return [bbox.x, bbox.y]
+  const bbox = bboxOf(raw)
+  if (bbox === undefined) {
+    return undefined
   }
-  return undefined
+  if (
+    parentBBox !== undefined &&
+    typeof parentBBox.x === 'number' &&
+    typeof parentBBox.y === 'number'
+  ) {
+    return [
+      (bbox.x as number) - parentBBox.x,
+      (bbox.y as number) - parentBBox.y,
+    ]
+  }
+  return [bbox.x as number, bbox.y as number]
 }
 
 // ─── paint: raw → FigmaPaint → atom (with var() wrapper) ──────────────────────
@@ -660,6 +688,7 @@ const toStub = (raw: RawNode): IdStub => {
 const buildNode = (
   raw: RawNode,
   remaining: number,
+  parentBBox: RawBBox | undefined,
 ): NodeSpec => {
   const out: NodeSpec = {
     type: str(raw.type) ?? '',
@@ -675,7 +704,7 @@ const buildNode = (
 
   out.size = sizeOf(raw)
 
-  const position = positionOf(raw)
+  const position = positionOf(raw, parentBBox)
   if (position !== undefined) {
     out.position = position
   }
@@ -781,8 +810,11 @@ const buildNode = (
       out.children = stubs
     } else {
       const next = remaining === -1 ? -1 : remaining - 1
+      // Thread THIS node's bbox down so each child's position is computed
+      // parent-relative (child.bbox − parent.bbox) when no relativeTransform.
+      const childParentBBox = bboxOf(raw)
       const built: NodeSpecOrStub[] = kids.map(c =>
-        buildNode(c, next),
+        buildNode(c, next, childParentBBox),
       )
       out.children = built
     }
@@ -796,5 +828,7 @@ export const toNodeSpec = (
   opts: { depth?: number },
 ): NodeSpec => {
   const depth = opts.depth ?? 0
-  return buildNode(raw, depth)
+  // The export ROOT has no parent frame: positionOf falls back to its own
+  // absolute bbox origin (current behavior preserved).
+  return buildNode(raw, depth, undefined)
 }
