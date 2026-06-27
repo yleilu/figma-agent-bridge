@@ -674,6 +674,16 @@ export const createMockPlugin = (
               )
             }
           }
+          // constraints warn-on-no-op: the real plugin guards on
+          // `'constraints' in node` and warns with this exact wording when the
+          // target lacks ConstraintMixin (mirrored here for a SLICE).
+          if (spec.constraints !== undefined) {
+            unWarnings.push(
+              'constraints ignored — not supported on a ' +
+                unType +
+                ' node',
+            )
+          }
           if (spec.sizing !== undefined) {
             unWarnings.push(
               'sizing not applicable on this node (' +

@@ -17,7 +17,7 @@
 //     applyCommonProperties  — name, size, position, fills, strokes,
 //       strokeWeight, strokeAlign, strokeDash (→ dashPattern), radius, opacity,
 //       blendMode, rotation, visible, clipsContent, effects, layout,
-//       minWidth/maxWidth/minHeight/maxHeight,
+//       minWidth/maxWidth/minHeight/maxHeight, constraints,
 //       fillStyleId/strokeStyleId/effectStyleId/textStyleId
 //     applyTextProperties    — text.content, text.font, text.align, text.valign,
 //       text.color, text.decoration, text.case, text.paragraphSpacing,
@@ -30,7 +30,7 @@
 //   round-trip for these until the plugin reads them):
 //     strokeCap, strokeJoin, strokeMiterLimit   (plugin reads only weight/
 //                                                 align/dashPattern today)
-//     grids, constraints,
+//     grids,
 //     overrides, componentProperties, variantProperties, exportSettings,
 //     id (writer emits it; plugin ignores it on create)
 //

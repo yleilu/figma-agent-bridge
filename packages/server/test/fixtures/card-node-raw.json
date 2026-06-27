@@ -9,7 +9,7 @@
   "absoluteBoundingBox": { "x": 100, "y": 200, "width": 320, "height": 200 },
   "absoluteRenderBounds": { "x": 96, "y": 196, "width": 328, "height": 212 },
   "relativeTransform": [[1, 0, 100], [0, 1, 200]],
-  "constraints": { "horizontal": "MIN", "vertical": "MIN" },
+  "constraints": { "horizontal": "LEFT", "vertical": "TOP" },
   "clipsContent": true,
   "layoutMode": "VERTICAL",
   "primaryAxisSizingMode": "AUTO",
@@ -34,7 +34,7 @@
     {
       "id": "1:43", "name": "Title", "type": "TEXT", "visible": true, "locked": false, "opacity": 1, "blendMode": "PASS_THROUGH",
       "absoluteBoundingBox": { "x": 116, "y": 216, "width": 288, "height": 24 },
-      "constraints": { "horizontal": "MIN", "vertical": "MIN" },
+      "constraints": { "horizontal": "LEFT", "vertical": "TOP" },
       "layoutSizingHorizontal": "FILL", "layoutSizingVertical": "HUG",
       "fills": [{ "type": "SOLID", "visible": true, "opacity": 1, "blendMode": "NORMAL", "color": { "r": 0.102, "g": 0.102, "b": 0.102, "a": 1 } }],
       "strokes": [],

@@ -136,6 +136,60 @@ describe('toNodeSpec — INSTANCE component read-back', () => {
   })
 })
 
+// ─── constraints REST→Plugin vocab translation ───────────────────────────────
+// JSON_REST_V1 emits LEFT/RIGHT/TOP/BOTTOM/LEFT_RIGHT/TOP_BOTTOM; the spec and
+// writer use the Plugin-API vocab MIN/MAX/STRETCH (CENTER/SCALE shared). The
+// reader must translate REST→Plugin and pass any unmapped value through.
+
+describe('toNodeSpec — constraints REST→Plugin vocab', () => {
+  const constraintSpec = (h: string, v: string): NodeSpec =>
+    toNodeSpec(
+      {
+        id: '9:1',
+        name: 'Box',
+        type: 'FRAME',
+        constraints: { horizontal: h, vertical: v },
+      },
+      { depth: -1 },
+    )
+
+  it('translates LEFT/TOP → [MIN, MIN]', () => {
+    expect(
+      constraintSpec('LEFT', 'TOP').constraints,
+    ).toEqual(['MIN', 'MIN'])
+  })
+
+  it('translates RIGHT/BOTTOM → [MAX, MAX]', () => {
+    expect(
+      constraintSpec('RIGHT', 'BOTTOM').constraints,
+    ).toEqual(['MAX', 'MAX'])
+  })
+
+  it('translates LEFT_RIGHT/TOP_BOTTOM → [STRETCH, STRETCH]', () => {
+    expect(
+      constraintSpec('LEFT_RIGHT', 'TOP_BOTTOM')
+        .constraints,
+    ).toEqual(['STRETCH', 'STRETCH'])
+  })
+
+  it('passes CENTER and SCALE through unchanged', () => {
+    expect(
+      constraintSpec('CENTER', 'SCALE').constraints,
+    ).toEqual(['CENTER', 'SCALE'])
+  })
+
+  it('passes an already-Plugin MIN/MAX value through unchanged', () => {
+    expect(
+      constraintSpec('MIN', 'MAX').constraints,
+    ).toEqual(['MIN', 'MAX'])
+  })
+
+  it('translates the card fixture LEFT/TOP → [MIN, MIN]', () => {
+    const spec = toNodeSpec(raw, { depth: -1 })
+    expect(spec.constraints).toEqual(['MIN', 'MIN'])
+  })
+})
+
 // ─── depth + stubs (no budget) ────────────────────────────────────────────────
 
 describe('toNodeSpec — depth + IdStubs', () => {

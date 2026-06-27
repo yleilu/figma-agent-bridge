@@ -270,6 +270,31 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     )
   })
 
+  // 3d — constraints warn-on-no-op (T7): patching constraints on a node that
+  // lacks ConstraintMixin warns-and-continues (success), naming the field and
+  // interpolating the actual node type — matching the opacity/layout path.
+  it('update_node warns (not errors) when constraints are patched onto an incompatible node', async () => {
+    const result = await handleUpdateNode(
+      {
+        nodeId: 'incompat:1',
+        patch: { constraints: ['MIN', 'STRETCH'] },
+      },
+      client,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const reply = JSON.parse(result.content[0].text) as {
+      type: string
+      warnings: string[]
+    }
+    const constraintsWarning = reply.warnings.find(w =>
+      w.includes('constraints'),
+    )
+    expect(constraintsWarning).toBeDefined()
+    expect(constraintsWarning).toContain(
+      'not supported on a ' + reply.type + ' node',
+    )
+  })
+
   // 4 — bind_variable PAINT degrade (success-with-warning, not error). A paint
   // field (fills/strokes) binds via setBoundVariableForPaint, so the degrade
   // message names THAT API — the field-aware mock mirrors the real plugin.
