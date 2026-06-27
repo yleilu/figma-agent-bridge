@@ -28,6 +28,7 @@ Surfaced 2026-06-27 during the comprehensive live tool sweep + per-issue spec re
 | **Masks** | `node.isMask` (+ `maskType`) | Not exposed (no `NodeSpec` field) | `isMask` field → writer + plugin apply + reader; masking has sibling-ordering semantics |
 | **`create_tree` declarative composites** — `GROUP`, `BOOLEAN_OPERATION`, `TRANSFORM_GROUP` | children-combining node types (plugin handlers existed but unspecced) | **Honest-rejected** (issue #2) — `create_tree` now validates against `CREATABLE_TYPES`; booleans available via the **`boolean_op` tool** | decide the family together: design how a tree declares "combine these children" + the fields + spec, OR keep routing to the dedicated tools |
 | **GROUP creation** | `figma.group(nodes)` | Not exposed (FRAME-only; T9 prefers frames) | a `group_nodes` op **or** a documented deliberate omission — but **GROUP must at least round-trip on read** (T2) so existing files aren't silently flattened |
+| **Library/remote instance round-trip** (T2) | `getMainComponentAsync()` on the read path | `create_node(INSTANCE)` works by `key` *and* `id` (issue #4), but `get_node` reads back only `{ id }` — so **local** instances round-trip while **published/library** ones don't (the remote `id` won't resolve on re-create) | emit `component.key` for published instances on read by augmenting `exportNodeDocument` per-INSTANCE via `getMainComponentAsync` (**perf-sensitive** — same O(instances) shape as the get_components scan), then prefer `key` when the main is remote |
 
 ## T1 — symmetry / CRUD holes
 
