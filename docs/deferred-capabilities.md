@@ -39,7 +39,9 @@ Surfaced 2026-06-27 during the comprehensive live tool sweep + per-issue spec re
 
 ## Test-infrastructure (deferred quality)
 
-- **Comprehensive plugin-apply unit-test layer.** The 917-test suite exercises a **mock stand-in**, never the real plugin — so plugin-side crashes/no-ops are invisible until live (this is the root reason the whole conversion-shape/field-strip/constraints class stayed live-only). The bug-fix pass adds only *targeted* plugin-apply tests; the durable fix is unit-testing the plugin's apply functions directly against `@figma/plugin-typings`.
+- **Comprehensive plugin-apply unit-test layer.** The headless suite exercises a **mock stand-in**, never the real plugin — so plugin-side crashes/no-ops were invisible until live (the root reason the conversion-shape/field-strip/constraints class stayed live-only). **Partially realized** by the 2026-06-27 bug-fix pass: the layout-apply and instance-prop-resolver logic were extracted into pure, headlessly-tested modules (`apply-layout.ts`, `resolve-instance-props.ts`). The durable fix is to continue extracting `applyCommonProperties`' field-applies (constraints, grids, effects, sizing) into pure helpers tested against `@figma/plugin-typings`.
+- **B-i — writer↔plugin field-symmetry test.** A meta-test asserting every `spec.<field>` the plugin reads is declared in `NodeSpec` and copied by the writer — catches the field-strip class (the bug behind `booleanOperation`/`vectorNodeId`/`component`) before it ships. Deferred from the bug-fix pass (the actual fields are resolved; this is a fragile-to-author guard worth its own focused effort).
+- **B-ii — reject/warn on unknown `NodeSpec` fields.** The node-spec schema currently strips/ignores unknown fields silently; rejecting or warning would surface a typo'd/unsupported field (T7) instead of a confusing downstream `undefined`. Hardening, not a live-sweep bug.
 
 ## See also
 - `docs/principles.md` (T1/T2/T6 — why these are obligations)
