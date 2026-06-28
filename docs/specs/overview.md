@@ -56,6 +56,28 @@ listening on `$PORT` (default **18080**), waits up to ~5s for it, then `exec`s t
 (passing through args). The server auto-discovers the relay port via a ping/pong probe, so
 the port is a default, not a hard coupling.
 
+## Connection lifecycle
+
+The plugin (`figma-plugin`) is the only layer that opens the WebSocket to the relay; the
+server attaches to the same channel. The lifecycle contract:
+
+- **Auto-connect on launch.** On open, the plugin resolves the relay port (saved or default
+  **18080**) and **auto-connects, restoring the saved channel** (`channel-id` in
+  `figma.clientStorage`) — so relaunching the plugin rejoins the same channel with no manual
+  Connect.
+- **Channel persistence across unintended close (T7).** The saved `channel-id` **survives an
+  unintended socket close** — a plugin reload, a relay restart, a network blip — and is
+  cleared **only** on an explicit user **Disconnect**. This is what makes an automated reload
+  deterministic: the fresh instance restores the channel and rejoins it. (Clearing it on
+  *every* close would strand the next launch on a freshly-generated channel — the prior
+  behavior, which is the bug this contract corrects.)
+- **`CLOSE_PLUGIN` (internal lifecycle command, not a tool).** A relay command that calls
+  `figma.closePlugin()` for a deterministic teardown, used by the dev `rebuild → close →
+  reopen` reload loop so new plugin code is picked up. It is **deliberately not** an MCP tool:
+  unlike `connect`/`status` (which the agent uses to pair and read connection state), closing
+  the plugin is a dev-workflow teardown, not a `figma.*` capability the agent composes during
+  design work — so the 47-tool surface stays unchanged.
+
 ## Tool contract (cross-cutting result / error shape)
 
 The principles demote the *mechanism* of B1's "uniform contract" to the specs. This is it —

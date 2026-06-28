@@ -175,6 +175,12 @@ export const createMockPlugin = (
         }
         break
 
+      // close_plugin: internal lifecycle command (figma.closePlugin in the real
+      // plugin). The mock can't close itself; mirror the real ack shape.
+      case 'close_plugin':
+        result = { closing: true }
+        break
+
       case 'get_selection':
         result = [
           { id: '1:42', name: 'Card', type: 'FRAME' },

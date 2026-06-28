@@ -24,6 +24,9 @@ export const useRelay = () => {
   const channelRef = useRef<string | null>(null)
   const errorRef = useRef<string | null>(null)
   const fileNameRef = useRef<string | null>(null)
+  // True only for an explicit user Disconnect — so onclose forgets the saved
+  // channel ONLY then, and an unintended close (reload/blip) keeps it.
+  const intentionalCloseRef = useRef(false)
 
   // Listen for command results and file name from plugin code
   useEffect(() => {
@@ -151,16 +154,24 @@ export const useRelay = () => {
         wsRef.current = null
         channelRef.current = null
 
-        // Delete persisted channel
-        parent.postMessage(
-          {
-            pluginMessage: {
-              type: 'storage-delete',
-              key: 'channel-id',
+        // Forget the channel ONLY on an explicit user Disconnect. An unintended
+        // close (plugin reload, relay restart, network blip) keeps channel-id so
+        // the next launch restores + rejoins the same channel (overview.md →
+        // Connection lifecycle). Read-then-reset so the flag can't leak into a
+        // later unintended close.
+        const intentional = intentionalCloseRef.current
+        intentionalCloseRef.current = false
+        if (intentional) {
+          parent.postMessage(
+            {
+              pluginMessage: {
+                type: 'storage-delete',
+                key: 'channel-id',
+              },
             },
-          },
-          '*',
-        )
+            '*',
+          )
+        }
 
         setState({
           status: 'disconnected',
@@ -176,6 +187,9 @@ export const useRelay = () => {
   const disconnect = useCallback(() => {
     const ws = wsRef.current
     if (ws) {
+      // Mark this close intentional BEFORE ws.close() — onclose fires async and
+      // will see the flag, so it forgets the persisted channel.
+      intentionalCloseRef.current = true
       ws.close()
       wsRef.current = null
       channelRef.current = null

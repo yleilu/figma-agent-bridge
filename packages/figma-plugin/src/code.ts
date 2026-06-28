@@ -1018,6 +1018,21 @@ const handleCommand = async (
         },
       }
 
+    // close_plugin (internal lifecycle command, NOT an MCP tool — see overview
+    // Connection lifecycle): tear down via figma.closePlugin() so the dev
+    // rebuild → close → reopen reload loop picks up new code. Fire-and-forget —
+    // closePlugin() severs the connection, so the caller detects closure by the
+    // command/STATUS timing out, not by an ack (which would race iframe
+    // teardown). The return is best-effort and usually unreached.
+    case 'close_plugin': {
+      const closeMessage =
+        typeof params.message === 'string'
+          ? params.message
+          : undefined
+      figma.closePlugin(closeMessage)
+      return { closing: true }
+    }
+
     // status (D1): the LIVE context the user is looking at — current page,
     // selection, and viewport. Connection state (connected/channel) is added
     // SERVER-side; this case supplies only the plugin-known live context. This
