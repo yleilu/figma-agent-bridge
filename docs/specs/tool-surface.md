@@ -206,6 +206,7 @@ Format: `name(params) → returns` — purpose · principle/checklist need.
 ### Session (2)
 - `connect(channel) → {channel, connected}` — pair MCP server to the Figma plugin · B1; §2 connect.
 - `status() → {connected, channel, currentPage, selection[], viewport}` — connection + live context in one read (live context is best-effort; failures degrade, they don't throw) · B1, T4; §2 read-what-user-sees.
+- *(plugin teardown = internal `CLOSE_PLUGIN` command, not a tool — transport/dev-reload lifecycle, see overview *Connection lifecycle*; T6.)*
 
 ### Read — nodes (4)
 - `inspect({nodeId?, pageId?, depth?, budget?, fields?, profile?, match?}) → {view, truncated[]}` — compact lossy view, drill-by-id (Rule B); omit both ids to inspect the current selection (multi-select returns a `SELECTION` forest) · **T3 inspect**, T4; §1 human view, §3 deep/large trees, §13 CSS-handoff data.
