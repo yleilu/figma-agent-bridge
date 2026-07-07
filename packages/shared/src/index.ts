@@ -7,6 +7,7 @@ export * from './node-spec'
 export * from './node-spec-schema'
 export * from './commands'
 export * from './read-model'
+export * from './feedback'
 // NOTE: `tool-params` is intentionally NOT re-exported here. It is the
 // canonical per-tool param surface and is imported via the
 // `@figma-agent-bridge/shared/tool-params` subpath. Keeping it off the barrel
