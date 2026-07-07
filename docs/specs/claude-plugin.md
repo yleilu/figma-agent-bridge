@@ -31,11 +31,11 @@ edit a config, and never install a language runtime.
 1. Install the Claude Code plugin (`/plugin install figma-agent-bridge@figma-agent-bridge`; see §3).
 2. Import + open the Figma plugin in Figma desktop (auto-connects).
 
-**Non-goals (this milestone).** Figma Community publish (deferred — manifest import for
-now); Windows/Linux binaries (macOS-arm64 first); the live GitHub **Send** path (the Worker
-is deferred — local capture built now, per
+**Non-goals (this milestone).** Windows/Linux binaries (macOS-arm64 first); the live GitHub
+**Send** path (the Worker is deferred — local capture built now, per
 [[figma-bridge/docs/specs/feedback-system|feedback-system.md]]); a true one-click `claude://`
-install (no such scheme exists — see §3).
+install (no such scheme exists — see §3). *(The Figma plugin ships by **manifest import** — this
+is the permanent path; Figma Community publish is **not pursued**.)*
 
 ## 2. End-user experience
 
@@ -446,7 +446,7 @@ build-order step 1 (§10) is done.**
 built **first**; this milestone **does not depend on its mechanism** and doesn't spec it. The
 plugin's only version touch-point is a small, later **diagnosis / response skill**: when the
 handshake reports a mismatch (or a connection is off), the skill guides the user through the fix
-(*reinstall the Figma plugin*, diagnose a stale server). Deferred until the handshake ships.
+(*reinstall the Figma plugin*, diagnose a stale server). The handshake has **now shipped** (app-semver, major.minor per B2), so this skill is authored as `figma-connection` in the skills/agents plan (Plan B) — no longer deferred.
 
 ## 9. Testing — remote-VM clean room
 
@@ -487,7 +487,6 @@ investing in skill/agent content.
   in cleanly, but the **shared secret for a *distributed* binary is unresolved** — a shipped
   binary can't safely embed it (extractable → Worker spam). Decide: per-install token,
   Worker-side rate-limiting, or accept the risk.
-- **Figma Community publish** — deferred; manifest import documented in the plugin README.
 - **Windows/Linux binaries + polyglot hook wrapper** — deferred; darwin-arm64 first.
 - **One-click install** — not possible today (no official scheme); revisit if Claude Code
   adds one.
