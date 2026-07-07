@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
+import type { FeedbackItem } from '@figma-agent-bridge/shared'
 
 type RelayState = {
   status: 'disconnected' | 'connecting' | 'connected'
@@ -27,6 +28,56 @@ export const useRelay = () => {
   // True only for an explicit user Disconnect — so onclose forgets the saved
   // channel ONLY then, and an unintended close (reload/blip) keeps it.
   const intentionalCloseRef = useRef(false)
+
+  // Feedback review list, keyed by FeedbackItem.path (its stable identity).
+  const [feedbackItems, setFeedbackItems] = useState<
+    Record<string, FeedbackItem>
+  >({})
+  // Requests THIS plugin originated (send-feedback / feedback-sync), tracked by
+  // id so their correlated replies can be matched without swallowing normal
+  // figma command traffic.
+  const feedbackPending = useRef(
+    new Map<
+      string,
+      { resolve: (v: unknown) => void; reject: (e: unknown) => void }
+    >(),
+  )
+  const upsert = useCallback((item: FeedbackItem) => {
+    setFeedbackItems(prev => ({ ...prev, [item.path]: item }))
+  }, [])
+
+  // Send a correlated request over the relay and resolve on its reply.
+  const request = useCallback(
+    (command: string, params: Record<string, unknown>): Promise<unknown> => {
+      const socket = wsRef.current
+      const ch = channelRef.current
+      if (!socket || !ch) return Promise.reject(new Error('Not connected'))
+      const id = crypto.randomUUID()
+      return new Promise((resolve, reject) => {
+        feedbackPending.current.set(id, { resolve, reject })
+        socket.send(
+          JSON.stringify({
+            type: 'message',
+            channel: ch,
+            message: { id, command, params },
+          }),
+        )
+      })
+    },
+    [],
+  )
+
+  const sendFeedback = useCallback(
+    (path: string) => request('send-feedback', { path }),
+    [request],
+  )
+
+  const syncFeedback = useCallback(async () => {
+    const { items } = (await request('feedback-sync', {})) as {
+      items: FeedbackItem[]
+    }
+    setFeedbackItems(Object.fromEntries(items.map(i => [i.path, i])))
+  }, [request])
 
   // Listen for command results and file name from plugin code
   useEffect(() => {
@@ -120,11 +171,38 @@ export const useRelay = () => {
             channel,
             error: null,
           })
+
+          // Pull the current feedback list once per successful (re)connect. Fires
+          // here in the join-success path, not on every render.
+          void syncFeedback()
           return
         }
 
         if (data.type === 'broadcast' && data.message) {
           const msg = data.message as Record<string, unknown>
+
+          // (a) Server → plugin feedback pushes: handled in-UI, never forwarded
+          // to code.ts.
+          if (
+            msg.command === 'feedback-added' ||
+            msg.command === 'feedback-updated'
+          ) {
+            upsert((msg.params as { item: FeedbackItem }).item)
+            return
+          }
+
+          // (b) Correlated reply to a request THIS plugin sent. Kept tight — only
+          // fires when there is NO command AND the id is in OUR pending map — so
+          // it never swallows normal figma command traffic.
+          const replyId = msg.id as string | undefined
+          if (!msg.command && replyId && feedbackPending.current.has(replyId)) {
+            const p = feedbackPending.current.get(replyId)!
+            feedbackPending.current.delete(replyId)
+            if (msg.error) p.reject(new Error(String(msg.error)))
+            else p.resolve(msg.result)
+            return
+          }
+
           if (msg.command) {
             parent.postMessage(
               {
@@ -181,7 +259,7 @@ export const useRelay = () => {
         errorRef.current = null
       }
     },
-    [],
+    [syncFeedback],
   )
 
   const disconnect = useCallback(() => {
@@ -201,5 +279,12 @@ export const useRelay = () => {
     })
   }, [])
 
-  return { ...state, connect, disconnect }
+  return {
+    ...state,
+    connect,
+    disconnect,
+    feedbackItems,
+    sendFeedback,
+    syncFeedback,
+  }
 }
