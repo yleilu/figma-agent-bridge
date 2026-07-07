@@ -10,6 +10,7 @@ related:
   - "[[figma-bridge/docs/principles]]"
   - "[[figma-bridge/docs/architecture]]"
   - "[[figma-bridge/docs/specs/tool-surface]]"
+  - "[[figma-bridge/docs/specs/claude-plugin]]"
 ---
 
 # figma-agent-bridge — Feedback System
@@ -287,7 +288,7 @@ No new message types, no plugin logic beyond rendering the new group.
 
 ## Out of scope (YAGNI)
 
-- **The when-to-record skill is a separate follow-up** — this spec builds the tool/bridge/UI/Worker mechanism. The plugin-layer skill that teaches the agent *when* to call `record_feedback` (P1) is its own deliverable, brainstormed and specced separately, and is required before the loop behaves as intended.
+- **The when-to-record skill is specced in the plugin milestone** — as the **`figma-feedback` skill** in [[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]] §6.3 (no longer a separate future follow-up). This spec still owns the tool/bridge/UI/Worker mechanism; the plugin-layer skill that teaches the agent *when* to call `record_feedback` (P1) lives there and is required before the loop behaves as intended.
 - No editing/deleting feedback from the plugin — the agent records, the human sends; edits happen in the Markdown file or on GitHub.
 - No auto-send — the human gate is the point.
 - No reading GitHub comments back into the tool — the weekly triage is a separate manual/agent read of the issues.
