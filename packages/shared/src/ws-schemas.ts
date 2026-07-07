@@ -29,6 +29,7 @@ export const registerMessageSchema = z.object({
   type: z.literal('register'),
   channel: z.string().min(1),
   fileName: z.string().nullable(),
+  version: z.string().optional(),
 })
 
 export const relayIncomingSchema = z.discriminatedUnion(

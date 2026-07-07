@@ -28,6 +28,7 @@ export type RegisterMessage = {
   type: 'register'
   channel: string
   fileName: string | null
+  version?: string
 }
 
 export type RelayIncoming =
@@ -54,6 +55,7 @@ export type ChannelInfo = {
   channel: string
   fileName: string | null
   connectedAt: number
+  version?: string
 }
 
 // --- M2 parsed output types ---
