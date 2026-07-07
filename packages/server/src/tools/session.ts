@@ -1,4 +1,7 @@
-import { COMMANDS, PROTOCOL_VERSION } from '@figma-agent-bridge/shared'
+import {
+  COMMANDS,
+  PROTOCOL_VERSION,
+} from '@figma-agent-bridge/shared'
 import type { ChannelInfo } from '@figma-agent-bridge/shared'
 import type { FigmaClient } from '../figma-client'
 import { discoverChannels } from '../figma-client'
@@ -12,9 +15,15 @@ import {
 // Returns an actionable error string if the channel's plugin reports a protocol
 // version that does not match the server's, else null. `undefined` info (channel
 // not in the registry) is treated as "can't tell" → no error (best-effort).
-const protocolMismatch = (info: ChannelInfo | undefined): string | null => {
-  if (info === undefined) return null
-  if (info.version === PROTOCOL_VERSION) return null
+const protocolMismatch = (
+  info: ChannelInfo | undefined,
+): string | null => {
+  if (info === undefined) {
+    return null
+  }
+  if (info.version === PROTOCOL_VERSION) {
+    return null
+  }
   const got = info.version ?? '(none)'
   return (
     `Figma plugin protocol '${got}' is incompatible with server protocol ` +
@@ -114,7 +123,9 @@ export const handleStatus = async (
   let protocolVersion: string | undefined
   if (relayHttpUrl !== undefined && channel !== null) {
     const infos = await discoverChannels(relayHttpUrl)
-    protocolVersion = infos.find(c => c.channel === channel)?.version
+    protocolVersion = infos.find(
+      c => c.channel === channel,
+    )?.version
   }
 
   let live: {

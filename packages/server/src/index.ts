@@ -150,7 +150,9 @@ server.tool(
     handleConnect({ channel }, client, relayHttpUrl, port),
 )
 
-server.tool('status', {}, async () => handleStatus(client, relayHttpUrl))
+server.tool('status', {}, async () =>
+  handleStatus(client, relayHttpUrl),
+)
 
 server.tool(
   'inspect',

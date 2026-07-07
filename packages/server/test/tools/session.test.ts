@@ -6,7 +6,10 @@ import {
   it,
 } from 'bun:test'
 import type { Server } from 'bun'
-import { COMMANDS, PROTOCOL_VERSION } from '@figma-agent-bridge/shared'
+import {
+  COMMANDS,
+  PROTOCOL_VERSION,
+} from '@figma-agent-bridge/shared'
 import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
 import {
   startRelay,
@@ -49,7 +52,14 @@ const joinAndRegister = async (
 ): Promise<void> => {
   ws.send(JSON.stringify({ type: 'join', channel }))
   await waitForMessage(ws)
-  ws.send(JSON.stringify({ type: 'register', channel, fileName: null, version: PROTOCOL_VERSION }))
+  ws.send(
+    JSON.stringify({
+      type: 'register',
+      channel,
+      fileName: null,
+      version: PROTOCOL_VERSION,
+    }),
+  )
   await Bun.sleep(30)
 }
 

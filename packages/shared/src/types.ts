@@ -32,9 +32,7 @@ export type RegisterMessage = {
 }
 
 export type RelayIncoming =
-  | JoinMessage
-  | ChannelMessage
-  | RegisterMessage
+  JoinMessage | ChannelMessage | RegisterMessage
 export type RelayOutgoing = BroadcastMessage | SystemMessage
 
 // --- Command types ---
