@@ -8,7 +8,7 @@ import {
 import type { Server } from 'bun'
 import {
   COMMANDS,
-  PROTOCOL_VERSION,
+  APP_VERSION,
 } from '@figma-agent-bridge/shared'
 import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
 import {
@@ -57,7 +57,7 @@ const joinAndRegister = async (
       type: 'register',
       channel,
       fileName: null,
-      version: PROTOCOL_VERSION,
+      version: APP_VERSION,
     }),
   )
   await Bun.sleep(30)

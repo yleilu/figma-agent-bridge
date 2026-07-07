@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import type { FeedbackItem } from '@figma-agent-bridge/shared'
-import { PROTOCOL_VERSION } from '@figma-agent-bridge/shared'
+import { APP_VERSION } from '@figma-agent-bridge/shared'
 
 type RelayState = {
   status: 'disconnected' | 'connecting' | 'connected'
@@ -152,7 +152,7 @@ export const useRelay = () => {
               type: 'register',
               channel,
               fileName: fileNameRef.current,
-              version: PROTOCOL_VERSION,
+              version: APP_VERSION,
             }),
           )
 
