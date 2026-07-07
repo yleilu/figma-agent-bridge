@@ -1,20 +1,35 @@
 import type { FigmaClient } from './figma-client'
 import type { FeedbackItem } from '@figma-agent-bridge/shared'
-import { listPending, readItem, markSent, markFailed } from './feedback-store'
+import {
+  listPending,
+  readItem,
+  markSent,
+  markFailed,
+} from './feedback-store'
 import { postFeedback } from './worker-client'
 
 const FEEDBACK_HYDRATE_LIMIT = 50
 
-type Notify = (command: string, params: Record<string, unknown>) => void
+type Notify = (
+  command: string,
+  params: Record<string, unknown>,
+) => void
 
-export const buildFeedbackHandlers = (notify: Notify, fetchImpl: typeof fetch = fetch) => ({
+export const buildFeedbackHandlers = (
+  notify: Notify,
+  fetchImpl: typeof fetch = fetch,
+) => ({
   sync: async (): Promise<{ items: FeedbackItem[] }> => ({
     items: await listPending(FEEDBACK_HYDRATE_LIMIT),
   }),
 
-  send: async (params: Record<string, unknown>): Promise<{ item: FeedbackItem }> => {
+  send: async (
+    params: Record<string, unknown>,
+  ): Promise<{ item: FeedbackItem }> => {
     const rawPath = params.path
-    if (typeof rawPath !== 'string' || !rawPath) throw new Error('send-feedback: path is required')
+    if (typeof rawPath !== 'string' || !rawPath) {
+      throw new Error('send-feedback: path is required')
+    }
     const path = rawPath
     const item = await readItem(path)
     if (item.status === 'sent') {
@@ -48,7 +63,10 @@ export const buildFeedbackHandlers = (notify: Notify, fetchImpl: typeof fetch = 
   },
 })
 
-export const wireFeedback = (client: FigmaClient, fetchImpl: typeof fetch = fetch): void => {
+export const wireFeedback = (
+  client: FigmaClient,
+  fetchImpl: typeof fetch = fetch,
+): void => {
   const handlers = buildFeedbackHandlers(
     (command, params) => client.notify(command, params),
     fetchImpl,

@@ -160,12 +160,16 @@ describe('figma-client', () => {
       item: { path: 'bugs/x.md', title: 'x' },
     })
 
-    const received = (await nextMessage()) as BroadcastMessage
+    const received =
+      (await nextMessage()) as BroadcastMessage
     expect(received.type).toBe('broadcast')
     expect(received.message.command).toBe('feedback-added')
     expect(
-      (received.message.params as { item: { path: string } }).item
-        .path,
+      (
+        received.message.params as {
+          item: { path: string }
+        }
+      ).item.path,
     ).toBe('bugs/x.md')
     expect(received.message.result).toBeUndefined()
 
@@ -208,9 +212,9 @@ describe('figma-client', () => {
     const reply = (await pluginQueue()) as BroadcastMessage
     expect(reply.type).toBe('broadcast')
     expect(reply.message.id).toBe('req-1')
-    expect((reply.message.result as { echoed: number }).echoed).toBe(
-      7,
-    )
+    expect(
+      (reply.message.result as { echoed: number }).echoed,
+    ).toBe(7)
 
     await closeWs(rawPlugin)
     client.disconnect()

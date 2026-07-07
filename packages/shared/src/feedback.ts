@@ -1,5 +1,9 @@
-export const FEEDBACK_CATEGORIES = ['bugs', 'proposals'] as const
-export type FeedbackCategory = (typeof FEEDBACK_CATEGORIES)[number]
+export const FEEDBACK_CATEGORIES = [
+  'bugs',
+  'proposals',
+] as const
+export type FeedbackCategory =
+  (typeof FEEDBACK_CATEGORIES)[number]
 export type FeedbackStatus = 'pending' | 'sent' | 'failed'
 
 export interface FeedbackItem {

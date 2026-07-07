@@ -14,7 +14,10 @@ export type FigmaClient = {
     params?: Record<string, unknown>,
     timeoutMs?: number,
   ) => Promise<unknown>
-  notify: (command: string, params: Record<string, unknown>) => void
+  notify: (
+    command: string,
+    params: Record<string, unknown>,
+  ) => void
   onRequest: (
     command: string,
     handler: (
@@ -60,7 +63,9 @@ export const createFigmaClient = (
   let joinPending: Pending<string> | null = null
   const requestHandlers = new Map<
     string,
-    (params: Record<string, unknown>) => Promise<unknown> | unknown
+    (
+      params: Record<string, unknown>,
+    ) => Promise<unknown> | unknown
   >()
 
   const rejectAll = (reason: string) => {
@@ -132,6 +137,9 @@ export const createFigmaClient = (
       requestHandlers.has(message.command)
     ) {
       const handler = requestHandlers.get(message.command)!
+      // `sendReply` is defined later in this same closure; `handleMessage` only
+      // runs at runtime (on an inbound message), so the forward reference is safe.
+      /* eslint-disable @typescript-eslint/no-use-before-define */
       Promise.resolve(handler(message.params ?? {}))
         .then(result => {
           sendReply(message.id, { result })
@@ -139,9 +147,12 @@ export const createFigmaClient = (
         .catch((err: unknown) => {
           sendReply(message.id, {
             error:
-              err instanceof Error ? err.message : String(err),
+              err instanceof Error
+                ? err.message
+                : String(err),
           })
         })
+      /* eslint-enable @typescript-eslint/no-use-before-define */
       return
     }
 

@@ -491,7 +491,8 @@ export const createMockPlugin = (
       //     the OPPOSITE of the real plugin.)
       case 'get_annotations': {
         const annNodeId = cmd.params?.nodeId as
-          string | undefined
+          | string
+          | undefined
         if (annNodeId?.startsWith('degrade:')) {
           result = {
             results: [],
@@ -633,7 +634,8 @@ export const createMockPlugin = (
         // B2 — depth bounds the scan SCOPE. undefined/-1 = scan all; N keeps
         // nodes at scan level ≤ N (the level-1 children appear once depth ≥ 1).
         const sDepth = cmd.params?.depth as
-          number | undefined
+          | number
+          | undefined
         const inScope = (n: ScanNode): boolean =>
           sDepth === undefined ||
           sDepth < 0 ||
@@ -851,9 +853,11 @@ export const createMockPlugin = (
       case 'create_node': {
         const nodeSpec = (cmd.params?.spec ??
           cmd.params?.node) as
-          Record<string, unknown> | undefined
+          | Record<string, unknown>
+          | undefined
         const parentId = cmd.params?.parentId as
-          string | undefined
+          | string
+          | undefined
         const nodeType = nodeSpec?.type as string
         const echo: Record<string, unknown> = {
           ...(nodeSpec ?? {}),
@@ -948,9 +952,11 @@ export const createMockPlugin = (
       // structure (and ref/clone resolution) reached the plugin intact.
       case 'create_tree': {
         const treeSpec = cmd.params?.tree as
-          Record<string, unknown> | undefined
+          | Record<string, unknown>
+          | undefined
         const treeParentId = cmd.params?.parentId as
-          string | undefined
+          | string
+          | undefined
         const treeRefs = cmd.params?.refs as
           | Record<string, Record<string, unknown>>
           | undefined
@@ -992,7 +998,8 @@ export const createMockPlugin = (
           }
           let count = 1
           const children = node.children as
-            Record<string, unknown>[] | undefined
+            | Record<string, unknown>[]
+            | undefined
           if (children) {
             for (const child of children) {
               count += countNodes(child, refStack)
@@ -1030,7 +1037,8 @@ export const createMockPlugin = (
         const cloneCount =
           (cmd.params?.count as number) ?? 1
         const cloneIndex = cmd.params?.index as
-          number | undefined
+          | number
+          | undefined
         const cloneParentChildCount = 3
         if (
           cloneIndex !== undefined &&
@@ -1150,9 +1158,11 @@ export const createMockPlugin = (
       // can assert routing. The build-from-spec overload was removed.
       case 'create_component': {
         const ccNodeId = cmd.params?.nodeId as
-          string | undefined
+          | string
+          | undefined
         const ccName = cmd.params?.name as
-          string | undefined
+          | string
+          | undefined
         result = {
           id: `comp:${Math.random().toString(36).slice(2, 8)}`,
           key: `key:${Math.random().toString(36).slice(2, 8)}`,
@@ -1192,7 +1202,8 @@ export const createMockPlugin = (
             }[]
           | undefined
         const ucExpose = cmd.params?.expose as
-          string[] | undefined
+          | string[]
+          | undefined
         const ucWarnings: string[] = []
         const properties: {
           id: string
@@ -1272,7 +1283,8 @@ export const createMockPlugin = (
         // component's parent, but REPORT it (no silent fallback), mirroring the
         // real plugin.
         const cvParentId = cmd.params?.parentId as
-          string | undefined
+          | string
+          | undefined
         if (cvParentId?.startsWith('nogood:')) {
           cvWarnings.push(
             'Requested parent "' +
@@ -1305,7 +1317,8 @@ export const createMockPlugin = (
       case 'swap_component': {
         const scId = cmd.params?.instanceId as string
         const scMainId = cmd.params?.mainComponentId as
-          string | undefined
+          | string
+          | undefined
         const scKey = cmd.params?.key as string | undefined
         const scWarnings: string[] = []
         // Resolve the target main: LOCAL wins; else import by key.
@@ -1358,9 +1371,11 @@ export const createMockPlugin = (
       case 'set_instance': {
         const siId = cmd.params?.instanceId as string
         const siProps = cmd.params?.properties as
-          Record<string, string | boolean> | undefined
+          | Record<string, string | boolean>
+          | undefined
         const siOverrides = cmd.params?.overrides as
-          unknown[] | undefined
+          | unknown[]
+          | undefined
         const siWarnings: string[] = []
         // Mirror the real plugin's T7 no-op warning: a call with neither
         // properties nor overrides mutates nothing and must warn.
@@ -1492,7 +1507,8 @@ export const createMockPlugin = (
       case 'create_image': {
         const imgUrl = cmd.params?.url as string | undefined
         const imgBytes = cmd.params?.bytes as
-          number[] | undefined
+          | number[]
+          | undefined
         if (imgUrl?.startsWith('degrade:')) {
           result = {
             warnings: [
@@ -1662,15 +1678,16 @@ export const createMockPlugin = (
         } else {
           const editVars =
             (cmd.params?.variables as
-              { id: string }[] | undefined) ?? []
+              | { id: string }[]
+              | undefined) ?? []
           const warnings: string[] = []
           // Mirror the real plugin's T7 renameMode-failure degrade: a
           // renameModes entry whose `from` is prefixed `degrade:` models a
           // duplicate/invalid rename throwing — warned, never {error}.
           const renameModes =
             (cmd.params?.renameModes as
-              { from: string; to: string }[] | undefined) ??
-            []
+              | { from: string; to: string }[]
+              | undefined) ?? []
           for (const rename of renameModes) {
             if (rename.from.startsWith('degrade:')) {
               warnings.push(
@@ -1874,7 +1891,8 @@ export const createMockPlugin = (
 
           try {
             raw = JSON.parse(event.data as string) as
-              SystemMessage | BroadcastMessage
+              | SystemMessage
+              | BroadcastMessage
           } catch {
             return
           }
