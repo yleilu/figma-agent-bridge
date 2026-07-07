@@ -54,7 +54,8 @@ One request already crosses four hops (`Agent → MCP server → relay → plugi
 same relay** plus **one new external hop** (server → CloudFlare Worker → GitHub).
 
 The relay stays dumb — it broadcasts any `{ type, channel, message }` envelope, so it
-needs **no logic change**, only new Zod message types in `packages/shared/src/ws-schemas.ts`.
+needs **no logic change** and **no new named Zod frame types**: the feedback messages ride
+the existing generic `commandMessageSchema` envelope in `packages/shared/src/ws-schemas.ts`.
 It **only routes** these messages; their meaning lives entirely in the server and the UI, so
 the bridge stays semantics-free (B1). The two new flows are:
 
@@ -124,8 +125,9 @@ justified, and confined.
   one shape. `feedback-added` / `feedback-updated` are unsolicited *refresh* pushes, not the
   authoritative reply to a request — the send's truth is its correlated reply. The relay
   gains no feedback semantics; it only routes envelopes.
-- **T10 — bounded by default.** Hydrate-on-join pushes a **capped** set of `pending` items,
-  never an unbounded O(store) flush, so a large backlog can never blow up the channel.
+- **T10 — bounded by default.** Hydration is a plugin-initiated `feedback-sync` request on
+  each successful (re)connect, which the server answers with a **capped** set of `pending`
+  items — never an unbounded O(store) flush, so a large backlog can never blow up the channel.
 - **Layer containment.** The bridge stays semantics-free (routing only); design meaning is
   never introduced (no node interpretation); the plugin's `code.ts` and `figma.*` are
   untouched. Feedback state lives server-side (files) and in the UI, not in the pipe.
@@ -188,7 +190,10 @@ human-scannable in the directory. The server owns filename generation.
 ## Components
 
 ### `packages/shared`
-- New `ws-schemas` message types: `feedback-added`, `feedback-updated`, `send-feedback`.
+- **No new named `ws-schemas` frame types.** The four feedback messages (`feedback-added`,
+  `feedback-updated`, `feedback-sync`, `send-feedback`) travel through the existing
+  generic/permissive `commandMessageSchema` envelope (the `command` string + `params`), so no
+  new named Zod frame types are needed — the cleaner B1-aligned choice.
 - A `Feedback` type (the item shape the UI consumes) and a `FeedbackCategory` enum
   (`bugs` | `proposals` — values equal the directory names), colocated with the existing
   schema exports.
@@ -212,11 +217,14 @@ human-scannable in the directory. The server owns filename generation.
   `send-feedback { id, path }` message: read the file, call `worker-client`, update
   frontmatter, then **reply `{ id, result }` / `{ id, error }`** (correlated, B1) and also
   broadcast `feedback-updated` as a secondary list refresh.
-- **Hydrate on plugin join (bounded, T10)** — when the plugin (re)connects to the channel,
-  the server pushes the current `pending` items so the list survives plugin reloads. The
-  push is **bounded by default** — a cap (e.g. the N most recent `pending` items) with the
-  rest available on demand — rather than an unbounded O(store) flush. At human scale this
-  cap is rarely hit, but the surface never emits an unbounded push (T10).
+- **Hydrate on plugin (re)connect (bounded, T10)** — the plugin issues a `feedback-sync`
+  request on each successful (re)connect, and the server answers with the current `pending`
+  items so the list survives plugin reloads. This is a **plugin-pull, not a server-push**:
+  the relay is a blind forwarder and the server cannot reliably detect a plugin join, so a
+  client-pull on connect is the correct realization of the same T10-bounded intent. The
+  answer is **bounded by default** — a cap (e.g. the N most recent `pending` items) with the
+  rest available on demand — rather than an unbounded O(store) flush. At human scale this cap
+  is rarely hit, but the surface never emits an unbounded list (T10).
 - **Config (env):** `FEEDBACK_DIR` (default `~/.figma-agent-bridge/feedbacks`), `WORKER_URL`,
   `WORKER_SECRET`.
 
