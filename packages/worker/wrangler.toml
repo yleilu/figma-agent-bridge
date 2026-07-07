@@ -1,0 +1,9 @@
+name = "figma-agent-bridge-feedback"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+
+# Set with: wrangler secret put GITHUB_TOKEN ; wrangler secret put SHARED_SECRET
+[vars]
+REPO = "yleilu/figma-agent-bridge"
+BUGS_ISSUE = ""       # issue number for bug reports
+PROPOSALS_ISSUE = ""  # issue number for proposals
