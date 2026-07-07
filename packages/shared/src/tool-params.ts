@@ -1140,3 +1140,35 @@ export const batchParamsSchema = z.object({
       "Entries to execute in order. Each is the op's params; set a per-entry `op` to override the default.",
     ),
 })
+
+// ---------------------------------------------------------------------------
+// Feedback tool
+// ---------------------------------------------------------------------------
+
+/**
+ * Params for `record_feedback`: record a piece of friction or a proposal into
+ * the local feedback queue.
+ */
+export const recordFeedbackParamsSchema = z.object({
+  category: z
+    .enum(['bugs', 'proposals'])
+    .describe(
+      "Which feedback stream this belongs to. Routes to that stream's GitHub issue.",
+    ),
+  title: z
+    .string()
+    .describe(
+      'One-line summary of the friction. Becomes the GitHub comment heading.',
+    ),
+  description: z
+    .string()
+    .describe(
+      'What happened, in natural language — what you did, what you expected, what you got.',
+    ),
+  tool: z
+    .string()
+    .optional()
+    .describe(
+      'The tool/command involved, if this is tool-specific (e.g. "resize_node").',
+    ),
+})
