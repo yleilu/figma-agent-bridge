@@ -24,7 +24,10 @@ const protocolMismatch = (
     return null
   }
   const theirs = info.version
-  if (theirs !== undefined && majorMinor(theirs) === majorMinor(APP_VERSION)) {
+  if (
+    theirs !== undefined &&
+    majorMinor(theirs) === majorMinor(APP_VERSION)
+  ) {
     return null
   }
   const got = theirs ?? '(none)'

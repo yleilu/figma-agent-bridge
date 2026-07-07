@@ -11,7 +11,10 @@ import {
   relayOutgoingSchema,
   commandMessageSchema,
 } from '@figma-agent-bridge/shared/ws-schemas'
-import { majorMinor, APP_VERSION } from '@figma-agent-bridge/shared/constants'
+import {
+  majorMinor,
+  APP_VERSION,
+} from '@figma-agent-bridge/shared/constants'
 import type {
   JoinMessage,
   ChannelMessage,

@@ -24,8 +24,8 @@ const text = (r: { content: { text: string }[] }) =>
   r.content[0].text
 
 const [MAJ, MIN] = APP_VERSION.split('.')
-const SAME_PATCH = `${MAJ}.${MIN}.999`               // same major.minor, different patch → OK
-const MINOR_BUMP = `${MAJ}.${Number(MIN) + 1}.0`     // minor bump = breaking → refuse
+const SAME_PATCH = `${MAJ}.${MIN}.999` // same major.minor, different patch → OK
+const MINOR_BUMP = `${MAJ}.${Number(MIN) + 1}.0` // minor bump = breaking → refuse
 
 describe('handleConnect version handshake', () => {
   let server: ReturnType<typeof startRelay>
@@ -37,32 +37,66 @@ describe('handleConnect version handshake', () => {
   })
 
   it('connects when major.minor matches (exact version)', async () => {
-    const plugin = createMockPlugin({ relayUrl: WS, channel: 'ok', documentName: 'D' })
+    const plugin = createMockPlugin({
+      relayUrl: WS,
+      channel: 'ok',
+      documentName: 'D',
+    })
     await plugin.start()
     const client = createFigmaClient(WS)
-    const res = await handleConnect({ channel: 'ok' }, client, HTTP, PORT)
+    const res = await handleConnect(
+      { channel: 'ok' },
+      client,
+      HTTP,
+      PORT,
+    )
     expect(text(res)).toContain('Connected to channel: ok')
-    client.disconnect(); plugin.stop()
+    client.disconnect()
+    plugin.stop()
   })
 
   it('connects on a patch-only difference (tolerated)', async () => {
-    const plugin = createMockPlugin({ relayUrl: WS, channel: 'patch', documentName: 'D', version: SAME_PATCH })
+    const plugin = createMockPlugin({
+      relayUrl: WS,
+      channel: 'patch',
+      documentName: 'D',
+      version: SAME_PATCH,
+    })
     await plugin.start()
     const client = createFigmaClient(WS)
-    const res = await handleConnect({ channel: 'patch' }, client, HTTP, PORT)
-    expect(text(res)).toContain('Connected to channel: patch')
-    client.disconnect(); plugin.stop()
+    const res = await handleConnect(
+      { channel: 'patch' },
+      client,
+      HTTP,
+      PORT,
+    )
+    expect(text(res)).toContain(
+      'Connected to channel: patch',
+    )
+    client.disconnect()
+    plugin.stop()
   })
 
   it('refuses on a minor difference (breaking) and names the fix', async () => {
-    const plugin = createMockPlugin({ relayUrl: WS, channel: 'bad', documentName: 'D', version: MINOR_BUMP })
+    const plugin = createMockPlugin({
+      relayUrl: WS,
+      channel: 'bad',
+      documentName: 'D',
+      version: MINOR_BUMP,
+    })
     await plugin.start()
     const client = createFigmaClient(WS)
-    const res = await handleConnect({ channel: 'bad' }, client, HTTP, PORT)
+    const res = await handleConnect(
+      { channel: 'bad' },
+      client,
+      HTTP,
+      PORT,
+    )
     expect(text(res)).toContain('incompatible')
     expect(text(res)).toContain(APP_VERSION)
     expect(client.isConnected()).toBe(false)
-    client.disconnect(); plugin.stop()
+    client.disconnect()
+    plugin.stop()
   })
 
   it('status reports the connected channel version', async () => {
