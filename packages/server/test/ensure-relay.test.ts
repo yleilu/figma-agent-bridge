@@ -3,12 +3,60 @@ import {
   startRelay,
   stopRelay,
 } from '@figma-agent-bridge/relay/relay'
-import { ensureRelay } from '@figma-agent-bridge/server/ensure-relay'
+import {
+  ensureRelay,
+  buildRelayArgv,
+} from '@figma-agent-bridge/server/ensure-relay'
 
 const TEST_PORT = 3100
 const HTTP_URL = `http://localhost:${TEST_PORT}`
 
 const FAST = { pollIntervalMs: 50, maxPollAttempts: 40 }
+
+// ---------------------------------------------------------------------------
+// Unit tests: buildRelayArgv — pure function, no stubs, no network
+// ---------------------------------------------------------------------------
+
+describe('buildRelayArgv', () => {
+  it('dev mode: includes execPath + script path + --relay', () => {
+    const argv = buildRelayArgv(
+      '/usr/local/bin/bun',
+      '/Users/dev/figma-bridge/packages/server/src/index.ts',
+    )
+    expect(argv).toEqual([
+      '/usr/local/bin/bun',
+      '/Users/dev/figma-bridge/packages/server/src/index.ts',
+      '--relay',
+    ])
+  })
+
+  it('compiled mode: argv[1] starts with /$bunfs/ → only execPath + --relay', () => {
+    const argv = buildRelayArgv(
+      '/usr/local/bin/figma-agent-bridge',
+      '/$bunfs/root/index.js',
+    )
+    expect(argv).toEqual([
+      '/usr/local/bin/figma-agent-bridge',
+      '--relay',
+    ])
+  })
+
+  it('undefined argv1 falls back to execPath (safety net)', () => {
+    const argv = buildRelayArgv(
+      '/usr/local/bin/bun',
+      undefined,
+    )
+    expect(argv).toEqual([
+      '/usr/local/bin/bun',
+      '/usr/local/bin/bun',
+      '--relay',
+    ])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Integration tests
+// ---------------------------------------------------------------------------
 
 const killPort = async (port: number) => {
   try {
@@ -55,11 +103,17 @@ describe('ensureRelay', () => {
   })
 
   it('spawns relay and returns a live proc', async () => {
-    const result = await ensureRelay(
-      HTTP_URL,
-      TEST_PORT,
-      FAST,
-    )
+    // In the test-runner context, process.argv[1] is the test file, not index.ts.
+    // Override the spawn argv so the relay process is correctly invoked.
+    const indexPath = `${import.meta.dir}/../src/index.ts`
+    const result = await ensureRelay(HTTP_URL, TEST_PORT, {
+      ...FAST,
+      _relayArgvOverride: [
+        process.execPath,
+        indexPath,
+        '--relay',
+      ],
+    })
 
     expect(result.error).toBeUndefined()
     expect(result.proc).toBeDefined()
