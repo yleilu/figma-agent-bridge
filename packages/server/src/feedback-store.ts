@@ -38,8 +38,9 @@ export const recordFeedback = async (
   version: string,
 ): Promise<FeedbackItem> => {
   const created = new Date().toISOString()
+  const dir = resolveFeedbackDir()
   const relPath = `${input.category}/${compactStamp(created)}-${slugify(input.title)}.md`
-  const absPath = join(resolveFeedbackDir(), relPath)
+  const absPath = join(dir, relPath)
   const fm: Frontmatter = {
     title: input.title,
     status: 'pending',
@@ -47,7 +48,7 @@ export const recordFeedback = async (
     created,
     ...(input.tool ? { tool: input.tool } : {}),
   }
-  await mkdir(join(resolveFeedbackDir(), input.category), { recursive: true })
+  await mkdir(join(dir, input.category), { recursive: true })
   await writeFile(absPath, serialize(fm, input.description), 'utf8')
   return {
     path: relPath,
@@ -63,6 +64,7 @@ export const recordFeedback = async (
 
 // ── Read / List / Mark ────────────────────────────────────────────────────────
 
+// LF-only: we only read files we wrote (writeFile utf8 always produces LF)
 const FRONTMATTER = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/
 
 const parse = (relPath: string, raw: string): FeedbackItem => {
@@ -115,8 +117,9 @@ const rewrite = async (
   const m = FRONTMATTER.exec(raw)
   if (!m) throw new Error(`Malformed feedback file: ${relPath}`)
   const fm = { ...(YAML.parse(m[1]) as Frontmatter), ...patch }
-  await writeFile(absPath, serialize(fm, m[2].trim()), 'utf8')
-  return parse(relPath, await readFile(absPath, 'utf8'))
+  const content = serialize(fm, m[2].trim())
+  await writeFile(absPath, content, 'utf8')
+  return parse(relPath, content)
 }
 
 export const markSent = (relPath: string, commentUrl: string): Promise<FeedbackItem> =>

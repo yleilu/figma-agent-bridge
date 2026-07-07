@@ -64,5 +64,7 @@ describe('read / list / mark', () => {
     const item = await recordFeedback({ category: 'bugs', title: 'c', description: 'x' }, '0.0.1')
     const failed = await markFailed(item.path)
     expect(failed.status).toBe('failed')
+    const reread = await readItem(item.path)
+    expect(reread.status).toBe('failed')
   })
 })
