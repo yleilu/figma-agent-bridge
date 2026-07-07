@@ -291,30 +291,34 @@ export const createFigmaClient = (
     })
   }
 
+  // Fire-and-forget send for the two best-effort senders (notify, sendReply).
+  // Silently drops when no plugin is attached or the socket is not open; unlike
+  // sendCommand it never throws or rejects a pending, matching WebSocket.OPEN
+  // guard used by sendCommand.
+  const sendFrame = (message: CommandMessage): void => {
+    const socket = ws
+    const ch = channel
+    if (
+      socket === null ||
+      ch === null ||
+      socket.readyState !== WebSocket.OPEN
+    ) {
+      return
+    }
+    socket.send(
+      JSON.stringify({
+        type: 'message',
+        channel: ch,
+        message,
+      } satisfies ChannelMessage),
+    )
+  }
+
   const notify = (
     command: string,
     params: Record<string, unknown>,
   ): void => {
-    const socket = ws
-    const ch = channel
-    if (socket === null || ch === null) {
-      // Best-effort: no plugin attached, drop silently.
-      return
-    }
-
-    const message: CommandMessage = {
-      id: randomUUID(),
-      command,
-      params,
-    }
-
-    const frame: ChannelMessage = {
-      type: 'message',
-      channel: ch,
-      message,
-    }
-
-    socket.send(JSON.stringify(frame))
+    sendFrame({ id: randomUUID(), command, params })
   }
 
   const onRequest = (
@@ -330,20 +334,7 @@ export const createFigmaClient = (
     id: string,
     body: { result?: unknown; error?: string },
   ): void => {
-    const socket = ws
-    const ch = channel
-    if (socket === null || ch === null) {
-      return
-    }
-
-    const message: CommandMessage = { id, ...body }
-    const frame: ChannelMessage = {
-      type: 'message',
-      channel: ch,
-      message,
-    }
-
-    socket.send(JSON.stringify(frame))
+    sendFrame({ id, ...body })
   }
 
   const disconnect = (): void => {
