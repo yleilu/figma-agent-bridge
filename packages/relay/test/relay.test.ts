@@ -12,7 +12,7 @@ import type {
   ChannelInfo,
   SystemMessage,
 } from '@figma-agent-bridge/shared/types'
-import { PROTOCOL_VERSION } from '@figma-agent-bridge/shared'
+import { APP_VERSION } from '@figma-agent-bridge/shared'
 import {
   startRelay,
   stopRelay,
@@ -678,7 +678,7 @@ describe('relay stores register version', () => {
               type: 'register',
               channel: 'ch1',
               fileName: 'f.fig',
-              version: PROTOCOL_VERSION,
+              version: APP_VERSION,
             }),
           )
           setTimeout(res, 50)
@@ -691,7 +691,7 @@ describe('relay stores register version', () => {
     const ch1 = (channels as ChannelInfo[]).find(
       (c: ChannelInfo) => c.channel === 'ch1',
     )
-    expect(ch1?.version).toBe(PROTOCOL_VERSION)
+    expect(ch1?.version).toBe(APP_VERSION)
     ws.close()
   })
 })

@@ -5,6 +5,7 @@ export const APP_VERSION: string = pkg.version
 
 export const DEFAULT_PORT = 18080
 
-// Protocol/compat version for the plugin↔server handshake.
-// Bump ONLY on a breaking transport/protocol change — NOT every release.
-export const PROTOCOL_VERSION = '1'
+// major.minor of a semver string — the compat key for the version handshake (B2).
+// A patch difference is tolerated; a minor/major difference is a breaking change.
+export const majorMinor = (v: string): string =>
+  v.split('.').slice(0, 2).join('.')
