@@ -1,4 +1,5 @@
-import { COMMANDS } from '@figma-agent-bridge/shared'
+import { COMMANDS, PROTOCOL_VERSION } from '@figma-agent-bridge/shared'
+import type { ChannelInfo } from '@figma-agent-bridge/shared'
 import type { FigmaClient } from '../figma-client'
 import { discoverChannels } from '../figma-client'
 import { ensureRelay } from '../ensure-relay'
@@ -7,6 +8,20 @@ import {
   textResult,
   errorMessage,
 } from './shared'
+
+// Returns an actionable error string if the channel's plugin reports a protocol
+// version that does not match the server's, else null. `undefined` info (channel
+// not in the registry) is treated as "can't tell" → no error (best-effort).
+const protocolMismatch = (info: ChannelInfo | undefined): string | null => {
+  if (info === undefined) return null
+  if (info.version === PROTOCOL_VERSION) return null
+  const got = info.version ?? '(none)'
+  return (
+    `Figma plugin protocol '${got}' is incompatible with server protocol ` +
+    `'${PROTOCOL_VERSION}' — reinstall/update the Figma plugin (or update the MCP ` +
+    `server if it is the older side).`
+  )
+}
 
 export const handleConnect = async (
   params: { channel?: string },
@@ -55,6 +70,18 @@ export const handleConnect = async (
     )
   }
 
+  // Version handshake: look up the channel's registered protocol version and
+  // refuse to connect on a mismatch. Uses discoverChannels (already the source
+  // of ChannelInfo) so no plugin round-trip is needed.
+  if (relayHttpUrl !== undefined) {
+    const infos = await discoverChannels(relayHttpUrl)
+    const info = infos.find(c => c.channel === channel)
+    const mismatch = protocolMismatch(info)
+    if (mismatch !== null) {
+      return textResult(mismatch)
+    }
+  }
+
   try {
     await client.joinChannel(channel)
 
@@ -77,11 +104,18 @@ export const handleConnect = async (
  */
 export const handleStatus = async (
   client: FigmaClient,
+  relayHttpUrl?: string,
 ): Promise<ToolResult> => {
   if (!client.isConnected()) {
     return textResult('disconnected')
   }
   const channel = client.currentChannel()
+
+  let protocolVersion: string | undefined
+  if (relayHttpUrl !== undefined && channel !== null) {
+    const infos = await discoverChannels(relayHttpUrl)
+    protocolVersion = infos.find(c => c.channel === channel)?.version
+  }
 
   let live: {
     currentPage?: { id: string; name: string }
@@ -107,6 +141,7 @@ export const handleStatus = async (
     JSON.stringify({
       connected: true,
       channel,
+      protocolVersion,
       currentPage: live.currentPage,
       selection: live.selection,
       viewport: live.viewport,

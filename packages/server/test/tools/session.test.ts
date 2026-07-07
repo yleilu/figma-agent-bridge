@@ -6,7 +6,7 @@ import {
   it,
 } from 'bun:test'
 import type { Server } from 'bun'
-import { COMMANDS } from '@figma-agent-bridge/shared'
+import { COMMANDS, PROTOCOL_VERSION } from '@figma-agent-bridge/shared'
 import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
 import {
   startRelay,
@@ -41,6 +41,17 @@ const closeWs = (ws: WebSocket): Promise<void> =>
     ws.onclose = () => resolve()
     ws.close()
   })
+
+// Helper: join a channel and send a matching register (simulates a real plugin)
+const joinAndRegister = async (
+  ws: WebSocket,
+  channel: string,
+): Promise<void> => {
+  ws.send(JSON.stringify({ type: 'join', channel }))
+  await waitForMessage(ws)
+  ws.send(JSON.stringify({ type: 'register', channel, fileName: null, version: PROTOCOL_VERSION }))
+  await Bun.sleep(30)
+}
 
 describe('handleConnect', () => {
   it('returns success with channel', async () => {
@@ -77,13 +88,7 @@ describe('handleConnect auto-discovery', () => {
   it('auto-joins when exactly one channel available', async () => {
     const ws = await connectRaw()
 
-    ws.send(
-      JSON.stringify({
-        type: 'join',
-        channel: 'auto-ch',
-      }),
-    )
-    await waitForMessage(ws)
+    await joinAndRegister(ws, 'auto-ch')
 
     const calls: string[] = []
     const mockClient: FigmaClient = {
