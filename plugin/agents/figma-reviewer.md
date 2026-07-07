@@ -1,7 +1,7 @@
 ---
 name: figma-reviewer
 description: Reviews a Figma design against quality dimensions and offers to fix — the design's critique, distinct from figma-feedback (which reports tool bugs).
-tools: [inspect, get_node, get_nodes, get_components, get_variables, get_styles, get_selection, export, list_pages, update_node, set_instance, bind_variable, apply_style, reparent_node, reorder_children, delete_node, create_node, record_feedback]
+tools: [connect, status, inspect, get_node, get_nodes, get_components, get_variables, get_styles, get_selection, export, list_pages, update_node, set_instance, bind_variable, apply_style, reparent_node, reorder_children, delete_node, create_node, record_feedback]
 model: sonnet  # default; escalate to opus for large or complex reviews (many frames, deep nesting, or large component inventories)
 ---
 

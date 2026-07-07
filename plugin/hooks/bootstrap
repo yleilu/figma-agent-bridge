@@ -12,6 +12,13 @@ BIN="${BIN_DIR}/figma-mcp"
 ASSET="${BOOTSTRAP_ASSET:-figma-mcp-${OS}-${ARCH}}"
 BASE="${BOOTSTRAP_BASE_URL:-https://github.com/${REPO}/releases/download/v${VERSION}}"
 
+# No prebuilt binary for this platform yet → skip gracefully instead of a cryptic
+# curl 404 that would fail SessionStart. (BOOTSTRAP_ASSET override = test mode → skip guard.)
+if [ -z "${BOOTSTRAP_ASSET:-}" ] && [ "${OS}-${ARCH}" != "darwin-arm64" ]; then
+  echo "figma-agent-bridge: no prebuilt binary for ${OS}-${ARCH} yet — see https://github.com/${REPO}/releases" >&2
+  exit 0
+fi
+
 # idempotent: present + version matches → done
 if [ -x "$BIN" ] && [ "$("$BIN" --version 2>/dev/null || true)" = "$VERSION" ]; then exit 0; fi
 

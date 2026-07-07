@@ -23,4 +23,11 @@ describe('plugin config', () => {
       '${CLAUDE_PLUGIN_DATA}/bin/figma-mcp',
     )
   })
+  it('marketplace + plugin versions agree (bump together)', async () => {
+    const m = await read('.claude-plugin/marketplace.json')
+    const p = await read(
+      'plugin/.claude-plugin/plugin.json',
+    )
+    expect(m.plugins[0].version).toBe(p.version)
+  })
 })
