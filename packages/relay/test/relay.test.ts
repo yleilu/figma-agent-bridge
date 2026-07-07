@@ -12,6 +12,7 @@ import type {
   ChannelInfo,
   SystemMessage,
 } from '@figma-agent-bridge/shared/types'
+import { PROTOCOL_VERSION } from '@figma-agent-bridge/shared'
 import {
   startRelay,
   stopRelay,
@@ -645,5 +646,52 @@ describe('relay', () => {
     expect(data.map(c => c.channel)).toEqual(['ok-ch'])
 
     await closeWs(ws)
+  })
+})
+
+const RELAY_VERSION_PORT = 18191
+const RELAY_VERSION_WS = `ws://localhost:${RELAY_VERSION_PORT}`
+const RELAY_VERSION_HTTP = `http://localhost:${RELAY_VERSION_PORT}`
+
+describe('relay stores register version', () => {
+  let server: ReturnType<typeof startRelay>
+  beforeEach(() => {
+    server = startRelay(RELAY_VERSION_PORT)
+  })
+  afterEach(() => {
+    stopRelay(server)
+  })
+
+  it('exposes the registered version on GET /channels', async () => {
+    const ws = new WebSocket(RELAY_VERSION_WS)
+    await new Promise<void>((res, rej) => {
+      ws.onerror = () => rej(new Error('ws error'))
+      ws.onopen = () =>
+        ws.send(
+          JSON.stringify({ type: 'join', channel: 'ch1' }),
+        )
+      ws.onmessage = e => {
+        const m = JSON.parse(e.data as string)
+        if (m.type === 'system') {
+          ws.send(
+            JSON.stringify({
+              type: 'register',
+              channel: 'ch1',
+              fileName: 'f.fig',
+              version: PROTOCOL_VERSION,
+            }),
+          )
+          setTimeout(res, 50)
+        }
+      }
+    })
+    const channels = await (
+      await fetch(`${RELAY_VERSION_HTTP}/channels`)
+    ).json()
+    const ch1 = (channels as ChannelInfo[]).find(
+      (c: ChannelInfo) => c.channel === 'ch1',
+    )
+    expect(ch1?.version).toBe(PROTOCOL_VERSION)
+    ws.close()
   })
 })

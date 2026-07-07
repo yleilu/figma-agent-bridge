@@ -28,12 +28,11 @@ export type RegisterMessage = {
   type: 'register'
   channel: string
   fileName: string | null
+  version?: string
 }
 
 export type RelayIncoming =
-  | JoinMessage
-  | ChannelMessage
-  | RegisterMessage
+  JoinMessage | ChannelMessage | RegisterMessage
 export type RelayOutgoing = BroadcastMessage | SystemMessage
 
 // --- Command types ---
@@ -54,6 +53,7 @@ export type ChannelInfo = {
   channel: string
   fileName: string | null
   connectedAt: number
+  version?: string
 }
 
 // --- M2 parsed output types ---

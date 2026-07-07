@@ -185,6 +185,7 @@ const handleRegister = (
   ws: ServerWebSocket<WsData>,
   channel: string,
   fileName: string | null,
+  version: string | undefined,
 ) => {
   if (
     ctx.clientChannels.get(ws.data.id)?.has(channel) !==
@@ -195,6 +196,7 @@ const handleRegister = (
   const entry = ctx.channelRegistry.get(channel)
   if (entry !== undefined) {
     entry.fileName = fileName
+    entry.version = version
   }
 }
 
@@ -303,6 +305,7 @@ export const startRelay = (
             ws,
             frame.channel,
             frame.fileName,
+            frame.version,
           )
         } else if (frame.type === 'message') {
           handleMessage(ctx, ws, frame.channel, frame)
