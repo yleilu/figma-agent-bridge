@@ -17,7 +17,10 @@ export const buildFeedbackHandlers = (notify: Notify, fetchImpl: typeof fetch = 
     if (typeof rawPath !== 'string' || !rawPath) throw new Error('send-feedback: path is required')
     const path = rawPath
     const item = await readItem(path)
-    if (item.status === 'sent') return { item } // idempotent no-op
+    if (item.status === 'sent') {
+      notify('feedback-updated', { item }) // idempotent: re-broadcast the already-sent item
+      return { item }
+    }
     try {
       const { commentUrl } = await postFeedback(
         {

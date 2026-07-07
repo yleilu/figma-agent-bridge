@@ -53,11 +53,17 @@ describe('buildFeedbackHandlers', () => {
     expect(notes[0].params.item.status).toBe('failed')
   })
 
-  it('send is idempotent for an already-sent item', async () => {
+  it('send is idempotent for an already-sent item and re-broadcasts it', async () => {
     const item = await recordFeedback({ category: 'bugs', title: 't4', description: 'd' }, '0.0.1')
-    const h = buildFeedbackHandlers(() => {}, ok({ comment_url: 'https://gh/c/2' }))
+    const notes: { command: string; params: any }[] = []
+    const h = buildFeedbackHandlers((command, params) => notes.push({ command, params }), ok({ comment_url: 'https://gh/c/2' }))
     await h.send({ path: item.path })
+    notes.length = 0 // drop the first send's notification
     const again = await h.send({ path: item.path })
     expect(again.item.status).toBe('sent')
+    expect(notes.length).toBe(1)
+    expect(notes[0].command).toBe('feedback-updated')
+    expect(notes[0].params.item.status).toBe('sent')
+    expect(notes[0].params.item.path).toBe(item.path)
   })
 })
