@@ -203,6 +203,14 @@ Format: `name(params) → returns` — purpose · principle/checklist need.
 
 **Count = 47** (auditable per group): Session 2 · Read-nodes 4 · Read-query 3 · Read-DS 4 · Read-meta 2 · Write-nodes 5 · Write-structure 8 · Write-pages 3 · Write-components 5 · Write-DS 6 · Write-meta 2 · Handoff 2 · Batch 1 = **47**.
 
+**`record_feedback` — deliberate meta-tool, outside the 47 (T6/T7 exception).** The facade
+rule (T6/T7) requires every tool to map to a real `figma.*` capability. `record_feedback` is
+the sole exception — it captures bridge-experience friction and has no Figma API counterpart.
+It is admitted knowingly and quarantined: placed in its own conceptual `feedback` group, absent
+from `COMMANDS` and the verify-live `ALL_TOOLS` catalogue, so the 47 count is unchanged.
+Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle commands. See
+[[figma-bridge/docs/specs/feedback-system]].
+
 ### Session (2)
 - `connect(channel) → {channel, connected}` — pair MCP server to the Figma plugin · B1; §2 connect.
 - `status() → {connected, channel, currentPage, selection[], viewport}` — connection + live context in one read (live context is best-effort; failures degrade, they don't throw) · B1, T4; §2 read-what-user-sees.
