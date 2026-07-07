@@ -9,7 +9,7 @@ import {
   startRelay,
   stopRelay,
 } from '@figma-agent-bridge/relay/relay'
-import { PROTOCOL_VERSION } from '@figma-agent-bridge/shared'
+import { APP_VERSION } from '@figma-agent-bridge/shared'
 import { createFigmaClient } from '@figma-agent-bridge/server/figma-client'
 import {
   handleConnect,
@@ -23,6 +23,10 @@ const HTTP = `http://localhost:${PORT}`
 const text = (r: { content: { text: string }[] }) =>
   r.content[0].text
 
+const [MAJ, MIN] = APP_VERSION.split('.')
+const SAME_PATCH = `${MAJ}.${MIN}.999`               // same major.minor, different patch → OK
+const MINOR_BUMP = `${MAJ}.${Number(MIN) + 1}.0`     // minor bump = breaking → refuse
+
 describe('handleConnect version handshake', () => {
   let server: ReturnType<typeof startRelay>
   beforeEach(() => {
@@ -32,50 +36,36 @@ describe('handleConnect version handshake', () => {
     stopRelay(server)
   })
 
-  it('connects when the plugin protocol version matches', async () => {
-    const plugin = createMockPlugin({
-      relayUrl: WS,
-      channel: 'ok-ch',
-      documentName: 'D',
-    })
+  it('connects when major.minor matches (exact version)', async () => {
+    const plugin = createMockPlugin({ relayUrl: WS, channel: 'ok', documentName: 'D' })
     await plugin.start()
     const client = createFigmaClient(WS)
-    const res = await handleConnect(
-      { channel: 'ok-ch' },
-      client,
-      HTTP,
-      PORT,
-    )
-    expect(text(res)).toContain(
-      'Connected to channel: ok-ch',
-    )
-    client.disconnect()
-    plugin.stop()
+    const res = await handleConnect({ channel: 'ok' }, client, HTTP, PORT)
+    expect(text(res)).toContain('Connected to channel: ok')
+    client.disconnect(); plugin.stop()
   })
 
-  it('refuses to connect on a protocol mismatch and names the fix', async () => {
-    const plugin = createMockPlugin({
-      relayUrl: WS,
-      channel: 'bad-ch',
-      documentName: 'D',
-      version: '999',
-    })
+  it('connects on a patch-only difference (tolerated)', async () => {
+    const plugin = createMockPlugin({ relayUrl: WS, channel: 'patch', documentName: 'D', version: SAME_PATCH })
     await plugin.start()
     const client = createFigmaClient(WS)
-    const res = await handleConnect(
-      { channel: 'bad-ch' },
-      client,
-      HTTP,
-      PORT,
-    )
+    const res = await handleConnect({ channel: 'patch' }, client, HTTP, PORT)
+    expect(text(res)).toContain('Connected to channel: patch')
+    client.disconnect(); plugin.stop()
+  })
+
+  it('refuses on a minor difference (breaking) and names the fix', async () => {
+    const plugin = createMockPlugin({ relayUrl: WS, channel: 'bad', documentName: 'D', version: MINOR_BUMP })
+    await plugin.start()
+    const client = createFigmaClient(WS)
+    const res = await handleConnect({ channel: 'bad' }, client, HTTP, PORT)
     expect(text(res)).toContain('incompatible')
-    expect(text(res)).toContain(PROTOCOL_VERSION)
+    expect(text(res)).toContain(APP_VERSION)
     expect(client.isConnected()).toBe(false)
-    client.disconnect()
-    plugin.stop()
+    client.disconnect(); plugin.stop()
   })
 
-  it('status reports the connected channel protocol version', async () => {
+  it('status reports the connected channel version', async () => {
     const plugin = createMockPlugin({
       relayUrl: WS,
       channel: 'st-ch',
@@ -91,7 +81,7 @@ describe('handleConnect version handshake', () => {
     )
     const res = await handleStatus(client, HTTP)
     const parsed = JSON.parse(text(res))
-    expect(parsed.protocolVersion).toBe(PROTOCOL_VERSION)
+    expect(parsed.protocolVersion).toBe(APP_VERSION)
     client.disconnect()
     plugin.stop()
   })

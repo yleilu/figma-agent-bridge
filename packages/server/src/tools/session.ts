@@ -1,6 +1,7 @@
 import {
   COMMANDS,
-  PROTOCOL_VERSION,
+  APP_VERSION,
+  majorMinor,
 } from '@figma-agent-bridge/shared'
 import type { ChannelInfo } from '@figma-agent-bridge/shared'
 import type { FigmaClient } from '../figma-client'
@@ -12,23 +13,25 @@ import {
   errorMessage,
 } from './shared'
 
-// Returns an actionable error string if the channel's plugin reports a protocol
-// version that does not match the server's, else null. `undefined` info (channel
-// not in the registry) is treated as "can't tell" → no error (best-effort).
+// Returns an actionable error if the channel's plugin reports a version whose
+// major.minor differs from the server's (a breaking difference, per B2), else null.
+// `undefined` info (channel not in the registry) → no error (best-effort); a plugin
+// that reports no version at all is treated as incompatible.
 const protocolMismatch = (
   info: ChannelInfo | undefined,
 ): string | null => {
   if (info === undefined) {
     return null
   }
-  if (info.version === PROTOCOL_VERSION) {
+  const theirs = info.version
+  if (theirs !== undefined && majorMinor(theirs) === majorMinor(APP_VERSION)) {
     return null
   }
-  const got = info.version ?? '(none)'
+  const got = theirs ?? '(none)'
   return (
-    `Figma plugin protocol '${got}' is incompatible with server protocol ` +
-    `'${PROTOCOL_VERSION}' — reinstall/update the Figma plugin (or update the MCP ` +
-    `server if it is the older side).`
+    `Figma plugin version '${got}' is incompatible with server version ` +
+    `'${APP_VERSION}' (major.minor mismatch) — reinstall/update the Figma plugin ` +
+    `(or update the MCP server if it is the older side).`
   )
 }
 
