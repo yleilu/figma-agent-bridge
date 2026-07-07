@@ -35,33 +35,38 @@ diagnostic). A handshake flags both immediately.
 
 ## Design
 
-- **Shared `PROTOCOL_VERSION`** — a constant in `packages/shared`, bumped **only on breaking
-  transport/protocol changes** (not every release). Both server and plugin reference it.
+- **App semver, per [[figma-bridge/docs/principles|B2]]** — each side reports its **app version**
+  (`APP_VERSION`, the root `package.json` semver, frozen into the build). A breaking change bumps
+  the **minor**; a patch is non-breaking. There is **no** separate protocol-version constant.
 - **Plugin reports it on register** — add `version: string` to `registerMessageSchema`
   (`packages/shared/src/ws-schemas.ts`, today `{ type, channel, fileName }`). The plugin sends its
-  `PROTOCOL_VERSION` on join/register.
+  `APP_VERSION` on join/register.
 - **Server compares on connect** — the `connect` handler reads the reported version and compares
-  to its own `PROTOCOL_VERSION`; the outcome is also surfaced in `status`.
-- **Mismatch → typed, actionable error** — return the standard envelope (`{ error, code }`) naming
-  the stale side: *"Agent Bridge plugin vX is incompatible with server vY — update the {plugin |
-  server}."* Subsequent tool calls short-circuit with the same message until resolved.
-- **Model:** **exact match** of `PROTOCOL_VERSION`. Because it's bumped only on breaking changes, a
-  patch/minor release does **not** trip it — only genuine incompatibility does.
+  it to its own `APP_VERSION` on **major + minor only** (patch ignored); the outcome is also
+  surfaced in `status`.
+- **Mismatch → actionable error** — naming the stale side: *"Agent Bridge plugin vX is incompatible
+  with server vY — update the {plugin | server}."* Subsequent tool calls short-circuit with the
+  same message until resolved.
+- **Model:** **major.minor** match of the app semver (B2). A **patch** difference does **not** trip
+  it; a **minor or major** difference — i.e. a breaking change — does. The two versions differ only
+  when the sides are built from different releases (each build freezes its version), so a same-build
+  plugin+server always match.
 
 ## Wire contract & layer alignment (B1)
 
-- `registerMessageSchema` gains `version: string`. The **relay stays semantics-free** — it only
-  routes the envelope and gains **no** version logic (B1). The **server owns** the comparison.
+- `registerMessageSchema` gains `version: string` (the sender's `APP_VERSION` semver). The **relay
+  stays semantics-free** — it only routes/stores the value and gains **no** version logic (B1). The
+  **server owns** the comparison (**major.minor**, per B2).
 - The comparison is **one-way** (the server is the reference), surfaced on `connect` + `status`.
 - Tool names/commands are unaffected; this rides the existing register/connect path.
 
 ## Testing
 
-- **Unit** — match → proceed; mismatch → the actionable error with the correct stale-side message,
-  surfaced on `connect` and `status`.
+- **Unit** — same `major.minor` → proceed; a **patch-only** difference → proceed (not a break); a
+  **minor/major** difference → the actionable error, surfaced on `connect` and `status`.
 - **Relay schema** — assert `version` is present/validated on the `register` message.
-- **Mock fidelity** — the mock plugin (`packages/server/test/mocks/mock-plugin.ts`) MUST carry the
-  same `PROTOCOL_VERSION`; assert it so server / plugin / mock drift is caught (mock-fidelity rule).
+- **Mock fidelity** — the mock plugin (`packages/server/test/mocks/mock-plugin.ts`) reports the same
+  `APP_VERSION` by default; assert it so server / plugin / mock drift is caught (mock-fidelity rule).
 
 ## Relationship to the plugin milestone
 
@@ -70,8 +75,8 @@ This handshake ships **first** and is **self-contained**. The Claude Code plugin
 **decoupled** — it does not spec or depend on this mechanism. Its only version touch-point is a
 later, small **diagnosis / response skill**: when this handshake reports a mismatch, that skill
 guides the user through the fix (e.g. *reinstall the Figma plugin*, or diagnose a stale server).
-The `PROTOCOL_VERSION`, the wire change, and the compare all live **here**; the plugin only
-*responds*.
+The version compare (major.minor), the wire change, and the actionable error all live **here**; the
+plugin only *responds*.
 
 ## Out of scope
 

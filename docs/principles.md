@@ -59,6 +59,16 @@ interprets what a node *means*.
 *Why:* everything above depends on the bridge being boring and trustworthy; if transport
 or error shapes are inconsistent, no tool or skill can be either.
 
+### B2 — Versioned and compatible
+The whole app is versioned with **semver**, and **a breaking change bumps the minor** version
+(patch is reserved for non-breaking changes). The bridge guards against a plugin↔server **version
+skew**: it compares the two sides on **major + minor only** (patch ignored) and, on a mismatch,
+**fails loudly with an actionable message** — never a silent breaking drift.
+*Why:* an uncaught breaking transport/schema change corrupts sessions silently (the 2026-06-25
+incident). Comparing on semver **major.minor** means every breaking change trips the check while
+harmless patches don't — neither too strict (tripping every release) nor too loose (missing
+breaks). *(Where the version is sourced and how it's compared is mechanism → the specs.)*
+
 ## Tool layer
 
 ### T1 — A clean, symmetric, organized facade over Figma
