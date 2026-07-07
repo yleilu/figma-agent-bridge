@@ -634,16 +634,28 @@ describe('batchParamsSchema', () => {
 describe('recordFeedbackParamsSchema', () => {
   it('accepts a valid bug report', () => {
     const parsed = recordFeedbackParamsSchema.parse({
-      category: 'bugs', title: 'resize_node no-ops on locked nodes',
-      description: 'Got success but nothing changed.', tool: 'resize_node',
+      category: 'bugs',
+      title: 'resize_node no-ops on locked nodes',
+      description: 'Got success but nothing changed.',
+      tool: 'resize_node',
     })
     expect(parsed.category).toBe('bugs')
   })
   it('rejects an unknown category', () => {
-    expect(() => recordFeedbackParamsSchema.parse({ category: 'wishlist', title: 't', description: 'd' })).toThrow()
+    expect(() =>
+      recordFeedbackParamsSchema.parse({
+        category: 'wishlist',
+        title: 't',
+        description: 'd',
+      }),
+    ).toThrow()
   })
   it('makes tool optional', () => {
-    const parsed = recordFeedbackParamsSchema.parse({ category: 'proposals', title: 't', description: 'd' })
+    const parsed = recordFeedbackParamsSchema.parse({
+      category: 'proposals',
+      title: 't',
+      description: 'd',
+    })
     expect(parsed.tool).toBeUndefined()
   })
 })

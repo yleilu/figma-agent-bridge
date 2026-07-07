@@ -22,6 +22,7 @@
 // here + connectParamsSchema there.
 
 import { z } from 'zod'
+import { FEEDBACK_CATEGORIES } from './feedback'
 import {
   nodeSpecSchema,
   partialNodeSpecSchema,
@@ -1151,7 +1152,7 @@ export const batchParamsSchema = z.object({
  */
 export const recordFeedbackParamsSchema = z.object({
   category: z
-    .enum(['bugs', 'proposals'])
+    .enum(FEEDBACK_CATEGORIES)
     .describe(
       "Which feedback stream this belongs to. Routes to that stream's GitHub issue.",
     ),
