@@ -6,6 +6,7 @@ import type {
   RegisterMessage,
   SystemMessage,
 } from '@figma-agent-bridge/shared/types'
+import { PROTOCOL_VERSION } from '@figma-agent-bridge/shared'
 import cardFixture from '../fixtures/card-node-raw.json'
 
 const MOCK_SVG =
@@ -93,6 +94,8 @@ type MockPluginOptions = {
    * plugin's degraded reply shape + message (Bug A).
    */
   componentSetError?: boolean
+  /** defaults to PROTOCOL_VERSION; set to a different value to test mismatch */
+  version?: string
 }
 
 type MockPlugin = {
@@ -110,6 +113,7 @@ export const createMockPlugin = (
     pageName = 'Page 1',
     selection,
     componentSetError = false,
+    version = PROTOCOL_VERSION,
   } = options
 
   let ws: WebSocket | null = null
@@ -1900,6 +1904,7 @@ export const createMockPlugin = (
               type: 'register',
               channel,
               fileName: documentName ?? null,
+              version,
             }
             socket.send(JSON.stringify(registerMsg))
 
