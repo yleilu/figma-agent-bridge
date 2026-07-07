@@ -11,7 +11,7 @@ import {
   relayOutgoingSchema,
   commandMessageSchema,
 } from '@figma-agent-bridge/shared/ws-schemas'
-import { PROTOCOL_VERSION } from '@figma-agent-bridge/shared/constants'
+import { majorMinor, APP_VERSION } from '@figma-agent-bridge/shared/constants'
 import type {
   JoinMessage,
   ChannelMessage,
@@ -191,20 +191,26 @@ describe('ws-schemas relayOutgoingSchema', () => {
   })
 })
 
-describe('registerMessageSchema version', () => {
-  it('exposes a non-empty PROTOCOL_VERSION', () => {
-    expect(typeof PROTOCOL_VERSION).toBe('string')
-    expect(PROTOCOL_VERSION.length).toBeGreaterThan(0)
+describe('majorMinor', () => {
+  it('extracts major.minor from a semver string', () => {
+    expect(majorMinor('0.0.1')).toBe('0.0')
+    expect(majorMinor('1.2.3')).toBe('1.2')
+    expect(majorMinor('0.1.0')).toBe('0.1')
   })
+  it('APP_VERSION is a semver string', () => {
+    expect(APP_VERSION).toMatch(/^\d+\.\d+\.\d+/)
+  })
+})
 
+describe('registerMessageSchema version', () => {
   it('parses a register message that carries a version', () => {
     const parsed = registerMessageSchema.parse({
       type: 'register',
       channel: 'abc',
       fileName: null,
-      version: PROTOCOL_VERSION,
+      version: APP_VERSION,
     })
-    expect(parsed.version).toBe(PROTOCOL_VERSION)
+    expect(parsed.version).toBe(APP_VERSION)
   })
 
   it('parses a register message WITHOUT a version (optional, old plugins)', () => {
@@ -214,12 +220,5 @@ describe('registerMessageSchema version', () => {
       fileName: null,
     })
     expect(parsed.version).toBeUndefined()
-  })
-
-  it('mock plugin default version equals PROTOCOL_VERSION (drift guard)', () => {
-    // The mock defaults `version` to PROTOCOL_VERSION; if someone hard-codes a
-    // literal there instead, this and the connect test will diverge. This asserts
-    // the shared source of truth is a single constant.
-    expect(PROTOCOL_VERSION).toBe('1')
   })
 })
