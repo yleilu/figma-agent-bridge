@@ -6,6 +6,7 @@ const DEFAULT_PORT = 18080
 
 export const App = () => {
   const [port, setPort] = useState(DEFAULT_PORT)
+  const [sending, setSending] = useState<Set<string>>(new Set())
   const {
     status,
     channel,
@@ -178,16 +179,34 @@ export const App = () => {
                     </div>
                     <button
                       className="px-2 py-1 rounded-md bg-figma-bg-brand text-figma-text-onbrand hover:bg-figma-bg-brand-hover active:bg-figma-bg-brand-pressed disabled:opacity-50"
-                      disabled={item.status === 'sent'}
+                      disabled={
+                        item.status === 'sent' || sending.has(item.path)
+                      }
                       onClick={() => {
+                        if (
+                          item.status === 'sent' ||
+                          sending.has(item.path)
+                        )
+                          return
+                        setSending(s => new Set(s).add(item.path))
                         void sendFeedback(item.path)
+                          .catch(() => {})
+                          .finally(() => {
+                            setSending(s => {
+                              const next = new Set(s)
+                              next.delete(item.path)
+                              return next
+                            })
+                          })
                       }}
                     >
-                      {item.status === 'failed'
-                        ? 'Retry'
-                        : item.status === 'sent'
-                          ? 'Sent'
-                          : 'Send'}
+                      {sending.has(item.path)
+                        ? 'Sending…'
+                        : item.status === 'failed'
+                          ? 'Retry'
+                          : item.status === 'sent'
+                            ? 'Sent'
+                            : 'Send'}
                     </button>
                   </div>
                 ))}

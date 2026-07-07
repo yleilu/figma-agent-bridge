@@ -174,7 +174,7 @@ export const useRelay = () => {
 
           // Pull the current feedback list once per successful (re)connect. Fires
           // here in the join-success path, not on every render.
-          void syncFeedback()
+          void syncFeedback().catch(() => {})
           return
         }
 
@@ -231,6 +231,14 @@ export const useRelay = () => {
       ws.onclose = () => {
         wsRef.current = null
         channelRef.current = null
+
+        // Settle any in-flight feedback requests — the socket is gone, so their
+        // correlated replies will never arrive. Callers .catch these rejections,
+        // so this won't surface as an unhandled rejection.
+        feedbackPending.current.forEach(({ reject }) =>
+          reject(new Error('Disconnected')),
+        )
+        feedbackPending.current.clear()
 
         // Forget the channel ONLY on an explicit user Disconnect. An unintended
         // close (plugin reload, relay restart, network blip) keeps channel-id so
