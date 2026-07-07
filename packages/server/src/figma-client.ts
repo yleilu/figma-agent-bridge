@@ -15,6 +15,12 @@ export type FigmaClient = {
     timeoutMs?: number,
   ) => Promise<unknown>
   notify: (command: string, params: Record<string, unknown>) => void
+  onRequest: (
+    command: string,
+    handler: (
+      params: Record<string, unknown>,
+    ) => Promise<unknown> | unknown,
+  ) => void
   disconnect: () => void
   isConnected: () => boolean
   currentChannel: () => string | null
@@ -52,6 +58,10 @@ export const createFigmaClient = (
   let pendingChannel: string | null = null
   const pending = new Map<string, Pending<unknown>>()
   let joinPending: Pending<string> | null = null
+  const requestHandlers = new Map<
+    string,
+    (params: Record<string, unknown>) => Promise<unknown> | unknown
+  >()
 
   const rejectAll = (reason: string) => {
     pending.forEach(({ reject, timer }) => {
@@ -113,6 +123,28 @@ export const createFigmaClient = (
 
     // parsed.type === 'broadcast'
     const { message } = parsed
+
+    // Inbound request from the plugin (unsolicited; we did not originate it).
+    // These carry a `command` AND match a registered handler. Command REPLIES
+    // ({ id, result|error } with NO command) fall through to pending-resolution.
+    if (
+      message.command !== undefined &&
+      requestHandlers.has(message.command)
+    ) {
+      const handler = requestHandlers.get(message.command)!
+      Promise.resolve(handler(message.params ?? {}))
+        .then(result => {
+          sendReply(message.id, { result })
+        })
+        .catch((err: unknown) => {
+          sendReply(message.id, {
+            error:
+              err instanceof Error ? err.message : String(err),
+          })
+        })
+      return
+    }
+
     const hasResponse =
       message.result !== undefined ||
       message.error !== undefined
@@ -285,6 +317,35 @@ export const createFigmaClient = (
     socket.send(JSON.stringify(frame))
   }
 
+  const onRequest = (
+    command: string,
+    handler: (
+      params: Record<string, unknown>,
+    ) => Promise<unknown> | unknown,
+  ): void => {
+    requestHandlers.set(command, handler)
+  }
+
+  const sendReply = (
+    id: string,
+    body: { result?: unknown; error?: string },
+  ): void => {
+    const socket = ws
+    const ch = channel
+    if (socket === null || ch === null) {
+      return
+    }
+
+    const message: CommandMessage = { id, ...body }
+    const frame: ChannelMessage = {
+      type: 'message',
+      channel: ch,
+      message,
+    }
+
+    socket.send(JSON.stringify(frame))
+  }
+
   const disconnect = (): void => {
     disconnected = true
     const socket = ws
@@ -307,6 +368,7 @@ export const createFigmaClient = (
     joinChannel,
     sendCommand,
     notify,
+    onRequest,
     disconnect,
     isConnected,
     currentChannel,

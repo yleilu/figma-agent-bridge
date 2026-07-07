@@ -173,6 +173,85 @@ describe('figma-client', () => {
     client.disconnect()
   })
 
+  it('onRequest handles an inbound command and replies with a correlated result', async () => {
+    const CHANNEL = 'req-ch'
+    const client = createFigmaClient(WS_URL)
+    await client.joinChannel(CHANNEL)
+
+    const rawPlugin = await connectRaw()
+    const pluginQueue = createMessageQueue(rawPlugin)
+    rawPlugin.send(
+      JSON.stringify({ type: 'join', channel: CHANNEL }),
+    )
+    // Wait for system confirmation.
+    await pluginQueue()
+
+    client.onRequest(
+      'feedback-sync',
+      async (params: Record<string, unknown>) => ({
+        echoed: params.marker,
+      }),
+    )
+
+    rawPlugin.send(
+      JSON.stringify({
+        type: 'message',
+        channel: CHANNEL,
+        message: {
+          id: 'req-1',
+          command: 'feedback-sync',
+          params: { marker: 7 },
+        },
+      }),
+    )
+
+    const reply = (await pluginQueue()) as BroadcastMessage
+    expect(reply.type).toBe('broadcast')
+    expect(reply.message.id).toBe('req-1')
+    expect((reply.message.result as { echoed: number }).echoed).toBe(
+      7,
+    )
+
+    await closeWs(rawPlugin)
+    client.disconnect()
+  })
+
+  it('onRequest replies with an error when the handler throws', async () => {
+    const CHANNEL = 'req-err-ch'
+    const client = createFigmaClient(WS_URL)
+    await client.joinChannel(CHANNEL)
+
+    const rawPlugin = await connectRaw()
+    const pluginQueue = createMessageQueue(rawPlugin)
+    rawPlugin.send(
+      JSON.stringify({ type: 'join', channel: CHANNEL }),
+    )
+    await pluginQueue()
+
+    client.onRequest('send-feedback', async () => {
+      throw new Error('boom')
+    })
+
+    rawPlugin.send(
+      JSON.stringify({
+        type: 'message',
+        channel: CHANNEL,
+        message: {
+          id: 'req-2',
+          command: 'send-feedback',
+          params: {},
+        },
+      }),
+    )
+
+    const reply = (await pluginQueue()) as BroadcastMessage
+    expect(reply.message.id).toBe('req-2')
+    expect(reply.message.error).toContain('boom')
+
+    await closeWs(rawPlugin)
+    client.disconnect()
+  })
+
   it('times out when no response', async () => {
     const client = createFigmaClient(WS_URL)
     await client.joinChannel('timeout-ch')
