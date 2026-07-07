@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# SessionStart bootstrap: ensure the right figma-mcp binary is present in
+# ${CLAUDE_PLUGIN_DATA}/bin, downloading from the GitHub Release if absent or
+# version-mismatched. Guarded + idempotent + SHA-256-verified before chmod +x.
+set -euo pipefail
+VERSION="0.0.1"                                    # bump per release (== plugin.json)
+REPO="yleilu/figma-agent-bridge"
+OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+ARCH="$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
+BIN_DIR="${CLAUDE_PLUGIN_DATA}/bin"
+BIN="${BIN_DIR}/figma-mcp"
+ASSET="${BOOTSTRAP_ASSET:-figma-mcp-${OS}-${ARCH}}"
+BASE="${BOOTSTRAP_BASE_URL:-https://github.com/${REPO}/releases/download/v${VERSION}}"
+
+# idempotent: present + version matches → done
+if [ -x "$BIN" ] && [ "$("$BIN" --version 2>/dev/null || true)" = "$VERSION" ]; then exit 0; fi
+
+mkdir -p "$BIN_DIR"
+curl -fsSL "${BASE}/${ASSET}" -o "${BIN}.tmp"
+curl -fsSL "${BASE}/${ASSET}.sha256" -o "${BIN}.sha256"
+EXPECTED="$(awk '{print $1}' "${BIN}.sha256")"
+ACTUAL="$(shasum -a 256 "${BIN}.tmp" | awk '{print $1}')"
+if [ "$EXPECTED" != "$ACTUAL" ]; then echo "checksum mismatch for $ASSET" >&2; rm -f "${BIN}.tmp" "${BIN}.sha256"; exit 1; fi
+chmod +x "${BIN}.tmp"
+mv "${BIN}.tmp" "$BIN"
+rm -f "${BIN}.sha256"
