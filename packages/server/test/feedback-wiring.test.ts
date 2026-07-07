@@ -18,14 +18,17 @@ beforeEach(async () => {
   process.env.WORKER_SECRET = 'sek'
 })
 afterEach(async () => {
-  delete process.env.FEEDBACK_DIR; delete process.env.WORKER_URL; delete process.env.WORKER_SECRET
+  delete process.env.FEEDBACK_DIR
+  delete process.env.WORKER_URL
+  delete process.env.WORKER_SECRET
   await rm(dir, { recursive: true, force: true })
 })
 
 describe('buildFeedbackHandlers', () => {
   it('sync returns the pending items', async () => {
     await recordFeedback({ category: 'bugs', title: 't1', description: 'd' }, '0.0.1')
-    const h = buildFeedbackHandlers(() => {}, ok({}))
+    const noFetch = (async () => { throw new Error('sync must not call fetch') }) as unknown as typeof fetch
+    const h = buildFeedbackHandlers(() => {}, noFetch)
     const { items } = await h.sync()
     expect(items.map((i) => i.title)).toContain('t1')
   })

@@ -13,7 +13,9 @@ export const buildFeedbackHandlers = (notify: Notify, fetchImpl: typeof fetch = 
   }),
 
   send: async (params: Record<string, unknown>): Promise<{ item: FeedbackItem }> => {
-    const path = String(params.path)
+    const rawPath = params.path
+    if (typeof rawPath !== 'string' || !rawPath) throw new Error('send-feedback: path is required')
+    const path = rawPath
     const item = await readItem(path)
     if (item.status === 'sent') return { item } // idempotent no-op
     try {
@@ -32,9 +34,13 @@ export const buildFeedbackHandlers = (notify: Notify, fetchImpl: typeof fetch = 
       notify('feedback-updated', { item: updated })
       return { item: updated }
     } catch (err) {
-      const failed = await markFailed(path)
-      notify('feedback-updated', { item: failed })
-      throw err // → correlated { id, error }
+      try {
+        const failed = await markFailed(path)
+        notify('feedback-updated', { item: failed })
+      } catch {
+        // mark-failed cleanup itself failed; swallow so the original error is preserved
+      }
+      throw err
     }
   },
 })
