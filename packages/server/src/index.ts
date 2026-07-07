@@ -54,6 +54,7 @@ import {
   updateStylesParamsSchema,
   applyStyleParamsSchema,
   batchParamsSchema,
+  recordFeedbackParamsSchema,
 } from '@figma-agent-bridge/shared/tool-params'
 import { createFigmaClient } from './figma-client'
 import {
@@ -121,6 +122,8 @@ import {
 } from './tools/components'
 import { handleCreateFromSvg } from './tools/create-svg'
 import { handleBatch } from './tools/batch'
+import { handleRecordFeedback } from './tools/feedback'
+import { wireFeedback } from './feedback-wiring'
 
 const server = new McpServer({
   name: APP_NAME,
@@ -138,6 +141,7 @@ const relayHttpUrl = relayUrl
   .replace('wss://', 'https://')
   .replace('ws://', 'http://')
 const client = createFigmaClient(relayUrl)
+wireFeedback(client)
 
 server.tool(
   'connect',
@@ -453,6 +457,12 @@ server.tool(
   'batch',
   batchParamsSchema.shape,
   async params => handleBatch(params, client),
+)
+
+server.tool(
+  'record_feedback',
+  recordFeedbackParamsSchema.shape,
+  async params => handleRecordFeedback(params, client),
 )
 
 const transport = new StdioServerTransport()
