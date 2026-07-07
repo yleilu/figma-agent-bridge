@@ -1,0 +1,12 @@
+{
+  "name": "figma-agent-bridge",
+  "owner": { "name": "Lei", "email": "l@tristone.io" },
+  "plugins": [
+    {
+      "name": "figma-agent-bridge",
+      "source": "./plugin",
+      "description": "Build and review Figma designs with an AI agent.",
+      "version": "0.0.1"
+    }
+  ]
+}
