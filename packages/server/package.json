@@ -9,6 +9,7 @@
     "./tools/*": "./src/tools/*",
     "./ensure-relay": "./src/ensure-relay.ts",
     "./figma-client": "./src/figma-client.ts",
+    "./feedback-store": "./src/feedback-store.ts",
     "./parser": "./src/parser.ts",
     "./expression-parser": "./src/expression-parser.ts"
   },
