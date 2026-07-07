@@ -14,6 +14,7 @@ export type FigmaClient = {
     params?: Record<string, unknown>,
     timeoutMs?: number,
   ) => Promise<unknown>
+  notify: (command: string, params: Record<string, unknown>) => void
   disconnect: () => void
   isConnected: () => boolean
   currentChannel: () => string | null
@@ -258,6 +259,32 @@ export const createFigmaClient = (
     })
   }
 
+  const notify = (
+    command: string,
+    params: Record<string, unknown>,
+  ): void => {
+    const socket = ws
+    const ch = channel
+    if (socket === null || ch === null) {
+      // Best-effort: no plugin attached, drop silently.
+      return
+    }
+
+    const message: CommandMessage = {
+      id: randomUUID(),
+      command,
+      params,
+    }
+
+    const frame: ChannelMessage = {
+      type: 'message',
+      channel: ch,
+      message,
+    }
+
+    socket.send(JSON.stringify(frame))
+  }
+
   const disconnect = (): void => {
     disconnected = true
     const socket = ws
@@ -279,6 +306,7 @@ export const createFigmaClient = (
   return {
     joinChannel,
     sendCommand,
+    notify,
     disconnect,
     isConnected,
     currentChannel,

@@ -141,6 +141,38 @@ describe('figma-client', () => {
     client.disconnect()
   })
 
+  it('notify broadcasts a fire-and-forget frame with no reply expected', async () => {
+    const client = createFigmaClient(WS_URL)
+    await client.joinChannel('notify-ch')
+
+    const plugin = await connectRaw()
+    const nextMessage = createMessageQueue(plugin)
+    plugin.send(
+      JSON.stringify({
+        type: 'join',
+        channel: 'notify-ch',
+      }),
+    )
+    // Wait for system confirmation.
+    await nextMessage()
+
+    client.notify('feedback-added', {
+      item: { path: 'bugs/x.md', title: 'x' },
+    })
+
+    const received = (await nextMessage()) as BroadcastMessage
+    expect(received.type).toBe('broadcast')
+    expect(received.message.command).toBe('feedback-added')
+    expect(
+      (received.message.params as { item: { path: string } }).item
+        .path,
+    ).toBe('bugs/x.md')
+    expect(received.message.result).toBeUndefined()
+
+    await closeWs(plugin)
+    client.disconnect()
+  })
+
   it('times out when no response', async () => {
     const client = createFigmaClient(WS_URL)
     await client.joinChannel('timeout-ch')
