@@ -20,7 +20,10 @@ related:
 relay, channels, or ports. Governed by [[figma-bridge/docs/principles|the principles]] (esp.
 **B2**); specced in [[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]].
 
-**Status:** spec — design + both plans drafted; implementation not started.
+**Status:** **implementation shipped on `dev`** (merge `d095fab`, 2026-07-08) — dual-mode binary,
+manifests, SHA-256 bootstrap, release CI, 4 skills + 2 agents; lint + full suite green, and the
+install *mechanism* validated locally with a real compiled binary. **Deferred** (see below): the
+GitHub Release + CI run + VM clean-room install and the `skill-creator` agent evals.
 
 ## Scope — two plans
 
@@ -47,6 +50,10 @@ relay, channels, or ports. Governed by [[figma-bridge/docs/principles|the princi
 
 ## Out of scope (deferred)
 
+- **Release + CI + VM validation** — cutting the GitHub Release (the CI builds binaries on a
+  `v*` tag), the clean-VM install test (incl. the `SessionStart`-hook-vs-MCP-launch ordering
+  check), and the `skill-creator` agent evals. **Deferred with the dev-workflow / CI overhaul**
+  (to be sorted separately). The install *mechanism* is already validated locally with a real binary.
 - Windows/Linux binaries; the live Worker **Send** path (the URL compiles in, but the
   distributed-binary shared-secret is unresolved — see claude-plugin.md §11).
 
