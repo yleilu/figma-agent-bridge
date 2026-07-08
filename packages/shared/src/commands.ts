@@ -33,6 +33,9 @@ export const COMMANDS = {
   GET_VARIABLES: 'get_variables',
   GET_COMPONENTS: 'get_components',
   LIST_FONTS: 'list_fonts',
+  SEARCH_COMPONENTS: 'search_components',
+  REINDEX: 'reindex',
+  DOCUMENT_CHANGED: 'document_changed',
 
   // --- read — node metadata & prototype (2) ---
   GET_PLUGIN_DATA: 'get_plugin_data',
