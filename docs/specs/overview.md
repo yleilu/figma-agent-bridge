@@ -81,7 +81,7 @@ server attaches to the same channel. The lifecycle contract:
 ## Tool contract (cross-cutting result / error shape)
 
 The principles demote the *mechanism* of B1's "uniform contract" to the specs. This is it —
-the shape **every** tool obeys, so the agent learns one envelope, not 45. It is normative for
+the shape **every** tool obeys, so the agent learns one envelope, not 47. It is normative for
 all tools; [[figma-bridge/docs/specs/tool-surface|tool-surface.md]] is authoritative for what
 each individual tool returns within these rules, and
 [[figma-bridge/docs/specs/expression-formats|expression-formats.md]] for the value grammar
@@ -99,7 +99,7 @@ Every call returns the MCP `ToolResult`:
   plus operation-salient fields, with an optional `warning?: string` as the canonical channel
   for non-fatal notes (e.g. `createSlot` unavailable, auto-layout no-op).
 - **Reads** split by audience: machine readers (`get_*`) emit JSON `ParsedNode`/arrays; human
-  readers (`inspect`, `inspect_page_layout`, `list_pages`) emit YAML.
+  readers (`inspect`, `list_pages`) emit YAML.
 - **`export`** returns an `image` block (PNG/JPG/PDF) or a `text` block (SVG).
 
 ### Error envelope — server-owned, typed

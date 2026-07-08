@@ -16,7 +16,7 @@ related:
 
 # Version / Protocol Handshake
 
-> **Status:** design spec. A **standalone, buildable** feature that lands **before** the Claude
+> **Status:** implemented (shipped on `dev`). A **standalone, buildable** feature that landed **before** the Claude
 > Code plugin milestone ([[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]]) — that
 > milestone assumes this is in place and only *specializes* the mismatch UX. This reinstates a
 > **real** version check: a prior server+relay review removed the app-level Ping/Pong that carried

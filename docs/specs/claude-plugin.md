@@ -90,7 +90,8 @@ figma-agent-bridge/                       repo == marketplace
 │   ├── skills/
 │   │   ├── figma-design/SKILL.md         + references/ (§6.1)
 │   │   ├── figma-feedback/SKILL.md       + references/ (§6.3)
-│   │   └── figma-reviewer/SKILL.md       + references/ (§6.4)
+│   │   ├── figma-reviewer/SKILL.md       + references/ (§6.4)
+│   │   └── figma-connection/SKILL.md     + references/ (§8)
 │   ├── agents/
 │   │   ├── figma-designer.md             frontmatter: tools:, model: (§6.2)
 │   │   └── figma-reviewer.md             (§6.5)
@@ -175,15 +176,16 @@ or mirror cannot inject a binary. **Reference plugins to model after:**
 
 ## 6. Components
 
-**At a glance** — three skills (the knowledge) + two agents (the executors). Skills are
+**At a glance** — four skills (the knowledge) + two agents (the executors). Skills are
 introduced before the agents that consume them, except `figma-designer` (§6.2), which
 forward-references the feedback/reviewer skills below:
 
 | Concern | Skill | Agent |
 |---|---|---|
-| Build | `figma-design` (§6.1) | `figma-designer` (§6.2) — consumes all three skills |
+| Build | `figma-design` (§6.1) | `figma-designer` (§6.2) — consumes all three build-loop skills |
 | Report *tool* friction | `figma-feedback` (§6.3) | — (folds into the skill) |
 | Review the *design* | `figma-reviewer` (§6.4) | `figma-reviewer` (§6.5) |
+| Diagnose connection / version | `figma-connection` (§8) | — (main-agent guidance) |
 
 ### 6.1 Skill — `figma-design`
 

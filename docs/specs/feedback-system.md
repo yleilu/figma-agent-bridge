@@ -51,25 +51,30 @@ The feature is deliberately divided across two layers so no opinion leaks into t
 ## Architecture
 
 One request already crosses four hops (`Agent → MCP server → relay → plugin`; see
-[[figma-bridge/docs/architecture]]). This feature adds **two new message flows over the
+[[figma-bridge/docs/architecture]]). This feature adds **three new message flows over the
 same relay** plus **one new external hop** (server → CloudFlare Worker → GitHub).
 
 The relay stays dumb — it broadcasts any `{ type, channel, message }` envelope, so it
 needs **no logic change** and **no new named Zod frame types**: the feedback messages ride
 the existing generic `commandMessageSchema` envelope in `packages/shared/src/ws-schemas.ts`.
 It **only routes** these messages; their meaning lives entirely in the server and the UI, so
-the bridge stays semantics-free (B1). The two new flows are:
+the bridge stays semantics-free (B1). The three new flows are:
 
 - **Server → plugin push** — `feedback-added`, `feedback-updated`. Unsolicited
   notifications; no reply is awaited. (New: today the server only sends `command`
   envelopes and awaits an `{ id, result }`.) These are list-refresh pushes, not the
   authoritative reply to any request.
-- **Plugin → server request** — `send-feedback { id, path }`. User-initiated, and the
-  **first plugin→server traffic that is not a `command-result`**. To keep B1's uniform
-  contract, it is **correlated like a command**: the plugin generates an `id`, the server
-  replies `{ id, result }` or `{ id, error }` — the same shape every other bridge message
-  uses. The `feedback-updated` broadcast is a secondary refresh for the list, *not* the
-  send's result.
+- **Plugin → server hydrate/sync** — `feedback-sync { id }`. Plugin-initiated on each
+  successful (re)connect — so it is the **earliest plugin→server traffic that is not a
+  `command-result`** (it precedes any `send-feedback`). It is **correlated like a command**:
+  the plugin generates an `id`, the server replies `{ id, result }` with a **bounded** set of
+  `pending` items (T10) or `{ id, error }` — the same B1 envelope `send-feedback` uses. It
+  hydrates the list so it survives plugin reloads.
+- **Plugin → server request** — `send-feedback { id, path }`. User-initiated. To keep B1's
+  uniform contract, it is **correlated like a command**: the plugin generates an `id`, the
+  server replies `{ id, result }` or `{ id, error }` — the same shape every other bridge
+  message uses. The `feedback-updated` broadcast is a secondary refresh for the list, *not*
+  the send's result.
 
 The Figma sandbox thread (`packages/figma-plugin/src/code.ts`) is **untouched** — the
 feedback list lives entirely in the React UI iframe and never touches `figma.*`.
@@ -82,6 +87,12 @@ sequenceDiagram
     participant Plugin as Plugin UI
     participant Worker as CF Worker
     participant GH as GitHub
+
+    Note over Plugin: on (re)connect — hydrate list
+    Plugin->>Relay: feedback-sync { id }
+    Relay->>Server: feedback-sync { id }
+    Server-->>Relay: { id, result } (bounded pending items, B1/T10)
+    Relay-->>Plugin: { id, result }
 
     Agent->>Server: record_feedback(category, title, description, tool?)
     Server->>Server: write feedbacks/<cat>/<file>.md (status pending)
