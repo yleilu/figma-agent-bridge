@@ -702,6 +702,9 @@ const buildNode = (
     out.id = id
   }
 
+  const context = str(raw.context)
+  if (context !== undefined && context !== '') out.context = context
+
   out.size = sizeOf(raw)
 
   const position = positionOf(raw, parentBBox)
