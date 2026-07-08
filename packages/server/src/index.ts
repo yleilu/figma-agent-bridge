@@ -158,9 +158,9 @@ if (process.argv.includes('--relay')) {
   server.tool(
     'connect',
     connectParamsSchema.shape,
-    async ({ channel }) =>
+    async ({ fileKey, fileName, channel }) =>
       handleConnect(
-        { channel },
+        { fileKey, fileName, channel },
         client,
         relayHttpUrl,
         port,

@@ -38,69 +38,197 @@ const protocolMismatch = (
   )
 }
 
+// --- target resolution (B3): match a connect request to exactly ONE file ---
+// fileKey is the stable identity and wins; fileName is the fallback; neither
+// given means "the sole open file" (auto-discovery). Anything other than a
+// single match is a caller decision, never a guess.
+export type TargetResolution =
+  | { ok: true; info: ChannelInfo }
+  | {
+      ok: false
+      reason: 'none' | 'ambiguous' | 'unspecified'
+    }
+
+export const resolveTarget = (
+  available: ChannelInfo[],
+  target: { fileKey?: string; fileName?: string },
+): TargetResolution => {
+  const { fileKey, fileName } = target
+  // No target named → never guess (B3), even for a single open file.
+  if (fileKey === undefined && fileName === undefined) {
+    return {
+      ok: false,
+      reason:
+        available.length === 0 ? 'none' : 'unspecified',
+    }
+  }
+  const matches =
+    fileKey !== undefined
+      ? available.filter(c => c.fileKey === fileKey)
+      : available.filter(c => c.fileName === fileName)
+  if (matches.length === 1) {
+    return { ok: true, info: matches[0] }
+  }
+  return {
+    ok: false,
+    reason: matches.length === 0 ? 'none' : 'ambiguous',
+  }
+}
+
+// Human-readable listing of every connected file for an ASK error.
+const listAvailable = (available: ChannelInfo[]): string =>
+  available
+    .map(c => {
+      const label = c.fileName ?? '(unsaved file)'
+      const key = c.fileKey ?? '(no fileKey)'
+      return `- ${label} [fileKey: ${key}, channel: ${c.channel}]`
+    })
+    .join('\n')
+
+// The ASK message: never fall back to the only/first file — name what was
+// asked for and hand back the choices so the agent picks by fileKey.
+const askMessage = (
+  reason: 'none' | 'ambiguous' | 'unspecified',
+  target: { fileKey?: string; fileName?: string },
+  available: ChannelInfo[],
+): string => {
+  const by =
+    target.fileKey !== undefined
+      ? `fileKey '${target.fileKey}'`
+      : target.fileName !== undefined
+        ? `fileName '${target.fileName}'`
+        : 'the open files'
+  const head =
+    reason === 'unspecified'
+      ? `No target file specified.`
+      : reason === 'ambiguous'
+        ? `Multiple connected Figma files match ${by}.`
+        : `No connected Figma file matches ${by}.`
+  return (
+    `${head} Choose one and call connect again with its { fileKey } ` +
+    `(never guessing):\n${listAvailable(available)}`
+  )
+}
+
+// The registry snapshot returned to the agent on connect + status.
+const availableView = (
+  available: ChannelInfo[],
+): {
+  fileKey: string | null
+  fileName: string | null
+  connectedAt: number
+}[] =>
+  available.map(c => ({
+    fileKey: c.fileKey,
+    fileName: c.fileName,
+    connectedAt: c.connectedAt,
+  }))
+
+const connectResult = (r: {
+  channel: string
+  fileKey: string | null
+  fileName: string | null
+  available: ChannelInfo[]
+}): ToolResult =>
+  textResult(
+    JSON.stringify({
+      connected: true,
+      fileKey: r.fileKey,
+      fileName: r.fileName,
+      channel: r.channel,
+      available: availableView(r.available),
+    }),
+  )
+
 export const handleConnect = async (
-  params: { channel?: string },
+  params: {
+    fileKey?: string
+    fileName?: string
+    channel?: string
+  },
   client: FigmaClient,
   relayHttpUrl?: string,
   port?: number,
 ): Promise<ToolResult> => {
-  let { channel } = params
+  const { fileKey, fileName, channel } = params
 
-  if (channel === undefined && relayHttpUrl !== undefined) {
-    if (port !== undefined) {
-      const relay = await ensureRelay(relayHttpUrl, port)
-
-      if (relay.error !== undefined) {
-        return textResult(`Relay error: ${relay.error}`)
+  // Explicit channel override (escape hatch): join it directly — no discovery
+  // match. Kept so a caller that already knows the channel can bypass targeting.
+  if (channel !== undefined) {
+    let info: ChannelInfo | undefined
+    let available: ChannelInfo[] = []
+    if (relayHttpUrl !== undefined) {
+      available = await discoverChannels(relayHttpUrl)
+      info = available.find(c => c.channel === channel)
+      const mismatch = protocolMismatch(info)
+      if (mismatch !== null) {
+        return textResult(mismatch)
       }
     }
-
-    const found = await discoverChannels(relayHttpUrl)
-
-    if (found.length === 0) {
-      return textResult(
-        'No Figma plugins connected. Open a Figma file with the Agent Bridge plugin running, then try again.',
+    try {
+      await client.joinChannel(
+        channel,
+        info?.fileKey ?? null,
       )
+      return connectResult({
+        channel,
+        fileKey: info?.fileKey ?? null,
+        fileName: info?.fileName ?? null,
+        available,
+      })
+    } catch (err) {
+      return textResult(`Error: ${errorMessage(err)}`)
     }
-
-    if (found.length > 1) {
-      const list = found
-        .map(
-          c =>
-            `- ${c.channel}${c.fileName !== null ? ` (${c.fileName})` : ''}`,
-        )
-        .join('\n')
-
-      return textResult(
-        `Multiple Figma plugins connected. Specify a channel:\n${list}`,
-      )
-    }
-
-    channel = found[0].channel
   }
 
-  if (channel === undefined) {
+  if (relayHttpUrl === undefined) {
     return textResult(
-      'No channel specified and relay URL not configured for auto-discovery.',
+      'No target specified and relay URL not configured for auto-discovery.',
     )
   }
 
-  // Version handshake: look up the channel's registered protocol version and
-  // refuse to connect on a mismatch. Uses discoverChannels (already the source
-  // of ChannelInfo) so no plugin round-trip is needed.
-  if (relayHttpUrl !== undefined) {
-    const infos = await discoverChannels(relayHttpUrl)
-    const info = infos.find(c => c.channel === channel)
-    const mismatch = protocolMismatch(info)
-    if (mismatch !== null) {
-      return textResult(mismatch)
+  if (port !== undefined) {
+    const relay = await ensureRelay(relayHttpUrl, port)
+    if (relay.error !== undefined) {
+      return textResult(`Relay error: ${relay.error}`)
     }
   }
 
-  try {
-    await client.joinChannel(channel)
+  const available = await discoverChannels(relayHttpUrl)
+  if (available.length === 0) {
+    return textResult(
+      'No Figma plugins connected. Open a Figma file with the Agent Bridge plugin running, then try again.',
+    )
+  }
 
-    return textResult(`Connected to channel: ${channel}`)
+  const resolution = resolveTarget(available, {
+    fileKey,
+    fileName,
+  })
+  if (!resolution.ok) {
+    return textResult(
+      askMessage(
+        resolution.reason,
+        { fileKey, fileName },
+        available,
+      ),
+    )
+  }
+
+  const { info } = resolution
+  const mismatch = protocolMismatch(info)
+  if (mismatch !== null) {
+    return textResult(mismatch)
+  }
+
+  try {
+    await client.joinChannel(info.channel, info.fileKey)
+    return connectResult({
+      channel: info.channel,
+      fileKey: info.fileKey,
+      fileName: info.fileName,
+      available,
+    })
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }

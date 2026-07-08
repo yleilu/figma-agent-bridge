@@ -95,7 +95,7 @@ describe('handleConnect auto-discovery', () => {
     stopRelay(server)
   })
 
-  it('auto-joins when exactly one channel available', async () => {
+  it('does NOT auto-join a sole channel — asks (B3)', async () => {
     const ws = await connectRaw()
 
     await joinAndRegister(ws, 'auto-ch')
@@ -120,7 +120,7 @@ describe('handleConnect auto-discovery', () => {
     )
 
     expect(result.content[0].text).toContain('auto-ch')
-    expect(calls).toEqual(['auto-ch'])
+    expect(calls).toEqual([])
 
     await closeWs(ws)
   })
@@ -159,7 +159,9 @@ describe('handleConnect auto-discovery', () => {
       TEST_PORT,
     )
 
-    expect(result.content[0].text).toContain('Multiple')
+    expect(result.content[0].text).toContain(
+      'No target file specified',
+    )
     expect(result.content[0].text).toContain('multi-1')
     expect(result.content[0].text).toContain('multi-2')
 

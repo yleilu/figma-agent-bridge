@@ -50,7 +50,9 @@ describe('handleConnect version handshake', () => {
       HTTP,
       PORT,
     )
-    expect(text(res)).toContain('Connected to channel: ok')
+    const out = JSON.parse(text(res))
+    expect(out.connected).toBe(true)
+    expect(out.channel).toBe('ok')
     client.disconnect()
     plugin.stop()
   })
@@ -70,9 +72,9 @@ describe('handleConnect version handshake', () => {
       HTTP,
       PORT,
     )
-    expect(text(res)).toContain(
-      'Connected to channel: patch',
-    )
+    const out = JSON.parse(text(res))
+    expect(out.connected).toBe(true)
+    expect(out.channel).toBe('patch')
     client.disconnect()
     plugin.stop()
   })
@@ -118,5 +120,106 @@ describe('handleConnect version handshake', () => {
     expect(parsed.protocolVersion).toBe(APP_VERSION)
     client.disconnect()
     plugin.stop()
+  })
+})
+
+// Raw channel register (connect only JOINS, so no mock plugin is needed): open
+// a ws, join `channel`, and register it with a fileName/fileKey so /channels
+// lists it as an available file.
+const registerRaw = async (
+  channel: string,
+  fileName: string | null,
+  fileKey: string | null,
+): Promise<WebSocket> => {
+  const ws = await new Promise<WebSocket>(
+    (resolve, reject) => {
+      const s = new WebSocket(WS)
+      s.onopen = () => resolve(s)
+      s.onerror = () => reject(new Error('connect failed'))
+    },
+  )
+  ws.send(JSON.stringify({ type: 'join', channel }))
+  await Bun.sleep(20)
+  ws.send(
+    JSON.stringify({
+      type: 'register',
+      channel,
+      fileName,
+      fileKey,
+      version: APP_VERSION,
+    }),
+  )
+  await Bun.sleep(30)
+  return ws
+}
+
+describe('handleConnect file targeting', () => {
+  let server: ReturnType<typeof startRelay>
+  beforeEach(() => {
+    server = startRelay(PORT)
+  })
+  afterEach(() => {
+    stopRelay(server)
+  })
+
+  it('routes to the file whose fileName matches', async () => {
+    const a = await registerRaw('ch-a', 'Design A', 'key-a')
+    const b = await registerRaw('ch-b', 'Design B', 'key-b')
+    const client = createFigmaClient(WS)
+
+    const res = await handleConnect(
+      { fileName: 'Design B' },
+      client,
+      HTTP,
+      PORT,
+    )
+    const out = JSON.parse(text(res))
+    expect(out.connected).toBe(true)
+    expect(out.channel).toBe('ch-b')
+    expect(out.fileName).toBe('Design B')
+    expect(out.available).toHaveLength(2)
+
+    client.disconnect()
+    a.close()
+    b.close()
+  })
+
+  it('ASKS (no guess) with available[] when the target is unknown', async () => {
+    const a = await registerRaw('ch-a', 'Design A', 'key-a')
+    const b = await registerRaw('ch-b', 'Design B', 'key-b')
+    const client = createFigmaClient(WS)
+
+    const res = await handleConnect(
+      { fileName: 'Nonexistent' },
+      client,
+      HTTP,
+      PORT,
+    )
+    const msg = text(res)
+    expect(msg).toContain('No connected Figma file')
+    expect(msg).toContain('Design A')
+    expect(msg).toContain('Design B')
+    expect(client.isConnected()).toBe(false)
+
+    client.disconnect()
+    a.close()
+    b.close()
+  })
+
+  it('ASKS (unspecified) when a bare connect names no file', async () => {
+    const a = await registerRaw('ch-a', 'Design A', 'key-a')
+    const b = await registerRaw('ch-b', 'Design B', 'key-b')
+    const client = createFigmaClient(WS)
+
+    const res = await handleConnect({}, client, HTTP, PORT)
+    const msg = text(res)
+    expect(msg).toContain('No target file specified')
+    expect(msg).toContain('Design A')
+    expect(msg).toContain('Design B')
+    expect(client.isConnected()).toBe(false)
+
+    client.disconnect()
+    a.close()
+    b.close()
   })
 })
