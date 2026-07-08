@@ -154,6 +154,9 @@ export type NodeSpec = {
   /** Structured override delta. */
   overrides?: OverrideEntry[]
 
+  /** Full round-trippable markdown note, stored in shared pluginData. Omitted on read when absent/empty. Verbatim; the server never parses it. Capped at CONTEXT_MAX_BYTES on write. */
+  context?: string
+
   // children — reads: stubs past depth; writes: nested specs
   children?: NodeSpecOrStub[]
 }

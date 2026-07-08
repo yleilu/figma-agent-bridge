@@ -68,6 +68,7 @@ export const PROFILES: Record<
     'componentProperties',
     'variantProperties',
     'overrides',
+    'context',
     'children',
   ],
 }

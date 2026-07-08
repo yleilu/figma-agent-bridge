@@ -195,6 +195,12 @@ describe('nodeSpecSchema', () => {
       false,
     )
   })
+
+  it('accepts optional string context and rejects non-string', () => {
+    expect(nodeSpecSchema.safeParse({ type: 'FRAME', name: 'x', context: '---\n' }).success).toBe(true)
+    expect(nodeSpecSchema.safeParse({ type: 'FRAME', name: 'x', context: 123 }).success).toBe(false)
+    expect(nodeSpecSchema.safeParse({ type: 'FRAME', name: 'x' }).success).toBe(true) // omitted ok
+  })
 })
 
 describe('partialNodeSpecSchema (update_node)', () => {

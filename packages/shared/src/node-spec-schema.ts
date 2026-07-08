@@ -130,6 +130,7 @@ const nodeSpecBase = {
     .optional(),
   variantProperties: z.record(z.string()).optional(),
   overrides: z.array(overrideEntrySchema).optional(),
+  context: z.string().optional(),
 } as const
 
 // NodeSpec — read/edit shape. `children` is NodeSpecOrStub[] (a child is
