@@ -325,6 +325,7 @@ export const specToFigma = (
   if (spec.overrides !== undefined) {
     out.overrides = spec.overrides
   }
+  if (spec.context !== undefined) out.context = spec.context
 
   return out
 }

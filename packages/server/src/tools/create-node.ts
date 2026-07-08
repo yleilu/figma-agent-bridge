@@ -17,6 +17,7 @@ import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { NodeSpec } from '@figma-agent-bridge/shared/node-spec'
 import type { FigmaClient } from '../figma-client'
 import { specToFigmaForCreate } from '../serialize/node-spec-writer'
+import { assertContextWithinCap } from '../serialize/context-cap'
 import {
   type ToolResult,
   requireConnected,
@@ -75,6 +76,7 @@ export const handleCreateNode = async (
   }
 
   try {
+    assertContextWithinCap(spec)
     // M2 single-node: never recurse. Strip children before converting and
     // surface a warning so the agent knows nested creation is create_tree.
     const warnings: string[] = []

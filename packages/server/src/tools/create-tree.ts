@@ -38,6 +38,7 @@ import {
   type FigmaWritePayload,
 } from '../serialize/node-spec-writer'
 import { CREATABLE_TYPES } from './create-node'
+import { assertContextWithinCap } from '../serialize/context-cap'
 import {
   type ToolResult,
   requireConnected,
@@ -91,6 +92,7 @@ export const convertTree = (
   const node = spec as NodeSpec & {
     children?: TreeNodeSpec[]
   }
+  assertContextWithinCap(node)
   if (
     !(CREATABLE_TYPES as readonly string[]).includes(
       node.type,

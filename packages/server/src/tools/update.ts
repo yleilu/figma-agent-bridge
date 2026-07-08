@@ -10,6 +10,7 @@ import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { NodeSpec } from '@figma-agent-bridge/shared/node-spec'
 import type { FigmaClient } from '../figma-client'
 import { specToFigma } from '../serialize/node-spec-writer'
+import { assertContextWithinCap } from '../serialize/context-cap'
 import {
   type ToolResult,
   requireConnected,
@@ -31,6 +32,7 @@ export const handleUpdateNode = async (
   }
 
   try {
+    assertContextWithinCap(patch)
     // The writer pushes lossy-conversion notes (e.g. per-side stroke collapse)
     // onto `warnings`.
     const warnings: string[] = []
