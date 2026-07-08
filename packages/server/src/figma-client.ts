@@ -8,7 +8,10 @@ import type {
 } from '@figma-agent-bridge/shared'
 
 export type FigmaClient = {
-  joinChannel: (channel: string) => Promise<string>
+  joinChannel: (
+    channel: string,
+    fileKey?: string | null,
+  ) => Promise<string>
   sendCommand: (
     command: string,
     params?: Record<string, unknown>,
@@ -27,6 +30,7 @@ export type FigmaClient = {
   disconnect: () => void
   isConnected: () => boolean
   currentChannel: () => string | null
+  currentFileKey: () => string | null
 }
 
 type Pending<T> = {
@@ -59,6 +63,11 @@ export const createFigmaClient = (
   let disconnected = false
   let channel: string | null = null
   let pendingChannel: string | null = null
+  // fileKey of the file this connection TARGETS (B3). Committed alongside
+  // `channel` on the relay's join confirmation; stamped on every outbound
+  // command so the plugin can verify it is the addressed file.
+  let targetFileKey: string | null = null
+  let pendingFileKey: string | null = null
   const pending = new Map<string, Pending<unknown>>()
   let joinPending: Pending<string> | null = null
   const requestHandlers = new Map<
@@ -112,6 +121,7 @@ export const createFigmaClient = (
           const { reject, timer } = joinPending
           joinPending = null
           pendingChannel = null
+          pendingFileKey = null
           clearTimeout(timer)
           reject(new Error(result))
         } else {
@@ -119,6 +129,7 @@ export const createFigmaClient = (
           joinPending = null
           clearTimeout(timer)
           channel = pendingChannel
+          targetFileKey = pendingFileKey
           resolve(result)
         }
       }
@@ -208,12 +219,17 @@ export const createFigmaClient = (
           ws = null
           channel = null
           pendingChannel = null
+          targetFileKey = null
+          pendingFileKey = null
           rejectAll('Disconnected')
         }
       }
     })
 
-  const joinChannel = (ch: string): Promise<string> => {
+  const joinChannel = (
+    ch: string,
+    fileKey: string | null = null,
+  ): Promise<string> => {
     if (joinPending !== null) {
       return Promise.reject(
         new Error('Join already in progress'),
@@ -230,6 +246,7 @@ export const createFigmaClient = (
         const timer = setTimeout(() => {
           joinPending = null
           pendingChannel = null
+          pendingFileKey = null
           reject(new Error('Join timed out'))
         }, joinTimeoutMs)
 
@@ -238,6 +255,7 @@ export const createFigmaClient = (
     )
 
     pendingChannel = ch
+    pendingFileKey = fileKey
 
     // Connect and send join frame; errors propagate via rejectAll or socket close.
     connect()
@@ -253,6 +271,7 @@ export const createFigmaClient = (
           const { reject, timer } = joinPending
           joinPending = null
           pendingChannel = null
+          pendingFileKey = null
           clearTimeout(timer)
           reject(err as Error)
         }
@@ -290,6 +309,7 @@ export const createFigmaClient = (
         id,
         command,
         params,
+        targetFileKey,
       }
 
       const msg: ChannelMessage = {
@@ -353,6 +373,7 @@ export const createFigmaClient = (
     const socket = ws
     ws = null
     channel = null
+    targetFileKey = null
     rejectAll('Disconnected')
     if (socket !== null) {
       socket.close()
@@ -366,6 +387,8 @@ export const createFigmaClient = (
 
   const currentChannel = (): string | null => channel
 
+  const currentFileKey = (): string | null => targetFileKey
+
   return {
     joinChannel,
     sendCommand,
@@ -374,5 +397,6 @@ export const createFigmaClient = (
     disconnect,
     isConnected,
     currentChannel,
+    currentFileKey,
   }
 }

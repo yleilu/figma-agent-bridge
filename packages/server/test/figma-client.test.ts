@@ -582,3 +582,73 @@ describe('discoverChannels', () => {
     server = startRelay(TEST_PORT)
   })
 })
+
+describe('figma-client targetFileKey stamping', () => {
+  const CAP_PORT = 3099
+  const CAP_WS = `ws://localhost:${CAP_PORT}`
+
+  const startCaptureServer = (port: number) => {
+    const frames: {
+      type?: string
+      channel?: string
+      message?: {
+        id: string
+        command?: string
+        targetFileKey?: string | null
+      }
+    }[] = []
+    const server = Bun.serve({
+      port,
+      fetch(req, srv) {
+        if (srv.upgrade(req)) {
+          return undefined
+        }
+        return new Response('ws only', { status: 426 })
+      },
+      websocket: {
+        message(ws, raw) {
+          const msg = JSON.parse(raw as string)
+          frames.push(msg)
+          if (msg.type === 'join') {
+            // Ack the join with a relay-shaped system frame so joinChannel resolves.
+            ws.send(
+              JSON.stringify({
+                type: 'system',
+                message: {
+                  id: 'sys',
+                  result: `Joined ${msg.channel}`,
+                },
+              }),
+            )
+          }
+        },
+      },
+    })
+    return { server, frames }
+  }
+
+  it('tracks the joined fileKey and stamps it on outbound commands', async () => {
+    const { server, frames } = startCaptureServer(CAP_PORT)
+    const client = createFigmaClient(CAP_WS)
+
+    await client.joinChannel('cap-ch', 'file-key-123')
+    expect(client.currentFileKey()).toBe('file-key-123')
+
+    // Fire a command; the capture server never replies, so do not await it.
+    // Attach a no-op catch so the teardown disconnect (which rejects the still
+    // -pending command) does not surface as an unhandled rejection.
+    void client
+      .sendCommand('status', { foo: 'bar' })
+      .catch(() => {})
+    await Bun.sleep(30)
+
+    const cmdFrame = frames.find(f => f.type === 'message')
+    expect(cmdFrame?.message?.command).toBe('status')
+    expect(cmdFrame?.message?.targetFileKey).toBe(
+      'file-key-123',
+    )
+
+    client.disconnect()
+    server.stop(true)
+  })
+})
