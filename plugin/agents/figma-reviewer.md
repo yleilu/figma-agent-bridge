@@ -1,14 +1,14 @@
 ---
 name: figma-reviewer
 description: Reviews a Figma design against quality dimensions and offers to fix — the design's critique, distinct from figma-feedback (which reports tool bugs).
-tools: [connect, status, inspect, get_node, get_nodes, get_components, get_variables, get_styles, get_selection, export, list_pages, update_node, set_instance, bind_variable, apply_style, reparent_node, reorder_children, delete_node, create_node, record_feedback]
+tools: [connect, status, inspect, get_node, get_nodes, get_components, get_variables, get_styles, get_selection, search, export, list_pages, update_node, set_instance, bind_variable, apply_style, reparent_node, reorder_children, delete_node, create_node, batch, record_feedback]
 model: sonnet  # default; escalate to opus for large or complex reviews (many frames, deep nesting, or large component inventories)
 ---
 
 # figma-reviewer agent
 
 A dedicated subagent that performs a **design review** — reads a target frame or selection,
-checks it against five quality dimensions using the `figma-reviewer` skill, emits a
+checks it against six quality dimensions using the `figma-reviewer` skill, emits a
 standardized report, and then offers to apply fixes. Also invoked by `figma-designer` as its
 self-review gate before a build is called done.
 
@@ -59,11 +59,11 @@ Before checking any dimension, build a faithful picture of the target:
 
 ### Phase 2 — Check each dimension
 
-Use the **`figma-reviewer` skill** for this phase. The skill defines the five dimensions,
+Use the **`figma-reviewer` skill** for this phase. The skill defines the six dimensions,
 their per-finding thresholds, and the output format. Load `references/checks.md` for the
 concrete numbers (WCAG ratios, spacing scales, naming patterns).
 
-**The five dimensions (summary — authoritative detail is in the skill):**
+**The six dimensions (summary — authoritative detail is in the skill):**
 
 1. **Design-system adherence** — only when a design system is present. Hardcoded values
    that should be tokens, text off a style, duplicated elements that should be components,
@@ -75,12 +75,18 @@ concrete numbers (WCAG ratios, spacing scales, naming patterns).
 3. **Accessibility** — text contrast (WCAG AA), minimum text size, touch-target size,
    meaning conveyed by colour alone.
 
-4. **Layout & structure hygiene** — absolute positioning where auto-layout fits, default
-   names ("Frame 42"), pile-up at [0,0], missing constraints, redundant nesting,
-   orphan / hidden nodes.
+4. **Layout & structure hygiene** — absolute positioning where auto-layout fits, pile-up
+   at [0,0], missing constraints, redundant nesting, orphan / hidden nodes.
 
 5. **Fidelity to intent** — matches the request; nothing missing or extra; placeholder
    text in positions the request specified real values for. (Skip if no intent was stated.)
+
+6. **Naming & context legibility** — blank or default-pattern names (with the text-node
+   exemption: a text node's name may equal its content, so only a *blank* one is flagged),
+   components lacking a `/` taxonomy (variant children with `=` exempt), malformed or
+   over-cap `context`, and name ↔ `context.role` contradictions (advisory). Enumerate
+   default names with a bounded `search` (`match.regex` = the default-name pattern), not a
+   manual tree walk.
 
 Collect all findings before moving to Phase 3.
 
@@ -138,7 +144,8 @@ On approval, apply the requested fixes using `figma-design` mechanics:
 - **Token binding:** `bind_variable` on fills / effects; `apply_style` on text nodes.
   Apply on masters so instances inherit.
 - **Renaming:** `update_node` with a `name` patch — rename default-named nodes to
-  semantic names.
+  semantic names, and add a `/` taxonomy path to untaxonomied components. Batch multiple
+  renames through `batch`.
 - **Layout fixes:** `update_node` to set `layoutMode`, `layoutSizing`, `padding`, `gap`,
   or `layoutPositioning` on the offending node.
 - **Nesting cleanup:** `reparent_node` to flatten redundant wrappers; `delete_node` to

@@ -175,32 +175,7 @@ Severity: `warning` (affects users with colour-vision deficiency).
 
 ## Dimension 4 — Layout & structure hygiene
 
-### Default-name patterns
-
-Figma's auto-generated names to flag (case-insensitive match):
-
-```
-/^Frame \d+$/
-/^Rectangle \d+$/
-/^Group \d+$/
-/^Ellipse \d+$/
-/^Line \d+$/
-/^Vector \d+$/
-/^Polygon \d+$/
-/^Star \d+$/
-/^Text \d+$/
-/^Component \d+$/
-/^Union \d+$/
-/^Intersect \d+$/
-/^Subtract \d+$/
-/^Exclude \d+$/
-```
-
-Severity:
-- Root-level frames / page sections → `warning` (agents and developers target them by name)
-- Component masters and variants → `warning`
-- Leaf content nodes inside a component → `nit`
-- Purely decorative or structural helpers → `nit`
+Default-name auditing moved to **Dimension 6 — Naming & context legibility**.
 
 ### Pile-up at [0,0]
 
@@ -263,6 +238,60 @@ Severity:
 
 ---
 
+## Dimension 6 — Naming & context legibility
+
+### Default-name patterns
+
+The canonical default-name regex (case-insensitive), matching Figma's auto-generated
+names with or without a trailing number:
+
+```
+^(Frame|Group|Rectangle|Ellipse|Line|Polygon|Star|Vector|Component|Component Set|Instance|Slice|Image|Section|Boolean|Union|Subtract|Intersect|Exclude)(\s+\d+)?$
+```
+
+Feed this same pattern to `search` (`match.regex`) to enumerate offenders server-side,
+cursor-paginated, instead of walking the tree. A name that is empty or whitespace-only
+is always flagged.
+
+**Text-node exemption:** a text node (`type: TEXT`) may legitimately be named after its
+own content, so a text node is flagged **only when its name is blank / whitespace** —
+never for matching its `characters` or the default pattern.
+
+Severity:
+- Root-level frames / page sections → `warning` (agents and developers target them by name)
+- Component masters and variants → `warning`
+- Blank name on any targetable node → `warning`
+- Leaf content nodes inside a component → `nit`
+- Purely decorative or structural helpers → `nit`
+
+### Component `/` taxonomy
+
+A `COMPONENT` or `COMPONENT_SET` whose `name` contains no `/` is missing its
+design-system taxonomy path (`Button/Primary`, `Icon/Chevron`). Severity: `warning`.
+
+**Exempt:** variant children whose names contain `=` (`Size=Lg, State=Hover`) — that is
+the variant-property form, not a taxonomy miss.
+
+### Context well-formedness
+
+The full `context` value is on `get_node`; the `contextSummary` slice is on `inspect` /
+`search` / `get_components`. A malformed `context` yields **no** `contextSummary`, so the
+note is silently invisible at a glance — worth flagging.
+
+| Case | Severity |
+|---|---|
+| Frontmatter fence opened (`---`) but never closed | `warning` |
+| `context` exceeds 2 KB (`CONTEXT_MAX_BYTES`; only via the `set_plugin_data` escape hatch) | `warning` |
+| Missing `purpose:` in the frontmatter | `nit` (advisory — convention, not server-enforced) |
+
+### Name ↔ context.role agreement (advisory)
+
+When a node carries both a `name` and a `context` `role`, they should tell the same
+story; a node named `SecondaryButton` with `role: button/primary` is contradictory.
+Always `nit` / advisory — never a hard fail, since either field could be the stale one.
+
+---
+
 ## Quick-reference severity table
 
 | Dimension | Blocker | Warning | Nit |
@@ -270,5 +299,6 @@ Severity:
 | DS adherence | — | Hardcoded color/text with matching token/style; detached instance | Near-match token candidate |
 | Consistency | — | Off-scale spacing ≥ 4 px; > 4 type sizes; misaligned block | Off-scale ≤ 3 px; radius rounding; type size ±2 px |
 | Accessibility | WCAG AA text contrast fail; touch target < 24×24 | WCAG AA UI/graphic fail; touch target < 44×44; colour-alone signal; text < 9 px | WCAG AAA near-miss; text 9–10 px |
-| Layout hygiene | — | Default-named frames/components; pile-up at [0,0] | Default-named leaves; redundant nesting; hidden nodes; default constraints |
+| Layout hygiene | — | Pile-up at [0,0] | Redundant nesting; hidden nodes; default constraints |
 | Fidelity | Missing named section or feature | Count mismatch; placeholder content | Extra elements not asked for |
+| Naming & context | — | Blank/default-named frames/components; component without `/` taxonomy; unclosed/over-cap context | Default-named leaves; missing `purpose`; name↔role contradiction |

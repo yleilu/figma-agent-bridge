@@ -10,7 +10,7 @@ version: 0.1.0
 
 # figma-reviewer skill
 
-Reviews a **design artifact** against five quality dimensions and emits a standardized
+Reviews a **design artifact** against six quality dimensions and emits a standardized
 report. Distinct from `figma-feedback`, which reviews the **tool** (bugs/proposals).
 
 Consumed by:
@@ -44,7 +44,7 @@ The flow is strictly three phases — never collapse them:
 
 ---
 
-## The five dimensions
+## The six dimensions
 
 ### 1. Design-system adherence *(context-aware)*
 
@@ -99,9 +99,6 @@ Check regardless of design system:
 - **Absolute positioning where auto-layout fits** — a child with `layoutPositioning:
   ABSOLUTE` inside an auto-layout frame, where the positioning could be expressed as
   flow. (Legitimate use: overlapping badges, floating tooltips — use judgement.)
-- **Default names** — nodes whose `name` matches Figma's auto-generated patterns
-  (`Frame \d+`, `Rectangle \d+`, `Group \d+`, `Ellipse \d+`, `Line \d+`,
-  `Vector \d+`). Unnamed nodes block meaningful agent and developer targeting.
 - **Pile-up at [0,0]** — multiple sibling nodes all at `position: [0, 0]` on the page
   root with no layout parent (the "create-without-placement" symptom).
 - **Missing constraints** — nodes inside a fixed-size frame with neither auto-layout
@@ -126,6 +123,33 @@ Compare the built design against the stated request:
 
 This dimension is always relative to the stated intent; if no intent was stated (a
 pure style audit), skip it.
+
+### 6. Naming & context legibility
+
+Audits the two hidden-in-plain-sight legibility surfaces: every node should carry a
+legible `name`, and any `context` note should be well-formed. (The naming *opinions* —
+what a good name is — live in the `figma-design` skill; this dimension only audits.)
+
+- **Blank or default name** — a `name` that is empty, whitespace-only, or matches
+  Figma's default-name pattern (`Frame 12`, `Rectangle`, `Ellipse 3` — the full regex
+  is in `references/checks.md`). Nameless nodes block agent and developer targeting.
+  - **Text-node exemption:** a text node's `name` may legitimately equal its
+    `characters`, so a text node is flagged **only when its name is blank** — never for
+    mirroring its own content or the default pattern.
+- **Component without a `/` taxonomy** — a `COMPONENT` / `COMPONENT_SET` whose name has
+  no slash path (`Button` rather than `Button/Primary`). **Variant children** (names
+  containing `=`, e.g. `Size=Lg, State=Hover`) are exempt.
+- **Malformed or oversized context** — a `context` value with an unclosed frontmatter
+  fence (yields no `contextSummary`, so the note is invisible at a glance), or one that
+  exceeds the 2 KB cap (only reachable via the `set_plugin_data` escape hatch).
+- **Name ↔ context.role contradiction *(advisory)*** — when a node's `name` and its
+  `context` frontmatter `role` tell different stories (a node named `SecondaryButton`
+  with `role: button/primary`). Advisory only — a judgement call, never a hard fail,
+  since either field could be the stale one.
+
+**Bounded enumeration.** Don't walk the whole tree by hand — run `search` with
+`match.regex` set to the default-name pattern (a server-side, cursor-paginated, bounded
+filter) to collect offenders, then batch renames via `update_node` / `batch`.
 
 ---
 

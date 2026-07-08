@@ -66,6 +66,80 @@ Rules for running the surface smoothly and cheaply:
 
 ---
 
+## Naming discipline
+
+Every node ships with a meaningful `name` — the layer panel is the design's first read,
+for both agents and humans. This is discipline, not tooling: the tools accept `name` on
+every create, and nothing enforces it server-side. Never leave the Figma defaults
+(`Frame 12`, `Rectangle 3`).
+
+- **Semantic layer names** — name a node for what it *is* or *does*, in descriptive
+  PascalCase / Title-Case (`CheckoutButton`, `Search Bar`, `StatCard`).
+- **`/` taxonomy for components** — a `COMPONENT` / `COMPONENT_SET` carries a slash path
+  that places it in the system: `Button/Primary`, `Icon/Chevron`, `Card/Product`. The
+  taxonomy is how the component browser groups assets, so it is mandatory on every
+  master. Variant children are named by their properties (`Size=Lg, State=Hover`) — that
+  `=` form is the variant convention, not a taxonomy path.
+- **Semantic names for structural text** — a text node that plays a structural role (a
+  heading, a label, a field caption) earns a role name (`SectionTitle`, `PriceLabel`),
+  not its literal content. A text node whose name simply mirrors its own characters is
+  fine for plain copy — the reviewer exempts it — but structural text deserves a real
+  name.
+
+---
+
+## Context — the hidden note
+
+`context` is a round-trippable markdown note stored on a node: the non-derivable *why* a
+structural read can't give — purpose, role, status, constraints, links. Write it with
+`create_node` / `update_node` (the `context` field); read it back in full on `get_node`
+/ `get_nodes`, or as a compact `contextSummary` (the frontmatter slice) on `inspect` /
+`search` / `get_components`.
+
+**Author it in this shape** — frontmatter scalars, then fixed body sections:
+
+```markdown
+---
+purpose: Primary checkout CTA — sole entry to checkout
+role: button/primary
+status: stable
+updated: agent · 2026-07-08
+---
+## Constraints
+Token-bound (do not restyle) · text localized · width fluid
+
+## Links
+linear:ENG-1234 · pr:#456
+
+## Notes
+Visually dominant by design; only one primary per screen.
+```
+
+- **Frontmatter** — `purpose` (required by convention: what it is and what it's *for*),
+  `role` (design-system label like `button/primary`), `status` (`draft` | `stable` |
+  `deprecated`, default `stable`), `updated` (provenance — `agent · <date>`). All but
+  `purpose` are optional.
+- **Body** — the three fixed sections `## Constraints`, `## Links`, `## Notes`, in that
+  order. Skip any you have nothing for; don't invent new headings.
+- **Keep it to one screen of *why*** — a ~600-character soft budget. Past that you're
+  writing docs: link out via `## Links` instead. The hard cap is 2 KB; a write over it
+  is rejected with a clean size error.
+
+Two boundaries to respect:
+
+- **Root-only read-back (v1).** `context` can be *written* on any node — including
+  `create_tree` descendants — but it is only *read back* when that node is the read /
+  export **root**. A deep `get_node` returns `context` on the root, not on descendants.
+  Do not rely on a deep read or a `create_tree` round-trip to preserve descendant
+  context; write it, then read each node *as its own root* to confirm.
+- **Over-cap writes are read-only.** The raw `set_plugin_data(figmabridge/context, …)`
+  escape hatch is unopinionated and can store a value above the 2 KB cap. Such a value
+  reads back faithfully but is **read-only** — a full-spec write-back through
+  `update_node` is rejected with the size error. Trim to ≤ 2 KB, or omit `context`
+  (omitting preserves the stored value) to edit the rest of the node.
+
+---
+
 ## Workflow spine
 
 A default order, not a mandate — adapt to the request:
