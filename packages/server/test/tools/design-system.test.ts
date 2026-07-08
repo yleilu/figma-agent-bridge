@@ -313,6 +313,38 @@ describe('handleGetStyles', () => {
     expect(out.truncated).toBe(false)
     expect(out).not.toHaveProperty('cursor')
   })
+
+  it('surfaces style description in full, and styles carry no context', async () => {
+    const parsed = YAML.parse(
+      (
+        await handleGetStyles(
+          {},
+          stubClient({
+            reply: {
+              paint: [
+                {
+                  id: 'S:1',
+                  name: 'Brand/Primary',
+                  value: {
+                    type: 'SOLID',
+                    color: { r: 1, g: 0, b: 0 },
+                  },
+                  description: 'Brand red',
+                },
+              ],
+            },
+          }),
+        )
+      ).content[0].text,
+    ) as {
+      results: {
+        description?: string
+        contextSummary?: string
+      }[]
+    }
+    expect(parsed.results[0].description).toBe('Brand red')
+    expect(parsed.results[0].contextSummary).toBeUndefined()
+  })
 })
 
 describe('handleGetComponents', () => {
@@ -661,6 +693,58 @@ describe('handleGetComponents', () => {
       warnings?: string[]
     }
     expect(out.warnings).toBeUndefined()
+  })
+
+  it('emits contextSummary on a component entry, never the raw context', async () => {
+    const result = await handleGetComponents(
+      {},
+      stubClient({
+        reply: {
+          local: [
+            {
+              id: '1:10',
+              name: 'Button',
+              key: 'btn-key',
+              type: 'COMPONENT',
+              context: '---\npurpose: CTA\n---\n## Notes\nlong body',
+            },
+          ],
+          remote: [],
+        },
+      }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { context?: string; contextSummary?: string }[]
+    }
+    expect(out.results[0].contextSummary).toBe('purpose: CTA')
+    expect(out.results[0].context).toBeUndefined()
+  })
+
+  it('surfaces component description in full, omitted when absent', async () => {
+    const parsed = YAML.parse(
+      (
+        await handleGetComponents(
+          {},
+          stubClient({
+            reply: {
+              local: [
+                {
+                  id: 'c1',
+                  name: 'Button',
+                  key: 'k',
+                  type: 'COMPONENT',
+                  description: 'Primary action only',
+                },
+              ],
+              remote: [],
+            },
+          }),
+        )
+      ).content[0].text,
+    ) as { results: { description?: string }[] }
+    expect(parsed.results[0].description).toBe(
+      'Primary action only',
+    )
   })
 
   it('returns failure text on a null reply', async () => {

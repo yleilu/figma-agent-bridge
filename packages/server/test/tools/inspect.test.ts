@@ -116,6 +116,24 @@ describe('handleInspect (rebuilt — Rule B)', () => {
     )
     expect(result.content[0].text).toContain('not found')
   })
+
+  it('emits contextSummary, never full context, and it survives a fields narrow', async () => {
+    const res = await handleInspect(
+      { nodeId: '1:42', fields: ['id'] },
+      stubClient({
+        reply: {
+          id: '1:42',
+          type: 'FRAME',
+          context: '---\npurpose: CTA\n---\n## Notes\nlong body',
+        },
+      }),
+    )
+    const parsed = YAML.parse(res.content[0].text) as {
+      view: { context?: string; contextSummary?: string }
+    }
+    expect(parsed.view.contextSummary).toBe('purpose: CTA')
+    expect(parsed.view.context).toBeUndefined()
+  })
 })
 
 // ─── multi-selection inspect (M2 chunk F) ─────────────────────────────────────

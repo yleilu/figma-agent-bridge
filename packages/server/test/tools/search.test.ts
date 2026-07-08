@@ -318,6 +318,28 @@ describe('handleSearch (rebuilt — Rule A)', () => {
     )
   })
 
+  it('emits contextSummary on a candidate, never full context (post-projection)', async () => {
+    const result = await handleSearch(
+      { match: { name: 'Card' } },
+      stubClient({
+        results: [
+          {
+            id: '1:1',
+            name: 'Card',
+            type: 'FRAME',
+            size: [320, 200],
+            context: '---\npurpose: CTA\n---\n## Notes\nlong body',
+          },
+        ],
+      }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { context?: string; contextSummary?: string }[]
+    }
+    expect(out.results[0].contextSummary).toBe('purpose: CTA')
+    expect(out.results[0].context).toBeUndefined()
+  })
+
   it('handles empty results gracefully', async () => {
     const result = await handleSearch(
       { match: { name: 'nonexistent' } },

@@ -15,6 +15,7 @@ import type {
 } from '../grammar'
 import type { FigmaClient } from '../figma-client'
 import { paginateList, CursorError } from '../read/paginate'
+import { contextSummaryOf } from '../read/context-summary'
 import {
   type ToolResult,
   textResult,
@@ -30,6 +31,7 @@ type StyleEntry = {
   id: string
   name: string
   value?: unknown
+  description?: string
 }
 
 type StylesReply = {
@@ -128,6 +130,7 @@ export const handleGetStyles = async (
       name: string
       type: StyleCategory
       value: unknown
+      description?: string
     }[] = []
 
     for (const category of STYLE_CATEGORIES) {
@@ -143,6 +146,9 @@ export const handleGetStyles = async (
           name: entry.name,
           type: category,
           value: renderStyleValue(category, entry.value),
+          ...(entry.description
+            ? { description: entry.description }
+            : {}),
         })
       }
     }
@@ -183,6 +189,7 @@ type ComponentEntry = {
   key?: string
   type?: string
   page?: string | null
+  description?: string
   // `properties`: the SAME {id,name,type,defaultValue,variantOptions?} array
   // shape + key update_component emits (read == write, T2).
   properties?: unknown[]
@@ -271,7 +278,20 @@ export const handleGetComponents = async (
       remote = remote.filter(matches)
     }
 
-    const results = [...local, ...remote]
+    // Bounded reader: replace each entry's raw `context` with the capped
+    // read-only `contextSummary` slice (post-projection, not projectable). The
+    // raw value only round-trips via the fidelity reads (get_node/get_nodes).
+    const results = [...local, ...remote].map(entry => {
+      const summary = contextSummaryOf(
+        (entry as { context?: string }).context,
+      )
+      delete (entry as { context?: unknown }).context
+      if (summary !== undefined) {
+        ;(entry as { contextSummary?: string }).contextSummary =
+          summary
+      }
+      return entry
+    })
 
     // T10 — bound the flattened list to one page server-side (same helper as the
     // other list reads). A STALE/MALFORMED cursor is surfaced cleanly, never

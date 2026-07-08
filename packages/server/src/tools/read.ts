@@ -13,6 +13,7 @@ import { toNodeSpec } from '../serialize/node-spec-reader'
 import { truncateTree, isStub } from '../read/truncate-tree'
 import { buildMatcher } from '../read/match'
 import { projectNode } from '../read/project'
+import { contextSummaryOf } from '../read/context-summary'
 import { paginateList, CursorError } from '../read/paginate'
 import {
   type ToolResult,
@@ -41,6 +42,13 @@ const projectView = (
   }
   const { children } = node
   const out = projectNode(node, sel) as NodeSpec
+  const summary = contextSummaryOf(
+    (node as { context?: string }).context,
+  )
+  delete (out as { context?: unknown }).context
+  if (summary !== undefined) {
+    ;(out as { contextSummary?: string }).contextSummary = summary
+  }
   if (Array.isArray(children)) {
     const kept = children
       .filter(c =>

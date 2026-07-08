@@ -26,6 +26,7 @@ import type { NodeSpec } from '@figma-agent-bridge/shared/node-spec'
 import type { FigmaClient } from '../figma-client'
 import { buildMatcher } from '../read/match'
 import { projectNode } from '../read/project'
+import { contextSummaryOf } from '../read/context-summary'
 import { paginateList, CursorError } from '../read/paginate'
 import {
   type ToolResult,
@@ -171,13 +172,23 @@ export const handleSearch = async (
       throw err
     }
 
-    // 4 — fields/profile projection over the page.
-    const projected = bounded.page.map(n =>
-      projectNode(n as unknown as NodeSpec, {
+    // 4 — fields/profile projection over the page. Bounded readers emit the
+    // capped `contextSummary` slice, never the raw `context` (post-projection,
+    // not projectable — the raw value only round-trips via get_node/get_nodes).
+    const projected = bounded.page.map(n => {
+      const out = projectNode(n as unknown as NodeSpec, {
         fields: params.fields,
         profile: params.profile,
-      }),
-    )
+      }) as { context?: unknown; contextSummary?: string }
+      const summary = contextSummaryOf(
+        (n as { context?: string }).context,
+      )
+      delete out.context
+      if (summary !== undefined) {
+        out.contextSummary = summary
+      }
+      return out
+    })
 
     const out: {
       results: unknown[]
