@@ -10,6 +10,11 @@ export const commandMessageSchema = z.object({
   id: z.string(),
   command: z.string().optional(),
   params: z.record(z.unknown()).optional(),
+  // Stamped by the server on every REQUEST (server -> plugin) to address the
+  // command to exactly one file (principle B3); null when no target is bound.
+  // Optional because the same envelope also carries plugin RESPONSES
+  // ({ id, result|error }), which have no target.
+  targetFileKey: z.string().nullable().optional(),
   result: z.unknown().optional(),
   error: z.string().optional(),
 })

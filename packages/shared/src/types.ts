@@ -46,6 +46,9 @@ export type CommandMessage = {
   // (plugin -> server), which carries only { id, result|error }.
   command?: string
   params?: Record<string, unknown>
+  // Target file the request is addressed to (B3). Optional (absent on
+  // responses); null when the server has no bound target.
+  targetFileKey?: string | null
   result?: unknown
   error?: string
 }
