@@ -39,9 +39,9 @@ const protocolMismatch = (
 }
 
 // --- target resolution (B3): match a connect request to exactly ONE file ---
-// fileKey is the stable identity and wins; fileName is the fallback; neither
-// given means "the sole open file" (auto-discovery). Anything other than a
-// single match is a caller decision, never a guess.
+// fileKey is the stable identity and wins; fileName is the fallback; with
+// neither given we never guess — return `unspecified` so connect asks the
+// caller to name a file (B3). Anything other than a single match asks too.
 export type TargetResolution =
   | { ok: true; info: ChannelInfo }
   | {

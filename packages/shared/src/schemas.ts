@@ -26,6 +26,6 @@ export const connectParamsSchema = z.object({
     .min(1)
     .optional()
     .describe(
-      'Explicit relay channel to join (escape hatch). Omit and pass fileKey/fileName to target by file; omit all three to auto-join the sole connected file.',
+      'Explicit relay channel to join (escape hatch). Omit and pass fileKey/fileName to target by file. Omit all three and the server lists the connected files and asks you to choose one by fileKey — it never auto-joins, even if only one file is open (B3).',
     ),
 })
