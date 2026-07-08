@@ -164,7 +164,7 @@ describe('e2e roundtrip', () => {
     await Bun.sleep(50)
 
     const result = await handleConnect(
-      {},
+      { fileName: 'Auto Doc' },
       client,
       RELAY_HTTP_URL,
     )
