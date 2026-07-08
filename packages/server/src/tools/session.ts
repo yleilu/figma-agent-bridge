@@ -235,15 +235,15 @@ export const handleConnect = async (
 }
 
 /**
- * status() → { connected, channel, currentPage, selection[], viewport } (D1).
+ * status() → { connected, fileKey, fileName, channel, available[],
+ *              protocolVersion, currentPage, selection[], viewport }.
  *
- * Connection state (connected, channel) is known SERVER-side; the LIVE context
- * (currentPage / selection / viewport — what the user is looking at) is read
- * from the plugin via COMMANDS.STATUS and merged in. The plugin's live context
- * is best-effort: if the STATUS round-trip fails or returns nothing, the
- * connection state still reports honestly (never a throw, never a hallucinated
- * context). This is also the documented READ path for the viewport (set_focus is
- * the writer).
+ * Connection identity (fileKey/channel) is known SERVER-side (fileKey from the
+ * client's join target); fileName + protocolVersion + available[] come from the
+ * relay registry (/channels); the LIVE context (currentPage / selection /
+ * viewport) is read from the plugin via COMMANDS.STATUS and merged in. The live
+ * read is best-effort: a failed round-trip still reports connection state (never
+ * a throw, never a hallucinated context).
  */
 export const handleStatus = async (
   client: FigmaClient,
@@ -253,13 +253,23 @@ export const handleStatus = async (
     return textResult('disconnected')
   }
   const channel = client.currentChannel()
+  const fileKey = client.currentFileKey()
 
+  let fileName: string | null = null
   let protocolVersion: string | undefined
-  if (relayHttpUrl !== undefined && channel !== null) {
+  let available: {
+    fileKey: string | null
+    fileName: string | null
+    connectedAt: number
+  }[] = []
+  if (relayHttpUrl !== undefined) {
     const infos = await discoverChannels(relayHttpUrl)
-    protocolVersion = infos.find(
-      c => c.channel === channel,
-    )?.version
+    available = availableView(infos)
+    const mine = infos.find(
+      c => channel !== null && c.channel === channel,
+    )
+    fileName = mine?.fileName ?? null
+    protocolVersion = mine?.version
   }
 
   let live: {
@@ -285,7 +295,10 @@ export const handleStatus = async (
   return textResult(
     JSON.stringify({
       connected: true,
+      fileKey,
+      fileName,
       channel,
+      available,
       protocolVersion,
       currentPage: live.currentPage,
       selection: live.selection,

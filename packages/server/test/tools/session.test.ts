@@ -223,6 +223,7 @@ describe('handleStatus', () => {
       disconnect: () => undefined,
       isConnected: () => false,
       currentChannel: () => null,
+      currentFileKey: () => null,
     }
 
     const result = await handleStatus(mockClient)
@@ -243,6 +244,7 @@ describe('handleStatus', () => {
       disconnect: () => undefined,
       isConnected: () => true,
       currentChannel: () => 'my-channel',
+      currentFileKey: () => null,
     }
 
     const result = await handleStatus(mockClient)
@@ -252,12 +254,16 @@ describe('handleStatus', () => {
     const out = JSON.parse(result.content[0].text) as {
       connected: boolean
       channel: string
+      fileKey?: string | null
+      available?: unknown
       currentPage?: unknown
       selection?: unknown
       viewport?: unknown
     }
     expect(out.connected).toBe(true)
     expect(out.channel).toBe('my-channel')
+    expect(out.fileKey).toBeNull()
+    expect(out.available).toEqual([])
     expect(out.currentPage).toBeUndefined()
     expect(out.selection).toBeUndefined()
     expect(out.viewport).toBeUndefined()
@@ -285,6 +291,7 @@ describe('handleStatus', () => {
       disconnect: () => undefined,
       isConnected: () => true,
       currentChannel: () => 'live-ch',
+      currentFileKey: () => 'live-key',
     }
 
     const result = await handleStatus(mockClient)
@@ -293,6 +300,8 @@ describe('handleStatus', () => {
     const out = JSON.parse(result.content[0].text) as {
       connected: boolean
       channel: string
+      fileKey?: string | null
+      available?: unknown
       currentPage: { id: string; name: string }
       selection: { id: string; type: string }[]
       viewport: {
@@ -302,6 +311,7 @@ describe('handleStatus', () => {
     }
     expect(out.connected).toBe(true)
     expect(out.channel).toBe('live-ch')
+    expect(out.fileKey).toBe('live-key')
     expect(out.currentPage).toEqual({
       id: 'page:1',
       name: 'Main',
@@ -320,6 +330,7 @@ describe('handleStatus', () => {
       disconnect: () => undefined,
       isConnected: () => true,
       currentChannel: () => 'degraded-ch',
+      currentFileKey: () => null,
     }
 
     const result = await handleStatus(mockClient)

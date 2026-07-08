@@ -121,6 +121,30 @@ describe('handleConnect version handshake', () => {
     client.disconnect()
     plugin.stop()
   })
+
+  it('status reports fileKey, fileName, and available[]', async () => {
+    const plugin = createMockPlugin({
+      relayUrl: WS,
+      channel: 'st-ch2',
+      documentName: 'Status File',
+    })
+    await plugin.start()
+    const client = createFigmaClient(WS)
+    // Join with a target fileKey so status echoes the client-tracked identity.
+    await client.joinChannel('st-ch2', 'key-s')
+
+    const res = await handleStatus(client, HTTP)
+    const out = JSON.parse(text(res))
+    expect(out.connected).toBe(true)
+    expect(out.channel).toBe('st-ch2')
+    expect(out.fileKey).toBe('key-s')
+    expect(out.fileName).toBe('Status File')
+    expect(Array.isArray(out.available)).toBe(true)
+    expect(out.available.length).toBeGreaterThanOrEqual(1)
+
+    client.disconnect()
+    plugin.stop()
+  })
 })
 
 // Raw channel register (connect only JOINS, so no mock plugin is needed): open
