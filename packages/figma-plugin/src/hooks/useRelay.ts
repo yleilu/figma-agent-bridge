@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import type { FeedbackItem } from '@figma-agent-bridge/shared'
 import { APP_VERSION } from '@figma-agent-bridge/shared'
+import { deriveChannel } from '../file-channel'
 
 type RelayState = {
   status: 'disconnected' | 'connecting' | 'connected'
@@ -26,9 +27,11 @@ export const useRelay = () => {
   const channelRef = useRef<string | null>(null)
   const errorRef = useRef<string | null>(null)
   const fileNameRef = useRef<string | null>(null)
-  // True only for an explicit user Disconnect — so onclose forgets the saved
-  // channel ONLY then, and an unintended close (reload/blip) keeps it.
-  const intentionalCloseRef = useRef(false)
+  const fileKeyRef = useRef<string | null>(null)
+  // Per-session channel for a never-saved file (no stable fileKey).
+  // Stable across reconnects within this session; a reload starts a new
+  // session. A saved file never uses this — its channel is deterministic.
+  const sessionChannelRef = useRef<string | null>(null)
 
   // Feedback review list, keyed by FeedbackItem.path (its stable identity).
   const [feedbackItems, setFeedbackItems] = useState<
@@ -86,7 +89,8 @@ export const useRelay = () => {
       const msg = event.data && event.data.pluginMessage
       if (!msg) return
 
-      if (msg.type === 'file-name') {
+      if (msg.type === 'identity') {
+        fileKeyRef.current = msg.fileKey ?? null
         fileNameRef.current = msg.fileName ?? null
         return
       }
@@ -118,166 +122,185 @@ export const useRelay = () => {
     }
   }, [])
 
-  const connect = useCallback(
-    (port: number, channelOverride?: string) => {
-      const channel = channelOverride ?? generateChannel()
-      channelRef.current = channel
+  // Ask code.ts for the file identity and resolve when it replies (or
+  // after a short timeout, so connect never blocks forever). This is the
+  // race-free path: the reply arrives AFTER this listener is attached.
+  const requestIdentity = useCallback(
+    (): Promise<void> =>
+      new Promise<void>(resolve => {
+        let settled = false
+        const handler = (event: MessageEvent) => {
+          const m = event.data?.pluginMessage
+          if (m?.type === 'identity') {
+            fileKeyRef.current = m.fileKey ?? null
+            fileNameRef.current = m.fileName ?? null
+            finish()
+          }
+        }
+        const finish = () => {
+          if (settled) return
+          settled = true
+          window.removeEventListener('message', handler)
+          resolve()
+        }
+        window.addEventListener('message', handler)
+        parent.postMessage(
+          { pluginMessage: { type: 'get-identity' } },
+          '*',
+        )
+        setTimeout(finish, 500)
+      }),
+    [],
+  )
 
+  const connect = useCallback(
+    (port: number) => {
       setState({
         status: 'connecting',
         channel: null,
         error: null,
       })
 
-      const ws = new WebSocket(`ws://localhost:${port}`)
-      wsRef.current = ws
+      void requestIdentity().then(() => {
+        // Deterministic channel for a saved file; stable per-session
+        // channel for a never-saved one. No clientStorage — a reload of
+        // a saved file re-derives the SAME channel from its fileKey.
+        const fk = fileKeyRef.current
+        let channel: string
+        if (fk !== null) {
+          channel = deriveChannel(fk)
+        } else {
+          if (sessionChannelRef.current === null) {
+            sessionChannelRef.current = generateChannel()
+          }
+          channel = sessionChannelRef.current
+        }
+        channelRef.current = channel
 
-      ws.onopen = () => {
-        ws.send(JSON.stringify({ type: 'join', channel }))
-      }
+        const ws = new WebSocket(`ws://localhost:${port}`)
+        wsRef.current = ws
 
-      ws.onmessage = (event: MessageEvent) => {
-        let data: Record<string, unknown>
-
-        try {
-          data = JSON.parse(event.data as string)
-        } catch {
-          return
+        ws.onopen = () => {
+          ws.send(JSON.stringify({ type: 'join', channel }))
         }
 
-        if (data.type === 'system') {
-          // Send register with file name
-          ws.send(
-            JSON.stringify({
-              type: 'register',
-              channel,
-              fileName: fileNameRef.current,
-              version: APP_VERSION,
-            }),
-          )
+        ws.onmessage = (event: MessageEvent) => {
+          let data: Record<string, unknown>
 
-          // Persist channel ID
-          parent.postMessage(
-            {
-              pluginMessage: {
-                type: 'storage-set',
-                key: 'channel-id',
-                value: channel,
-              },
-            },
-            '*',
+          try {
+            data = JSON.parse(event.data as string)
+          } catch {
+            return
+          }
+
+          if (data.type === 'system') {
+            // Register with the file identity. fileKey lets the server
+            // address commands to exactly THIS file (B3).
+            ws.send(
+              JSON.stringify({
+                type: 'register',
+                channel,
+                fileKey: fileKeyRef.current,
+                fileName: fileNameRef.current,
+                version: APP_VERSION,
+              }),
+            )
+
+            setState({
+              status: 'connected',
+              channel,
+              error: null,
+            })
+
+            void syncFeedback().catch(() => {})
+            return
+          }
+
+          if (data.type === 'broadcast' && data.message) {
+            const msg = data.message as Record<
+              string,
+              unknown
+            >
+
+            if (
+              msg.command === 'feedback-added' ||
+              msg.command === 'feedback-updated'
+            ) {
+              upsert(
+                (msg.params as { item: FeedbackItem }).item,
+              )
+              return
+            }
+
+            const replyId = msg.id as string | undefined
+            if (
+              !msg.command &&
+              replyId &&
+              feedbackPending.current.has(replyId)
+            ) {
+              const p =
+                feedbackPending.current.get(replyId)!
+              feedbackPending.current.delete(replyId)
+              if (msg.error)
+                p.reject(new Error(String(msg.error)))
+              else p.resolve(msg.result)
+              return
+            }
+
+            if (msg.command) {
+              parent.postMessage(
+                {
+                  pluginMessage: {
+                    type: 'execute-command',
+                    id: msg.id,
+                    command: msg.command,
+                    params:
+                      (msg.params as Record<
+                        string,
+                        unknown
+                      >) ?? {},
+                  },
+                },
+                '*',
+              )
+            }
+          }
+        }
+
+        ws.onerror = () => {
+          errorRef.current = 'Connection failed'
+          setState(prev => ({
+            ...prev,
+            status: 'disconnected',
+            error: 'Connection failed',
+          }))
+        }
+
+        ws.onclose = () => {
+          wsRef.current = null
+          channelRef.current = null
+
+          // Settle any in-flight feedback requests — the socket is gone.
+          feedbackPending.current.forEach(({ reject }) =>
+            reject(new Error('Disconnected')),
           )
+          feedbackPending.current.clear()
 
           setState({
-            status: 'connected',
-            channel,
-            error: null,
+            status: 'disconnected',
+            channel: null,
+            error: errorRef.current,
           })
-
-          // Pull the current feedback list once per successful (re)connect. Fires
-          // here in the join-success path, not on every render.
-          void syncFeedback().catch(() => {})
-          return
+          errorRef.current = null
         }
-
-        if (data.type === 'broadcast' && data.message) {
-          const msg = data.message as Record<string, unknown>
-
-          // (a) Server → plugin feedback pushes: handled in-UI, never forwarded
-          // to code.ts.
-          if (
-            msg.command === 'feedback-added' ||
-            msg.command === 'feedback-updated'
-          ) {
-            upsert((msg.params as { item: FeedbackItem }).item)
-            return
-          }
-
-          // (b) Correlated reply to a request THIS plugin sent. Kept tight — only
-          // fires when there is NO command AND the id is in OUR pending map — so
-          // it never swallows normal figma command traffic.
-          const replyId = msg.id as string | undefined
-          if (!msg.command && replyId && feedbackPending.current.has(replyId)) {
-            const p = feedbackPending.current.get(replyId)!
-            feedbackPending.current.delete(replyId)
-            if (msg.error) p.reject(new Error(String(msg.error)))
-            else p.resolve(msg.result)
-            return
-          }
-
-          if (msg.command) {
-            parent.postMessage(
-              {
-                pluginMessage: {
-                  type: 'execute-command',
-                  id: msg.id,
-                  command: msg.command,
-                  params: (msg.params as Record<string, unknown>) ?? {},
-                },
-              },
-              '*',
-            )
-          }
-        }
-      }
-
-      ws.onerror = () => {
-        errorRef.current = 'Connection failed'
-        setState(prev => ({
-          ...prev,
-          status: 'disconnected',
-          error: 'Connection failed',
-        }))
-      }
-
-      ws.onclose = () => {
-        wsRef.current = null
-        channelRef.current = null
-
-        // Settle any in-flight feedback requests — the socket is gone, so their
-        // correlated replies will never arrive. Callers .catch these rejections,
-        // so this won't surface as an unhandled rejection.
-        feedbackPending.current.forEach(({ reject }) =>
-          reject(new Error('Disconnected')),
-        )
-        feedbackPending.current.clear()
-
-        // Forget the channel ONLY on an explicit user Disconnect. An unintended
-        // close (plugin reload, relay restart, network blip) keeps channel-id so
-        // the next launch restores + rejoins the same channel (overview.md →
-        // Connection lifecycle). Read-then-reset so the flag can't leak into a
-        // later unintended close.
-        const intentional = intentionalCloseRef.current
-        intentionalCloseRef.current = false
-        if (intentional) {
-          parent.postMessage(
-            {
-              pluginMessage: {
-                type: 'storage-delete',
-                key: 'channel-id',
-              },
-            },
-            '*',
-          )
-        }
-
-        setState({
-          status: 'disconnected',
-          channel: null,
-          error: errorRef.current,
-        })
-        errorRef.current = null
-      }
+      })
     },
-    [syncFeedback],
+    [requestIdentity, syncFeedback, upsert],
   )
 
   const disconnect = useCallback(() => {
     const ws = wsRef.current
     if (ws) {
-      // Mark this close intentional BEFORE ws.close() — onclose fires async and
-      // will see the flag, so it forgets the persisted channel.
-      intentionalCloseRef.current = true
       ws.close()
       wsRef.current = null
       channelRef.current = null

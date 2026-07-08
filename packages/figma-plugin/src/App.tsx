@@ -20,36 +20,13 @@ export const App = () => {
 
   const isConnected = status === 'connected'
 
-  // Auto-connect when port resolved, restoring saved channel if available
+  // Auto-connect once a port is resolved. The channel is derived from
+  // figma.fileKey inside connect(), so a reload rejoins the same file's
+  // channel with no saved-channel restore.
   useEffect(() => {
     if (discoveredPort && status === 'disconnected') {
       setPort(discoveredPort)
-
-      // Request saved channel ID from clientStorage
-      const handler = (event: MessageEvent) => {
-        const msg = event.data?.pluginMessage
-        if (
-          msg?.type === 'storage-result' &&
-          msg.key === 'channel-id'
-        ) {
-          window.removeEventListener('message', handler)
-          connect(
-            discoveredPort,
-            msg.value ?? undefined,
-          )
-        }
-      }
-
-      window.addEventListener('message', handler)
-      parent.postMessage(
-        {
-          pluginMessage: {
-            type: 'storage-get',
-            key: 'channel-id',
-          },
-        },
-        '*',
-      )
+      connect(discoveredPort)
     }
   }, [discoveredPort, status, connect])
 
