@@ -91,7 +91,7 @@ figma-agent-bridge/                       repo == marketplace
 │   │   ├── figma-design/SKILL.md         + references/ (§6.1)
 │   │   ├── figma-feedback/SKILL.md       + references/ (§6.3)
 │   │   ├── figma-reviewer/SKILL.md       + references/ (§6.4)
-│   │   └── figma-connection/SKILL.md     + references/ (§8)
+│   │   └── figma-connection/SKILL.md     + references/ (§6.6)
 │   ├── agents/
 │   │   ├── figma-designer.md             frontmatter: tools:, model: (§6.2)
 │   │   └── figma-reviewer.md             (§6.5)
@@ -185,7 +185,7 @@ forward-references the feedback/reviewer skills below:
 | Build | `figma-design` (§6.1) | `figma-designer` (§6.2) — consumes all three build-loop skills |
 | Report *tool* friction | `figma-feedback` (§6.3) | — (folds into the skill) |
 | Review the *design* | `figma-reviewer` (§6.4) | `figma-reviewer` (§6.5) |
-| Diagnose connection / version | `figma-connection` (§8) | — (main-agent guidance) |
+| Diagnose connection / version | `figma-connection` (§6.6) | — (main-agent guidance) |
 
 ### 6.1 Skill — `figma-design`
 
@@ -394,6 +394,16 @@ keeps a review's heavy read output out of the main context. Loop: read the targe
 fix** → on approval apply edits (or route tool-gaps to `figma-feedback`). Frontmatter: `tools:`
 (read tools + the edit tools for the fix step + `record_feedback`), `model:` (sonnet; opus for
 large/complex reviews). Also invoked by `figma-designer` as its self-review gate.
+
+### 6.6 Skill — `figma-connection`
+
+Main-agent guidance for **diagnosing and recovering the connection** — a stale or mismatched
+server/plugin, a failed handshake, or a "reinstall the Figma plugin" situation. Unlike the three
+build-loop skills (§6.1/§6.3/§6.4) it is **not** part of the design loop; the **main agent** invokes
+it when a call can't reach Figma or the version handshake reports a mismatch. The connection and
+handshake **mechanism** it wraps is specced authoritatively in §8 (app-semver major.minor per B2);
+this skill is the *when + how to react* layer over it. **Structure:** `SKILL.md` (symptoms →
+diagnosis → recovery) → `references/` as needed.
 
 ## 7. Feedback
 

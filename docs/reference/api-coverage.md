@@ -369,7 +369,7 @@ The expression grammar and its round-trip gaps are normative in one place: see
 | Write private plugin data | `node.setPluginData(key, value)` | ✅ | `set_plugin_data` (no namespace); empty string clears |
 | Read shared plugin data | `node.getSharedPluginData(ns, key)` / `getSharedPluginDataKeys(ns)` | ✅ | `get_plugin_data` with `namespace` |
 | Write shared plugin data | `node.setSharedPluginData(ns, key, value)` | ✅ | `set_plugin_data` with `namespace`; REST-readable |
-| Agent `context` convention | shared `pluginData` `figmabridge/context` | ⏳ | Planned (not yet implemented) — round-trippable `NodeSpec.context`, 2 KB cap; design of record in `docs/specs/self-describing-nodes.md` |
+| Agent `context` convention | shared `pluginData` `figmabridge/context` | ⏳ | Planned (not yet implemented) — round-trippable `NodeSpec.context`, 2 KB cap; design of record in [[figma-bridge/docs/specs/self-describing-nodes]] |
 
 ---
 
