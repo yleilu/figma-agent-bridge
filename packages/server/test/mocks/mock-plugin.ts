@@ -118,6 +118,16 @@ export const createMockPlugin = (
 
   let ws: WebSocket | null = null
 
+  // Stateful shared-pluginData store for the agent `context` field, faithful to
+  // the real plugin's set/getSharedPluginData semantics: a write of a non-empty
+  // string persists; an empty/whitespace string CLEARS the key (Figma treats ''
+  // as delete); an omitted value on update PRESERVES the prior value. Keyed by
+  // node id, per-plugin-instance so it resets between tests. The reads
+  // (get_node/get_nodes/inspect) attach `context` back onto the fixture only
+  // when present, and the get_components/get_styles fixtures below carry a raw
+  // `description` (+ optional `context`) so the read surfacing is exercised e2e.
+  const sharedContext = new Map<string, string>()
+
   // runCommand mirrors the real plugin's handleCommand: dispatch on the command
   // string and return { result?, error? }. Pulled out of handleBroadcast so the
   // BATCH case can re-dispatch each op through it (the same way the real plugin's
@@ -231,7 +241,12 @@ export const createMockPlugin = (
       }
 
       case 'get_node':
-        result = cardFixture
+        result = {
+          ...cardFixture,
+          ...(sharedContext.get(cardFixture.id)
+            ? { context: sharedContext.get(cardFixture.id) }
+            : {}),
+        }
         break
 
       // inspect serializes the same raw export get_node consumes; the server's
@@ -257,13 +272,25 @@ export const createMockPlugin = (
         ) {
           ;[result] = selection
         } else {
-          result = cardFixture
+          result = {
+            ...cardFixture,
+            ...(sharedContext.get(cardFixture.id)
+              ? { context: sharedContext.get(cardFixture.id) }
+              : {}),
+          }
         }
         break
       }
 
       case 'get_nodes':
-        result = [cardFixture]
+        result = [
+          {
+            ...cardFixture,
+            ...(sharedContext.get(cardFixture.id)
+              ? { context: sharedContext.get(cardFixture.id) }
+              : {}),
+          },
+        ]
         break
 
       // list_pages: Rule A document + page enumeration ({docName, results}).
@@ -290,6 +317,8 @@ export const createMockPlugin = (
             {
               id: 'S:1',
               name: 'Brand/Primary',
+              // Surface 2: description surfaces read-only on styles (no context).
+              description: 'Brand primary blue',
               value: {
                 type: 'SOLID',
                 color: { r: 0.231, g: 0.51, b: 0.965 },
@@ -300,6 +329,7 @@ export const createMockPlugin = (
             {
               id: 'S:2',
               name: 'Heading',
+              description: 'Section heading type',
               value: {
                 family: 'Inter',
                 style: 'Bold',
@@ -350,6 +380,11 @@ export const createMockPlugin = (
           key: 'btn-key',
           type: 'COMPONENT_SET',
           page: 'Main',
+          // Surface 2: description surfaces read-only on every entry; context is
+          // local-pluginData (frontmatter → server-sliced contextSummary).
+          description: 'Primary action button',
+          context:
+            '---\npurpose: primary CTA\nrole: button/primary\n---\n## Notes\nUse for the main action only.',
           properties: [
             {
               id: 'Variant',
@@ -709,6 +744,15 @@ export const createMockPlugin = (
           string,
           unknown
         >
+        // Faithful set/getSharedPluginData: a non-empty context persists; an
+        // empty/whitespace value clears the key; an omitted value preserves.
+        if (typeof spec.context === 'string') {
+          if (spec.context.trim() === '') {
+            sharedContext.delete(unId)
+          } else {
+            sharedContext.set(unId, spec.context)
+          }
+        }
         // Mirror the real plugin's warn-on-no-op + degrade behavior on an
         // INCOMPATIBLE target (modeled by an `incompat:` nodeId — a node that
         // lacks layoutMode/fills/etc. capability). 3a: a patched property that
@@ -932,9 +976,19 @@ export const createMockPlugin = (
             cnWarnings.push(...cnResolveWarnings)
           }
         }
+        const createdId = `created:${Math.random().toString(36).slice(2, 8)}`
+        // Faithful set/getSharedPluginData on the newly created node (see
+        // update_node): non-empty persists, empty/whitespace clears.
+        if (typeof nodeSpec?.context === 'string') {
+          if (nodeSpec.context.trim() === '') {
+            sharedContext.delete(createdId)
+          } else {
+            sharedContext.set(createdId, nodeSpec.context)
+          }
+        }
         result = {
           ...echo,
-          id: `created:${Math.random().toString(36).slice(2, 8)}`,
+          id: createdId,
           name: (nodeSpec?.name as string) ?? nodeType,
           type: createdType,
           parentId,
@@ -1538,10 +1592,25 @@ export const createMockPlugin = (
         break
       }
 
-      // set_plugin_data: echo {id}.
-      case 'set_plugin_data':
-        result = { id: cmd.params?.nodeId as string }
+      // set_plugin_data: echo {id}. The figmabridge/context escape hatch writes
+      // straight to the shared store with NO cap (the cap is server-side only,
+      // so this proves over-cap values are read-only). value === '' clears.
+      case 'set_plugin_data': {
+        const spNodeId = cmd.params?.nodeId as string
+        if (
+          cmd.params?.namespace === 'figmabridge' &&
+          cmd.params?.key === 'context'
+        ) {
+          const spValue = cmd.params?.value as string
+          if (spValue === '') {
+            sharedContext.delete(spNodeId)
+          } else {
+            sharedContext.set(spNodeId, spValue)
+          }
+        }
+        result = { id: spNodeId }
         break
+      }
 
       // set_reactions: a nodeId starting with `degrade:` exercises the T7
       // unavailable-API degrade ({id,warnings}, NEVER {error}); else {id,[]}.
