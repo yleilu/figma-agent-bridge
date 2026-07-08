@@ -1,4 +1,4 @@
-import { COMMANDS } from '@figma-agent-bridge/shared'
+import { COMMANDS, CONTEXT_NS, CONTEXT_KEY } from '@figma-agent-bridge/shared'
 
 import { applyLayout, type AppliedLayout } from './apply-layout'
 import { projectComponentDefs } from './project-component-defs'
@@ -38,6 +38,12 @@ const summarizeChildren = (
       }))
     : []
 
+const readContext = (n: BaseNode): string | undefined => {
+  if (!('getSharedPluginData' in n)) return undefined
+  const v = (n as BaseNode & PluginDataMixin).getSharedPluginData(CONTEXT_NS, CONTEXT_KEY)
+  return v !== '' ? v : undefined
+}
+
 const exportNodeDocument = async (
   node: BaseNode,
 ): Promise<unknown> => {
@@ -47,6 +53,7 @@ const exportNodeDocument = async (
       name: node.name,
       type: node.type,
       children: summarizeChildren(node),
+      ...(readContext(node) !== undefined ? { context: readContext(node) } : {}),
     }
   }
   const exported = await (node as SceneNode).exportAsync({
@@ -57,6 +64,11 @@ const exportNodeDocument = async (
     exported !== null &&
     (exported as Record<string, unknown>).document
   ) {
+    const ctx = readContext(node)
+    if (ctx !== undefined) {
+      const doc = (exported as Record<string, unknown>).document as Record<string, unknown>
+      doc.context = ctx
+    }
     return (exported as Record<string, unknown>).document
   }
   throw new Error(
@@ -376,6 +388,10 @@ const applyCommonProperties = async (
   ) {
     ;(node as TextNode).textStyleId =
       spec.textStyleId as string
+  }
+  if (spec.context !== undefined && 'setSharedPluginData' in node) {
+    const raw = String(spec.context)
+    ;(node as BaseNode & PluginDataMixin).setSharedPluginData(CONTEXT_NS, CONTEXT_KEY, raw.trim() === '' ? '' : raw)
   }
 }
 
@@ -1233,6 +1249,7 @@ const handleCommand = async (
         id: s.id,
         name: s.name,
         value: s.paints[0],
+        ...(s.description ? { description: s.description } : {}),
       }))
       const textStylesRaw =
         await figma.getLocalTextStylesAsync()
@@ -1246,6 +1263,7 @@ const handleCommand = async (
           lineHeight: s.lineHeight,
           letterSpacing: s.letterSpacing,
         },
+        ...(s.description ? { description: s.description } : {}),
       }))
       const effectStylesRaw =
         await figma.getLocalEffectStylesAsync()
@@ -1253,6 +1271,7 @@ const handleCommand = async (
         id: s.id,
         name: s.name,
         value: s.effects[0],
+        ...(s.description ? { description: s.description } : {}),
       }))
       const gridStylesRaw =
         await figma.getLocalGridStylesAsync()
@@ -1292,6 +1311,7 @@ const handleCommand = async (
                 visible: g.visible,
               }
             : undefined,
+          ...(s.description ? { description: s.description } : {}),
         }
       })
       return { paint, text, effect, grid }
@@ -1374,10 +1394,16 @@ const handleCommand = async (
                 ? variantAxes
                 : undefined,
             defaults: defaultsOf(csDefs),
+            ...(readContext(cs) !== undefined ? { context: readContext(cs) } : {}),
+            ...(cs.description ? { description: cs.description } : {}),
           }
         } catch (e) {
           // Degrade: include the set WITHOUT its variant info and warn.
-          setMap[cs.id] = base
+          setMap[cs.id] = {
+            ...base,
+            ...(readContext(cs) !== undefined ? { context: readContext(cs) } : {}),
+            ...(cs.description ? { description: cs.description } : {}),
+          }
           componentWarnings.push(
             'component set "' +
               cs.name +
@@ -1411,6 +1437,8 @@ const handleCommand = async (
                 : null,
             properties: projectComponentDefs(compDefs),
             defaults: defaultsOf(compDefs),
+            ...(readContext(comp) !== undefined ? { context: readContext(comp) } : {}),
+            ...(comp.description ? { description: comp.description } : {}),
           })
         } catch (e) {
           // Degrade: include the component WITHOUT its property info and warn.
@@ -1423,6 +1451,8 @@ const handleCommand = async (
               comp.parent && comp.parent.type === 'PAGE'
                 ? comp.parent.name
                 : null,
+            ...(readContext(comp) !== undefined ? { context: readContext(comp) } : {}),
+            ...(comp.description ? { description: comp.description } : {}),
           })
           componentWarnings.push(
             'component "' +
@@ -1449,6 +1479,7 @@ const handleCommand = async (
           name: string
           library: string
           instancesCount: number
+          description?: string
         }
       > = {}
       if (includeRemote) {
@@ -1468,6 +1499,7 @@ const handleCommand = async (
                     ? main.parent.name
                     : 'Unknown',
                 instancesCount: 0,
+                ...(main.description ? { description: main.description } : {}),
               }
             }
             remoteMap[mkey].instancesCount++
@@ -1554,6 +1586,7 @@ const handleCommand = async (
                   .height,
               ]
             : undefined,
+        ...(fn && readContext(fn) !== undefined ? { context: readContext(fn) } : {}),
       })
 
       // B2 — depth bounds the SCAN SCOPE (descent depth), NOT the output shape:
