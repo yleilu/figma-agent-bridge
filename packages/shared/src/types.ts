@@ -58,6 +58,9 @@ export type CommandMessage = {
 export type ChannelInfo = {
   channel: string
   fileName: string | null
+  // Stable per-file identity carried into the availability registry (B3).
+  // null when the registering plugin had no figma.fileKey.
+  fileKey: string | null
   connectedAt: number
   version?: string
 }
