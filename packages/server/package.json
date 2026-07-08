@@ -22,12 +22,11 @@
     "typecheck": "tsc --noEmit --project tsconfig.src.json"
   },
   "dependencies": {
+    "@figma-agent-bridge/relay": "workspace:*",
     "@figma-agent-bridge/shared": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.13.1",
     "yaml": "^2.8.2",
     "zod": "^3.22.4"
   },
-  "devDependencies": {
-    "@figma-agent-bridge/relay": "workspace:*"
-  }
+  "devDependencies": {}
 }

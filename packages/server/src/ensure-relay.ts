@@ -4,6 +4,29 @@ const DEFAULT_MAX_POLL_ATTEMPTS = 30
 export type EnsureRelayOptions = {
   pollIntervalMs?: number
   maxPollAttempts?: number
+  /**
+   * Override the spawn argv vector. Used in tests to inject the correct
+   * entry-point path when `process.argv[1]` is the test runner, not index.ts.
+   * In production (dev or compiled binary), leave this undefined.
+   */
+  _relayArgvOverride?: string[]
+}
+
+/**
+ * Builds the argv vector for spawning the relay subprocess.
+ * Exported for unit testing the dev-vs-compiled branch logic.
+ *
+ * - Compiled binary (argv[1] starts with '/$bunfs/'): [execPath, '--relay']
+ * - Dev (argv[1] is a real script path): [execPath, argv[1], '--relay']
+ */
+export const buildRelayArgv = (
+  execPath: string,
+  argv1: string | undefined,
+): string[] => {
+  const compiled = argv1?.startsWith('/$bunfs/') ?? false
+  return compiled
+    ? [execPath, '--relay']
+    : [execPath, argv1 ?? execPath, '--relay']
 }
 
 const isRelayUp = async (
@@ -37,19 +60,19 @@ export const ensureRelay = async (
 
   let proc: ReturnType<typeof Bun.spawn>
   try {
-    // Resolve relay entry point path.
-    const relayUrl = import.meta
-      .resolve('@figma-agent-bridge/relay')
-    const relayPath = Bun.fileURLToPath(relayUrl)
-
     // Single-flight: re-check immediately before spawn in case another
     // instance won the race between the first check and now (TOCTOU).
     if (await isRelayUp(httpUrl)) {
       return {}
     }
 
-    // Spawn detached relay process.
-    proc = Bun.spawn(['bun', 'run', relayPath], {
+    // Build spawn argv: compiled binary omits the script path; dev includes it.
+    const relayArgv =
+      opts._relayArgvOverride ??
+      buildRelayArgv(process.execPath, process.argv[1])
+
+    // Spawn detached relay process using the binary itself.
+    proc = Bun.spawn(relayArgv, {
       env: { ...process.env, PORT: String(port) },
       stdio: ['ignore', 'ignore', 'ignore'],
     })

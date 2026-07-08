@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "figma-agent-bridge": {
+      "command": "${CLAUDE_PLUGIN_DATA}/bin/figma-mcp"
+    }
+  }
+}
