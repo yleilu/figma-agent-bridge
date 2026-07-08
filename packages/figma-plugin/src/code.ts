@@ -11,10 +11,18 @@ figma.showUI(__html__, {
   themeColors: true,
 })
 
-figma.ui.postMessage({
-  type: 'file-name',
+// The file's stable identity. figma.fileKey needs enablePrivatePluginApi
+// (manifest) and is undefined for a never-saved file → null. Sent up
+// front (best-effort) AND on a get-identity request (the reliable path
+// the UI awaits before it derives a channel / registers — fixes the old
+// fileName:null register race).
+const fileIdentity = () => ({
+  type: 'identity' as const,
+  fileKey: figma.fileKey ?? null,
   fileName: figma.root.name,
 })
+
+figma.ui.postMessage(fileIdentity())
 
 type PluginMessage =
   | {
@@ -23,6 +31,7 @@ type PluginMessage =
       command: string
       params: Record<string, unknown>
     }
+  | { type: 'get-identity' }
   | { type: 'storage-get'; key: string }
   | { type: 'storage-set'; key: string; value: unknown }
   | { type: 'storage-delete'; key: string }
@@ -4224,6 +4233,10 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
       id: msg.id,
       result,
     })
+  }
+
+  if (msg.type === 'get-identity') {
+    figma.ui.postMessage(fileIdentity())
   }
 
   if (msg.type === 'storage-get') {
