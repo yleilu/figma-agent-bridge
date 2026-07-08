@@ -309,6 +309,49 @@ describe('relay', () => {
       expect(data).toEqual([])
     })
 
+    it('a registered channel (with fileKey) is reaped from /channels on disconnect', async () => {
+      const ws = await connect()
+      const nextMessage = createMessageQueue(ws)
+
+      ws.send(
+        JSON.stringify({
+          type: 'join',
+          channel: 'avail-ch',
+        }),
+      )
+      await nextMessage()
+
+      ws.send(
+        JSON.stringify({
+          type: 'register',
+          channel: 'avail-ch',
+          fileName: 'Avail.fig',
+          fileKey: 'AVAILfileKey',
+        }),
+      )
+      await Bun.sleep(50)
+
+      // present with its fileKey while the last member is connected
+      const present = (await (
+        await fetch(`${HTTP_URL}/channels`)
+      ).json()) as ChannelInfo[]
+      expect(
+        present.find(c => c.channel === 'avail-ch')
+          ?.fileKey,
+      ).toBe('AVAILfileKey')
+
+      // last member leaves -> close -> removeClient deletes the registry entry
+      await closeWs(ws)
+      await Bun.sleep(50)
+
+      const gone = (await (
+        await fetch(`${HTTP_URL}/channels`)
+      ).json()) as ChannelInfo[]
+      expect(gone.some(c => c.channel === 'avail-ch')).toBe(
+        false,
+      )
+    })
+
     it('multiple channels listed independently', async () => {
       const ws1 = await connect()
       const ws2 = await connect()
