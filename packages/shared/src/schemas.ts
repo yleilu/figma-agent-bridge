@@ -7,11 +7,25 @@ import { z } from 'zod'
 // versions; the live server now imports those from `tool-params.ts` (the
 // canonical M2 shapes), so they were retired here in M3-E.
 export const connectParamsSchema = z.object({
+  fileKey: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Stable Figma fileKey of the file to target (from status/connect available[]). The precise way to address exactly one file (B3).',
+    ),
+  fileName: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Figma file NAME to target when the fileKey is unknown. Rejected as ambiguous if two open files share a name — pass fileKey instead.',
+    ),
   channel: z
     .string()
     .min(1)
     .optional()
     .describe(
-      'Channel ID to join. Pairs with the Figma plugin. Omit to auto-discover.',
+      'Explicit relay channel to join (escape hatch). Omit and pass fileKey/fileName to target by file; omit all three to auto-join the sole connected file.',
     ),
 })
