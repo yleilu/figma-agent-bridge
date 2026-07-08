@@ -259,6 +259,9 @@ export const useRelay = () => {
                         string,
                         unknown
                       >) ?? {},
+                    targetFileKey:
+                      (msg.targetFileKey as
+                        string | null | undefined) ?? null,
                   },
                 },
                 '*',

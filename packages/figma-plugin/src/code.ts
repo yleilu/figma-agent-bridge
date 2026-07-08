@@ -3,6 +3,10 @@ import { COMMANDS, CONTEXT_NS, CONTEXT_KEY } from '@figma-agent-bridge/shared'
 import { applyLayout, type AppliedLayout } from './apply-layout'
 import { projectComponentDefs } from './project-component-defs'
 import { resolveInstanceProps } from './resolve-instance-props'
+import {
+  isTargetMismatch,
+  targetGuardError,
+} from './file-channel'
 
 figma.showUI(__html__, {
   width: 340,
@@ -30,6 +34,7 @@ type PluginMessage =
       id: string
       command: string
       params: Record<string, unknown>
+      targetFileKey?: string | null
     }
   | { type: 'get-identity' }
   | { type: 'storage-get'; key: string }
@@ -4221,6 +4226,25 @@ const handleCommand = async (
 
 figma.ui.onmessage = async (msg: PluginMessage) => {
   if (msg.type === 'execute-command') {
+    // B3 identity guard: refuse a command addressed to a different file.
+    // If our fileKey is unknown (never-saved / no private API) the guard
+    // can't verify and does NOT refuse — degrade honestly.
+    const localFileKey = figma.fileKey ?? null
+    const targetFileKey = msg.targetFileKey ?? null
+    if (isTargetMismatch(localFileKey, targetFileKey)) {
+      figma.ui.postMessage({
+        type: 'command-result',
+        id: msg.id,
+        result: {
+          error: targetGuardError(
+            String(targetFileKey),
+            String(localFileKey),
+          ),
+        },
+      })
+      return
+    }
+
     let result: unknown
     try {
       result = await handleCommand(msg.command, msg.params)
