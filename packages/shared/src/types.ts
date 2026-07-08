@@ -28,6 +28,7 @@ export type RegisterMessage = {
   type: 'register'
   channel: string
   fileName: string | null
+  fileKey?: string | null
   version?: string
 }
 

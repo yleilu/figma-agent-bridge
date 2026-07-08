@@ -29,6 +29,11 @@ export const registerMessageSchema = z.object({
   type: z.literal('register'),
   channel: z.string().min(1),
   fileName: z.string().nullable(),
+  // Stable per-file identity (principle B3). null when figma.fileKey is
+  // unavailable (never-saved file / private API not enabled). Optional so
+  // an old/unupdated plugin's register still parses (degrades to null);
+  // the version handshake catches skew separately.
+  fileKey: z.string().nullable().optional(),
   version: z.string().optional(),
 })
 

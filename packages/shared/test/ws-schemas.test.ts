@@ -225,3 +225,34 @@ describe('registerMessageSchema version', () => {
     expect(parsed.version).toBeUndefined()
   })
 })
+
+describe('registerMessageSchema fileKey', () => {
+  it('round-trips a real fileKey', () => {
+    const parsed = registerMessageSchema.parse({
+      type: 'register',
+      channel: 'abc',
+      fileName: 'Design File',
+      fileKey: 'FILEKEY123',
+    })
+    expect(parsed.fileKey).toBe('FILEKEY123')
+  })
+
+  it('accepts a null fileKey (never-saved file)', () => {
+    const parsed = registerMessageSchema.parse({
+      type: 'register',
+      channel: 'abc',
+      fileName: null,
+      fileKey: null,
+    })
+    expect(parsed.fileKey).toBeNull()
+  })
+
+  it('accepts a register frame WITHOUT fileKey (old/degraded plugin)', () => {
+    const parsed = registerMessageSchema.parse({
+      type: 'register',
+      channel: 'abc',
+      fileName: null,
+    })
+    expect(parsed.fileKey ?? null).toBeNull()
+  })
+})
