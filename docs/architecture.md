@@ -38,7 +38,7 @@ flowchart LR
    Params are Zod-validated against the shared schemas.
 2. **MCP server → relay.** The server *parses* expressions into Figma-ready values
    (see below), wraps the work as a `{ id, command, params }` message, and sends it
-   over a single WebSocket to the relay on the joined channel.
+   over its WebSocket to the relay on the **target file's** channel (one file, one channel — B3).
 3. **Relay → plugin.** The relay is dumb pub/sub: it broadcasts the message to every
    client on that channel. The paired Figma plugin is the one that receives it.
 4. **Plugin → Figma.** The plugin's UI iframe forwards the command to `code.ts`
@@ -87,19 +87,34 @@ Figma-ready values in the MCP server. `code.ts` receives those values and assign
 them to nodes — it never interprets an expression string. This keeps the QuickJS
 main thread thin and keeps one grammar with one parser (no per-tool, per-side drift).
 
-### Transport: one WebSocket, UUID-correlated request/response
-The server holds a **single** WebSocket to the relay. Each outbound command carries a
-UUID `id` (`randomUUID()`); the server keeps a pending-request map keyed by that id.
-Responses are matched back by `id` and resolve (or reject, on `error`) the originating
-promise. Because the relay broadcasts, the `id` — not the connection — is what
-correlates a reply to its request.
+### Transport: per-file channels, UUID-correlated request/response
+The server holds a WebSocket to the relay. Each outbound command carries a UUID `id`
+(`randomUUID()`); the server keeps a pending-request map keyed by that id. Responses are
+matched back by `id` and resolve (or reject, on `error`) the originating promise.
+
+**One file, one channel (B3).** Each connected file's plugin is on its **own** channel,
+bound to the file by its `fileKey` — not a single shared channel. (The prior design stored
+one `channel-id` in `figma.clientStorage`, which is per-user and shared across *every* open
+file, so every file's plugin rejoined the **same** channel and a command broadcast to all of
+them — the multi-file collision this replaces.) The server drives **one file at a time**: it
+resolves a target `fileKey` to that file's channel and operates only there.
+
+**Availability registry (relay).** The relay maintains `{ fileKey → { channel, fileName,
+connectedAt } }` — the files with a **live plugin** (reachable/writable). It is kept current
+by the WebSocket lifecycle: a plugin's `register` adds its entry; the socket's `close`, or a
+missed heartbeat (`removeClient`), removes it. So "which files are available" is a transport
+fact the relay already owns — no Figma focus/active-file API is involved (none exists). The
+agent reads this set to choose a target.
+
+**Identity guard (B3).** A command carries its `targetFileKey`; the plugin refuses to execute
+if `figma.fileKey` doesn't match — so even a stale registry entry can never land a write in
+the wrong file. If the target `fileKey` is not in the registry the command fails and the agent
+is asked to choose; it is never silently retargeted to another available file.
 
 - **Default timeout:** 30s per command (`3e4` ms in `figma-client.ts`); callers may
   override per command. On timeout the pending entry is dropped and the call rejects.
 - **Reconnection:** the client recovers a dropped relay connection; in-flight requests
   that cannot complete are rejected so the agent never hangs silently.
-- **Pairing:** the plugin UI generates a channel and joins it; the agent calls the
-  `connect` tool with that channel id. Both sides on one channel = one paired session.
 
 ### Default port
 Relay and server both default to **18080** (`DEFAULT_PORT` in `shared`), overridable

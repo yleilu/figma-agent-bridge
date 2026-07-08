@@ -434,15 +434,19 @@ open piece — see §11.
 
 ## 8. Connection lifecycle
 
-**Already-built plumbing** — no new work; this is why "open plugin + talk" is all that
-remains after install (see [[figma-bridge/docs/specs/overview|overview.md]] → Connection
-lifecycle):
-- The Figma plugin **auto-connects** on launch and **persists its channel** across
-  unintended closes.
-- The MCP server **auto-discovers** the channel and **auto-starts a shared relay** if none is
-  running — a **detached singleton** on `:18080` that **outlives any single session**, so many
-  Figma files (each plugin on its own channel) and many Claude Code sessions all pair through
-  the one relay (`packages/relay` is already multi-channel: `channels: Map<channel, Set<client>>`).
+**Already-built plumbing** (plus one prerequisite change) — this is why "open plugin + talk"
+is most of what remains after install (see [[figma-bridge/docs/specs/overview|overview.md]] →
+Connection lifecycle):
+- The Figma plugin **auto-connects** on launch and rejoins its own channel, so a reload is
+  deterministic. *(Shipped: a persisted `channel-id`. **Per-file channels** — a prerequisite
+  change landing with this work — bind that channel to `fileKey` instead; a breaking wire
+  change that bumps the minor, see overview *Connection lifecycle* / version-handshake.md.)*
+- The MCP server **auto-discovers the relay port** and **auto-starts a shared relay** if none
+  is running — a **detached singleton** on `:18080` that **outlives any single session**, so
+  many Figma files (each plugin on its own channel) and many Claude Code sessions all pair
+  through the one relay (`packages/relay` is already multi-channel: `channels: Map<channel,
+  Set<client>>`). The **target file/channel is chosen explicitly by the agent** (`connect` by
+  `fileKey` → server resolves `fileKey`→channel), never auto-guessed (B3).
 
 **Relay in the binary (option c — resolves a distribution blocker).** `ensure-relay.ts` today
 spawns `Bun.spawn(['bun','run', relayPath])`, which is **broken in a compiled binary** (no

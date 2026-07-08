@@ -214,9 +214,9 @@ Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle
 [[figma-bridge/docs/specs/feedback-system]].
 
 ### Session (2)
-- `connect(channel) → {channel, connected}` — pair MCP server to the Figma plugin · B1; §2 connect.
-- `status() → {connected, channel, currentPage, selection[], viewport}` — connection + live context in one read (live context is best-effort; failures degrade, they don't throw) · B1, T4; §2 read-what-user-sees.
-- *(plugin teardown = internal `CLOSE_PLUGIN` command, not a tool — transport/dev-reload lifecycle, see overview *Connection lifecycle*; T6.)*
+- `connect({fileKey?, fileName?}) → {fileKey, fileName, connected, available[]}` — pair the MCP server to a **specific file's** plugin, targeted by `fileKey` (or `fileName`), and return the currently **available** files `available:[{fileKey, fileName, connectedAt}]` (the relay availability registry). When the target is ambiguous or **not available**, it does **not** guess — it returns an error listing `available[]` and asks the agent to choose (B3). The raw channel is now an internal detail (server resolves `fileKey`→channel). *(`fileKey` needs `enablePrivatePluginApi`; `fileName` is the fallback id — see overview *Connection lifecycle*.)* · B1, B3; §2 connect.
+- `status() → {connected, fileKey, fileName, available[], currentPage, selection[], viewport}` — the paired file + the **availability set** + live context in one read (live context is best-effort; failures degrade, they don't throw) · B1, B3, T4; §2 read-what-user-sees.
+- *(plugin teardown = internal `close_plugin` command, not a tool — transport/dev-reload lifecycle, see overview *Connection lifecycle*; T6. The B3 `targetFileKey` guard is **server-stamped** on every command from the current connection — not a per-tool param — so the 47-tool surface stays unchanged.)*
 
 ### Read — nodes (4)
 - `inspect({nodeId?, pageId?, depth?, budget?, fields?, profile?, match?}) → {view, truncated[]}` — compact lossy view, drill-by-id (Rule B); each node carries a read-only **`contextSummary`** (the frontmatter slice of `context`, capped at `CONTEXT_SUMMARY_MAX_BYTES` = 512, rendered as a YAML block scalar; server-derived, **not** `fields`/`profile`-projectable; omitted when absent); omit both ids to inspect the current selection (multi-select returns a `SELECTION` forest) · **T3 inspect**, T4; §1 human view, §3 deep/large trees, §13 CSS-handoff data.

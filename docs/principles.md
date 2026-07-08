@@ -69,6 +69,20 @@ incident). Comparing on semver **major.minor** means every breaking change trips
 harmless patches don't — neither too strict (tripping every release) nor too loose (missing
 breaks). *(Where the version is sourced and how it's compared is mechanism → the specs.)*
 
+### B3 — Every command is addressed to exactly one file
+The bridge never leaves **which file** ambiguous. A command carries its target file's
+**stable identity** (`fileKey`) and executes **only** against that file — never another,
+never a guessed default. If the target file has **no live, connected plugin**, the command
+**fails loudly and asks the agent to choose** — it does not silently retarget, and it does
+not fall back to "the only file that happens to be open." On a transport that can reach
+more than one file at once, a write must never land in the wrong file.
+*Why:* once more than one file is reachable, a silent mis-target corrupts the wrong design —
+the failure that erodes trust fastest. "One file was open, so I edited it" is exactly the
+guess this forbids: the file the agent meant may be the one that just closed. Naming the
+file on every command, and making an unmatched target a hard stop, is what makes multi-file
+safe. *(Mechanism — per-file channels, the availability registry, the plugin-side identity
+guard — lives in the specs, not here.)*
+
 ## Tool layer
 
 ### T1 — A clean, symmetric, organized facade over Figma

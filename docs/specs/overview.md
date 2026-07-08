@@ -32,7 +32,7 @@ three principle layers as five packages. Layer detail and data flow live in
 | Package | npm name | Layer | Role |
 |---|---|---|---|
 | `shared` | `@figma-agent-bridge/shared` | bridge/tool | One vocabulary: `NodeSpec`/`ParsedNode` schemas, types, constants, zod schemas. Depended on by relay + server. |
-| `relay` | `@figma-agent-bridge/relay` | bridge | WebSocket relay. Pairs the MCP server with the Figma plugin over a channel; default port **18080**. |
+| `relay` | `@figma-agent-bridge/relay` | bridge | WebSocket relay. Pairs the MCP server with each Figma file's plugin over that file's own channel (one file, one channel — B3) and keeps the availability registry (`fileKey → {channel, fileName, connectedAt}`); default port **18080**. |
 | `figma-plugin` | `@figma-agent-bridge/figma-plugin` | bridge | The Figma plugin (React UI + sandbox `code`). Executes commands inside Figma; the only layer that touches `figma.*`. Built with Vite (two configs: `ui`, `code`). |
 | `server` | `@figma-agent-bridge/server` | tool | The MCP server — the agent-facing tool surface. Parses expressions, owns the typed error envelope, sends commands over the relay. |
 | `cli` | `@figma-agent-bridge/cli` | — | CLI entry (scaffold). |
@@ -58,20 +58,42 @@ the port is a default, not a hard coupling.
 
 ## Connection lifecycle
 
-The plugin (`figma-plugin`) is the only layer that opens the WebSocket to the relay; the
-server attaches to the same channel. The lifecycle contract:
+The plugin (`figma-plugin`) is the only layer that opens the WebSocket to the relay. Every
+open file runs its own plugin instance, and **each file gets its own channel** — so the server
+drives one specific file with no ambiguity (B3). The lifecycle contract:
 
-- **Auto-connect on launch.** On open, the plugin resolves the relay port (saved or default
-  **18080**) and **auto-connects, restoring the saved channel** (`channel-id` in
-  `figma.clientStorage`) — so relaunching the plugin rejoins the same channel with no manual
-  Connect.
-- **Channel persistence across unintended close (T7).** The saved `channel-id` **survives an
-  unintended socket close** — a plugin reload, a relay restart, a network blip — and is
-  cleared **only** on an explicit user **Disconnect**. This is what makes an automated reload
-  deterministic: the fresh instance restores the channel and rejoins it. (Clearing it on
-  *every* close would strand the next launch on a freshly-generated channel — the prior
-  behavior, which is the bug this contract corrects.)
-- **`CLOSE_PLUGIN` (internal lifecycle command, not a tool).** A relay command that calls
+- **File identity (B3).** Each file is identified by its **`fileKey`** (`figma.fileKey`), a
+  stable per-file id. `figma.fileKey` requires **`"enablePrivatePluginApi": true`** in the
+  manifest and resolves for dev-loaded / private-org installs (our distribution); it is
+  expected to be `undefined` for a never-saved file (untested edge — see the reference §5). `fileName` (`figma.root.name`) is the human-readable
+  label and the **fallback** identity when `fileKey` is absent. *(There is no Figma API for
+  "which file is frontmost/active" — verified; see
+  [[figma-bridge/docs/reference/figma-file-identity-and-activation]].)*
+- **One file, one channel.** The plugin binds its channel to its `fileKey`, so a reload
+  deterministically rejoins the *same* file's channel, and registers `{ fileKey, channel,
+  fileName }`. This replaces the prior single `channel-id` in `figma.clientStorage` —
+  `clientStorage` is per-user and shared across **all** files, so the old design had every open
+  file's plugin rejoin the **same** channel and a command broadcast to all of them (the
+  multi-file collision). When `fileKey` is unavailable (never-saved file), the plugin falls
+  back to a per-session channel registered under `fileName`; reload determinism there is
+  best-effort.
+- **Availability, not activity (the availability registry).** The relay maintains
+  `{ fileKey → { channel, fileName, connectedAt } }` — the files with a **live plugin**
+  (reachable/writable). A plugin's `register` adds its entry; the socket's `close`, or a missed
+  heartbeat (`DEFAULT_HEARTBEAT_INTERVAL = 30_000` ms → dead within ~2 ticks), removes it, so
+  **closing a file drops it from the set**. This is availability — a transport fact — not
+  activity: Figma exposes no "frontmost/active file" signal, so the agent never guesses which
+  file is meant. `fileName` is populated **reliably at register time**: the prior
+  `fileName: null` was a timing bug (the register frame was sent before the main-thread file
+  name arrived); the fix carries `fileKey`+`fileName` on register (re-sending if the name
+  arrives late).
+- **Targeting + guard (B3).** The agent names a target file by `fileKey`; the server resolves
+  it against the availability registry and drives only that file's channel. An **unavailable**
+  target (file closed / never matched) **fails and asks the agent to choose** — never a silent
+  fallback to another available file, not even the only one open. Defense-in-depth: each command
+  carries its `targetFileKey`, and the plugin **refuses to execute if `figma.fileKey` doesn't
+  match** — so a stale registry entry can never land a write in the wrong file.
+- **`close_plugin` (internal lifecycle command, not a tool).** A relay command that calls
   `figma.closePlugin()` for a deterministic teardown, used by the dev `rebuild → close →
   reopen` reload loop so new plugin code is picked up. It is **deliberately not** an MCP tool:
   unlike `connect`/`status` (which the agent uses to pair and read connection state), closing

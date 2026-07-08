@@ -51,7 +51,7 @@ Two real DX gaps hit while building a full dashboard end-to-end through the tool
 
 ## Tooling / workflow
 
-- **Auto-reconnect-with-backoff (deferred).** **Shipped 2026-06-28:** the `close_plugin` internal command (`figma.closePlugin()`) + the channel-persistence fix (keep `channel-id` across an unintended close; clear only on explicit Disconnect) + `scripts/reload-plugin.sh` — so the **rebuild → close → reopen → auto-reconnect → verify** loop reloads new `dist/code.js` headlessly (see `docs/specs/overview.md` Connection lifecycle). The remaining nice-to-have is auto-**re**connect-with-backoff so a *live* plugin self-heals when its socket drops while it stays open (relay restart, network blip), not only on relaunch. Add only if live relay-restart drops prove annoying.
+- **Auto-reconnect-with-backoff (deferred).** **Shipped 2026-06-28:** the `close_plugin` internal command (`figma.closePlugin()`) + the channel-persistence fix (keep `channel-id` across an unintended close; clear only on explicit Disconnect) *(mechanism superseded by per-file channels — reload determinism now comes from binding the channel to `fileKey`; see [[figma-bridge/docs/specs/overview|overview.md]] Connection lifecycle)* + `scripts/reload-plugin.sh` — so the **rebuild → close → reopen → auto-reconnect → verify** loop reloads new `dist/code.js` headlessly (see `docs/specs/overview.md` Connection lifecycle). The remaining nice-to-have is auto-**re**connect-with-backoff so a *live* plugin self-heals when its socket drops while it stays open (relay restart, network blip), not only on relaunch. Add only if live relay-restart drops prove annoying.
 
 ## Test-infrastructure (deferred quality)
 

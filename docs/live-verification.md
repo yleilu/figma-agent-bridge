@@ -79,9 +79,12 @@ Development → Import plugin from manifest…` and pick
    UI. Copy the **channel id** it shows.
 4. **Restart Claude Code** so the `figma-bridge` MCP server loads (if you want
    to drive the tools from an agent session as well as the CLI harness).
-5. **(Agent session) connect tool.** From the agent, call the `connect` tool —
-   pass the channel id, or let it auto-discover when exactly one plugin is
-   connected.
+5. **(Agent session) connect tool.** From the agent, call `connect({fileKey})`
+   (or `fileName`) to target a **specific file**, choosing from the `available[]`
+   set it returns. There is no single-plugin auto-discover and no channel id:
+   with per-file channels many plugins are connected at once, and B3 forbids
+   guessing which file — an unavailable/ambiguous target returns the available
+   list and asks you to choose.
 
 > [!note] networkAccess + GUI-connect caveats
 >
@@ -109,7 +112,7 @@ bun run verify:live -- --channel <id>
 
 | Flag              | Effect                                                                                                       |
 | ----------------- | ------------------------------------------------------------------------------------------------------------ |
-| `--channel <id>`  | Join this channel. Omit to auto-discover (fails if 0 or >1 plugins).                                         |
+| `--channel <id>`  | Dev harness escape hatch — join this channel directly on the relay. Omit to auto-discover a single connected plugin; with several files open (per-file channels), pass the channel.                                         |
 | `--out <dir>`     | Where PNGs + reports are written. Default `verify-output/`.                                                  |
 | `--keep`          | Do **not** delete the nodes the harness created.                                                             |
 | `--screencapture` | macOS: after `set_focus`, shell `screencapture -x` per node so the canvas is grabbed with the nodes in view. |

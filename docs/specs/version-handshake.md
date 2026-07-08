@@ -59,6 +59,12 @@ diagnostic). A handshake flags both immediately.
   **server owns** the comparison (**major.minor**, per B2).
 - The comparison is **one-way** (the server is the reference), surfaced on `connect` + `status`.
 - Tool names/commands are unaffected; this rides the existing register/connect path.
+- **Per-file channels extend this same schema.** The
+  [[figma-bridge/docs/specs/overview|per-file channel]] change adds **`fileKey`** to
+  `registerMessageSchema` and a **`targetFileKey`** to the command envelope (the B3 identity
+  guard) — a **breaking wire change**, so it **bumps the minor** (B2) and trips *this* handshake
+  on a mixed-version plugin/server. The relay stays semantics-free — it stores `fileKey` in the
+  availability registry but gains no logic (B1); the server owns targeting and the compare.
 
 ## Testing
 
