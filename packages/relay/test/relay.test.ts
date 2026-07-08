@@ -243,6 +243,50 @@ describe('relay', () => {
       await closeWs(ws)
     })
 
+    it('register with fileKey is reflected in /channels', async () => {
+      const ws = await connect()
+      const nextMessage = createMessageQueue(ws)
+
+      ws.send(
+        JSON.stringify({
+          type: 'join',
+          channel: 'filekey-ch',
+        }),
+      )
+      await nextMessage()
+
+      // default entry (before register) must carry fileKey:null, not undefined
+      const before = (await (
+        await fetch(`${HTTP_URL}/channels`)
+      ).json()) as ChannelInfo[]
+      expect(
+        before.find(c => c.channel === 'filekey-ch')
+          ?.fileKey,
+      ).toBeNull()
+
+      ws.send(
+        JSON.stringify({
+          type: 'register',
+          channel: 'filekey-ch',
+          fileName: 'My Design.fig',
+          fileKey: 'ABC123fileKey',
+        }),
+      )
+      // Give relay a moment to process
+      await Bun.sleep(50)
+
+      const after = (await (
+        await fetch(`${HTTP_URL}/channels`)
+      ).json()) as ChannelInfo[]
+      const entry = after.find(
+        c => c.channel === 'filekey-ch',
+      )
+      expect(entry?.fileName).toBe('My Design.fig')
+      expect(entry?.fileKey).toBe('ABC123fileKey')
+
+      await closeWs(ws)
+    })
+
     it('channel removed from registry on disconnect', async () => {
       const ws = await connect()
       const nextMessage = createMessageQueue(ws)

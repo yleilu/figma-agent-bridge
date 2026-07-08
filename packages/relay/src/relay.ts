@@ -163,6 +163,7 @@ const handleJoin = (
     ctx.channelRegistry.set(channel, {
       channel,
       fileName: null,
+      fileKey: null,
       connectedAt: Date.now(),
     })
   }
@@ -190,6 +191,7 @@ const handleRegister = (
   ws: ServerWebSocket<WsData>,
   channel: string,
   fileName: string | null,
+  fileKey: string | null,
   version: string | undefined,
 ) => {
   if (
@@ -201,6 +203,7 @@ const handleRegister = (
   const entry = ctx.channelRegistry.get(channel)
   if (entry !== undefined) {
     entry.fileName = fileName
+    entry.fileKey = fileKey
     entry.version = version
   }
 }
@@ -320,6 +323,7 @@ export const startRelay = (
             ws,
             frame.channel,
             frame.fileName,
+            frame.fileKey ?? null,
             frame.version,
           )
         } else if (frame.type === 'message') {
