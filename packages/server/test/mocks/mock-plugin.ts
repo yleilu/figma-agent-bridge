@@ -6,7 +6,11 @@ import type {
   RegisterMessage,
   SystemMessage,
 } from '@figma-agent-bridge/shared/types'
-import { APP_VERSION } from '@figma-agent-bridge/shared'
+import {
+  APP_VERSION,
+  isTargetMismatch,
+  targetGuardError,
+} from '@figma-agent-bridge/shared'
 import cardFixture from '../fixtures/card-node-raw.json'
 
 const MOCK_SVG =
@@ -1929,6 +1933,31 @@ export const createMockPlugin = (
     socket: WebSocket,
     cmd: CommandMessage,
   ): void => {
+    // B3 identity guard (mirrors the real plugin's code.ts, via the same
+    // shared isTargetMismatch/targetGuardError): a command addressed to a
+    // DIFFERENT file is refused with a byte-identical typed error and NOT
+    // executed. Only fires when this plugin knows its own fileKey AND the
+    // command carries a target — when either is null the guard can't verify
+    // and degrades honestly (executes), faithful to the undefined-figma.fileKey
+    // path.
+    if (isTargetMismatch(fileKey, cmd.targetFileKey)) {
+      const refusal: ChannelMessage = {
+        type: 'message',
+        channel,
+        message: {
+          id: cmd.id,
+          result: {
+            error: targetGuardError(
+              String(cmd.targetFileKey),
+              String(fileKey),
+            ),
+          },
+        },
+      }
+      socket.send(JSON.stringify(refusal))
+      return
+    }
+
     const { result, error } = runCommand(
       cmd.command,
       cmd.params,
