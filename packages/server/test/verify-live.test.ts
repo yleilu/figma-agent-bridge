@@ -48,7 +48,16 @@ describe('verify-live harness against the mock plugin', () => {
     null
 
   beforeAll(async () => {
-    server = startRelay(TEST_PORT)
+    // Lift the token-bucket rate limit for the self-test: this harness replays
+    // the ENTIRE CHECK_LIST + the cleanup delete loop back-to-back with zero
+    // client pacing, which blows past the production-sized burst (RATE_BURST)
+    // and would otherwise see a frame silently dropped mid-run (a 30s command
+    // timeout). A real agent never fires this fast. Production defaults are
+    // unchanged; only this in-process test opts into a large burst.
+    server = startRelay(TEST_PORT, {
+      rateBurst: 1_000_000,
+      rateTokensPerSec: 1_000_000,
+    })
     client = createFigmaClient(RELAY_URL)
     plugin = createMockPlugin({
       relayUrl: RELAY_URL,

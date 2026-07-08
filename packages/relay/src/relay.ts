@@ -31,6 +31,9 @@ type RelayContext = {
   alive: WeakMap<ServerWebSocket<WsData>, boolean>
   rate: WeakMap<ServerWebSocket<WsData>, RateState>
   heartbeatTimer: ReturnType<typeof setInterval> | null
+  /** Per-relay token-bucket sizing (defaults to the module constants). */
+  rateBurst: number
+  rateTokensPerSec: number
 }
 
 const contexts = new WeakMap<Server<WsData>, RelayContext>()
@@ -43,6 +46,8 @@ const createContext = (): RelayContext => ({
   alive: new WeakMap(),
   rate: new WeakMap(),
   heartbeatTimer: null,
+  rateBurst: RATE_BURST,
+  rateTokensPerSec: RATE_TOKENS_PER_SEC,
 })
 
 const send = (
@@ -64,8 +69,8 @@ const consumeToken = (
   const now = Date.now()
   const elapsed = (now - state.last) / 1000
   state.tokens = Math.min(
-    RATE_BURST,
-    state.tokens + elapsed * RATE_TOKENS_PER_SEC,
+    ctx.rateBurst,
+    state.tokens + elapsed * ctx.rateTokensPerSec,
   )
   state.last = now
   if (state.tokens < 1) {
@@ -227,6 +232,13 @@ const handleMessage = (
 export type StartRelayOptions = {
   hostname?: string
   heartbeatInterval?: number
+  /** Token-bucket initial/max burst (default RATE_BURST). Raise it for the
+   * in-process harness self-test, which replays the whole check suite +
+   * cleanup back-to-back with no client pacing and would otherwise exhaust the
+   * production-sized bucket and see frames silently dropped. */
+  rateBurst?: number
+  /** Token refill rate per second (default RATE_TOKENS_PER_SEC). */
+  rateTokensPerSec?: number
 }
 
 export const startRelay = (
@@ -234,6 +246,9 @@ export const startRelay = (
   opts: StartRelayOptions = {},
 ): Server<WsData> => {
   const ctx = createContext()
+  ctx.rateBurst = opts.rateBurst ?? RATE_BURST
+  ctx.rateTokensPerSec =
+    opts.rateTokensPerSec ?? RATE_TOKENS_PER_SEC
   const hostname =
     opts.hostname ?? process.env.RELAY_BIND ?? '127.0.0.1'
   const heartbeatInterval =
@@ -275,7 +290,7 @@ export const startRelay = (
         ctx.sockets.add(ws)
         ctx.alive.set(ws, true)
         ctx.rate.set(ws, {
-          tokens: RATE_BURST,
+          tokens: ctx.rateBurst,
           last: Date.now(),
         })
       },
