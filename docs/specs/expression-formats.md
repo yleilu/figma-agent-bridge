@@ -43,7 +43,8 @@ Everything an agent reads is one of two things:
 | **Atom** | a single leaf value | a **compact string** (the atom grammar below) | paints, gradients, font, effects, stroke, radius, sizing, constraints, scalars |
 
 - **Structs contain atoms** as their field values (a `text` struct's `font:` and
-  `color:` are atoms).
+  `color:` are atoms) — with a few **plain-string scalar fields** (`name`, `id`,
+  `text.content`, `context`) that are not atom-grammar values.
 - **Style tokens resolve to atoms** — a named style is the `style(...)` wrapper
   with its resolved atom following.
 - All **atoms share one shape**, so an agent learns the pattern once and can read
@@ -181,7 +182,7 @@ Bare literals: `opacity` `0.5` · `rotation` `45` · `blendMode` `MULTIPLY` ·
 Composite types render as YAML maps; their leaves are atoms. The fields a struct
 exposes:
 
-- **node** — `type, name, id, size, position, layoutPositioning, fills[], strokes[], stroke, effects[], radius, opacity, rotation, blend, visible, clipsContent, exportSettings[], layout, sizing, constraints, text, component, componentProperties, variantProperties, overrides, children[]` (children are nested node structs).
+- **node** — `type, name, id, size, position, layoutPositioning, fills[], strokes[], stroke, effects[], radius, opacity, rotation, blend, visible, clipsContent, exportSettings[], layout, sizing, constraints, text, component, componentProperties, variantProperties, overrides, context, children[]` (children are nested node structs).
 - **layout** — `{mode: H|V|NONE, gap, pad: [t,r,b,l], align: [primary, counter], wrap}`. `mode: NONE` turns auto-layout off.
 - **text** — `{content, font, color, align, valign, decoration, case, paragraphSpacing, runs}`. `font`/`color` are atoms; `runs` carries per-range overrides (see below). Line height and letter spacing are canonical on the `font(...)` atom (`font(...){lh=24, ls=0.5}`) — there are no separate top-level `lh`/`ls` text keys.
 - **exportSettings** — array of persistent export presets, each `{format: PNG|JPG|SVG|PDF, suffix?, constraint?: [SCALE|WIDTH|HEIGHT, value]}`. Round-trips via `get_node`/`update_node` (the persistent-presets path; the `export` tool itself is one-off render/asset output).
@@ -189,6 +190,7 @@ exposes:
 - **componentProperties / variantProperties** *(on INSTANCE / variant nodes)* — the instance's current property values and variant selection. The `componentPropertyDefinitions` (the schema) live on the component/set and are read via `get_components`.
 - **overrides** — the structured override delta on an instance: which fields / nested instances differ from the main component, so the agent can **read, replay, or report** surviving overrides (the read side of `set_instance`; read via `get_node`).
 - **component** *(on INSTANCE)* — the main-component reference for `create_node(INSTANCE)`: `{ key }` for a published/library component (`importComponentByKeyAsync`) **or** `{ id }` for a local component node, plus optional `properties` (component-property values, by exact key). **Write side: both paths.** **Read side:** `get_node` reads back `{ id }` for a **local** instance so it round-trips (T2); round-tripping a **published/library** instance (reading its `key` back) is a **documented deferred gap** (`docs/deferred-capabilities.md`) — it needs `getMainComponentAsync` on the read path (perf-sensitive). Instance property *values* read back via `componentProperties`, not here. Resolves the `tool-surface.md` "create_node(INSTANCE) by key/id" capability to a concrete field.
+- **context** — a round-tripping markdown **metadata field** (frontmatter scalars + fixed `##` body sections), stored in shared `pluginData` under `CONTEXT_NS = "figmabridge"` / `CONTEXT_KEY = "context"`. It is a **plain string, not an atom** (renders as a YAML block scalar), size-capped at 2 KB (`CONTEXT_MAX_BYTES` = 2048). View/edit split: the fidelity readers (`get_node`/`get_nodes`) return the full `context` and it round-trips via `create_node`/`update_node`; the view/list readers (`inspect`/`search`/`get_components`) emit a read-only `contextSummary` (the capped frontmatter slice). An over-cap value written via the raw `set_plugin_data` escape hatch is a declared read-only, non-round-trippable asymmetry (T2). Full field spec: `docs/specs/self-describing-nodes.md`.
 
 ## The `{…}` attribute catalogue (completeness)
 
