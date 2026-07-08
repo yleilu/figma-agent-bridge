@@ -96,6 +96,13 @@ type MockPluginOptions = {
   componentSetError?: boolean
   /** defaults to APP_VERSION; set to a different value to test mismatch */
   version?: string
+  /**
+   * The plugin's stable figma.fileKey. Real plugin reads figma.fileKey (with
+   * enablePrivatePluginApi) → a real key for a saved file, null/undefined for a
+   * never-saved file. Default null = the never-saved-file case (registers null,
+   * and the identity guard can't verify — see handleBroadcast).
+   */
+  fileKey?: string | null
 }
 
 type MockPlugin = {
@@ -114,6 +121,7 @@ export const createMockPlugin = (
     selection,
     componentSetError = false,
     version = APP_VERSION,
+    fileKey = null,
   } = options
 
   let ws: WebSocket | null = null
@@ -1972,6 +1980,7 @@ export const createMockPlugin = (
             const registerMsg: RegisterMessage = {
               type: 'register',
               channel,
+              fileKey,
               fileName: documentName ?? null,
               version,
             }
