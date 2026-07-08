@@ -54,6 +54,16 @@ GitHub Release + CI run + VM clean-room install and the `skill-creator` agent ev
   `v*` tag), the clean-VM install test (incl. the `SessionStart`-hook-vs-MCP-launch ordering
   check), and the `skill-creator` agent evals. **Deferred with the dev-workflow / CI overhaul**
   (to be sorted separately). The install *mechanism* is already validated locally with a real binary.
+- **Install flow & binary-hosting design (revisit with the CI overhaul).** The flow: `/plugin
+  marketplace add` + `install` pulls the plugin *content* (skills/agents/hooks/`.mcp.json`) from
+  the GitHub repo → on first session the `SessionStart` bootstrap **downloads the compiled MCP
+  binary from a GitHub Release** (SHA-256-verified) into `${CLAUDE_PLUGIN_DATA}/bin` → `.mcp.json`
+  starts the server, which self-spawns the relay → the user imports the Figma plugin manifest,
+  which connects to the relay. **Why GitHub:** the server is a compiled ~59 MB standalone binary
+  (chosen so the user needs no Bun/Node — zero-config), too big to bundle in the plugin/repo, so
+  it's hosted as a **Release asset** the bootstrap fetches. When sorting the dev-workflow/CI,
+  reconsider the host — keep GitHub Releases vs bundle-in-repo / require-Bun-from-source /
+  S3·R2·self-hosted CDN — the choice is coupled to the release-CI design.
 - Windows/Linux binaries; the live Worker **Send** path (the URL compiles in, but the
   distributed-binary shared-secret is unresolved — see claude-plugin.md §11).
 
