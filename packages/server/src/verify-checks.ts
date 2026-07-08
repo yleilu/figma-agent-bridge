@@ -18,6 +18,7 @@
 // Each check tracks the node ids it created so verify-live.ts can delete them.
 
 import YAML from 'yaml'
+import { CONTEXT_NS, CONTEXT_KEY } from '@figma-agent-bridge/shared'
 import type { FigmaClient } from './figma-client'
 import type { ToolResult } from './tools/shared'
 
@@ -845,6 +846,447 @@ const tier2: Check[] = [
       }
       return pass(
         `promoted ${compId}, added property (Label present=${hasLabel}), re-read components ok`,
+        { nodeIds: created, exportNodeId: compId },
+      )
+    },
+  },
+  {
+    id: 'T2.d-context-roundtrip',
+    tier: 2,
+    tools: [
+      'create_node',
+      'get_node',
+      'inspect',
+      'update_node',
+    ],
+    name: 'context: create_node(context) → get_node verbatim + inspect contextSummary only + empty update_node clears',
+    // Self-describing-nodes Surface 1: `context` rides create_node/update_node,
+    // round-trips verbatim through the FIDELITY read (get_node), is sliced to a
+    // capped `contextSummary` on the BOUNDED read (inspect), and an empty write
+    // clears it. These plugin runtime hooks (setSharedPluginData / export merge)
+    // are Figma-runtime — the mock echoes its card fixture, so the STRICT
+    // verbatim/summary assertions only fire when the plugin returns the SAME node
+    // we operated on (echoedId === id); against the fixture-substituting mock the
+    // check still runs the whole flow without error (contract-level), deferring
+    // the value assertions to the live run.
+    run: async client => {
+      const created: string[] = []
+      const value =
+        '---\npurpose: CTA\n---\n## Notes\nlong body here'
+      const create = await handleCreateNode(
+        {
+          spec: {
+            type: 'FRAME',
+            name: 'CtxRoundTrip',
+            size: [240, 160],
+            fills: ['#FFFFFF'],
+            context: value,
+          },
+        },
+        client,
+      )
+      if (isError(create)) {
+        return fail(`create_node(context): ${text(create)}`)
+      }
+      const id = createdId(asJson(create))
+      if (id === undefined) {
+        return fail(
+          `create_node returned no id: ${text(create)}`,
+        )
+      }
+      created.push(id)
+
+      // Fidelity read: get_node returns `context` in FULL (no slice).
+      const gn = await handleGetNode(
+        { nodeId: id, depth: 0 },
+        client,
+      )
+      if (isError(gn)) {
+        return {
+          ...fail(`get_node: ${text(gn)}`),
+          nodeIds: created,
+        }
+      }
+      const gnData = asYaml(gn)
+      const sameNode = gnData.id === id
+      if (sameNode && gnData.context !== value) {
+        return {
+          ...fail(
+            `get_node did not return context verbatim: got ${JSON.stringify(gnData.context)}`,
+          ),
+          nodeIds: created,
+        }
+      }
+
+      // Bounded read: inspect emits `contextSummary` (frontmatter slice) and
+      // NEVER the full `context`.
+      const ins = await handleInspect(
+        { nodeId: id },
+        client,
+      )
+      if (isError(ins)) {
+        return {
+          ...fail(`inspect: ${text(ins)}`),
+          nodeIds: created,
+        }
+      }
+      const view = (asYaml(ins).view ?? {}) as {
+        id?: string
+        context?: unknown
+        contextSummary?: unknown
+      }
+      if (view.context !== undefined) {
+        return {
+          ...fail(
+            `inspect leaked full context (must be contextSummary only): ${JSON.stringify(view.context)}`,
+          ),
+          nodeIds: created,
+        }
+      }
+      if (
+        view.id === id &&
+        view.contextSummary !== 'purpose: CTA'
+      ) {
+        return {
+          ...fail(
+            `inspect contextSummary mismatch: got ${JSON.stringify(view.contextSummary)}`,
+          ),
+          nodeIds: created,
+        }
+      }
+
+      // Empty write clears (Figma delete of the shared-pluginData key).
+      const clear = await handleUpdateNode(
+        { nodeId: id, patch: { context: '' } },
+        client,
+      )
+      if (isError(clear)) {
+        return {
+          ...fail(`update_node(clear): ${text(clear)}`),
+          nodeIds: created,
+        }
+      }
+      const gn2 = await handleGetNode(
+        { nodeId: id, depth: 0 },
+        client,
+      )
+      if (isError(gn2)) {
+        return {
+          ...fail(`get_node(after clear): ${text(gn2)}`),
+          nodeIds: created,
+        }
+      }
+      const gn2Data = asYaml(gn2)
+      if (gn2Data.id === id && gn2Data.context !== undefined) {
+        return {
+          ...fail(
+            `empty update_node did not clear context: ${JSON.stringify(gn2Data.context)}`,
+          ),
+          nodeIds: created,
+        }
+      }
+
+      return pass(
+        sameNode
+          ? `context round-tripped verbatim on ${id}; inspect returned contextSummary only; empty update cleared it`
+          : `ran create/get/inspect/clear without error; plugin echoed fixture node ${String(gnData.id)} so the verbatim/summary asserts are deferred to the live run`,
+        { nodeIds: created, exportNodeId: id },
+      )
+    },
+  },
+  {
+    id: 'T2.e-context-overcap-readonly',
+    tier: 2,
+    tools: [
+      'create_node',
+      'set_plugin_data',
+      'get_node',
+      'update_node',
+    ],
+    name: 'context over-cap: set_plugin_data(figmabridge/context) escape hatch is read-only (get_node returns it; update_node write-back rejected)',
+    // Surface 1 escape hatch: writing `context` straight to shared pluginData
+    // bypasses the 2 KB write cap (which lives in the server write path, not the
+    // store), so an over-cap value can EXIST and is returned verbatim by the
+    // fidelity read — but the normal update_node write-back of that value is
+    // rejected server-side with the `limit is 2048` message. The verbatim
+    // read-back assert only fires when the plugin returns the same node we wrote
+    // (fixture-substituting mock → deferred); the write-back REJECT is
+    // server-side and therefore strict on both.
+    run: async client => {
+      const frame = await makeFrame(client, 'CtxOverCap')
+      if (frame.id === undefined || isError(frame.result)) {
+        return fail(`create_node: ${text(frame.result)}`)
+      }
+      const created = [frame.id]
+      const big = 'x'.repeat(2500) // 2500 bytes > 2048 cap
+
+      const sp = await handleSetPluginData(
+        {
+          nodeId: frame.id,
+          namespace: CONTEXT_NS,
+          key: CONTEXT_KEY,
+          value: big,
+        },
+        client,
+      )
+      if (isError(sp)) {
+        return {
+          ...fail(`set_plugin_data(context): ${text(sp)}`),
+          nodeIds: created,
+        }
+      }
+
+      // Fidelity read returns the over-cap value verbatim (no read truncation).
+      const gn = await handleGetNode(
+        { nodeId: frame.id, depth: 0 },
+        client,
+      )
+      if (isError(gn)) {
+        return {
+          ...fail(`get_node: ${text(gn)}`),
+          nodeIds: created,
+        }
+      }
+      const gnData = asYaml(gn)
+      const sameNode = gnData.id === frame.id
+      if (sameNode && gnData.context !== big) {
+        return {
+          ...fail(
+            `get_node did not return the over-cap context verbatim (got ${String((gnData.context as string | undefined)?.length)} chars, want ${big.length})`,
+          ),
+          nodeIds: created,
+        }
+      }
+
+      // Normal write-back of the same over-cap value is rejected by the cap.
+      const back = await handleUpdateNode(
+        { nodeId: frame.id, patch: { context: big } },
+        client,
+      )
+      if (!isError(back)) {
+        return {
+          ...fail(
+            `update_node write-back of over-cap context was NOT rejected: ${text(back)}`,
+          ),
+          nodeIds: created,
+        }
+      }
+      if (!/limit is 2048/.test(text(back))) {
+        return {
+          ...fail(
+            `over-cap rejection missing the cap message: ${text(back)}`,
+          ),
+          nodeIds: created,
+        }
+      }
+
+      return pass(
+        sameNode
+          ? `escape-hatch stored a ${big.length}-byte context (read back verbatim); update_node write-back rejected with 'limit is 2048'`
+          : `escape-hatch write + rejected over-cap write-back verified; plugin echoed fixture node ${String(gnData.id)} so the verbatim read-back is deferred to the live run`,
+        { nodeIds: created },
+      )
+    },
+  },
+  {
+    id: 'T2.f-context-overcap-create-rejected',
+    tier: 2,
+    tools: ['create_node'],
+    name: 'context over-cap: oversized create_node(context) is rejected pre-send (no node created)',
+    // Surface 1 write cap: an over-cap `context` on create_node is rejected by
+    // assertContextWithinCap BEFORE the WS send, so no node is created. Fully
+    // server-side → strict on both the mock and the live plugin.
+    run: async client => {
+      const big = 'x'.repeat(3000) // > 2048
+      const result = await handleCreateNode(
+        {
+          spec: {
+            type: 'FRAME',
+            name: 'CtxOverCapCreate',
+            size: [100, 100],
+            fills: ['#FFFFFF'],
+            context: big,
+          },
+        },
+        client,
+      )
+      if (!isError(result)) {
+        // Unexpectedly accepted — a node may exist; report it for cleanup.
+        const leaked = createdId(asJson(result))
+        return {
+          ...fail(
+            `oversized create_node was NOT rejected: ${text(result)}`,
+          ),
+          nodeIds: leaked ? [leaked] : [],
+        }
+      }
+      if (!/limit is 2048/.test(text(result))) {
+        return fail(
+          `oversized create_node rejection missing the cap message: ${text(result)}`,
+        )
+      }
+      // The cap throws before conversion/send, so no node was created — nothing
+      // to clean up.
+      return pass(
+        `oversized create_node rejected pre-send with 'limit is 2048' (no node created)`,
+      )
+    },
+  },
+  {
+    id: 'T2.g-component-description-context',
+    tier: 2,
+    tools: [
+      'create_node',
+      'create_component',
+      'set_plugin_data',
+      'update_component',
+      'get_components',
+    ],
+    name: 'get_components surfaces component description (+ contextSummary when context is set)',
+    // Surface 2: promote a frame → set its `description` via update_component →
+    // get_components surfaces that `description` in FULL. When the component also
+    // carries `context` (set here via the escape hatch), the bounded reader
+    // additionally emits a `contextSummary` slice and NEVER the raw `context`.
+    // `query` narrows the read to our entry so it lands on the first page. The
+    // mock returns its own fixture catalogue (our promoted comp isn't in it), so
+    // the strict description/summary asserts fire only when our entry is found
+    // (live run); otherwise the flow still runs green (contract-level).
+    run: async client => {
+      const created: string[] = []
+      const base = await makeFrame(client, 'DescCompBase')
+      if (base.id === undefined || isError(base.result)) {
+        return fail(`create_node: ${text(base.result)}`)
+      }
+      created.push(base.id)
+
+      const uniqueName = 'VerifyDescComponent'
+      const promoted = await handleCreateComponent(
+        { nodeId: base.id, name: uniqueName },
+        client,
+      )
+      if (isError(promoted)) {
+        return {
+          ...fail(`create_component: ${text(promoted)}`),
+          nodeIds: created,
+        }
+      }
+      const compId = createdId(asJson(promoted))
+      if (compId === undefined) {
+        return {
+          ...fail(
+            `create_component returned no id: ${text(promoted)}`,
+          ),
+          nodeIds: created,
+        }
+      }
+      created.push(compId)
+
+      // Seed `context` on the component (escape hatch) so a contextSummary can
+      // surface on the entry alongside the description.
+      const ctxValue =
+        '---\npurpose: Primary CTA\n---\n## Notes\nprimary action only'
+      const sp = await handleSetPluginData(
+        {
+          nodeId: compId,
+          namespace: CONTEXT_NS,
+          key: CONTEXT_KEY,
+          value: ctxValue,
+        },
+        client,
+      )
+      if (isError(sp)) {
+        return {
+          ...fail(
+            `set_plugin_data(context on component): ${text(sp)}`,
+          ),
+          nodeIds: created,
+        }
+      }
+
+      const upd = await handleUpdateComponent(
+        {
+          componentId: compId,
+          description: 'Primary action only',
+        },
+        client,
+      )
+      if (isError(upd)) {
+        return {
+          ...fail(`update_component(description): ${text(upd)}`),
+          nodeIds: created,
+        }
+      }
+
+      const comps = await handleGetComponents(
+        { query: uniqueName },
+        client,
+      )
+      if (isError(comps)) {
+        return {
+          ...fail(`get_components: ${text(comps)}`),
+          nodeIds: created,
+        }
+      }
+      const compsText = text(comps)
+      if (compsText.includes('Unexpected response')) {
+        return {
+          ...fail(
+            `get_components masked a degrade as "Unexpected response": ${compsText}`,
+          ),
+          nodeIds: created,
+        }
+      }
+      const results = (asYaml(comps).results ?? []) as {
+        id?: string
+        name?: unknown
+        description?: unknown
+        context?: unknown
+        contextSummary?: unknown
+      }[]
+      const entry =
+        results.find(e => e.id === compId) ??
+        results.find(e => e.name === uniqueName)
+      if (entry === undefined) {
+        return pass(
+          `promoted ${compId} + set description; get_components returned ${results.length} entr(ies) but our component is not in this catalogue (mock fixture set) — description/contextSummary asserts deferred to the live run`,
+          { nodeIds: created, exportNodeId: compId },
+        )
+      }
+      if (entry.context !== undefined) {
+        return {
+          ...fail(
+            `get_components leaked full context (must be contextSummary only): ${JSON.stringify(entry.context)}`,
+          ),
+          nodeIds: created,
+        }
+      }
+      if (entry.description !== 'Primary action only') {
+        return {
+          ...fail(
+            `get_components description mismatch: got ${JSON.stringify(entry.description)}`,
+          ),
+          nodeIds: created,
+        }
+      }
+      // contextSummary is a secondary surface — assert it when present, and note
+      // it honestly when the plugin did not attach the component context.
+      if (
+        entry.contextSummary !== undefined &&
+        entry.contextSummary !== 'purpose: Primary CTA'
+      ) {
+        return {
+          ...fail(
+            `get_components contextSummary mismatch: got ${JSON.stringify(entry.contextSummary)}`,
+          ),
+          nodeIds: created,
+        }
+      }
+      const summaryNote =
+        entry.contextSummary === 'purpose: Primary CTA'
+          ? ' + contextSummary surfaced'
+          : ' (contextSummary absent — plugin did not attach component context)'
+      return pass(
+        `promoted ${compId}; get_components surfaced description in full${summaryNote}`,
         { nodeIds: created, exportNodeId: compId },
       )
     },
