@@ -35,6 +35,7 @@ const stubClient = (opts: {
   connected?: boolean
   reply?: unknown
   sent?: Sent[]
+  fileKey?: string | null
 }): FigmaClient => ({
   joinChannel: async () => 'ch',
   sendCommand: async (command, params) => {
@@ -46,6 +47,8 @@ const stubClient = (opts: {
   disconnect: () => {},
   isConnected: () => opts.connected ?? true,
   currentChannel: () => 'ch',
+  currentFileKey: () =>
+    opts.fileKey === undefined ? 'f' : opts.fileKey,
 })
 
 const reply = {
@@ -87,6 +90,17 @@ describe('handleSearchComponents', () => {
     expect(
       out.results.map((r: { name: string }) => r.name),
     ).toEqual(['Primary Button'])
+  })
+  it('errors when fileId is not the connected file (B3)', async () => {
+    const mgr = new IndexManager()
+    const res = await handleSearchComponents(
+      { fileId: 'other', query: 'x' },
+      stubClient({ reply, fileKey: 'f' }),
+      mgr,
+    )
+    expect(res.content[0].text).toContain(
+      'operates on the connected file',
+    )
   })
 })
 

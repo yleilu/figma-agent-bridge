@@ -32,6 +32,40 @@ const getComponentsVia =
     return { local: raw.local, remote: raw.remote }
   }
 
+/**
+ * B3 — every command is addressed to exactly one file, never guessed. The
+ * index is keyed by the file the plugin commands actually reach: the client's
+ * connected file. So the caller's `fileId` MUST match `currentFileKey()`; a
+ * mismatch means the agent should connect to that file first (we never key
+ * data under the wrong file).
+ */
+const resolveTarget = (
+  fileId: string,
+  client: FigmaClient,
+):
+  | { ok: true; fileKey: string }
+  | { ok: false; result: ToolResult } => {
+  const current = client.currentFileKey()
+  if (current === null) {
+    return {
+      ok: false,
+      result: textResult(
+        'Not connected to a specific file. Connect to a file first, then retry.',
+      ),
+    }
+  }
+  if (fileId !== current) {
+    return {
+      ok: false,
+      result: textResult(
+        `This tool operates on the connected file (${current}). ` +
+          `To operate on ${fileId}, connect to that file first.`,
+      ),
+    }
+  }
+  return { ok: true, fileKey: current }
+}
+
 export const handleSearchComponents = async (
   {
     fileId,
@@ -51,9 +85,13 @@ export const handleSearchComponents = async (
   if (guard) {
     return guard
   }
+  const target = resolveTarget(fileId, client)
+  if (!target.ok) {
+    return target.result
+  }
   try {
     const out = await manager.search(
-      fileId,
+      target.fileKey,
       query,
       limit ?? DEFAULT_LIMIT,
       getComponentsVia(client),
@@ -82,9 +120,13 @@ export const handleReindex = async (
   if (guard) {
     return guard
   }
+  const target = resolveTarget(fileId, client)
+  if (!target.ok) {
+    return target.result
+  }
   try {
     const out = await manager.reindex(
-      fileId,
+      target.fileKey,
       getComponentsVia(client),
     )
     return textResult(YAML.stringify(out))
