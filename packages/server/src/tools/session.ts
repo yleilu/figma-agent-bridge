@@ -133,9 +133,15 @@ export const handleConnect = async (
     if (relayHttpUrl !== undefined) {
       available = await discoverChannels(relayHttpUrl)
       info = available.find(c => c.channel === channel)
-      const mismatch = protocolMismatch(info?.version)
-      if (mismatch !== null) {
-        return textResult(mismatch)
+      // Only version-check a channel the registry actually knows: a discovered
+      // channel gets the B2 gate, but a raw explicit channel absent from
+      // /channels is the deliberate escape hatch — join it, don't misreport it
+      // as a '(none)' version skew (an unregistered channel ≠ a version mismatch).
+      if (info !== undefined) {
+        const mismatch = protocolMismatch(info.version)
+        if (mismatch !== null) {
+          return textResult(mismatch)
+        }
       }
     }
     try {

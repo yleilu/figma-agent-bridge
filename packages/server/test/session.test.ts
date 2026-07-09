@@ -117,7 +117,37 @@ describe('handleConnect version handshake', () => {
     )
     const res = await handleStatus(client, HTTP)
     const parsed = JSON.parse(text(res))
-    expect(parsed.joined[0].protocolVersion).toBe(APP_VERSION)
+    expect(parsed.joined[0].protocolVersion).toBe(
+      APP_VERSION,
+    )
+    client.disconnect()
+    plugin.stop()
+  })
+
+  it('status merges the per-file live context from a responding plugin', async () => {
+    const plugin = createMockPlugin({
+      relayUrl: WS,
+      channel: 'st-live',
+      documentName: 'Live',
+    })
+    await plugin.start()
+    const client = createFigmaClient(WS)
+    await handleConnect(
+      { channel: 'st-live' },
+      client,
+      HTTP,
+      PORT,
+    )
+
+    const out = JSON.parse(
+      text(await handleStatus(client, HTTP)),
+    )
+    const entry = out.joined[0]
+    expect(entry.currentPage.id).toBe('page:1')
+    expect(entry.selection).toHaveLength(1)
+    expect(entry.selection[0].id).toBe('1:42')
+    expect(entry.viewport.zoom).toBe(1.5)
+
     client.disconnect()
     plugin.stop()
   })
@@ -248,6 +278,30 @@ describe('handleConnect file targeting', () => {
     a.close()
     b.close()
   })
+
+  it('joins an explicit channel that is NOT in the registry (escape hatch)', async () => {
+    // A registered file exists, but the caller targets a different, unregistered
+    // channel directly. info is undefined (channel unknown to /channels) → NO
+    // version check → the join proceeds. It must NOT be misreported as a
+    // '(none)' version skew (an unregistered channel ≠ a version mismatch).
+    const a = await registerRaw('ch-a', 'Design A', 'key-a')
+    const client = createFigmaClient(WS)
+
+    const res = await handleConnect(
+      { channel: 'ch-raw' },
+      client,
+      HTTP,
+      PORT,
+    )
+    const out = JSON.parse(text(res))
+    expect(out.connected).toBe(true)
+    expect(out.channel).toBe('ch-raw')
+    expect(out.fileKey).toBe('ch-raw')
+    expect(client.channelFor('ch-raw')).toBe('ch-raw')
+
+    client.disconnect()
+    a.close()
+  })
 })
 
 describe('connect/status multi-file contract', () => {
@@ -285,7 +339,9 @@ describe('connect/status multi-file contract', () => {
     const client = createFigmaClient(WS)
     await client.joinChannel('ch-a', 'key-a')
     await client.joinChannel('ch-b', 'key-b')
-    const out = JSON.parse(text(await handleStatus(client, HTTP)))
+    const out = JSON.parse(
+      text(await handleStatus(client, HTTP)),
+    )
     expect(out.connected).toBe(true)
     expect(
       out.joined
@@ -300,9 +356,9 @@ describe('connect/status multi-file contract', () => {
 
   it('status reports disconnected when nothing is joined', async () => {
     const client = createFigmaClient(WS)
-    expect(text(await handleStatus(client, HTTP))).toContain(
-      'disconnected',
-    )
+    expect(
+      text(await handleStatus(client, HTTP)),
+    ).toContain('disconnected')
     client.disconnect()
   })
 })
