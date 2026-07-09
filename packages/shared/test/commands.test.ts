@@ -5,9 +5,11 @@ import {
   type Command,
 } from '@figma-agent-bridge/shared/commands'
 
-// The frozen 47-tool catalogue (docs/scratch/tool-surface-design.md
-// → Tool catalogue, Count = 47). Hard-coded here so a dropped or
-// renamed command fails CI — honoring the "never drop API items" rule.
+// The frozen tool catalogue (docs/specs/tool-surface.md → the 49-tool
+// surface: the 47 base tools + the 2 component-index tools). Hard-coded
+// here so a dropped or renamed command fails CI — honoring the "never
+// drop API items" rule. document_changed is an internal plugin→server
+// push (not an MCP tool) and is tracked separately in INTERNAL below.
 //
 // Grouped exactly as the catalogue groups them; the per-group counts
 // are asserted below so a regression points at the offending group.
@@ -75,7 +77,13 @@ const EXPECTED: Record<string, readonly string[]> = {
   handoff: ['get_annotations', 'set_annotations'],
   // Batch (1)
   batch: ['batch'],
+  // Component index (2)
+  componentIndex: ['search_components', 'reindex'],
 }
+
+// Non-tool protocol commands: wire commands that are not MCP tools.
+// document_changed is the unsolicited plugin→server freshness push.
+const INTERNAL: readonly string[] = ['document_changed']
 
 const EXPECTED_GROUP_COUNTS: Record<string, number> = {
   session: 2,
@@ -91,15 +99,18 @@ const EXPECTED_GROUP_COUNTS: Record<string, number> = {
   writeMeta: 2,
   handoff: 2,
   batch: 1,
+  componentIndex: 2,
 }
 
-const EXPECTED_COMMANDS: readonly string[] =
-  Object.values(EXPECTED).flat()
+const EXPECTED_COMMANDS: readonly string[] = [
+  ...Object.values(EXPECTED).flat(),
+  ...INTERNAL,
+]
 
 describe('COMMANDS registry', () => {
-  it('has exactly 47 entries', () => {
-    expect(Object.keys(COMMANDS).length).toBe(47)
-    expect(EXPECTED_COMMANDS.length).toBe(47)
+  it('has exactly 50 entries (49 tools + 1 internal)', () => {
+    expect(Object.keys(COMMANDS).length).toBe(50)
+    expect(EXPECTED_COMMANDS.length).toBe(50)
   })
 
   it('per-group counts match the catalogue', () => {
@@ -109,7 +120,7 @@ describe('COMMANDS registry', () => {
     const total = Object.values(
       EXPECTED_GROUP_COUNTS,
     ).reduce((a, b) => a + b, 0)
-    expect(total).toBe(47)
+    expect(total).toBe(49)
   })
 
   it('command string values are exactly the expected set', () => {
