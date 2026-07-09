@@ -279,6 +279,29 @@ describe('handleConnect file targeting', () => {
     b.close()
   })
 
+  it('surfaces a synthetic fileKey (= channel) for an unsaved file', async () => {
+    const u = await registerRaw('sess-x', 'Untitled', null)
+    const client = createFigmaClient(WS)
+    const out = JSON.parse(
+      text(
+        await handleConnect(
+          { channel: 'sess-x' },
+          client,
+          HTTP,
+          PORT,
+        ),
+      ),
+    )
+    expect(out.fileKey).toBe('sess-x')
+    expect(
+      out.available.find(
+        (f: { fileKey: string }) => f.fileKey === 'sess-x',
+      ),
+    ).toBeDefined()
+    client.disconnect()
+    u.close()
+  })
+
   it('joins an explicit channel that is NOT in the registry (escape hatch)', async () => {
     // A registered file exists, but the caller targets a different, unregistered
     // channel directly. info is undefined (channel unknown to /channels) → NO

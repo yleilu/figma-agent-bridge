@@ -83,16 +83,19 @@ const askMessage = (
   )
 }
 
-// The registry snapshot returned to the agent on connect + status.
+// The registry snapshot returned to the agent on connect + status. Each entry's
+// fileKey is the SYNTHETIC key (synthKey): a saved file exposes its real
+// figma.fileKey, an unsaved file (fileKey === null) is surfaced as its session
+// channel so the agent can read AND address it (requireFile auto-joins by it).
 const availableView = (
   available: ChannelInfo[],
 ): {
-  fileKey: string | null
+  fileKey: string
   fileName: string | null
   connectedAt: number
 }[] =>
   available.map(c => ({
-    fileKey: c.fileKey,
+    fileKey: synthKey(c),
     fileName: c.fileName,
     connectedAt: c.connectedAt,
   }))
