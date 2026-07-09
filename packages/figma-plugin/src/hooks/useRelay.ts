@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
-import type { FeedbackItem } from '@figma-agent-bridge/shared'
+import type { FeedbackItem, Meta } from '@figma-agent-bridge/shared'
 import { APP_VERSION, genId, genToken } from '@figma-agent-bridge/shared'
 import { deriveChannel } from '../file-channel'
 
@@ -252,9 +252,8 @@ export const useRelay = () => {
               return
             }
 
-            const replyId = (
-              msg.meta as { requestId?: string } | undefined
-            )?.requestId
+            const replyId = (msg.meta as Meta | undefined)
+              ?.requestId
             if (
               !msg.command &&
               replyId &&
@@ -274,14 +273,24 @@ export const useRelay = () => {
               // requestId correlates the reply, fileKey is the B3 target the
               // sandbox guards against. Forward both into the internal
               // execute-command message (whose fields keep their names).
-              const meta = msg.meta as
-                | { requestId?: string; fileKey?: string | null }
-                | undefined
+              const meta = msg.meta as Meta | undefined
+              const requestId = meta?.requestId
+              // The server contract always stamps meta.requestId on a command
+              // frame; a frame without one can't be correlated, so drop it
+              // loudly rather than round-trip a reply the server can't match
+              // (which would hang the caller).
+              if (requestId === undefined) {
+                console.warn(
+                  'Dropping inbound command with no meta.requestId:',
+                  msg.command,
+                )
+                return
+              }
               parent.postMessage(
                 {
                   pluginMessage: {
                     type: 'execute-command',
-                    id: meta?.requestId,
+                    id: requestId,
                     command: msg.command,
                     params:
                       (msg.params as Record<
