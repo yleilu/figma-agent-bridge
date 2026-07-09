@@ -9,7 +9,6 @@ type RelayState = {
   error: string | null
 }
 
-
 export const useRelay = () => {
   const [state, setState] = useState<RelayState>({
     status: 'disconnected',

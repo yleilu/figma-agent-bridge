@@ -61,9 +61,14 @@ describe('non-secure runtime safety', () => {
       })
       simulated = true
     } catch {
-      /* crypto not reconfigurable here; assert anyway */
+      /* if this runtime forbids it, the assertion below fails loudly */
     }
     try {
+      // The simulation MUST have taken effect, else this test would
+      // silently pass against the real crypto without exercising the
+      // crypto-absent path it exists to guard.
+      expect(simulated).toBe(true)
+      expect(g.crypto).toBeUndefined()
       expect(genId()).toMatch(ALNUM)
       expect(genToken()).toHaveLength(8)
     } finally {
