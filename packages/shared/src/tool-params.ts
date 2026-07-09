@@ -68,9 +68,11 @@ export const listPaginationParamsSchema = z.object({
 // File-target mixin — the per-call `fileKey` every tool takes (B3), plus the
 // reserved, server-managed `sessionId` header (request-envelope.md).
 //
-// Addressing is per-call, not server-stamped from the connection. `connect`
-// (discovery) and `status` (no per-call file) are the exceptions and keep their
-// own schemas. overview.md + request-envelope.md are the source of truth.
+// Addressing is per-call, not server-stamped from the connection. The non-file
+// tools are the exceptions and keep their own schemas: `connect` (discovery),
+// `status` (no per-call file), and `record_feedback` (global feedback store, no
+// file) — the three registered via registerSessionTool.
+// overview.md + request-envelope.md are the source of truth.
 // ---------------------------------------------------------------------------
 
 /** The per-call fileKey (required) + reserved sessionId, shared by every file-addressed tool. */

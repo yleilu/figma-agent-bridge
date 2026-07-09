@@ -159,9 +159,12 @@ tool's exact return shape, so this set stays in sync there.
 
 ### Handler order
 
-Each handler runs a fixed sequence (so failures surface consistently): input cross-validation →
-connection check (`DISCONNECTED`) → convert expressions server-side → `sendCommand` → null-result
-guard → `result.error` guard → success. Cross-field validation lives in the **handler**, not the
+The connection/addressing gate now lives in the shared `withFile`/`requireFile` **wrapper** that
+registers every file-addressed tool — it runs *before* the handler and emits `DISCONNECTED` (no
+plugin), `WRONG_FILE` (the `fileKey` is not available — ASK, never guess, B3), or `INCOMPATIBLE`
+(B2 version skew). The per-handler `requireConnected` check was removed. Each handler then runs a
+fixed sequence (so failures surface consistently): input cross-validation → convert expressions
+server-side → `sendCommand` → null-result guard → `result.error` guard → success. Cross-field validation lives in the **handler**, not the
 zod schema. Tool names may differ from plugin command strings (e.g. tool `inspect` → command
 `get_node`; the six setters → command `update_node` with field-scoped payloads). `export` and
 large `create_tree` pass a larger `timeoutMs`. This whole section is a cross-cutting summary of

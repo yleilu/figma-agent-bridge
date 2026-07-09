@@ -7,6 +7,10 @@ import { z } from 'zod'
 // versions; the live server now imports the canonical NodeSpec-based shapes
 // from `tool-params.ts`, so those were retired here in M3-E.
 export const createFromSvgParamsSchema = z.object({
+  // fileKey + sessionId MIRROR fileTargetParamsSchema (tool-params.ts); inlined
+  // here rather than spread because this module is barrel-exported and importing
+  // tool-params.ts would reintroduce a barrel-export cycle. Keep the two
+  // describe() strings in sync with the mixin's.
   fileKey: z
     .string()
     .min(1)
