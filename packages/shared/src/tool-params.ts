@@ -65,6 +65,31 @@ export const listPaginationParamsSchema = z.object({
 })
 
 // ---------------------------------------------------------------------------
+// File-target mixin — the per-call `fileKey` every tool takes (B3), plus the
+// reserved, server-managed `sessionId` header (request-envelope.md).
+//
+// Addressing is per-call, not server-stamped from the connection. `connect`
+// (discovery) and `status` (no per-call file) are the exceptions and keep their
+// own schemas. overview.md + request-envelope.md are the source of truth.
+// ---------------------------------------------------------------------------
+
+/** The per-call fileKey (required) + reserved sessionId, shared by every file-addressed tool. */
+export const fileTargetParamsSchema = z.object({
+  fileKey: z
+    .string()
+    .min(1)
+    .describe(
+      'Stable Figma fileKey of the file this call operates on (from status/connect available[]). Required — the server never guesses which file (B3).',
+    ),
+  sessionId: z
+    .string()
+    .optional()
+    .describe(
+      'Reserved — server-managed. Do NOT set. Injected by the session PreToolUse hook (request-envelope.md); ignored by this surface today.',
+    ),
+})
+
+// ---------------------------------------------------------------------------
 // Read tools — fidelity-first tree readers (depth / fields / profile ONLY)
 //
 // `get_node` / `get_nodes` are the D1/T2 fidelity exception: they spread the
@@ -77,12 +102,14 @@ export const listPaginationParamsSchema = z.object({
 
 /** Params for `get_node`: retrieve a single node by ID. */
 export const getNodeParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   nodeId: z.string().describe('The node ID to retrieve.'),
   ...fidelityReadParamsSchema.shape,
 })
 
 /** Params for `get_nodes`: retrieve multiple nodes by their IDs. */
 export const getNodesParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   nodeIds: z
     .array(z.string())
     .describe('Array of node IDs to retrieve.'),
@@ -98,6 +125,7 @@ export const getNodesParamsSchema = z.object({
  * returns that node's view; an empty selection falls back to the current page.
  */
 export const inspectParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
     .optional()
@@ -143,6 +171,7 @@ export const searchScopeSchema = z.enum([
  * subtree; `depth=0` scans only the root(s); `depth=N` descends N levels.
  */
 export const searchParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   scope: searchScopeSchema
     .optional()
     .describe(
@@ -175,8 +204,10 @@ export const searchParamsSchema = z.object({
 /** Params for `status`: no params — reads connection/document state. */
 export const statusParamsSchema = z.object({})
 
-/** Params for `get_selection`: no params — reads the current selection. */
-export const getSelectionParamsSchema = z.object({})
+/** Params for `get_selection`: reads the current selection of the target file. */
+export const getSelectionParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
+})
 
 /**
  * Params for `list_pages`: document + page enumeration (Rule A; bounded by T10).
@@ -185,11 +216,13 @@ export const getSelectionParamsSchema = z.object({})
  * stays on the envelope alongside the bounded page.
  */
 export const listPagesParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   ...listPaginationParamsSchema.shape,
 })
 
 /** Params for `set_selection`: replace the current Figma selection. */
 export const setSelectionParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   nodeIds: z
     .array(z.string())
     .describe(
@@ -203,6 +236,7 @@ export const setSelectionParamsSchema = z.object({
 
 /** Params for `delete_node`: remove a node from the document. */
 export const deleteNodeParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   nodeId: z.string().describe('ID of the node to delete.'),
 })
 
@@ -213,6 +247,7 @@ export const deleteNodeParamsSchema = z.object({
  * not change the selection (pair with set_selection for that).
  */
 export const setFocusParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   nodeIds: z
     .array(z.string())
     .describe(
@@ -225,6 +260,7 @@ export const setFocusParamsSchema = z.object({
  * index, optionally `count` times. Returns one entry per clone.
  */
 export const cloneNodeParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   nodeId: z.string().describe('ID of the node to clone.'),
   parentId: z
     .string()
@@ -254,6 +290,7 @@ export const cloneNodeParamsSchema = z.object({
  * the new parent's layout), optionally at a specific index.
  */
 export const reparentNodeParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
     .describe('ID of the node to reparent.'),
@@ -277,6 +314,7 @@ export const reparentNodeParamsSchema = z.object({
  * parent's actual children (warns on mismatch, never throws — T7).
  */
 export const reorderChildrenParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   parentId: z
     .string()
     .describe(
@@ -294,6 +332,7 @@ export const reorderChildrenParamsSchema = z.object({
  * union/subtract/intersect/exclude.
  */
 export const booleanOpParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   op: z
     .enum(['UNION', 'SUBTRACT', 'INTERSECT', 'EXCLUDE'])
     .describe('The boolean operation to apply.'),
@@ -311,6 +350,7 @@ export const booleanOpParamsSchema = z.object({
 
 /** Params for `flatten`: flatten one or more nodes into a single vector. */
 export const flattenParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   nodeIds: z
     .array(z.string())
     .min(1)
@@ -329,11 +369,13 @@ export const flattenParamsSchema = z.object({
 
 /** Params for `create_page`: add a new page to the document. */
 export const createPageParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   name: z.string().describe('Name for the new page.'),
 })
 
 /** Params for `set_current_page`: switch the active page. */
 export const setCurrentPageParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   pageId: z
     .string()
     .describe('ID of the page to make current.'),
@@ -341,6 +383,7 @@ export const setCurrentPageParamsSchema = z.object({
 
 /** Params for `duplicate_page`: clone an existing page, optionally renaming it. */
 export const duplicatePageParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   pageId: z
     .string()
     .describe('ID of the page to duplicate.'),
@@ -362,6 +405,7 @@ export const duplicatePageParamsSchema = z.object({
  * omitted fields are left untouched.
  */
 export const updateNodeParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   nodeId: z.string().describe('ID of the node to update.'),
   patch: partialNodeSpecSchema.describe(
     'Partial NodeSpec. Only supplied fields are replaced; omitted fields are left unchanged.',
@@ -377,6 +421,7 @@ export const updateNodeParamsSchema = z.object({
  * (this module is NOT barrel-exported) until the create path migrates.
  */
 export const createNodeParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   spec: nodeSpecSchema.describe(
     'The NodeSpec to create. Its `type` selects the Figma node kind.',
   ),
@@ -395,6 +440,7 @@ export const createNodeParamsSchema = z.object({
  * ref-pool the `{ ref }` nodes resolve against.
  */
 export const createTreeParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   tree: treeNodeSpecSchema.describe(
     'The root TreeNodeSpec (recursive children, { ref } reuse, or { id } clone).',
   ),
@@ -419,6 +465,7 @@ export const createTreeParamsSchema = z.object({
  * validates that exactly one is present.
  */
 export const createImageParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   url: z
     .string()
     .optional()
@@ -439,6 +486,7 @@ export const createImageParamsSchema = z.object({
 
 /** Params for `bind_variable`: bind a variable to a node field. */
 export const bindVariableParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
     .describe('ID of the node to bind the variable to.'),
@@ -459,6 +507,7 @@ export const bindVariableParamsSchema = z.object({
  * continues when `truncated`).
  */
 export const getVariablesParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   collectionId: z
     .string()
     .optional()
@@ -526,6 +575,7 @@ export const createVariableSpecSchema = z.object({
  * { collectionId, modes, variables:[{id,name}] }.
  */
 export const createVariablesParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   collection: z
     .string()
     .describe('Name for the new variable collection.'),
@@ -574,6 +624,7 @@ export const updateVariableSpecSchema = z.object({
  * warning (T7). Returns { collectionId, modes, warnings[] }.
  */
 export const updateVariablesParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   collectionId: z
     .string()
     .describe('ID of the variable collection to update.'),
@@ -645,6 +696,7 @@ export const createStyleSpecSchema = z.object({
  * the rest. Returns { results:[{id,key,name,type,index}], errors:[{index,error}] }.
  */
 export const createStylesParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   styles: z
     .array(createStyleSpecSchema)
     .describe('The styles to create (partial success).'),
@@ -694,6 +746,7 @@ export const updateStyleSpecSchema = z.object({
  * the rest. Returns { results:[{id,index}], errors:[{index,error}] }.
  */
 export const updateStylesParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   styles: z
     .array(updateStyleSpecSchema)
     .describe('The styles to edit (partial success).'),
@@ -705,6 +758,7 @@ export const updateStylesParamsSchema = z.object({
  * setEffectStyleIdAsync / setGridStyleIdAsync. Returns { id, warnings[] }.
  */
 export const applyStyleParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
     .describe('ID of the node to apply the style to.'),
@@ -727,6 +781,7 @@ export const applyStyleParamsSchema = z.object({
  * `truncated`).
  */
 export const getStylesParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   type: z
     .enum(['paint', 'text', 'effect', 'grid'])
     .optional()
@@ -749,6 +804,7 @@ export const getStylesParamsSchema = z.object({
  * cheap LOCAL component/set scan.
  */
 export const getComponentsParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   query: z
     .string()
     .optional()
@@ -772,6 +828,7 @@ export const getComponentsParamsSchema = z.object({
  * 100, `cursor` continues when `truncated`).
  */
 export const listFontsParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   query: z
     .string()
     .optional()
@@ -792,6 +849,7 @@ export const listFontsParamsSchema = z.object({
  * `warnings` still ride on the success envelope.
  */
 export const getReactionsParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
     .describe(
@@ -802,6 +860,7 @@ export const getReactionsParamsSchema = z.object({
 
 /** Params for `get_plugin_data`: read a node's plugin data. */
 export const getPluginDataParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
     .describe('The node to read plugin data from.'),
@@ -815,6 +874,7 @@ export const getPluginDataParamsSchema = z.object({
 
 /** Params for `set_plugin_data`: write a single plugin-data key on a node. */
 export const setPluginDataParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
     .describe('The node to write plugin data to.'),
@@ -834,6 +894,7 @@ export const setPluginDataParamsSchema = z.object({
 
 /** Params for `set_reactions`: replace a node's prototype reactions. */
 export const setReactionsParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
     .describe('The node whose prototype reactions to set.'),
@@ -855,6 +916,7 @@ export const setReactionsParamsSchema = z.object({
  * editorType-gated T7 degrade `warnings` still ride on the success envelope.
  */
 export const getAnnotationsParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
     .optional()
@@ -866,6 +928,7 @@ export const getAnnotationsParamsSchema = z.object({
 
 /** Params for `set_annotations`: replace a node's annotations. */
 export const setAnnotationsParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
     .describe('The node whose annotations to set.'),
@@ -882,6 +945,7 @@ export const setAnnotationsParamsSchema = z.object({
 
 /** Params for `export`: render a node to PNG/JPG/SVG/PDF. */
 export const exportParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   nodeId: z.string().describe('The node to export.'),
   format: z
     .enum(['PNG', 'JPG', 'SVG', 'PDF'])
@@ -907,6 +971,7 @@ export const exportParamsSchema = z.object({
  * a node first, use create_node / create_tree, then promote the returned id.
  */
 export const createComponentParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
     .describe(
@@ -955,6 +1020,7 @@ export const componentPropertyEditSchema = z.object({
  * set the description, and (T7-gated) expose nested instances.
  */
 export const updateComponentParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   componentId: z
     .string()
     .describe(
@@ -988,6 +1054,7 @@ export const updateComponentParamsSchema = z.object({
 
 /** Params for `combine_variants`: combine ≥2 components into a variant set. */
 export const combineVariantsParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   componentIds: z
     .array(z.string())
     .min(2)
@@ -1013,6 +1080,7 @@ export const combineVariantsParamsSchema = z.object({
  * `mainComponentId` WINS (it needs no async import).
  */
 export const swapComponentParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   instanceId: z
     .string()
     .describe('ID of the instance to swap.'),
@@ -1035,6 +1103,7 @@ export const swapComponentParamsSchema = z.object({
  * INSTANCE_SWAP) and/or apply per-node overrides.
  */
 export const setInstanceParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   instanceId: z
     .string()
     .describe('ID of the instance to configure.'),
@@ -1129,6 +1198,7 @@ export const batchEntrySchema = z
  * — one entry's failure does NOT abort the rest.
  */
 export const batchParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
   op: batchOpSchema
     .optional()
     .describe(
@@ -1147,11 +1217,7 @@ export const batchParamsSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const searchComponentsParamsSchema = z.object({
-  fileId: z
-    .string()
-    .describe(
-      'The fileKey of the file to search (from get_document_info).',
-    ),
+  ...fileTargetParamsSchema.shape,
   query: z
     .string()
     .describe(
@@ -1170,11 +1236,7 @@ export const searchComponentsParamsSchema = z.object({
 })
 
 export const reindexParamsSchema = z.object({
-  fileId: z
-    .string()
-    .describe(
-      'The fileKey of the file to rebuild the index for.',
-    ),
+  ...fileTargetParamsSchema.shape,
 })
 
 // ---------------------------------------------------------------------------

@@ -5,12 +5,14 @@
 // create-schemas.ts versions still used by the live server.
 import { describe, expect, it } from 'bun:test'
 import {
+  fileTargetParamsSchema,
   getNodeParamsSchema,
   getNodesParamsSchema,
   inspectParamsSchema,
   searchParamsSchema,
   statusParamsSchema,
   setSelectionParamsSchema,
+  deleteNodeParamsSchema,
   updateNodeParamsSchema,
   createNodeParamsSchema,
   createTreeParamsSchema,
@@ -18,6 +20,8 @@ import {
   getVariablesParamsSchema,
   getComponentsParamsSchema,
   batchParamsSchema,
+  searchComponentsParamsSchema,
+  reindexParamsSchema,
   recordFeedbackParamsSchema,
 } from '@figma-agent-bridge/shared/tool-params'
 
@@ -25,16 +29,19 @@ import {
 // getNodeParamsSchema — tree read mixin (depth/budget/fields/profile/match)
 // ---------------------------------------------------------------------------
 describe('getNodeParamsSchema', () => {
-  it('accepts a minimal payload (nodeId only)', () => {
+  it('accepts a minimal payload (fileKey + nodeId)', () => {
     expect(
-      getNodeParamsSchema.safeParse({ nodeId: '1:2' })
-        .success,
+      getNodeParamsSchema.safeParse({
+        fileKey: 'fk',
+        nodeId: '1:2',
+      }).success,
     ).toBe(true)
   })
 
   it('accepts the reduced mixin (depth + fields + profile only)', () => {
     expect(
       getNodeParamsSchema.safeParse({
+        fileKey: 'fk',
         nodeId: '1:2',
         depth: 3,
         fields: ['id', 'name', 'type'],
@@ -48,6 +55,7 @@ describe('getNodeParamsSchema', () => {
   // never carries budget/match (the schema does not advertise them).
   it('drops budget (the fidelity exception is never budget-truncated)', () => {
     const parsed = getNodeParamsSchema.safeParse({
+      fileKey: 'fk',
       nodeId: '1:2',
       budget: 5000,
     })
@@ -59,6 +67,7 @@ describe('getNodeParamsSchema', () => {
 
   it('drops match (no source-side filter on the edit reader)', () => {
     const parsed = getNodeParamsSchema.safeParse({
+      fileKey: 'fk',
       nodeId: '1:2',
       match: { type: ['FRAME', 'TEXT'], name: 'Row' },
     })
@@ -69,14 +78,16 @@ describe('getNodeParamsSchema', () => {
   })
 
   it('rejects a missing nodeId', () => {
-    expect(getNodeParamsSchema.safeParse({}).success).toBe(
-      false,
-    )
+    expect(
+      getNodeParamsSchema.safeParse({ fileKey: 'fk' })
+        .success,
+    ).toBe(false)
   })
 
   it('accepts negative depth (depth -1 = unlimited)', () => {
     expect(
       getNodeParamsSchema.safeParse({
+        fileKey: 'fk',
         nodeId: '1:2',
         depth: -1,
         profile: 'layout',
@@ -89,9 +100,10 @@ describe('getNodeParamsSchema', () => {
 // getNodesParamsSchema — tree read mixin
 // ---------------------------------------------------------------------------
 describe('getNodesParamsSchema', () => {
-  it('accepts a minimal payload (nodeIds only)', () => {
+  it('accepts a minimal payload (fileKey + nodeIds)', () => {
     expect(
       getNodesParamsSchema.safeParse({
+        fileKey: 'fk',
         nodeIds: ['1:2', '3:4'],
       }).success,
     ).toBe(true)
@@ -100,6 +112,7 @@ describe('getNodesParamsSchema', () => {
   it('accepts the reduced mixin (depth + fields + profile only)', () => {
     expect(
       getNodesParamsSchema.safeParse({
+        fileKey: 'fk',
         nodeIds: ['1:2'],
         depth: 2,
         fields: ['id', 'name'],
@@ -112,6 +125,7 @@ describe('getNodesParamsSchema', () => {
   // advertised, so a supplied budget/match is stripped from the parsed output.
   it('drops budget and match (fidelity exception, no source filter)', () => {
     const parsed = getNodesParamsSchema.safeParse({
+      fileKey: 'fk',
       nodeIds: ['1:2'],
       budget: 1000,
       match: { type: 'FRAME' },
@@ -124,15 +138,18 @@ describe('getNodesParamsSchema', () => {
   })
 
   it('rejects missing nodeIds', () => {
-    expect(getNodesParamsSchema.safeParse({}).success).toBe(
-      false,
-    )
+    expect(
+      getNodesParamsSchema.safeParse({ fileKey: 'fk' })
+        .success,
+    ).toBe(false)
   })
 
   it('rejects non-array nodeIds', () => {
     expect(
-      getNodesParamsSchema.safeParse({ nodeIds: '1:2' })
-        .success,
+      getNodesParamsSchema.safeParse({
+        fileKey: 'fk',
+        nodeIds: '1:2',
+      }).success,
     ).toBe(false)
   })
 })
@@ -141,29 +158,41 @@ describe('getNodesParamsSchema', () => {
 // inspectParamsSchema — tree read mixin + optional nodeId/pageId
 // ---------------------------------------------------------------------------
 describe('inspectParamsSchema', () => {
-  it('accepts an empty payload (current selection)', () => {
+  it('accepts a fileKey-only payload (current selection)', () => {
+    expect(
+      inspectParamsSchema.safeParse({ fileKey: 'fk' })
+        .success,
+    ).toBe(true)
+  })
+
+  it('rejects a missing fileKey', () => {
     expect(inspectParamsSchema.safeParse({}).success).toBe(
-      true,
+      false,
     )
   })
 
   it('accepts nodeId only', () => {
     expect(
-      inspectParamsSchema.safeParse({ nodeId: '1:2' })
-        .success,
+      inspectParamsSchema.safeParse({
+        fileKey: 'fk',
+        nodeId: '1:2',
+      }).success,
     ).toBe(true)
   })
 
   it('accepts pageId only', () => {
     expect(
-      inspectParamsSchema.safeParse({ pageId: 'p:1' })
-        .success,
+      inspectParamsSchema.safeParse({
+        fileKey: 'fk',
+        pageId: 'p:1',
+      }).success,
     ).toBe(true)
   })
 
   it('accepts both nodeId and pageId', () => {
     expect(
       inspectParamsSchema.safeParse({
+        fileKey: 'fk',
         nodeId: '1:2',
         pageId: 'p:1',
       }).success,
@@ -173,6 +202,7 @@ describe('inspectParamsSchema', () => {
   it('accepts a maximal payload (nodeId + all mixin fields)', () => {
     expect(
       inspectParamsSchema.safeParse({
+        fileKey: 'fk',
         nodeId: '1:2',
         depth: 5,
         budget: 2000,
@@ -188,15 +218,23 @@ describe('inspectParamsSchema', () => {
 // searchParamsSchema — list read mixin (cursor/limit/fields/match) + pageId
 // ---------------------------------------------------------------------------
 describe('searchParamsSchema', () => {
-  it('accepts an empty payload (match-all)', () => {
+  it('accepts a fileKey-only payload (match-all)', () => {
+    expect(
+      searchParamsSchema.safeParse({ fileKey: 'fk' })
+        .success,
+    ).toBe(true)
+  })
+
+  it('rejects a missing fileKey', () => {
     expect(searchParamsSchema.safeParse({}).success).toBe(
-      true,
+      false,
     )
   })
 
   it('accepts cursor + limit (list mixin fields)', () => {
     expect(
       searchParamsSchema.safeParse({
+        fileKey: 'fk',
         cursor: 'abc',
         limit: 10,
       }).success,
@@ -206,6 +244,7 @@ describe('searchParamsSchema', () => {
   it('accepts pageId restriction', () => {
     expect(
       searchParamsSchema.safeParse({
+        fileKey: 'fk',
         pageId: 'p:1',
         match: { type: 'TEXT' },
       }).success,
@@ -216,25 +255,35 @@ describe('searchParamsSchema', () => {
   // results stay a flat Rule-A list.
   it('accepts a depth scan-scope bound', () => {
     expect(
-      searchParamsSchema.safeParse({ depth: 2 }).success,
+      searchParamsSchema.safeParse({
+        fileKey: 'fk',
+        depth: 2,
+      }).success,
     ).toBe(true)
   })
 
   it('accepts depth -1 (scan everything)', () => {
     expect(
-      searchParamsSchema.safeParse({ depth: -1 }).success,
+      searchParamsSchema.safeParse({
+        fileKey: 'fk',
+        depth: -1,
+      }).success,
     ).toBe(true)
   })
 
   it('rejects a non-integer depth', () => {
     expect(
-      searchParamsSchema.safeParse({ depth: 1.5 }).success,
+      searchParamsSchema.safeParse({
+        fileKey: 'fk',
+        depth: 1.5,
+      }).success,
     ).toBe(false)
   })
 
   it('accepts a full payload', () => {
     expect(
       searchParamsSchema.safeParse({
+        fileKey: 'fk',
         pageId: 'p:1',
         depth: 3,
         cursor: 'eyJwb3MiOjQyfQ==',
@@ -250,13 +299,19 @@ describe('searchParamsSchema', () => {
 
   it('rejects a non-positive limit', () => {
     expect(
-      searchParamsSchema.safeParse({ limit: 0 }).success,
+      searchParamsSchema.safeParse({
+        fileKey: 'fk',
+        limit: 0,
+      }).success,
     ).toBe(false)
   })
 
   it('rejects an empty cursor', () => {
     expect(
-      searchParamsSchema.safeParse({ cursor: '' }).success,
+      searchParamsSchema.safeParse({
+        fileKey: 'fk',
+        cursor: '',
+      }).success,
     ).toBe(false)
   })
 })
@@ -286,6 +341,7 @@ describe('setSelectionParamsSchema', () => {
   it('accepts a list of node ids', () => {
     expect(
       setSelectionParamsSchema.safeParse({
+        fileKey: 'fk',
         nodeIds: ['1:2', '3:4'],
       }).success,
     ).toBe(true)
@@ -293,14 +349,17 @@ describe('setSelectionParamsSchema', () => {
 
   it('accepts an empty nodeIds array (clear selection)', () => {
     expect(
-      setSelectionParamsSchema.safeParse({ nodeIds: [] })
-        .success,
+      setSelectionParamsSchema.safeParse({
+        fileKey: 'fk',
+        nodeIds: [],
+      }).success,
     ).toBe(true)
   })
 
   it('rejects missing nodeIds', () => {
     expect(
-      setSelectionParamsSchema.safeParse({}).success,
+      setSelectionParamsSchema.safeParse({ fileKey: 'fk' })
+        .success,
     ).toBe(false)
   })
 })
@@ -312,6 +371,7 @@ describe('updateNodeParamsSchema', () => {
   it('accepts a nodeId + empty patch ({})', () => {
     expect(
       updateNodeParamsSchema.safeParse({
+        fileKey: 'fk',
         nodeId: '1:2',
         patch: {},
       }).success,
@@ -321,6 +381,7 @@ describe('updateNodeParamsSchema', () => {
   it('accepts a single-field patch (opacity)', () => {
     expect(
       updateNodeParamsSchema.safeParse({
+        fileKey: 'fk',
         nodeId: '1:2',
         patch: { opacity: 0.5 },
       }).success,
@@ -330,6 +391,7 @@ describe('updateNodeParamsSchema', () => {
   it('accepts a single-field patch (name)', () => {
     expect(
       updateNodeParamsSchema.safeParse({
+        fileKey: 'fk',
         nodeId: '1:2',
         patch: { name: 'Card' },
       }).success,
@@ -338,15 +400,19 @@ describe('updateNodeParamsSchema', () => {
 
   it('rejects missing nodeId', () => {
     expect(
-      updateNodeParamsSchema.safeParse({ patch: {} })
-        .success,
+      updateNodeParamsSchema.safeParse({
+        fileKey: 'fk',
+        patch: {},
+      }).success,
     ).toBe(false)
   })
 
   it('rejects missing patch', () => {
     expect(
-      updateNodeParamsSchema.safeParse({ nodeId: '1:2' })
-        .success,
+      updateNodeParamsSchema.safeParse({
+        fileKey: 'fk',
+        nodeId: '1:2',
+      }).success,
     ).toBe(false)
   })
 })
@@ -358,6 +424,7 @@ describe('createNodeParamsSchema', () => {
   it('accepts a minimal spec (type only)', () => {
     expect(
       createNodeParamsSchema.safeParse({
+        fileKey: 'fk',
         spec: { type: 'FRAME' },
       }).success,
     ).toBe(true)
@@ -366,6 +433,7 @@ describe('createNodeParamsSchema', () => {
   it('accepts a spec with atom leaves + parentId', () => {
     expect(
       createNodeParamsSchema.safeParse({
+        fileKey: 'fk',
         spec: {
           type: 'FRAME',
           name: 'Card',
@@ -380,6 +448,7 @@ describe('createNodeParamsSchema', () => {
   it('rejects a spec missing type', () => {
     expect(
       createNodeParamsSchema.safeParse({
+        fileKey: 'fk',
         spec: { name: 'NoType' },
       }).success,
     ).toBe(false)
@@ -387,8 +456,10 @@ describe('createNodeParamsSchema', () => {
 
   it('rejects a missing spec', () => {
     expect(
-      createNodeParamsSchema.safeParse({ parentId: '1:2' })
-        .success,
+      createNodeParamsSchema.safeParse({
+        fileKey: 'fk',
+        parentId: '1:2',
+      }).success,
     ).toBe(false)
   })
 })
@@ -400,6 +471,7 @@ describe('createTreeParamsSchema', () => {
   it('accepts a nested tree (recursive children)', () => {
     expect(
       createTreeParamsSchema.safeParse({
+        fileKey: 'fk',
         tree: {
           type: 'FRAME',
           children: [
@@ -419,6 +491,7 @@ describe('createTreeParamsSchema', () => {
   it('accepts a { ref } child + a refs pool', () => {
     expect(
       createTreeParamsSchema.safeParse({
+        fileKey: 'fk',
         tree: {
           type: 'FRAME',
           children: [{ ref: 'button' }],
@@ -436,6 +509,7 @@ describe('createTreeParamsSchema', () => {
   it('accepts an { id } clone child', () => {
     expect(
       createTreeParamsSchema.safeParse({
+        fileKey: 'fk',
         tree: {
           type: 'FRAME',
           children: [{ id: '9:9' }],
@@ -447,8 +521,10 @@ describe('createTreeParamsSchema', () => {
 
   it('rejects a missing tree', () => {
     expect(
-      createTreeParamsSchema.safeParse({ parentId: '1:2' })
-        .success,
+      createTreeParamsSchema.safeParse({
+        fileKey: 'fk',
+        parentId: '1:2',
+      }).success,
     ).toBe(false)
   })
 })
@@ -460,6 +536,7 @@ describe('bindVariableParamsSchema', () => {
   it('accepts a valid payload', () => {
     expect(
       bindVariableParamsSchema.safeParse({
+        fileKey: 'fk',
         nodeId: '1:2',
         variableId: 'VariableID:1',
         field: 'fills',
@@ -470,6 +547,7 @@ describe('bindVariableParamsSchema', () => {
   it('rejects missing field', () => {
     expect(
       bindVariableParamsSchema.safeParse({
+        fileKey: 'fk',
         nodeId: '1:2',
         variableId: 'VariableID:1',
       }).success,
@@ -479,6 +557,7 @@ describe('bindVariableParamsSchema', () => {
   it('rejects missing variableId', () => {
     expect(
       bindVariableParamsSchema.safeParse({
+        fileKey: 'fk',
         nodeId: '1:2',
         field: 'fills',
       }).success,
@@ -488,6 +567,7 @@ describe('bindVariableParamsSchema', () => {
   it('rejects missing nodeId', () => {
     expect(
       bindVariableParamsSchema.safeParse({
+        fileKey: 'fk',
         variableId: 'VariableID:1',
         field: 'fills',
       }).success,
@@ -499,15 +579,23 @@ describe('bindVariableParamsSchema', () => {
 // getVariablesParamsSchema
 // ---------------------------------------------------------------------------
 describe('getVariablesParamsSchema', () => {
-  it('accepts an empty payload (all collections)', () => {
+  it('accepts a fileKey-only payload (all collections)', () => {
+    expect(
+      getVariablesParamsSchema.safeParse({ fileKey: 'fk' })
+        .success,
+    ).toBe(true)
+  })
+
+  it('rejects a missing fileKey', () => {
     expect(
       getVariablesParamsSchema.safeParse({}).success,
-    ).toBe(true)
+    ).toBe(false)
   })
 
   it('accepts a collectionId filter', () => {
     expect(
       getVariablesParamsSchema.safeParse({
+        fileKey: 'fk',
         collectionId: 'VariableCollectionId:1',
       }).success,
     ).toBe(true)
@@ -519,15 +607,23 @@ describe('getVariablesParamsSchema', () => {
 // (cursor/limit). includeRemote defaults off (the live timeout fix).
 // ---------------------------------------------------------------------------
 describe('getComponentsParamsSchema', () => {
-  it('accepts an empty payload (local-only, default page)', () => {
+  it('accepts a fileKey-only payload (local-only, default page)', () => {
+    expect(
+      getComponentsParamsSchema.safeParse({ fileKey: 'fk' })
+        .success,
+    ).toBe(true)
+  })
+
+  it('rejects a missing fileKey', () => {
     expect(
       getComponentsParamsSchema.safeParse({}).success,
-    ).toBe(true)
+    ).toBe(false)
   })
 
   it('accepts a query filter', () => {
     expect(
       getComponentsParamsSchema.safeParse({
+        fileKey: 'fk',
         query: 'Button',
       }).success,
     ).toBe(true)
@@ -535,6 +631,7 @@ describe('getComponentsParamsSchema', () => {
 
   it('accepts includeRemote (the opt-in remote-discovery gate)', () => {
     const parsed = getComponentsParamsSchema.safeParse({
+      fileKey: 'fk',
       includeRemote: true,
     })
     expect(parsed.success).toBe(true)
@@ -546,6 +643,7 @@ describe('getComponentsParamsSchema', () => {
   it('accepts cursor + limit (list mixin fields)', () => {
     expect(
       getComponentsParamsSchema.safeParse({
+        fileKey: 'fk',
         cursor: 'eyJwb3MiOjQyfQ==',
         limit: 50,
       }).success,
@@ -554,8 +652,10 @@ describe('getComponentsParamsSchema', () => {
 
   it('rejects a non-positive limit', () => {
     expect(
-      getComponentsParamsSchema.safeParse({ limit: 0 })
-        .success,
+      getComponentsParamsSchema.safeParse({
+        fileKey: 'fk',
+        limit: 0,
+      }).success,
     ).toBe(false)
   })
 })
@@ -567,6 +667,7 @@ describe('batchParamsSchema', () => {
   it('accepts a homogeneous batch (top-level op, entries omit op)', () => {
     expect(
       batchParamsSchema.safeParse({
+        fileKey: 'fk',
         op: 'delete_node',
         ops: [{ nodeId: '1:1' }, { nodeId: '1:2' }],
       }).success,
@@ -576,6 +677,7 @@ describe('batchParamsSchema', () => {
   it('accepts a heterogeneous batch (per-entry op)', () => {
     expect(
       batchParamsSchema.safeParse({
+        fileKey: 'fk',
         ops: [
           { op: 'update_node', nodeId: '1:1', patch: {} },
           { op: 'set_focus', nodeIds: ['1:2'] },
@@ -586,6 +688,7 @@ describe('batchParamsSchema', () => {
 
   it('passes through arbitrary per-op params (passthrough entry)', () => {
     const parsed = batchParamsSchema.safeParse({
+      fileKey: 'fk',
       op: 'apply_style',
       ops: [
         { nodeId: '1:1', styleId: 'S:1', field: 'fill' },
@@ -605,6 +708,7 @@ describe('batchParamsSchema', () => {
   it('rejects an empty ops array', () => {
     expect(
       batchParamsSchema.safeParse({
+        fileKey: 'fk',
         op: 'delete_node',
         ops: [],
       }).success,
@@ -614,6 +718,7 @@ describe('batchParamsSchema', () => {
   it('rejects an unknown op (not a WRITE command)', () => {
     expect(
       batchParamsSchema.safeParse({
+        fileKey: 'fk',
         op: 'inspect',
         ops: [{ nodeId: '1:1' }],
       }).success,
@@ -622,9 +727,90 @@ describe('batchParamsSchema', () => {
 
   it('rejects a missing ops array', () => {
     expect(
-      batchParamsSchema.safeParse({ op: 'delete_node' })
+      batchParamsSchema.safeParse({
+        fileKey: 'fk',
+        op: 'delete_node',
+      }).success,
+    ).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// fileTargetParamsSchema (per-call fileKey — B3)
+// ---------------------------------------------------------------------------
+describe('fileTargetParamsSchema (per-call fileKey — B3)', () => {
+  it('requires a non-empty fileKey', () => {
+    expect(
+      fileTargetParamsSchema.safeParse({}).success,
+    ).toBe(false)
+    expect(
+      fileTargetParamsSchema.safeParse({ fileKey: '' })
         .success,
     ).toBe(false)
+    expect(
+      fileTargetParamsSchema.safeParse({ fileKey: 'fk-1' })
+        .success,
+    ).toBe(true)
+  })
+
+  it('accepts the reserved sessionId (optional, forward-compat)', () => {
+    expect(
+      fileTargetParamsSchema.safeParse({
+        fileKey: 'fk-1',
+        sessionId: 's-1',
+      }).success,
+    ).toBe(true)
+  })
+
+  it('every file-addressed tool schema carries fileKey', () => {
+    expect(
+      getNodeParamsSchema.safeParse({ nodeId: '1:2' })
+        .success,
+    ).toBe(false)
+    expect(
+      getNodeParamsSchema.safeParse({
+        fileKey: 'fk',
+        nodeId: '1:2',
+      }).success,
+    ).toBe(true)
+    expect(
+      deleteNodeParamsSchema.safeParse({ nodeId: '1:2' })
+        .success,
+    ).toBe(false)
+    expect(
+      batchParamsSchema.safeParse({
+        ops: [{ op: 'delete_node', nodeId: '1' }],
+      }).success,
+    ).toBe(false)
+    expect(
+      batchParamsSchema.safeParse({
+        fileKey: 'fk',
+        ops: [{ op: 'delete_node', nodeId: '1' }],
+      }).success,
+    ).toBe(true)
+  })
+
+  it('component-index tools use fileKey (renamed from fileId)', () => {
+    expect(
+      searchComponentsParamsSchema.safeParse({
+        fileId: 'fk',
+        query: 'x',
+      }).success,
+    ).toBe(false)
+    expect(
+      searchComponentsParamsSchema.safeParse({
+        fileKey: 'fk',
+        query: 'x',
+      }).success,
+    ).toBe(true)
+    expect(
+      reindexParamsSchema.safeParse({ fileId: 'fk' })
+        .success,
+    ).toBe(false)
+    expect(
+      reindexParamsSchema.safeParse({ fileKey: 'fk' })
+        .success,
+    ).toBe(true)
   })
 })
 
