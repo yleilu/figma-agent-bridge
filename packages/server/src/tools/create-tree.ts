@@ -32,7 +32,7 @@ import type {
   RefPool,
   NodeSpec,
 } from '@figma-agent-bridge/shared/node-spec'
-import type { FigmaClient } from '../figma-client'
+import type { ScopedFigmaClient } from '../figma-client'
 import {
   specToFigmaForCreate,
   type FigmaWritePayload,
@@ -41,7 +41,6 @@ import { CREATABLE_TYPES } from './create-node'
 import { assertContextWithinCap } from '../serialize/context-cap'
 import {
   type ToolResult,
-  requireConnected,
   formatMutationResult,
   errorMessage,
   textResult,
@@ -136,13 +135,8 @@ export const handleCreateTree = async (
     parentId?: string
     refs?: RefPool
   },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const warnings: string[] = []
     const convertedTree = convertTree(tree, warnings)

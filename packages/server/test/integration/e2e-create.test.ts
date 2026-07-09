@@ -11,9 +11,11 @@ import {
   stopRelay,
 } from '@figma-agent-bridge/relay/relay'
 import { createFigmaClient } from '@figma-agent-bridge/server/figma-client'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import type {
+  FigmaClient,
+  ScopedFigmaClient,
+} from '@figma-agent-bridge/server/figma-client'
 import { transformToAngle } from '@figma-agent-bridge/server/grammar'
-import { handleConnect } from '@figma-agent-bridge/server/tools/session'
 // create_node and create_component were rebuilt on NodeSpec (M3 chunks A/B);
 // their handlers live in tools/create-node.ts and tools/components.ts and are
 // covered by create-node.test.ts / e2e-slice.test.ts and components.test.ts /
@@ -43,10 +45,12 @@ import { createMockPlugin } from '../mocks/mock-plugin'
 const TEST_PORT = 3099
 const RELAY_URL = `ws://localhost:${TEST_PORT}`
 const TEST_CHANNEL = 'e2e-create-test'
+const FK = 'fk-create'
 
 describe('M3 create tools e2e', () => {
   let server: Server<{ id: string }>
   let client: FigmaClient
+  let scoped: ScopedFigmaClient
   let plugin: ReturnType<typeof createMockPlugin> | null =
     null
 
@@ -59,10 +63,12 @@ describe('M3 create tools e2e', () => {
       channel: TEST_CHANNEL,
       documentName: 'Create Test Doc',
       pageName: 'Main Page',
+      fileKey: FK,
     })
 
     await plugin.start()
-    await handleConnect({ channel: TEST_CHANNEL }, client)
+    await client.joinChannel(TEST_CHANNEL, FK)
+    scoped = client.forFile(FK)
   })
 
   afterEach(() => {
@@ -110,7 +116,7 @@ describe('M3 create tools e2e', () => {
           ],
         },
       },
-      client,
+      scoped,
     )
 
     const data = JSON.parse(
@@ -143,7 +149,7 @@ describe('M3 create tools e2e', () => {
         svg: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 2L2 22h20z"/></svg>',
         name: 'Triangle',
       },
-      client,
+      scoped,
     )
 
     const data = JSON.parse(
@@ -166,7 +172,7 @@ describe('M3 create tools e2e', () => {
           fills: ['linear(135, #FF6B6B@0, #4ECDC4@100)'],
         },
       },
-      client,
+      scoped,
     )
 
     const data = JSON.parse(
@@ -223,7 +229,7 @@ describe('M3 create tools e2e', () => {
           fills: ['#FF0000'],
         },
       },
-      client,
+      scoped,
     )
     const parsed = JSON.parse(
       result.content[0].text,
@@ -249,7 +255,7 @@ describe('M3 create tools e2e', () => {
           },
         },
       },
-      client,
+      scoped,
     )
     const parsed = JSON.parse(
       result.content[0].text,
@@ -272,7 +278,7 @@ describe('M3 create tools e2e', () => {
           component: { key: 'btn-key-123' },
         },
       },
-      client,
+      scoped,
     )
     const parsed = JSON.parse(
       result.content[0].text,
@@ -290,7 +296,7 @@ describe('M3 create tools e2e', () => {
         parentId: '0:1',
         spec: { type: 'INSTANCE', name: 'Orphan' },
       },
-      client,
+      scoped,
     )
     const { text } = result.content[0]
     expect(text).toStartWith('Error')
@@ -309,7 +315,7 @@ describe('M3 create tools e2e', () => {
           component: { id: 'notcomp:9' },
         },
       },
-      client,
+      scoped,
     )
     const { text } = result.content[0]
     expect(text).toStartWith('Error')
@@ -321,10 +327,12 @@ describe('M3 create tools e2e', () => {
 const D_TEST_PORT = 3102
 const D_RELAY_URL = `ws://localhost:${D_TEST_PORT}`
 const D_TEST_CHANNEL = 'e2e-chunk-d-test'
+const D_FK = 'fk-create-d'
 
 describe('M2 chunk D writes e2e', () => {
   let server: Server<{ id: string }>
   let client: FigmaClient
+  let scoped: ScopedFigmaClient
   let plugin: ReturnType<typeof createMockPlugin> | null =
     null
 
@@ -337,10 +345,12 @@ describe('M2 chunk D writes e2e', () => {
       channel: D_TEST_CHANNEL,
       documentName: 'Chunk D Doc',
       pageName: 'Main Page',
+      fileKey: D_FK,
     })
 
     await plugin.start()
-    await handleConnect({ channel: D_TEST_CHANNEL }, client)
+    await client.joinChannel(D_TEST_CHANNEL, D_FK)
+    scoped = client.forFile(D_FK)
   })
 
   afterEach(() => {
@@ -355,7 +365,7 @@ describe('M2 chunk D writes e2e', () => {
   it('delete_node echoes the deleted {id,name,type}', async () => {
     const result = await handleDeleteNode(
       { nodeId: '1:42' },
-      client,
+      scoped,
     )
     const data = JSON.parse(
       result.content[0].text,
@@ -367,7 +377,7 @@ describe('M2 chunk D writes e2e', () => {
   it('set_focus echoes a viewport snapshot', async () => {
     const result = await handleSetFocus(
       { nodeIds: ['1:42'] },
-      client,
+      scoped,
     )
     const data = JSON.parse(result.content[0].text) as {
       viewport: { zoom: number }
@@ -381,7 +391,7 @@ describe('M2 chunk D writes e2e', () => {
   it('set_focus warns about (and reports) ids that do not resolve', async () => {
     const result = await handleSetFocus(
       { nodeIds: ['1:42', 'missing:1'] },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const data = JSON.parse(result.content[0].text) as {
@@ -401,7 +411,7 @@ describe('M2 chunk D writes e2e', () => {
   it('set_focus warns when no id resolves (focused:0)', async () => {
     const result = await handleSetFocus(
       { nodeIds: ['missing:1', 'missing:2'] },
-      client,
+      scoped,
     )
     const data = JSON.parse(result.content[0].text) as {
       requested: number
@@ -418,7 +428,7 @@ describe('M2 chunk D writes e2e', () => {
   it('create_page echoes the new page id + name', async () => {
     const result = await handleCreatePage(
       { name: 'Specs' },
-      client,
+      scoped,
     )
     const data = JSON.parse(
       result.content[0].text,
@@ -430,7 +440,7 @@ describe('M2 chunk D writes e2e', () => {
   it('set_current_page echoes the switched page', async () => {
     const result = await handleSetCurrentPage(
       { pageId: 'page:2' },
-      client,
+      scoped,
     )
     const data = JSON.parse(result.content[0].text) as {
       currentPage: { id: string }
@@ -441,7 +451,7 @@ describe('M2 chunk D writes e2e', () => {
   it('duplicate_page echoes the clone with rename', async () => {
     const result = await handleDuplicatePage(
       { pageId: 'page:1', name: 'Copy A' },
-      client,
+      scoped,
     )
     const data = JSON.parse(
       result.content[0].text,
@@ -453,7 +463,7 @@ describe('M2 chunk D writes e2e', () => {
   it('create_image (url) returns a hash', async () => {
     const result = await handleCreateImage(
       { url: 'https://x/y.png' },
-      client,
+      scoped,
     )
     const data = JSON.parse(
       result.content[0].text,
@@ -464,7 +474,7 @@ describe('M2 chunk D writes e2e', () => {
   it('create_image T7 degrade (degrade: url) → warnings, success NOT error', async () => {
     const result = await handleCreateImage(
       { url: 'degrade:nope' },
-      client,
+      scoped,
     )
     const data = JSON.parse(result.content[0].text) as {
       hash?: string
@@ -478,7 +488,7 @@ describe('M2 chunk D writes e2e', () => {
   it('create_image T7 degrade (bytes path) → warnings, success NOT error', async () => {
     const result = await handleCreateImage(
       { bytes: [] },
-      client,
+      scoped,
     )
     const data = JSON.parse(result.content[0].text) as {
       hash?: string
@@ -497,7 +507,7 @@ describe('M2 chunk D writes e2e', () => {
   it('set_plugin_data echoes {id}', async () => {
     const result = await handleSetPluginData(
       { nodeId: '1:42', key: 'k', value: 'v' },
-      client,
+      scoped,
     )
     const data = JSON.parse(result.content[0].text) as {
       id: string
@@ -508,7 +518,7 @@ describe('M2 chunk D writes e2e', () => {
   it('set_reactions echoes {id,warnings:[]} on the happy path', async () => {
     const result = await handleSetReactions(
       { nodeId: '1:42', reactions: [] },
-      client,
+      scoped,
     )
     const data = JSON.parse(result.content[0].text) as {
       id: string
@@ -521,7 +531,7 @@ describe('M2 chunk D writes e2e', () => {
   it('set_reactions T7 degrade (degrade: nodeId) → warnings, success NOT error', async () => {
     const result = await handleSetReactions(
       { nodeId: 'degrade:1', reactions: [] },
-      client,
+      scoped,
     )
     const data = JSON.parse(result.content[0].text) as {
       id: string
@@ -534,7 +544,7 @@ describe('M2 chunk D writes e2e', () => {
   it('set_annotations T7 degrade (degrade: nodeId) → warnings, success NOT error', async () => {
     const result = await handleSetAnnotations(
       { nodeId: 'degrade:1', annotations: [] },
-      client,
+      scoped,
     )
     const data = JSON.parse(result.content[0].text) as {
       id: string

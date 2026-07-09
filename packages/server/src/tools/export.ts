@@ -1,10 +1,6 @@
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '../figma-client'
-import {
-  requireConnected,
-  textResult,
-  errorMessage,
-} from './shared'
+import type { ScopedFigmaClient } from '../figma-client'
+import { textResult, errorMessage } from './shared'
 
 type ExportParams = {
   nodeId: string
@@ -20,13 +16,8 @@ const MIME_MAP: Record<string, string> = {
 
 export const handleExport = async (
   params: ExportParams,
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ) => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   const format = params.format ?? 'PNG'
   const scale = params.scale ?? 1
 

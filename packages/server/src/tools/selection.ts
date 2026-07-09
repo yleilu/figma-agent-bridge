@@ -7,23 +7,18 @@
 
 import YAML from 'yaml'
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '../figma-client'
+import type { ScopedFigmaClient } from '../figma-client'
 import {
   type ToolResult,
   textResult,
-  requireConnected,
   formatMutationResult,
   errorMessage,
 } from './shared'
 
 export const handleGetSelection = async (
-  client: FigmaClient,
+  _params: Record<string, never>,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const raw = (await client.sendCommand(
       COMMANDS.GET_SELECTION,
@@ -44,13 +39,8 @@ export const handleGetSelection = async (
 
 export const handleSetSelection = async (
   { nodeIds }: { nodeIds: string[] },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const result = (await client.sendCommand(
       COMMANDS.SET_SELECTION,

@@ -14,7 +14,7 @@
 
 import { describe, expect, it } from 'bun:test'
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
 import {
   handleCreateVariables,
   handleUpdateVariables,
@@ -29,11 +29,10 @@ type Sent = {
 }
 
 const stubClient = (opts: {
-  connected?: boolean
   reply?: unknown
   sent?: Sent[]
-}): FigmaClient => ({
-  joinChannel: async () => 'ch',
+}): ScopedFigmaClient => ({
+  fileKey: 'fk-test',
   sendCommand: async (
     command: string,
     params?: Record<string, unknown>,
@@ -41,24 +40,11 @@ const stubClient = (opts: {
     opts.sent?.push({ command, params })
     return opts.reply ?? null
   },
-  disconnect: () => {},
-  isConnected: () => opts.connected ?? true,
-  currentChannel: () => 'ch',
 })
 
 // ─── create_variables ─────────────────────────────────────────────────────────
 
 describe('handleCreateVariables', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleCreateVariables(
-      { collection: 'Brand', variables: [] },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.CREATE_VARIABLES with COLOR values parsed to {r,g,b}', async () => {
     const sent: Sent[] = []
     await handleCreateVariables(
@@ -274,16 +260,6 @@ describe('handleCreateVariables', () => {
 // ─── update_variables ─────────────────────────────────────────────────────────
 
 describe('handleUpdateVariables', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleUpdateVariables(
-      { collectionId: 'col:1' },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.UPDATE_VARIABLES with mode lifecycle + parsed COLOR edits', async () => {
     const sent: Sent[] = []
     await handleUpdateVariables(
@@ -419,20 +395,6 @@ describe('handleUpdateVariables', () => {
 // ─── create_styles ────────────────────────────────────────────────────────────
 
 describe('handleCreateStyles', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleCreateStyles(
-      {
-        styles: [
-          { type: 'paint', name: 'P', value: '#FF0000' },
-        ],
-      },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards each style atom converted to its Figma object (paint/text/effect/grid)', async () => {
     const sent: Sent[] = []
     await handleCreateStyles(
@@ -670,16 +632,6 @@ describe('handleCreateStyles', () => {
 // ─── update_styles ────────────────────────────────────────────────────────────
 
 describe('handleUpdateStyles', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleUpdateStyles(
-      { styles: [{ id: 'S:1' }] },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards newName/description without a value untouched (lookup by id)', async () => {
     const sent: Sent[] = []
     await handleUpdateStyles(
@@ -902,16 +854,6 @@ describe('handleUpdateStyles', () => {
 // ─── apply_style ──────────────────────────────────────────────────────────────
 
 describe('handleApplyStyle', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleApplyStyle(
-      { nodeId: '1:1', styleId: 'S:1', field: 'fill' },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.APPLY_STYLE with {nodeId,styleId,field}', async () => {
     const sent: Sent[] = []
     await handleApplyStyle(

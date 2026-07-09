@@ -12,7 +12,10 @@ import {
   stopRelay,
 } from '@figma-agent-bridge/relay/relay'
 import { createFigmaClient } from '@figma-agent-bridge/server/figma-client'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import type {
+  FigmaClient,
+  ScopedFigmaClient,
+} from '@figma-agent-bridge/server/figma-client'
 import {
   handleConnect,
   handleStatus,
@@ -177,10 +180,12 @@ describe('e2e roundtrip', () => {
 const M2_TEST_PORT = 3098
 const M2_RELAY_URL = `ws://localhost:${M2_TEST_PORT}`
 const M2_TEST_CHANNEL = 'e2e-m2-test-channel'
+const M2_FK = 'fk-roundtrip-m2'
 
 describe('M2 read tools e2e', () => {
   let server: Server<{ id: string }>
   let client: FigmaClient
+  let scoped: ScopedFigmaClient
   let plugin: ReturnType<typeof createMockPlugin> | null =
     null
 
@@ -193,13 +198,12 @@ describe('M2 read tools e2e', () => {
       channel: M2_TEST_CHANNEL,
       documentName: 'Mock Document',
       pageName: 'Homepage',
+      fileKey: M2_FK,
     })
 
     await plugin.start()
-    await handleConnect(
-      { channel: M2_TEST_CHANNEL },
-      client,
-    )
+    await client.joinChannel(M2_TEST_CHANNEL, M2_FK)
+    scoped = client.forFile(M2_FK)
   })
 
   afterEach(() => {
@@ -214,7 +218,7 @@ describe('M2 read tools e2e', () => {
   it('inspect returns {view, truncated} YAML for mock document', async () => {
     const result = await handleInspect(
       { nodeId: '1:42', depth: -1 },
-      client,
+      scoped,
     )
 
     expect(result.content).toHaveLength(1)
@@ -230,7 +234,7 @@ describe('M2 read tools e2e', () => {
   it('get_node returns a NodeSpec (YAML) with depth control', async () => {
     const result = await handleGetNode(
       { nodeId: '1:42', depth: 0 },
-      client,
+      scoped,
     )
 
     expect(result.content).toHaveLength(1)
@@ -252,7 +256,7 @@ describe('M2 read tools e2e', () => {
   })
 
   it('get_styles returns the Rule-A results list', async () => {
-    const result = await handleGetStyles({}, client)
+    const result = await handleGetStyles({}, scoped)
 
     expect(result.content).toHaveLength(1)
     expect(result.content[0].type).toBe('text')
@@ -261,7 +265,7 @@ describe('M2 read tools e2e', () => {
   })
 
   it('get_components returns the component catalog', async () => {
-    const result = await handleGetComponents({}, client)
+    const result = await handleGetComponents({}, scoped)
 
     expect(result.content).toHaveLength(1)
     expect(result.content[0].type).toBe('text')
@@ -272,7 +276,7 @@ describe('M2 read tools e2e', () => {
   it('search finds nodes by name pattern (server-side match)', async () => {
     const result = await handleSearch(
       { match: { name: 'Card' } },
-      client,
+      scoped,
     )
 
     expect(result.content).toHaveLength(1)
@@ -281,7 +285,7 @@ describe('M2 read tools e2e', () => {
   })
 
   it('list_pages returns the document + pages in YAML (Rule A)', async () => {
-    const result = await handleListPages({}, client)
+    const result = await handleListPages({}, scoped)
 
     expect(result.content).toHaveLength(1)
     expect(result.content[0].type).toBe('text')
@@ -293,7 +297,7 @@ describe('M2 read tools e2e', () => {
   it('export PNG returns image with valid base64', async () => {
     const result = await handleExport(
       { nodeId: '1:42', format: 'PNG' },
-      client,
+      scoped,
     )
 
     expect(result.content).toHaveLength(1)
@@ -313,7 +317,7 @@ describe('M2 read tools e2e', () => {
   it('export SVG returns text starting with <svg', async () => {
     const result = await handleExport(
       { nodeId: '1:42', format: 'SVG' },
-      client,
+      scoped,
     )
 
     expect(result.content).toHaveLength(1)

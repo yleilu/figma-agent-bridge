@@ -26,14 +26,17 @@ import {
   stopRelay,
 } from '@figma-agent-bridge/relay/relay'
 import { createFigmaClient } from '@figma-agent-bridge/server/figma-client'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
-import { handleConnect } from '@figma-agent-bridge/server/tools/session'
+import type {
+  FigmaClient,
+  ScopedFigmaClient,
+} from '@figma-agent-bridge/server/figma-client'
 import { handleBatch } from '@figma-agent-bridge/server/tools/batch'
 import { createMockPlugin } from '../mocks/mock-plugin'
 
 const TEST_PORT = 3107
 const RELAY_URL = `ws://localhost:${TEST_PORT}`
 const TEST_CHANNEL = 'e2e-batch-test'
+const FK = 'fk-batch'
 
 type BatchOut = {
   results: {
@@ -56,6 +59,7 @@ const parse = (text: string): BatchOut =>
 describe('M3 batch tool e2e (mock plugin over real relay)', () => {
   let server: Server<{ id: string }>
   let client: FigmaClient
+  let scoped: ScopedFigmaClient
   let plugin: ReturnType<typeof createMockPlugin> | null =
     null
 
@@ -67,9 +71,11 @@ describe('M3 batch tool e2e (mock plugin over real relay)', () => {
       channel: TEST_CHANNEL,
       documentName: 'Batch Doc',
       pageName: 'Main',
+      fileKey: FK,
     })
     await plugin.start()
-    await handleConnect({ channel: TEST_CHANNEL }, client)
+    await client.joinChannel(TEST_CHANNEL, FK)
+    scoped = client.forFile(FK)
   })
 
   afterEach(() => {
@@ -107,7 +113,7 @@ describe('M3 batch tool e2e (mock plugin over real relay)', () => {
           },
         ],
       },
-      client,
+      scoped,
     )
 
     expect(result.content[0].text).not.toStartWith('Error:')
@@ -163,7 +169,7 @@ describe('M3 batch tool e2e (mock plugin over real relay)', () => {
           { nodeId: '1:3' },
         ],
       },
-      client,
+      scoped,
     )
     const out = parse(result.content[0].text)
     expect(out.results).toHaveLength(3)
@@ -188,7 +194,7 @@ describe('M3 batch tool e2e (mock plugin over real relay)', () => {
           },
         ],
       },
-      client,
+      scoped,
     )
     const out = parse(result.content[0].text)
     expect(out.results[0].ok).toBe(true)

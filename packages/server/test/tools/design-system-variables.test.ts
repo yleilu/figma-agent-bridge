@@ -12,7 +12,7 @@ import {
   handleGetVariables,
 } from '@figma-agent-bridge/server/tools/design-system'
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
 
 type Sent = {
   command: string
@@ -20,11 +20,10 @@ type Sent = {
 }
 
 const stubClient = (opts: {
-  connected?: boolean
   reply?: unknown
   sent?: Sent[]
-}): FigmaClient => ({
-  joinChannel: async () => 'ch',
+}): ScopedFigmaClient => ({
+  fileKey: 'fk-test',
   sendCommand: async (
     command: string,
     params?: Record<string, unknown>,
@@ -32,22 +31,9 @@ const stubClient = (opts: {
     opts.sent?.push({ command, params })
     return opts.reply ?? { id: 'n', warnings: [] }
   },
-  disconnect: () => {},
-  isConnected: () => opts.connected ?? true,
-  currentChannel: () => 'ch',
 })
 
 describe('handleBindVariable', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleBindVariable(
-      { nodeId: '1:1', variableId: 'v:1', field: 'fills' },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.BIND_VARIABLE with {nodeId, variableId, field}', async () => {
     const sent: Sent[] = []
     await handleBindVariable(
@@ -96,16 +82,6 @@ describe('handleBindVariable', () => {
 })
 
 describe('handleGetVariables', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleGetVariables(
-      {},
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.GET_VARIABLES with {collectionId}', async () => {
     const sent: Sent[] = []
     await handleGetVariables(

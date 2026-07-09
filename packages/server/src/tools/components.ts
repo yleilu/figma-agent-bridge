@@ -31,11 +31,10 @@
 // ride along on success).
 
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '../figma-client'
+import type { ScopedFigmaClient } from '../figma-client'
 import { splitComponentProperties } from '../serialize/node-spec-reader'
 import {
   type ToolResult,
-  requireConnected,
   formatMutationResult,
   errorMessage,
   textResult,
@@ -51,13 +50,8 @@ export const handleCreateComponent = async (
     name?: string
     description?: string
   },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const result = (await client.sendCommand(
       COMMANDS.CREATE_COMPONENT,
@@ -96,13 +90,8 @@ export const handleUpdateComponent = async (
     description?: string
     expose?: string[]
   },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const result = (await client.sendCommand(
       COMMANDS.UPDATE_COMPONENT,
@@ -134,13 +123,8 @@ export const handleCombineVariants = async (
     parentId?: string
     name?: string
   },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   if (componentIds.length < 2) {
     return textResult(
       'Error: combine_variants requires at least 2 components.',
@@ -171,7 +155,7 @@ export const handleSwapComponent = async (
     mainComponentId?: string
     key?: string
   },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
   // Remote-capable: at least one target source is required. If BOTH are given
   // the LOCAL mainComponentId WINS (no async import needed); the plugin resolves
@@ -180,11 +164,6 @@ export const handleSwapComponent = async (
     return textResult(
       'Error: swap_component requires mainComponentId (local) or key (remote).',
     )
-  }
-
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
   }
 
   try {
@@ -215,13 +194,8 @@ export const handleSetInstance = async (
       value: string
     }[]
   },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const result = (await client.sendCommand(
       COMMANDS.SET_INSTANCE,

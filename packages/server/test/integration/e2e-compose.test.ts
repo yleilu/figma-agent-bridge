@@ -23,8 +23,10 @@ import {
   stopRelay,
 } from '@figma-agent-bridge/relay/relay'
 import { createFigmaClient } from '@figma-agent-bridge/server/figma-client'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
-import { handleConnect } from '@figma-agent-bridge/server/tools/session'
+import type {
+  FigmaClient,
+  ScopedFigmaClient,
+} from '@figma-agent-bridge/server/figma-client'
 import { handleCreateTree } from '@figma-agent-bridge/server/tools/create-tree'
 import {
   handleCloneNode,
@@ -38,10 +40,12 @@ import { createMockPlugin } from '../mocks/mock-plugin'
 const TEST_PORT = 3103
 const RELAY_URL = `ws://localhost:${TEST_PORT}`
 const TEST_CHANNEL = 'e2e-compose-test'
+const FK = 'fk-compose'
 
 describe('M3 compose tools e2e (mock plugin over real relay)', () => {
   let server: Server<{ id: string }>
   let client: FigmaClient
+  let scoped: ScopedFigmaClient
   let plugin: ReturnType<typeof createMockPlugin> | null =
     null
 
@@ -53,9 +57,11 @@ describe('M3 compose tools e2e (mock plugin over real relay)', () => {
       channel: TEST_CHANNEL,
       documentName: 'Compose Doc',
       pageName: 'Main',
+      fileKey: FK,
     })
     await plugin.start()
-    await handleConnect({ channel: TEST_CHANNEL }, client)
+    await client.joinChannel(TEST_CHANNEL, FK)
+    scoped = client.forFile(FK)
   })
 
   afterEach(() => {
@@ -110,7 +116,7 @@ describe('M3 compose tools e2e (mock plugin over real relay)', () => {
           },
         },
       },
-      client,
+      scoped,
     )
 
     const data = JSON.parse(
@@ -169,7 +175,7 @@ describe('M3 compose tools e2e (mock plugin over real relay)', () => {
           b: { ref: 'a' },
         },
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).toContain('Error')
     expect(result.content[0].text).toContain(
@@ -190,7 +196,7 @@ describe('M3 compose tools e2e (mock plugin over real relay)', () => {
           loop: { ref: 'loop' },
         },
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).toContain('Error')
     expect(result.content[0].text).toContain(
@@ -201,7 +207,7 @@ describe('M3 compose tools e2e (mock plugin over real relay)', () => {
   it('boolean_op combines nodes into a BooleanOperationNode', async () => {
     const result = await handleBooleanOp(
       { op: 'UNION', nodeIds: ['1:1', '1:2'] },
-      client,
+      scoped,
     )
     const data = JSON.parse(
       result.content[0].text,
@@ -213,7 +219,7 @@ describe('M3 compose tools e2e (mock plugin over real relay)', () => {
   it('boolean_op surfaces an error when fewer than 2 nodes resolve', async () => {
     const result = await handleBooleanOp(
       { op: 'UNION', nodeIds: ['1:1'] },
-      client,
+      scoped,
     )
     expect(result.content[0].text).toContain('Error')
     expect(result.content[0].text).toContain('at least 2')
@@ -222,7 +228,7 @@ describe('M3 compose tools e2e (mock plugin over real relay)', () => {
   it('flatten produces a single VECTOR', async () => {
     const result = await handleFlatten(
       { nodeIds: ['1:1', '1:2'] },
-      client,
+      scoped,
     )
     const data = JSON.parse(
       result.content[0].text,
@@ -233,7 +239,7 @@ describe('M3 compose tools e2e (mock plugin over real relay)', () => {
   it('clone_node returns one entry per clone (count)', async () => {
     const result = await handleCloneNode(
       { nodeId: '1:42', count: 3 },
-      client,
+      scoped,
     )
     const data = JSON.parse(
       result.content[0].text,
@@ -246,7 +252,7 @@ describe('M3 compose tools e2e (mock plugin over real relay)', () => {
   it('clone_node surfaces a clean {error} for an out-of-range index', async () => {
     const result = await handleCloneNode(
       { nodeId: '1:42', parentId: '1:9', index: 99 },
-      client,
+      scoped,
     )
     expect(result.content[0].text).toContain('Error')
     expect(result.content[0].text).toContain('out of range')
@@ -259,7 +265,7 @@ describe('M3 compose tools e2e (mock plugin over real relay)', () => {
   it('reparent_node echoes {id,…,parentId}', async () => {
     const result = await handleReparentNode(
       { nodeId: '1:42', parentId: '1:9' },
-      client,
+      scoped,
     )
     const data = JSON.parse(result.content[0].text) as {
       parentId: string
@@ -272,7 +278,7 @@ describe('M3 compose tools e2e (mock plugin over real relay)', () => {
     // id and omits 1:2 → a set mismatch → a warning, success not error.
     const result = await handleReorderChildren(
       { parentId: 'p:1', nodeIds: ['1:3', '1:1', 'ghost'] },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const data = JSON.parse(result.content[0].text) as {
@@ -290,7 +296,7 @@ describe('M3 compose tools e2e (mock plugin over real relay)', () => {
   it('reorder_children succeeds with no warning on an exact set', async () => {
     const result = await handleReorderChildren(
       { parentId: 'p:1', nodeIds: ['1:3', '1:2', '1:1'] },
-      client,
+      scoped,
     )
     const data = JSON.parse(result.content[0].text) as {
       order: string[]

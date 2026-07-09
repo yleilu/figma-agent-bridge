@@ -10,24 +10,18 @@
 // success, never an error.
 
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '../figma-client'
+import type { ScopedFigmaClient } from '../figma-client'
 import {
   type ToolResult,
   textResult,
-  requireConnected,
   formatMutationResult,
   errorMessage,
 } from './shared'
 
 export const handleCreateImage = async (
   { url, bytes }: { url?: string; bytes?: number[] },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   const hasUrl = url !== undefined
   const hasBytes = bytes !== undefined
   if (hasUrl === hasBytes) {

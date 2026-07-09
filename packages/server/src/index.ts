@@ -55,6 +55,7 @@ import {
   updateStylesParamsSchema,
   applyStyleParamsSchema,
   batchParamsSchema,
+  statusParamsSchema,
   recordFeedbackParamsSchema,
   searchComponentsParamsSchema,
   reindexParamsSchema,
@@ -63,6 +64,10 @@ import {
   createFigmaClient,
   toHttpUrl,
 } from './figma-client'
+import {
+  registerFileTool,
+  registerSessionTool,
+} from './tools/with-file'
 import {
   handleConnect,
   handleStatus,
@@ -174,347 +179,369 @@ if (process.argv.includes('--relay')) {
     return { ok: true }
   })
 
-  server.tool(
+  // --- Session tools (NOT file-addressed) ------------------------------------
+  // These address the connection, not a per-call file, so they take the REAL
+  // client and are NOT gated by requireFile.
+  registerSessionTool(
+    server,
     'connect',
-    connectParamsSchema.shape,
-    async ({ fileKey, fileName, channel }) =>
-      handleConnect(
-        { fileKey, fileName, channel },
-        client,
-        relayHttpUrl,
-        port,
-      ),
+    connectParamsSchema,
+    p => handleConnect(p, client, relayHttpUrl, port),
   )
 
-  server.tool('status', {}, async () =>
-    handleStatus(client, relayHttpUrl),
+  registerSessionTool(
+    server,
+    'status',
+    statusParamsSchema,
+    () => handleStatus(client, relayHttpUrl),
   )
 
-  server.tool(
-    'inspect',
-    inspectParamsSchema.shape,
-    async params => handleInspect(params, client),
-  )
-
-  server.tool(
-    'get_styles',
-    getStylesParamsSchema.shape,
-    async params => handleGetStyles(params, client),
-  )
-
-  server.tool(
-    'get_components',
-    getComponentsParamsSchema.shape,
-    async params => handleGetComponents(params, client),
-  )
-
-  server.tool(
-    'list_fonts',
-    listFontsParamsSchema.shape,
-    async params => handleListFonts(params, client),
-  )
-
-  server.tool(
-    'get_reactions',
-    getReactionsParamsSchema.shape,
-    async params => handleGetReactions(params, client),
-  )
-
-  server.tool(
-    'get_plugin_data',
-    getPluginDataParamsSchema.shape,
-    async params => handleGetPluginData(params, client),
-  )
-
-  server.tool(
-    'get_annotations',
-    getAnnotationsParamsSchema.shape,
-    async params => handleGetAnnotations(params, client),
-  )
-
-  server.tool(
-    'search',
-    searchParamsSchema.shape,
-    async params => handleSearch(params, client),
-  )
-
-  server.tool(
-    'get_node',
-    getNodeParamsSchema.shape,
-    async params => handleGetNode(params, client),
-  )
-
-  server.tool(
-    'get_nodes',
-    getNodesParamsSchema.shape,
-    async ({ nodeIds, depth, fields, profile }) =>
-      handleGetNodes(
-        { nodeIds, depth, fields, profile },
-        client,
-      ),
-  )
-
-  server.tool(
-    'list_pages',
-    listPagesParamsSchema.shape,
-    async params => handleListPages(params, client),
-  )
-
-  server.tool(
-    'get_selection',
-    getSelectionParamsSchema.shape,
-    async () => handleGetSelection(client),
-  )
-
-  server.tool(
-    'set_selection',
-    setSelectionParamsSchema.shape,
-    async ({ nodeIds }) =>
-      handleSetSelection({ nodeIds }, client),
-  )
-
-  server.tool(
-    'export',
-    exportParamsSchema.shape,
-    async params => handleExport(params, client),
-  )
-
-  server.tool(
-    'create_node',
-    createNodeParamsSchema.shape,
-    async params =>
-      handleCreateNode(
-        {
-          spec: params.spec,
-          parentId: params.parentId,
-        },
-        client,
-      ),
-  )
-
-  server.tool(
-    'create_tree',
-    createTreeParamsSchema.shape,
-    async params =>
-      handleCreateTree(
-        {
-          tree: params.tree,
-          parentId: params.parentId,
-          refs: params.refs,
-        },
-        client,
-      ),
-  )
-
-  server.tool(
-    'create_component',
-    createComponentParamsSchema.shape,
-    async params =>
-      handleCreateComponent(
-        {
-          nodeId: params.nodeId,
-          name: params.name,
-          description: params.description,
-        },
-        client,
-      ),
-  )
-
-  server.tool(
-    'update_component',
-    updateComponentParamsSchema.shape,
-    async params => handleUpdateComponent(params, client),
-  )
-
-  server.tool(
-    'combine_variants',
-    combineVariantsParamsSchema.shape,
-    async params => handleCombineVariants(params, client),
-  )
-
-  server.tool(
-    'swap_component',
-    swapComponentParamsSchema.shape,
-    async params => handleSwapComponent(params, client),
-  )
-
-  server.tool(
-    'set_instance',
-    setInstanceParamsSchema.shape,
-    async params => handleSetInstance(params, client),
-  )
-
-  server.tool(
-    'create_from_svg',
-    createFromSvgParamsSchema.shape,
-    async params =>
-      handleCreateFromSvg(
-        {
-          parentId: params.parentId,
-          svg: params.svg,
-          name: params.name,
-          size: params.size,
-        },
-        client,
-      ),
-  )
-
-  server.tool(
-    'update_node',
-    updateNodeParamsSchema.shape,
-    async params => handleUpdateNode(params, client),
-  )
-
-  server.tool(
-    'bind_variable',
-    bindVariableParamsSchema.shape,
-    async params => handleBindVariable(params, client),
-  )
-
-  server.tool(
-    'get_variables',
-    getVariablesParamsSchema.shape,
-    async params => handleGetVariables(params, client),
-  )
-
-  server.tool(
-    'delete_node',
-    deleteNodeParamsSchema.shape,
-    async params => handleDeleteNode(params, client),
-  )
-
-  server.tool(
-    'set_focus',
-    setFocusParamsSchema.shape,
-    async params => handleSetFocus(params, client),
-  )
-
-  server.tool(
-    'clone_node',
-    cloneNodeParamsSchema.shape,
-    async params => handleCloneNode(params, client),
-  )
-
-  server.tool(
-    'reparent_node',
-    reparentNodeParamsSchema.shape,
-    async params => handleReparentNode(params, client),
-  )
-
-  server.tool(
-    'reorder_children',
-    reorderChildrenParamsSchema.shape,
-    async params => handleReorderChildren(params, client),
-  )
-
-  server.tool(
-    'boolean_op',
-    booleanOpParamsSchema.shape,
-    async params => handleBooleanOp(params, client),
-  )
-
-  server.tool(
-    'flatten',
-    flattenParamsSchema.shape,
-    async params => handleFlatten(params, client),
-  )
-
-  server.tool(
-    'create_page',
-    createPageParamsSchema.shape,
-    async params => handleCreatePage(params, client),
-  )
-
-  server.tool(
-    'set_current_page',
-    setCurrentPageParamsSchema.shape,
-    async params => handleSetCurrentPage(params, client),
-  )
-
-  server.tool(
-    'duplicate_page',
-    duplicatePageParamsSchema.shape,
-    async params => handleDuplicatePage(params, client),
-  )
-
-  server.tool(
-    'create_image',
-    createImageParamsSchema.shape,
-    async params => handleCreateImage(params, client),
-  )
-
-  server.tool(
-    'set_plugin_data',
-    setPluginDataParamsSchema.shape,
-    async params => handleSetPluginData(params, client),
-  )
-
-  server.tool(
-    'set_reactions',
-    setReactionsParamsSchema.shape,
-    async params => handleSetReactions(params, client),
-  )
-
-  server.tool(
-    'set_annotations',
-    setAnnotationsParamsSchema.shape,
-    async params => handleSetAnnotations(params, client),
-  )
-
-  server.tool(
-    'create_variables',
-    createVariablesParamsSchema.shape,
-    async params => handleCreateVariables(params, client),
-  )
-
-  server.tool(
-    'update_variables',
-    updateVariablesParamsSchema.shape,
-    async params => handleUpdateVariables(params, client),
-  )
-
-  server.tool(
-    'create_styles',
-    createStylesParamsSchema.shape,
-    async params => handleCreateStyles(params, client),
-  )
-
-  server.tool(
-    'update_styles',
-    updateStylesParamsSchema.shape,
-    async params => handleUpdateStyles(params, client),
-  )
-
-  server.tool(
-    'apply_style',
-    applyStyleParamsSchema.shape,
-    async params => handleApplyStyle(params, client),
-  )
-
-  server.tool(
-    'batch',
-    batchParamsSchema.shape,
-    async params => handleBatch(params, client),
-  )
-
-  server.tool(
+  registerSessionTool(
+    server,
     'record_feedback',
-    recordFeedbackParamsSchema.shape,
-    async params => handleRecordFeedback(params, client),
+    recordFeedbackParamsSchema,
+    p => handleRecordFeedback(p, client),
   )
 
-  server.tool(
+  // --- File-addressed tools (B3) ---------------------------------------------
+  // Every tool below is registered through registerFileTool: the wrapper reads
+  // `fileKey` from the validated params, gates via requireFile, and hands the
+  // handler a file-scoped client (identity fields moved into meta). A scoped
+  // handler cannot reach server.tool any other way, so a forgotten wrapper is a
+  // compile error, not a silent WRONG_FILE.
+  registerFileTool(
+    server,
+    client,
+    'inspect',
+    inspectParamsSchema,
+    handleInspect,
+  )
+  registerFileTool(
+    server,
+    client,
+    'get_styles',
+    getStylesParamsSchema,
+    handleGetStyles,
+  )
+  registerFileTool(
+    server,
+    client,
+    'get_components',
+    getComponentsParamsSchema,
+    handleGetComponents,
+  )
+  registerFileTool(
+    server,
+    client,
+    'list_fonts',
+    listFontsParamsSchema,
+    handleListFonts,
+  )
+  registerFileTool(
+    server,
+    client,
+    'get_reactions',
+    getReactionsParamsSchema,
+    handleGetReactions,
+  )
+  registerFileTool(
+    server,
+    client,
+    'get_plugin_data',
+    getPluginDataParamsSchema,
+    handleGetPluginData,
+  )
+  registerFileTool(
+    server,
+    client,
+    'get_annotations',
+    getAnnotationsParamsSchema,
+    handleGetAnnotations,
+  )
+  registerFileTool(
+    server,
+    client,
+    'search',
+    searchParamsSchema,
+    handleSearch,
+  )
+  registerFileTool(
+    server,
+    client,
+    'get_node',
+    getNodeParamsSchema,
+    handleGetNode,
+  )
+  registerFileTool(
+    server,
+    client,
+    'get_nodes',
+    getNodesParamsSchema,
+    handleGetNodes,
+  )
+  registerFileTool(
+    server,
+    client,
+    'list_pages',
+    listPagesParamsSchema,
+    handleListPages,
+  )
+  registerFileTool(
+    server,
+    client,
+    'get_selection',
+    getSelectionParamsSchema,
+    handleGetSelection,
+  )
+  registerFileTool(
+    server,
+    client,
+    'set_selection',
+    setSelectionParamsSchema,
+    handleSetSelection,
+  )
+  registerFileTool(
+    server,
+    client,
+    'export',
+    exportParamsSchema,
+    handleExport,
+  )
+  registerFileTool(
+    server,
+    client,
+    'create_node',
+    createNodeParamsSchema,
+    handleCreateNode,
+  )
+  registerFileTool(
+    server,
+    client,
+    'create_tree',
+    createTreeParamsSchema,
+    handleCreateTree,
+  )
+  registerFileTool(
+    server,
+    client,
+    'create_component',
+    createComponentParamsSchema,
+    handleCreateComponent,
+  )
+  registerFileTool(
+    server,
+    client,
+    'update_component',
+    updateComponentParamsSchema,
+    handleUpdateComponent,
+  )
+  registerFileTool(
+    server,
+    client,
+    'combine_variants',
+    combineVariantsParamsSchema,
+    handleCombineVariants,
+  )
+  registerFileTool(
+    server,
+    client,
+    'swap_component',
+    swapComponentParamsSchema,
+    handleSwapComponent,
+  )
+  registerFileTool(
+    server,
+    client,
+    'set_instance',
+    setInstanceParamsSchema,
+    handleSetInstance,
+  )
+  registerFileTool(
+    server,
+    client,
+    'create_from_svg',
+    createFromSvgParamsSchema,
+    handleCreateFromSvg,
+  )
+  registerFileTool(
+    server,
+    client,
+    'update_node',
+    updateNodeParamsSchema,
+    handleUpdateNode,
+  )
+  registerFileTool(
+    server,
+    client,
+    'bind_variable',
+    bindVariableParamsSchema,
+    handleBindVariable,
+  )
+  registerFileTool(
+    server,
+    client,
+    'get_variables',
+    getVariablesParamsSchema,
+    handleGetVariables,
+  )
+  registerFileTool(
+    server,
+    client,
+    'delete_node',
+    deleteNodeParamsSchema,
+    handleDeleteNode,
+  )
+  registerFileTool(
+    server,
+    client,
+    'set_focus',
+    setFocusParamsSchema,
+    handleSetFocus,
+  )
+  registerFileTool(
+    server,
+    client,
+    'clone_node',
+    cloneNodeParamsSchema,
+    handleCloneNode,
+  )
+  registerFileTool(
+    server,
+    client,
+    'reparent_node',
+    reparentNodeParamsSchema,
+    handleReparentNode,
+  )
+  registerFileTool(
+    server,
+    client,
+    'reorder_children',
+    reorderChildrenParamsSchema,
+    handleReorderChildren,
+  )
+  registerFileTool(
+    server,
+    client,
+    'boolean_op',
+    booleanOpParamsSchema,
+    handleBooleanOp,
+  )
+  registerFileTool(
+    server,
+    client,
+    'flatten',
+    flattenParamsSchema,
+    handleFlatten,
+  )
+  registerFileTool(
+    server,
+    client,
+    'create_page',
+    createPageParamsSchema,
+    handleCreatePage,
+  )
+  registerFileTool(
+    server,
+    client,
+    'set_current_page',
+    setCurrentPageParamsSchema,
+    handleSetCurrentPage,
+  )
+  registerFileTool(
+    server,
+    client,
+    'duplicate_page',
+    duplicatePageParamsSchema,
+    handleDuplicatePage,
+  )
+  registerFileTool(
+    server,
+    client,
+    'create_image',
+    createImageParamsSchema,
+    handleCreateImage,
+  )
+  registerFileTool(
+    server,
+    client,
+    'set_plugin_data',
+    setPluginDataParamsSchema,
+    handleSetPluginData,
+  )
+  registerFileTool(
+    server,
+    client,
+    'set_reactions',
+    setReactionsParamsSchema,
+    handleSetReactions,
+  )
+  registerFileTool(
+    server,
+    client,
+    'set_annotations',
+    setAnnotationsParamsSchema,
+    handleSetAnnotations,
+  )
+  registerFileTool(
+    server,
+    client,
+    'create_variables',
+    createVariablesParamsSchema,
+    handleCreateVariables,
+  )
+  registerFileTool(
+    server,
+    client,
+    'update_variables',
+    updateVariablesParamsSchema,
+    handleUpdateVariables,
+  )
+  registerFileTool(
+    server,
+    client,
+    'create_styles',
+    createStylesParamsSchema,
+    handleCreateStyles,
+  )
+  registerFileTool(
+    server,
+    client,
+    'update_styles',
+    updateStylesParamsSchema,
+    handleUpdateStyles,
+  )
+  registerFileTool(
+    server,
+    client,
+    'apply_style',
+    applyStyleParamsSchema,
+    handleApplyStyle,
+  )
+  registerFileTool(
+    server,
+    client,
+    'batch',
+    batchParamsSchema,
+    handleBatch,
+  )
+
+  // Component-index tools carry the extra indexManager arg (Task 7 reconciles
+  // their bodies onto the scoped client + requireFile).
+  registerFileTool(
+    server,
+    client,
     'search_components',
-    searchComponentsParamsSchema.shape,
-    async params =>
-      handleSearchComponents(params, client, indexManager),
+    searchComponentsParamsSchema,
+    (params, scoped) =>
+      handleSearchComponents(params, scoped, indexManager),
   )
-
-  server.tool(
+  registerFileTool(
+    server,
+    client,
     'reindex',
-    reindexParamsSchema.shape,
-    async params =>
-      handleReindex(params, client, indexManager),
+    reindexParamsSchema,
+    (params, scoped) =>
+      handleReindex(params, scoped, indexManager),
   )
 
   const transport = new StdioServerTransport()

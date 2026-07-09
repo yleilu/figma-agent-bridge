@@ -10,7 +10,7 @@ import { describe, expect, it } from 'bun:test'
 import YAML from 'yaml'
 import { handleSearch } from '@figma-agent-bridge/server/tools/search'
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
 
 type Sent = {
   command: string
@@ -46,11 +46,10 @@ const candidates = [
 ]
 
 const stubClient = (opts: {
-  connected?: boolean
   results?: unknown[]
   sent?: Sent[]
-}): FigmaClient => ({
-  joinChannel: async () => 'ch',
+}): ScopedFigmaClient => ({
+  fileKey: 'fk-test',
   sendCommand: async (
     command: string,
     params?: Record<string, unknown>,
@@ -58,22 +57,9 @@ const stubClient = (opts: {
     opts.sent?.push({ command, params })
     return { results: opts.results ?? candidates }
   },
-  disconnect: () => {},
-  isConnected: () => opts.connected ?? true,
-  currentChannel: () => 'ch',
 })
 
 describe('handleSearch (rebuilt — Rule A)', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleSearch(
-      {},
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('sends COMMANDS.SEARCH with scope/pageId/nodeId', async () => {
     const sent: Sent[] = []
     await handleSearch(
@@ -360,14 +346,11 @@ describe('handleSearch (rebuilt — Rule A)', () => {
   })
 
   it('surfaces a plugin-side {error} (unresolvable scope) instead of empty results (T7)', async () => {
-    const errorClient: FigmaClient = {
-      joinChannel: async () => 'ch',
+    const errorClient: ScopedFigmaClient = {
+      fileKey: 'fk-test',
       sendCommand: async () => ({
         error: 'Node not found: 1:99',
       }),
-      disconnect: () => {},
-      isConnected: () => true,
-      currentChannel: () => 'ch',
     }
     const result = await handleSearch(
       { scope: 'node', nodeId: '1:99' },

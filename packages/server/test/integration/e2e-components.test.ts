@@ -25,8 +25,10 @@ import {
   stopRelay,
 } from '@figma-agent-bridge/relay/relay'
 import { createFigmaClient } from '@figma-agent-bridge/server/figma-client'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
-import { handleConnect } from '@figma-agent-bridge/server/tools/session'
+import type {
+  FigmaClient,
+  ScopedFigmaClient,
+} from '@figma-agent-bridge/server/figma-client'
 import {
   handleCreateComponent,
   handleUpdateComponent,
@@ -39,10 +41,12 @@ import { createMockPlugin } from '../mocks/mock-plugin'
 const TEST_PORT = 3104
 const RELAY_URL = `ws://localhost:${TEST_PORT}`
 const TEST_CHANNEL = 'e2e-components-test'
+const FK = 'fk-components'
 
 describe('M3 components tools e2e (mock plugin over real relay)', () => {
   let server: Server<{ id: string }>
   let client: FigmaClient
+  let scoped: ScopedFigmaClient
   let plugin: ReturnType<typeof createMockPlugin> | null =
     null
 
@@ -54,9 +58,11 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
       channel: TEST_CHANNEL,
       documentName: 'Components Doc',
       pageName: 'Main',
+      fileKey: FK,
     })
     await plugin.start()
-    await handleConnect({ channel: TEST_CHANNEL }, client)
+    await client.joinChannel(TEST_CHANNEL, FK)
+    scoped = client.forFile(FK)
   })
 
   afterEach(() => {
@@ -71,7 +77,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
   it('create_component PROMOTE-ONLY from a node id (sourceNodeId echoed; key set)', async () => {
     const result = await handleCreateComponent(
       { nodeId: '1:5', name: 'Promoted' },
-      client,
+      scoped,
     )
     const data = JSON.parse(
       result.content[0].text,
@@ -85,7 +91,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
   it('combine_variants produces a COMPONENT_SET and returns its key (C1)', async () => {
     const result = await handleCombineVariants(
       { componentIds: ['c:1', 'c:2'] },
-      client,
+      scoped,
     )
     const data = JSON.parse(
       result.content[0].text,
@@ -104,7 +110,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
       {
         componentIds: ['noaxis:c1', 'noaxis:c2'],
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const data = JSON.parse(
@@ -121,7 +127,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
     // named in warnings — never silently swallowed.
     const result = await handleCombineVariants(
       { componentIds: ['c:1', 'bad:9', 'c:2'] },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const data = JSON.parse(
@@ -141,7 +147,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
         componentIds: ['c:1', 'c:2'],
         parentId: 'nogood:p',
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const data = JSON.parse(
@@ -156,7 +162,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
   it('combine_variants guards <2 in the handler (no command sent)', async () => {
     const result = await handleCombineVariants(
       { componentIds: ['c:1'] },
-      client,
+      scoped,
     )
     expect(result.content[0].text).toContain('Error')
     expect(result.content[0].text).toContain('at least 2')
@@ -169,7 +175,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
   it('combine_variants surfaces a plugin {error} when dropping invalids leaves <2 survivors', async () => {
     const result = await handleCombineVariants(
       { componentIds: ['c:1', 'bad:9'] },
-      client,
+      scoped,
     )
     expect(result.content[0].text).toContain('Error')
     expect(result.content[0].text).toContain('at least 2')
@@ -181,7 +187,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
         instanceId: 'i:1',
         properties: { Size: 'Large', Disabled: true },
       },
-      client,
+      scoped,
     )
     const data = JSON.parse(
       result.content[0].text,
@@ -209,7 +215,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
   it('set_instance resolves a friendly property name to its exact key', async () => {
     const result = await handleSetInstance(
       { instanceId: 'i:1', properties: { Label: 'Hi' } },
-      client,
+      scoped,
     )
     const data = JSON.parse(
       result.content[0].text,
@@ -226,7 +232,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
   it('set_instance warns and skips an unknown property name', async () => {
     const result = await handleSetInstance(
       { instanceId: 'i:1', properties: { Ghost: 'x' } },
-      client,
+      scoped,
     )
     const data = JSON.parse(
       result.content[0].text,
@@ -245,7 +251,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
   it('set_instance warns on a no-op call (no properties, no overrides)', async () => {
     const result = await handleSetInstance(
       { instanceId: 'i:1' },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const data = JSON.parse(
@@ -267,7 +273,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
     // must echo the original main, NOT the requested target ('c:9').
     const result = await handleSwapComponent(
       { instanceId: 'degrade:i9', mainComponentId: 'c:9' },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const data = JSON.parse(
@@ -283,7 +289,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
   it('swap_component happy path reports the requested TARGET main', async () => {
     const result = await handleSwapComponent(
       { instanceId: 'i:1', mainComponentId: 'c:7' },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const data = JSON.parse(
@@ -298,7 +304,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
   it('swap_component REMOTE-by-key imports then swaps', async () => {
     const result = await handleSwapComponent(
       { instanceId: 'i:1', key: 'remote-btn-key' },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const data = JSON.parse(
@@ -315,7 +321,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
   it('swap_component REMOTE-by-key degrades (T7) when the import fails', async () => {
     const result = await handleSwapComponent(
       { instanceId: 'i:1', key: 'importfail:nope' },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const data = JSON.parse(
@@ -337,7 +343,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
         mainComponentId: 'c:local',
         key: 'remote-key',
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const data = JSON.parse(
@@ -359,7 +365,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
         ],
         expose: ['i:nested'],
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const data = JSON.parse(
@@ -390,7 +396,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
   it('update_component surfaces a {error} when the component is not found', async () => {
     const result = await handleUpdateComponent(
       { componentId: 'err:gone' },
-      client,
+      scoped,
     )
     expect(result.content[0].text).toContain('Error')
     expect(result.content[0].text).toContain(
@@ -403,7 +409,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
   it('update_component surfaces a {error} when the node is not a component', async () => {
     const result = await handleUpdateComponent(
       { componentId: 'notcomp:1' },
-      client,
+      scoped,
     )
     expect(result.content[0].text).toContain('Error')
     expect(result.content[0].text).toContain(

@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'bun:test'
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
 import { handleCreateImage } from '@figma-agent-bridge/server/tools/create-image'
 
 type Sent = {
@@ -17,11 +17,10 @@ type Sent = {
 }
 
 const stubClient = (opts: {
-  connected?: boolean
   reply?: unknown
   sent?: Sent[]
-}): FigmaClient => ({
-  joinChannel: async () => 'ch',
+}): ScopedFigmaClient => ({
+  fileKey: 'fk-test',
   sendCommand: async (
     command: string,
     params?: Record<string, unknown>,
@@ -29,22 +28,9 @@ const stubClient = (opts: {
     opts.sent?.push({ command, params })
     return opts.reply ?? null
   },
-  disconnect: () => {},
-  isConnected: () => opts.connected ?? true,
-  currentChannel: () => 'ch',
 })
 
 describe('handleCreateImage', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleCreateImage(
-      { url: 'https://x/y.png' },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.CREATE_IMAGE with {url} and emits {hash}', async () => {
     const sent: Sent[] = []
     const result = await handleCreateImage(

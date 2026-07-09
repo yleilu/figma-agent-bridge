@@ -9,7 +9,7 @@ import { describe, expect, it } from 'bun:test'
 import YAML from 'yaml'
 import { handleGetNodes } from '@figma-agent-bridge/server/tools/read'
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
 import cardFixture from '../fixtures/card-node-raw.json'
 
 type Sent = {
@@ -18,11 +18,10 @@ type Sent = {
 }
 
 const stubClient = (opts: {
-  connected?: boolean
   reply?: unknown
   sent?: Sent[]
-}): FigmaClient => ({
-  joinChannel: async () => 'ch',
+}): ScopedFigmaClient => ({
+  fileKey: 'fk-test',
   sendCommand: async (
     command: string,
     params?: Record<string, unknown>,
@@ -30,22 +29,9 @@ const stubClient = (opts: {
     opts.sent?.push({ command, params })
     return opts.reply ?? null
   },
-  disconnect: () => {},
-  isConnected: () => opts.connected ?? true,
-  currentChannel: () => 'ch',
 })
 
 describe('handleGetNodes (rebuilt — NodeSpec)', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleGetNodes(
-      { nodeIds: ['1:42'] },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('sends COMMANDS.GET_NODES with {nodeIds, depth, fields}', async () => {
     const sent: Sent[] = []
     await handleGetNodes(

@@ -13,13 +13,12 @@ import type {
   FigmaFontName,
   FigmaLayoutGrid,
 } from '../grammar'
-import type { FigmaClient } from '../figma-client'
+import type { ScopedFigmaClient } from '../figma-client'
 import { paginateList, CursorError } from '../read/paginate'
 import { contextSummaryOf } from '../read/context-summary'
 import {
   type ToolResult,
   textResult,
-  requireConnected,
   formatMutationResult,
   errorMessage,
   cursorRejected,
@@ -100,13 +99,8 @@ export const handleGetStyles = async (
     limit?: number
     cursor?: string
   },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const raw = (await client.sendCommand(
       COMMANDS.GET_STYLES,
@@ -227,13 +221,8 @@ export const handleGetComponents = async (
     limit?: number
     cursor?: string
   },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const raw = (await client.sendCommand(
       COMMANDS.GET_COMPONENTS,
@@ -363,13 +352,8 @@ export const handleListFonts = async (
     limit,
     cursor,
   }: { query?: string; limit?: number; cursor?: string },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const raw = (await client.sendCommand(
       COMMANDS.LIST_FONTS,
@@ -448,13 +432,8 @@ export const handleBindVariable = async (
     variableId,
     field,
   }: { nodeId: string; variableId: string; field: string },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const result = (await client.sendCommand(
       COMMANDS.BIND_VARIABLE,
@@ -540,13 +519,8 @@ export const handleGetVariables = async (
     limit?: number
     cursor?: string
   },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const raw = (await client.sendCommand(
       COMMANDS.GET_VARIABLES,

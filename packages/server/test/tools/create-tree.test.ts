@@ -17,7 +17,7 @@ import {
   convertTree,
 } from '@figma-agent-bridge/server/tools/create-tree'
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
 
 type Sent = {
   command: string
@@ -25,11 +25,10 @@ type Sent = {
 }
 
 const stubClient = (opts: {
-  connected?: boolean
   reply?: unknown
   sent?: Sent[]
-}): FigmaClient => ({
-  joinChannel: async () => 'ch',
+}): ScopedFigmaClient => ({
+  fileKey: 'fk-test',
   sendCommand: async (
     command: string,
     params?: Record<string, unknown>,
@@ -43,9 +42,6 @@ const stubClient = (opts: {
       }
     )
   },
-  disconnect: () => {},
-  isConnected: () => opts.connected ?? true,
-  currentChannel: () => 'ch',
 })
 
 describe('convertTree (recursive children + ref-pool)', () => {
@@ -218,16 +214,6 @@ describe('convertTree (recursive children + ref-pool)', () => {
 })
 
 describe('handleCreateTree', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleCreateTree(
-      { tree: { type: 'FRAME' } },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('sends COMMANDS.CREATE_TREE with a converted tree + parentId', async () => {
     const sent: Sent[] = []
     await handleCreateTree(
@@ -382,13 +368,10 @@ describe('handleCreateTree', () => {
   })
 
   it('maps a thrown plugin error to a tool-formatted message', async () => {
-    const client: FigmaClient = {
-      joinChannel: async () => '',
+    const client: ScopedFigmaClient = {
+      fileKey: 'fk-test',
       sendCommand: () =>
         Promise.reject(new Error('plugin exploded')),
-      disconnect: () => {},
-      isConnected: () => true,
-      currentChannel: () => 'ch',
     }
     const result = await handleCreateTree(
       { tree: { type: 'FRAME' } },

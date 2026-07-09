@@ -24,24 +24,18 @@
 // error, otherwise JSON.stringify of the plugin reply.
 
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '../figma-client'
+import type { ScopedFigmaClient } from '../figma-client'
 import {
   type ToolResult,
   textResult,
-  requireConnected,
   formatMutationResult,
   errorMessage,
 } from './shared'
 
 export const handleDeleteNode = async (
   { nodeId }: { nodeId: string },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const result = (await client.sendCommand(
       COMMANDS.DELETE_NODE,
@@ -58,13 +52,8 @@ export const handleDeleteNode = async (
 
 export const handleSetFocus = async (
   { nodeIds }: { nodeIds: string[] },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const result = (await client.sendCommand(
       COMMANDS.SET_FOCUS,
@@ -91,13 +80,8 @@ export const handleCloneNode = async (
     index?: number
     count?: number
   },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const result = (await client.sendCommand(
       COMMANDS.CLONE_NODE,
@@ -122,13 +106,8 @@ export const handleReparentNode = async (
     parentId: string
     index?: number
   },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const result = (await client.sendCommand(
       COMMANDS.REPARENT_NODE,
@@ -148,13 +127,8 @@ export const handleReorderChildren = async (
     parentId,
     nodeIds,
   }: { parentId: string; nodeIds: string[] },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const result = (await client.sendCommand(
       COMMANDS.REORDER_CHILDREN,
@@ -179,13 +153,8 @@ export const handleBooleanOp = async (
     nodeIds: string[]
     parentId?: string
   },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const result = (await client.sendCommand(
       COMMANDS.BOOLEAN_OP,
@@ -205,13 +174,8 @@ export const handleFlatten = async (
     nodeIds,
     parentId,
   }: { nodeIds: string[]; parentId?: string },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const result = (await client.sendCommand(
       COMMANDS.FLATTEN,

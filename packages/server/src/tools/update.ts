@@ -8,12 +8,11 @@
 
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { NodeSpec } from '@figma-agent-bridge/shared/node-spec'
-import type { FigmaClient } from '../figma-client'
+import type { ScopedFigmaClient } from '../figma-client'
 import { specToFigma } from '../serialize/node-spec-writer'
 import { assertContextWithinCap } from '../serialize/context-cap'
 import {
   type ToolResult,
-  requireConnected,
   formatMutationResult,
   errorMessage,
   textResult,
@@ -24,13 +23,8 @@ export const handleUpdateNode = async (
     nodeId,
     patch,
   }: { nodeId: string; patch: Partial<NodeSpec> },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     assertContextWithinCap(patch)
     // The writer pushes lossy-conversion notes (e.g. per-side stroke collapse)

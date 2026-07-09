@@ -15,12 +15,11 @@
 
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { NodeSpec } from '@figma-agent-bridge/shared/node-spec'
-import type { FigmaClient } from '../figma-client'
+import type { ScopedFigmaClient } from '../figma-client'
 import { specToFigmaForCreate } from '../serialize/node-spec-writer'
 import { assertContextWithinCap } from '../serialize/context-cap'
 import {
   type ToolResult,
-  requireConnected,
   formatMutationResult,
   errorMessage,
   textResult,
@@ -58,13 +57,8 @@ export const CREATABLE_TYPES = [
 
 export const handleCreateNode = async (
   { spec, parentId }: { spec: NodeSpec; parentId?: string },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   if (
     !(CREATABLE_TYPES as readonly string[]).includes(
       spec.type,

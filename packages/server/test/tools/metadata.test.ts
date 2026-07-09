@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'bun:test'
 import YAML from 'yaml'
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
 import {
   handleGetReactions,
   handleGetPluginData,
@@ -23,11 +23,10 @@ type Sent = {
 }
 
 const stubClient = (opts: {
-  connected?: boolean
   reply?: unknown
   sent?: Sent[]
-}): FigmaClient => ({
-  joinChannel: async () => 'ch',
+}): ScopedFigmaClient => ({
+  fileKey: 'fk-test',
   sendCommand: async (
     command: string,
     params?: Record<string, unknown>,
@@ -35,22 +34,9 @@ const stubClient = (opts: {
     opts.sent?.push({ command, params })
     return opts.reply ?? null
   },
-  disconnect: () => {},
-  isConnected: () => opts.connected ?? true,
-  currentChannel: () => 'ch',
 })
 
 describe('handleGetReactions', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleGetReactions(
-      { nodeId: '1:1' },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.GET_REACTIONS and emits results', async () => {
     const sent: Sent[] = []
     const result = await handleGetReactions(
@@ -208,16 +194,6 @@ describe('handleGetReactions', () => {
 })
 
 describe('handleGetPluginData', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleGetPluginData(
-      { nodeId: '1:1' },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards with namespace → sharedPluginData present', async () => {
     const sent: Sent[] = []
     const result = await handleGetPluginData(
@@ -294,16 +270,6 @@ describe('handleGetPluginData', () => {
 })
 
 describe('handleGetAnnotations', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleGetAnnotations(
-      {},
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.GET_ANNOTATIONS and emits Rule-A results', async () => {
     const sent: Sent[] = []
     const result = await handleGetAnnotations(
@@ -465,16 +431,6 @@ describe('handleGetAnnotations', () => {
 // ─── set_plugin_data (twin of get_plugin_data) ────────────────────────────────
 
 describe('handleSetPluginData', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleSetPluginData(
-      { nodeId: '1:1', key: 'k', value: 'v' },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.SET_PLUGIN_DATA with key/value (+namespace) and emits {id}', async () => {
     const sent: Sent[] = []
     const result = await handleSetPluginData(
@@ -526,16 +482,6 @@ describe('handleSetPluginData', () => {
 // ─── set_reactions (T7; twin of get_reactions) ────────────────────────────────
 
 describe('handleSetReactions', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleSetReactions(
-      { nodeId: '1:1', reactions: [] },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.SET_REACTIONS and emits {id,warnings}', async () => {
     const sent: Sent[] = []
     const reactions = [
@@ -605,16 +551,6 @@ describe('handleSetReactions', () => {
 // ─── set_annotations (T7 editorType-gated; twin of get_annotations) ───────────
 
 describe('handleSetAnnotations', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleSetAnnotations(
-      { nodeId: '1:1', annotations: [] },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.SET_ANNOTATIONS and emits {id,warnings}', async () => {
     const sent: Sent[] = []
     const annotations = [{ label: 'Check spacing' }]
