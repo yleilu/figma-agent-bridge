@@ -11,12 +11,28 @@ import type {
   McpServer,
   ToolCallback,
 } from '@modelcontextprotocol/sdk/server/mcp.js'
-import type { ZodRawShape } from 'zod'
+import type {
+  ZodRawShape,
+  ZodTypeAny,
+  objectOutputType,
+} from 'zod'
 import type {
   FigmaClient,
   ScopedFigmaClient,
 } from '../figma-client'
 import { requireFile, type ToolResult } from './shared'
+
+/**
+ * The params a FILE-ADDRESSED handler actually receives: the schema's inferred
+ * output MINUS the identity fields the withFile wrapper strips into `meta`
+ * (`fileKey`, always present via the Task 3 mixin; `sessionId`, reserved). Deriving
+ * this from the schema shape `S` binds the handler's param type to its schema, so
+ * pairing the wrong handler with a schema is a compile error (see registerFileTool).
+ */
+type FileHandlerParams<S extends ZodRawShape> = Omit<
+  objectOutputType<S, ZodTypeAny>,
+  'fileKey' | 'sessionId'
+>
 
 /**
  * Registration wrapper for every FILE-ADDRESSED tool (B3). Reads `fileKey` from
@@ -46,30 +62,48 @@ export const withFile =
   }
 
 /**
- * The one way to register a FILE-ADDRESSED tool. The handler is scoped-client
- * typed, so it can ONLY be wired in here (it does not fit server.tool directly).
- * `schema.shape` must already carry fileTargetParamsSchema (Task 3).
+ * The one way to register a FILE-ADDRESSED tool. It enforces two contracts:
+ *
+ *  1. MUST-WRAP (fully enforced): the handler is `ScopedFigmaClient`-typed, so it
+ *     cannot reach `server.tool` any other way — its 2nd param is incompatible
+ *     with the SDK's `RequestHandlerExtra`. A forgotten wrapper is a compile error.
+ *  2. SCHEMA↔HANDLER param binding (PARTIALLY enforced): the handler's param type
+ *     is DERIVED from the schema shape `S` (`FileHandlerParams<S>` = the schema
+ *     output minus the stripped identity fields), NOT a free generic. So the
+ *     DANGEROUS mismatch — a handler that REQUIRES a field the schema doesn't
+ *     supply, or types one differently (e.g. component-index's `fileId`) — is a
+ *     compile error, because that handler is not assignable to `(params:
+ *     FileHandlerParams<S>, …)`.
+ *
+ *     RESIDUAL GAP (not catchable here): a handler whose params are a loose,
+ *     all-OPTIONAL superset of the schema's is still accepted, because TypeScript's
+ *     function-parameter contravariance lets a tolerant handler accept a stricter
+ *     caller. Concretely `registerFileTool(…, deleteNodeParamsSchema, handleInspect)`
+ *     still compiles: handleInspect's params are all optional, so it happily
+ *     accepts delete_node's `{ nodeId }`. Making that a compile error needs
+ *     invariant param matching, which TS function types don't express without
+ *     inference-breaking conditional gymnastics — so the EXACT schema↔handler
+ *     pairing is pinned by each tool's per-tool test, not by this type alone.
+ *
+ * `schema.shape` must already carry fileTargetParamsSchema (Task 3). `R` stays a
+ * free type var because not every handler returns a bare `ToolResult` — export
+ * returns image content too — so its result is inferred, not pinned to ToolResult.
  */
-export const registerFileTool = <
-  S extends ZodRawShape,
-  P extends Record<string, unknown>,
-  R,
->(
+export const registerFileTool = <S extends ZodRawShape, R>(
   server: McpServer,
   client: FigmaClient,
   name: string,
   schema: { shape: S },
   handler: (
-    params: P,
+    params: FileHandlerParams<S>,
     client: ScopedFigmaClient,
   ) => Promise<R>,
 ): void => {
-  // withFile turns the scoped-client handler into a single-arg `(args)` callback;
-  // server.tool passes the Zod-validated params as `args` and ignores the unused
-  // `extra`. The cast bridges a generic-S ShapeOutput (which TS can't resolve
-  // against the overload set) to ToolCallback<S>. Enforcement lives at this
-  // function's `handler` parameter type — a ScopedFigmaClient handler only fits
-  // here, never server.tool directly.
+  // The cast is the ONE thing given up: TS can't resolve the withFile closure's
+  // param type against `server.tool`'s overloaded ShapeOutput for a generic `S`,
+  // so we assert ToolCallback<S>. The schema↔param binding lives on the `handler`
+  // parameter and is checked BEFORE this cast; the cast only bridges the wrapper
+  // to the SDK signature, it does not erase that binding.
   server.tool(
     name,
     schema.shape,
