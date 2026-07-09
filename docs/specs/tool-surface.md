@@ -11,6 +11,7 @@ related:
   - "[[figma-bridge/docs/specs/expression-formats]]"
   - "[[figma-bridge/docs/milestones/README]]"
   - "[[figma-bridge/docs/specs/self-describing-nodes]]"
+  - "[[figma-bridge/docs/specs/component-index]]"
 ---
 
 # figma-agent-bridge — Tool Surface
@@ -21,6 +22,11 @@ related:
 > `packages/shared/src/tool-params.ts`, plugin commands in
 > `packages/figma-plugin/src/code.ts`. Governed by `docs/principles.md` (T1–T10, B1,
 > P1).
+>
+> The **component index** feature layers two further MCP tools —
+> `search_components` and `reindex` — specified in
+> `docs/specs/component-index.md` (not re-catalogued here). With those, the
+> shipped MCP surface is **49 tools**.
 
 > The tool layer only — opinions (design-system-first, audit verdicts, layout
 > inference) are skill-layer (P1) and deliberately absent.

@@ -28,6 +28,46 @@ const fileIdentity = () => ({
 
 figma.ui.postMessage(fileIdentity())
 
+// Component-index freshness: on a component-relevant document change, nudge the
+// server to mark this file's index stale (debounced). It only SIGNALS — the
+// server re-projects — so documentchange granularity is not load-bearing.
+const INDEX_STALE_TYPES = new Set([
+  'COMPONENT',
+  'COMPONENT_SET',
+  'INSTANCE',
+])
+let indexStaleTimer: ReturnType<typeof setTimeout> | undefined
+figma.on('documentchange', event => {
+  let relevant = false
+  for (const change of event.documentChanges) {
+    try {
+      const node = (change as { node?: { type?: string } })
+        .node
+      if (
+        typeof node?.type === 'string' &&
+        INDEX_STALE_TYPES.has(node.type)
+      ) {
+        relevant = true
+        break
+      }
+    } catch {
+      // removed / inaccessible node — ignore
+    }
+  }
+  if (!relevant) {
+    return
+  }
+  if (indexStaleTimer !== undefined) {
+    clearTimeout(indexStaleTimer)
+  }
+  indexStaleTimer = setTimeout(() => {
+    figma.ui.postMessage({
+      type: 'index-stale',
+      fileKey: figma.fileKey ?? null,
+    })
+  }, 300)
+})
+
 type PluginMessage =
   | {
       type: 'execute-command'

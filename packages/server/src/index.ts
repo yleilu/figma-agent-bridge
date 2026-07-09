@@ -3,6 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
   APP_NAME,
   APP_VERSION,
+  COMMANDS,
   DEFAULT_PORT,
   connectParamsSchema,
   createFromSvgParamsSchema,
@@ -55,6 +56,8 @@ import {
   applyStyleParamsSchema,
   batchParamsSchema,
   recordFeedbackParamsSchema,
+  searchComponentsParamsSchema,
+  reindexParamsSchema,
 } from '@figma-agent-bridge/shared/tool-params'
 import { createFigmaClient } from './figma-client'
 import {
@@ -124,6 +127,11 @@ import { handleCreateFromSvg } from './tools/create-svg'
 import { handleBatch } from './tools/batch'
 import { handleRecordFeedback } from './tools/feedback'
 import { wireFeedback } from './feedback-wiring'
+import { IndexManager } from './component-index/manager'
+import {
+  handleSearchComponents,
+  handleReindex,
+} from './tools/component-index'
 
 if (process.argv.includes('--version')) {
   console.log(APP_VERSION)
@@ -154,6 +162,16 @@ if (process.argv.includes('--relay')) {
     .replace('ws://', 'http://')
   const client = createFigmaClient(relayUrl)
   wireFeedback(client)
+
+  const indexManager = new IndexManager()
+
+  client.onRequest(COMMANDS.DOCUMENT_CHANGED, params => {
+    const { fileId } = params
+    if (typeof fileId === 'string') {
+      indexManager.markStale(fileId)
+    }
+    return { ok: true }
+  })
 
   server.tool(
     'connect',
@@ -482,6 +500,20 @@ if (process.argv.includes('--relay')) {
     'record_feedback',
     recordFeedbackParamsSchema.shape,
     async params => handleRecordFeedback(params, client),
+  )
+
+  server.tool(
+    'search_components',
+    searchComponentsParamsSchema.shape,
+    async params =>
+      handleSearchComponents(params, client, indexManager),
+  )
+
+  server.tool(
+    'reindex',
+    reindexParamsSchema.shape,
+    async params =>
+      handleReindex(params, client, indexManager),
   )
 
   const transport = new StdioServerTransport()

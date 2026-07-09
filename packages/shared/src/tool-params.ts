@@ -1143,6 +1143,41 @@ export const batchParamsSchema = z.object({
 })
 
 // ---------------------------------------------------------------------------
+// Component index tools
+// ---------------------------------------------------------------------------
+
+export const searchComponentsParamsSchema = z.object({
+  fileId: z
+    .string()
+    .describe(
+      'The fileKey of the file to search (from get_document_info).',
+    ),
+  query: z
+    .string()
+    .describe(
+      'Search text matched against component name/description.',
+    ),
+  type: z
+    .enum(['COMPONENT', 'COMPONENT_SET'])
+    .optional()
+    .describe('Filter by node type.'),
+  limit: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe('Max results (default 25).'),
+})
+
+export const reindexParamsSchema = z.object({
+  fileId: z
+    .string()
+    .describe(
+      'The fileKey of the file to rebuild the index for.',
+    ),
+})
+
+// ---------------------------------------------------------------------------
 // Feedback tool
 // ---------------------------------------------------------------------------
 
