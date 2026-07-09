@@ -137,7 +137,9 @@ Every call returns the MCP `ToolResult`:
 
 Errors are uniform: `{ error: string, code: ErrorCode }`, emitted as one JSON `text` block.
 
-`ErrorCode = 'NODE_NOT_FOUND' | 'INVALID_PARAM' | 'FONT_LOAD_FAILED' | 'DISCONNECTED' | 'TIMEOUT' | 'UNSUPPORTED_NODE_TYPE' | 'API_UNAVAILABLE' | 'WRONG_EDITOR' | 'LIBRARY_UNPUBLISHED' | 'WRONG_FILE'`.
+`ErrorCode = 'NODE_NOT_FOUND' | 'INVALID_PARAM' | 'FONT_LOAD_FAILED' | 'DISCONNECTED' | 'TIMEOUT' | 'UNSUPPORTED_NODE_TYPE' | 'API_UNAVAILABLE' | 'WRONG_EDITOR' | 'LIBRARY_UNPUBLISHED' | 'WRONG_FILE' | 'INCOMPATIBLE'`.
+
+`INCOMPATIBLE` is the plugin↔server **version skew** code (B2): distinct from `DISCONNECTED` (you *are* connected, just to an incompatible build — retrying `connect` won't help). Surfaced when the major.minor compare fails; see [[figma-bridge/docs/specs/version-handshake|version-handshake.md]].
 
 The **server** owns the mapping — connection state plus known plugin error strings → a code —
 and adds the `code`. The plugin is unchanged this phase: it keeps returning `{ error: string }`
