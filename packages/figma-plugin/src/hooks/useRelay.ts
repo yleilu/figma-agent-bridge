@@ -95,6 +95,30 @@ export const useRelay = () => {
         return
       }
 
+      // Unsolicited freshness push: the component index on the server marks
+      // this file stale. Not a command reply — carries a command the server
+      // handles (document_changed), no id/target guard needed (plugin→server).
+      if (msg.type === 'index-stale') {
+        const staleWs = wsRef.current
+        const staleChannel = channelRef.current
+        if (staleWs && staleChannel) {
+          staleWs.send(
+            JSON.stringify({
+              type: 'message',
+              channel: staleChannel,
+              message: {
+                id: `stale-${Date.now()}-${Math.floor(
+                  Math.random() * 1e9,
+                )}`,
+                command: 'document_changed',
+                params: { fileId: msg.fileKey ?? null },
+              },
+            }),
+          )
+        }
+        return
+      }
+
       if (msg.type !== 'command-result') {
         return
       }
