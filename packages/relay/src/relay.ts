@@ -8,9 +8,9 @@ import type {
 } from '@figma-agent-bridge/shared'
 import {
   DEFAULT_PORT,
+  genId,
   relayIncomingSchema,
 } from '@figma-agent-bridge/shared'
-import { randomUUID } from 'node:crypto'
 
 const MAX_CHANNELS_PER_CONNECTION = 32
 const MAX_MEMBERS_PER_CHANNEL = 64
@@ -87,7 +87,7 @@ const rejectJoin = (
   const reply: SystemMessage = {
     type: 'system',
     message: {
-      id: randomUUID(),
+      id: genId('sys'),
       result: `Error: ${reason}`,
     },
   }
@@ -178,7 +178,7 @@ const handleJoin = (
   const reply: SystemMessage = {
     type: 'system',
     message: {
-      id: randomUUID(),
+      id: genId('sys'),
       result: `Connected to channel: ${channel}`,
     },
   }
@@ -266,7 +266,7 @@ export const startRelay = (
         'websocket'
       ) {
         const upgraded = srv.upgrade(req, {
-          data: { id: randomUUID() },
+          data: { id: genId('cli') },
         })
         if (upgraded) {
           return undefined

@@ -1,5 +1,7 @@
-import { randomUUID } from 'node:crypto'
-import { relayOutgoingSchema } from '@figma-agent-bridge/shared'
+import {
+  genId,
+  relayOutgoingSchema,
+} from '@figma-agent-bridge/shared'
 import type {
   ChannelInfo,
   ChannelMessage,
@@ -295,7 +297,7 @@ export const createFigmaClient = (
 
     const socket = ws
     const ch = channel
-    const id = randomUUID()
+    const id = genId('cmd')
 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -349,7 +351,7 @@ export const createFigmaClient = (
     command: string,
     params: Record<string, unknown>,
   ): void => {
-    sendFrame({ id: randomUUID(), command, params })
+    sendFrame({ id: genId('ntf'), command, params })
   }
 
   const onRequest = (
