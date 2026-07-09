@@ -88,23 +88,27 @@ describe('e2e roundtrip', () => {
     expect(result.content[0].type).toBe('text')
     const out = JSON.parse(result.content[0].text) as {
       connected: boolean
-      channel: string
-      currentPage: { id: string; name: string }
-      selection: { id: string; type: string }[]
-      viewport: {
-        center: { x: number; y: number }
-        zoom: number
-      }
+      joined: {
+        channel: string
+        currentPage: { id: string; name: string }
+        selection: { id: string; type: string }[]
+        viewport: {
+          center: { x: number; y: number }
+          zoom: number
+        }
+      }[]
     }
     expect(out.connected).toBe(true)
-    expect(out.channel).toBe(TEST_CHANNEL)
+    // Single joined file (multi-file status reports each in joined[]).
+    const entry = out.joined[0]
+    expect(entry.channel).toBe(TEST_CHANNEL)
     // Live context merged from the plugin's STATUS reply.
-    expect(out.currentPage).toEqual({
+    expect(entry.currentPage).toEqual({
       id: 'page:1',
       name: 'Live Page',
     })
-    expect(out.selection[0].type).toBe('FRAME')
-    expect(out.viewport.zoom).toBe(1.5)
+    expect(entry.selection[0].type).toBe('FRAME')
+    expect(entry.viewport.zoom).toBe(1.5)
   })
 
   it('server can send command to mock plugin and get response', async () => {
@@ -119,7 +123,10 @@ describe('e2e roundtrip', () => {
 
     await handleConnect({ channel: TEST_CHANNEL }, client)
 
+    // A never-registered mock (no fileKey) is addressed by its synthetic key
+    // (= the channel); sendCommand now takes (fileKey, command, params, timeout).
     const result = await client.sendCommand(
+      TEST_CHANNEL,
       'get_document_info',
       {},
       5000,

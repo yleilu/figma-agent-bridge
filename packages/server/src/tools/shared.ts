@@ -25,15 +25,6 @@ export const errorMessage = (err: unknown): string =>
 export const cursorRejected = (err: CursorError): string =>
   `Cursor rejected (${err.reason}) — re-run the read to get a fresh cursor.`
 
-export const requireConnected = (
-  client: FigmaClient,
-): ToolResult | null =>
-  client.isConnected()
-    ? null
-    : textResult(
-        'Not connected to Figma. Use connect tool first.',
-      )
-
 export const formatMutationResult = (
   result: { error?: string } | null,
   failMsg: string,

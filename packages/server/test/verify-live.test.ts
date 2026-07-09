@@ -85,9 +85,13 @@ describe('verify-live harness against the mock plugin', () => {
   it('runs every check in CHECK_LIST without a FAIL', async () => {
     const createdNodes = new Set<string>()
     const failures: string[] = []
+    // Checks drive file tools through a scoped client (the single joined file's
+    // fileKey); status still gets the unscoped client as the second arg.
+    const fileKey = client.joinedFiles()[0]
+    const scoped = client.forFile(fileKey)
 
     for (const check of CHECK_LIST) {
-      const outcome = await check.run(client)
+      const outcome = await check.run(scoped, client)
       for (const id of outcome.nodeIds ?? []) {
         createdNodes.add(id)
       }
@@ -107,7 +111,7 @@ describe('verify-live harness against the mock plugin', () => {
     for (const id of createdNodes) {
       const r = await handleDeleteNode(
         { nodeId: id },
-        client,
+        scoped,
       )
       if (!r.content[0]?.text.startsWith('Error:')) {
         deleted++

@@ -17,7 +17,6 @@ import { createFigmaClient } from '@figma-agent-bridge/server/figma-client'
 import { CursorError } from '@figma-agent-bridge/server/read/paginate'
 import {
   textResult,
-  requireConnected,
   formatMutationResult,
   errorMessage,
   cursorRejected,
@@ -26,37 +25,11 @@ import {
   requireFile,
 } from '@figma-agent-bridge/server/tools/shared'
 
-const connected: FigmaClient = {
-  joinChannel: () => Promise.resolve(''),
-  sendCommand: () => Promise.resolve(null),
-  disconnect: () => undefined,
-  isConnected: () => true,
-  currentChannel: () => 'test-ch',
-}
-const disconnected: FigmaClient = {
-  ...connected,
-  isConnected: () => false,
-}
-
 describe('textResult', () => {
   it('wraps a string in the ToolResult shape', () => {
     expect(textResult('hi')).toEqual({
       content: [{ type: 'text', text: 'hi' }],
     })
-  })
-})
-
-describe('requireConnected', () => {
-  it('returns null when connected', () => {
-    expect(requireConnected(connected)).toBeNull()
-  })
-
-  it('returns the verbatim not-connected message when disconnected', () => {
-    const r = requireConnected(disconnected)
-    expect(r).not.toBeNull()
-    expect(r?.content[0].text).toBe(
-      'Not connected to Figma. Use connect tool first.',
-    )
   })
 })
 

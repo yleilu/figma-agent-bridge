@@ -22,7 +22,10 @@ import {
   CONTEXT_NS,
   CONTEXT_KEY,
 } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from './figma-client'
+import type {
+  FigmaClient,
+  ScopedFigmaClient,
+} from './figma-client'
 import type { ToolResult } from './tools/shared'
 
 import { handleStatus } from './tools/session'
@@ -109,7 +112,13 @@ export type Check = {
   /** Which of the 47 tools this check exercises (for coverage reporting). */
   tools: string[]
   name: string
-  run: (client: FigmaClient) => Promise<CheckOutcome>
+  // Checks drive FILE-addressed tools through a scoped client (per-call fileKey
+  // captured). A handful of SESSION-level reads (e.g. status, which reports ALL
+  // joined files) need the unscoped client — passed as the second arg.
+  run: (
+    client: ScopedFigmaClient,
+    fullClient: FigmaClient,
+  ) => Promise<CheckOutcome>
 }
 
 // ---------------------------------------------------------------------------
@@ -171,7 +180,7 @@ const createdId = (
 // clean it up themselves; this keeps every check self-contained so they run in
 // any order against either plugin.
 const makeFrame = async (
-  client: FigmaClient,
+  client: ScopedFigmaClient,
   name: string,
 ): Promise<{ id?: string; result: ToolResult }> => {
   const result = await handleCreateNode(
@@ -427,8 +436,10 @@ const tier1: Check[] = [
     tier: 1,
     tools: ['status'],
     name: 'status: live context populated (currentPage / selection / viewport)',
-    run: async client => {
-      const result = await handleStatus(client)
+    run: async (_client, fullClient) => {
+      // status is a SESSION tool: it reports ALL joined files, so it takes the
+      // unscoped client (not the file-scoped one the other checks use).
+      const result = await handleStatus(fullClient)
       const raw = text(result)
       if (raw === 'disconnected') {
         return fail('status reported disconnected')
@@ -1338,7 +1349,10 @@ const tier3: Check[] = [
           ),
         ],
         ['list_pages', await handleListPages({}, client)],
-        ['get_selection', await handleGetSelection(client)],
+        [
+          'get_selection',
+          await handleGetSelection({}, client),
+        ],
         ['get_styles', await handleGetStyles({}, client)],
         ['list_fonts', await handleListFonts({}, client)],
         [
