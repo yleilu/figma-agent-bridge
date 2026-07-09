@@ -208,9 +208,17 @@ describe('component-index per-fileKey routing (real client)', () => {
       client.forFile('fk-b'),
       manager,
     )
+    // Both files are searchable, AND each result set carries ONLY its own
+    // fileKey (ComponentIndexRecord.fileKey is a store field). This is the
+    // discriminating guard: a mis-key — the IndexManager collapsing both files
+    // onto one entry, or the scoped client routing both calls to one channel —
+    // would leak the other file's key here and fail.
     expect(ra.content[0].text).toContain('Button')
     expect(rb.content[0].text).toContain('Button')
-    expect(ra.content[0].text).not.toContain('connect')
+    expect(ra.content[0].text).toContain('fk-a')
+    expect(ra.content[0].text).not.toContain('fk-b')
+    expect(rb.content[0].text).toContain('fk-b')
+    expect(rb.content[0].text).not.toContain('fk-a')
 
     const reA = await handleReindex(
       {},
@@ -218,12 +226,16 @@ describe('component-index per-fileKey routing (real client)', () => {
       manager,
     )
     expect(reA.content[0].text).not.toContain('Error')
+    // Reindexing fk-a must not contaminate fk-b's index: re-searching fk-b
+    // still returns ONLY fk-b's key.
     const rb2 = await handleSearchComponents(
       { query: 'Button' },
       client.forFile('fk-b'),
       manager,
     )
     expect(rb2.content[0].text).toContain('Button')
+    expect(rb2.content[0].text).toContain('fk-b')
+    expect(rb2.content[0].text).not.toContain('fk-a')
 
     pa.stop()
     pb.stop()
