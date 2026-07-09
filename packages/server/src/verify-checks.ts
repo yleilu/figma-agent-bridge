@@ -1425,11 +1425,32 @@ const tier3: Check[] = [
       if (rootId !== undefined) {
         created.push(rootId)
       }
-      // ids[] is the live plugin's full id list; fall back to the root.
-      const ids =
-        (treeData.ids as string[] | undefined) ?? []
-      const childA = ids[1] ?? rootId ?? '1:1'
-      const childB = ids[2] ?? rootId ?? '1:2'
+      // `create_tree` returns only {id,name,type} — there is no `ids` list.
+      // Read the frame's children back so boolean_op/flatten operate on two
+      // REAL, DISTINCT leaf ids; otherwise childA===childB===rootId and the
+      // union+flatten destroys the frame, then reparent fails ("Parent not
+      // found"). See docs/scratch/2026-07-09-verify-live-failures.md (T3).
+      let childA = rootId ?? '1:1'
+      let childB = rootId ?? '1:2'
+      if (rootId !== undefined) {
+        const kids = await handleGetNode(
+          { nodeId: rootId, depth: 1 },
+          client,
+        )
+        if (!isError(kids)) {
+          const kidIds = (
+            (asYaml(kids).children as
+              | { id?: string }[]
+              | undefined) ?? []
+          )
+            .map(k => k.id)
+            .filter(
+              (id): id is string => typeof id === 'string',
+            )
+          if (kidIds[0] !== undefined) childA = kidIds[0]
+          if (kidIds[1] !== undefined) childB = kidIds[1]
+        }
+      }
 
       const clone = await handleCloneNode(
         { nodeId: rootId ?? childA, count: 1 },
