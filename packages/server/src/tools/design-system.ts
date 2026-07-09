@@ -287,8 +287,9 @@ export const handleGetComponents = async (
       )
       delete (entry as { context?: unknown }).context
       if (summary !== undefined) {
-        ;(entry as { contextSummary?: string }).contextSummary =
-          summary
+        ;(
+          entry as { contextSummary?: string }
+        ).contextSummary = summary
       }
       return entry
     })

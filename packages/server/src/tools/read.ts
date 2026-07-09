@@ -47,7 +47,8 @@ const projectView = (
   )
   delete (out as { context?: unknown }).context
   if (summary !== undefined) {
-    ;(out as { contextSummary?: string }).contextSummary = summary
+    ;(out as { contextSummary?: string }).contextSummary =
+      summary
   }
   if (Array.isArray(children)) {
     const kept = children

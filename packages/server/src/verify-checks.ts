@@ -18,7 +18,10 @@
 // Each check tracks the node ids it created so verify-live.ts can delete them.
 
 import YAML from 'yaml'
-import { CONTEXT_NS, CONTEXT_KEY } from '@figma-agent-bridge/shared'
+import {
+  CONTEXT_NS,
+  CONTEXT_KEY,
+} from '@figma-agent-bridge/shared'
 import type { FigmaClient } from './figma-client'
 import type { ToolResult } from './tools/shared'
 
@@ -977,7 +980,10 @@ const tier2: Check[] = [
         }
       }
       const gn2Data = asYaml(gn2)
-      if (gn2Data.id === id && gn2Data.context !== undefined) {
+      if (
+        gn2Data.id === id &&
+        gn2Data.context !== undefined
+      ) {
         return {
           ...fail(
             `empty update_node did not clear context: ${JSON.stringify(gn2Data.context)}`,
@@ -1212,7 +1218,9 @@ const tier2: Check[] = [
       )
       if (isError(upd)) {
         return {
-          ...fail(`update_component(description): ${text(upd)}`),
+          ...fail(
+            `update_component(description): ${text(upd)}`,
+          ),
           nodeIds: created,
         }
       }

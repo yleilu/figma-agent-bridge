@@ -159,7 +159,10 @@ describe('handleUpdateNode', () => {
   it('rejects over-cap context with a clean message and does not send', async () => {
     const sent: Sent[] = []
     const res = await handleUpdateNode(
-      { nodeId: '1:42', patch: { context: '🙂'.repeat(513) } },
+      {
+        nodeId: '1:42',
+        patch: { context: '🙂'.repeat(513) },
+      },
       stubClient({ sent }),
     )
     expect(res.content[0].text).toMatch(
@@ -175,7 +178,8 @@ describe('handleUpdateNode', () => {
       stubClient({ sent }),
     )
     expect(
-      (sent[0].params?.spec as { context?: string }).context,
+      (sent[0].params?.spec as { context?: string })
+        .context,
     ).toBe('---\nx\n---')
   })
 })

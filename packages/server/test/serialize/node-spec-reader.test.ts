@@ -341,12 +341,35 @@ describe('toNodeSpec — fidelity guard', () => {
 
 describe('toNodeSpec — context read-back', () => {
   it('lifts raw.context into NodeSpec.context, omitting empty/absent', () => {
-    expect(toNodeSpec({ id: '1', type: 'FRAME', context: '---\nx\n---' } as never, { depth: 0 }).context).toBe('---\nx\n---')
-    expect(toNodeSpec({ id: '1', type: 'FRAME', context: '' } as never, { depth: 0 }).context).toBeUndefined()
-    expect(toNodeSpec({ id: '1', type: 'FRAME' } as never, { depth: 0 }).context).toBeUndefined()
+    expect(
+      toNodeSpec(
+        {
+          id: '1',
+          type: 'FRAME',
+          context: '---\nx\n---',
+        } as never,
+        { depth: 0 },
+      ).context,
+    ).toBe('---\nx\n---')
+    expect(
+      toNodeSpec(
+        { id: '1', type: 'FRAME', context: '' } as never,
+        { depth: 0 },
+      ).context,
+    ).toBeUndefined()
+    expect(
+      toNodeSpec({ id: '1', type: 'FRAME' } as never, {
+        depth: 0,
+      }).context,
+    ).toBeUndefined()
   })
   it('returns over-cap context faithfully (no truncation on read)', () => {
     const big = 'a'.repeat(5000)
-    expect(toNodeSpec({ id: '1', type: 'FRAME', context: big } as never, { depth: 0 }).context).toBe(big)
+    expect(
+      toNodeSpec(
+        { id: '1', type: 'FRAME', context: big } as never,
+        { depth: 0 },
+      ).context,
+    ).toBe(big)
   })
 })

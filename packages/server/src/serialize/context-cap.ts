@@ -6,7 +6,9 @@ import { CONTEXT_MAX_BYTES } from '@figma-agent-bridge/shared'
 export const assertContextWithinCap = (spec: {
   context?: unknown
 }): void => {
-  if (typeof spec.context !== 'string') return
+  if (typeof spec.context !== 'string') {
+    return
+  }
   const bytes = Buffer.byteLength(spec.context, 'utf8')
   if (bytes > CONTEXT_MAX_BYTES) {
     throw new Error(

@@ -287,7 +287,11 @@ export const createMockPlugin = (
           result = {
             ...cardFixture,
             ...(sharedContext.get(cardFixture.id)
-              ? { context: sharedContext.get(cardFixture.id) }
+              ? {
+                  context: sharedContext.get(
+                    cardFixture.id,
+                  ),
+                }
               : {}),
           }
         }
@@ -299,7 +303,11 @@ export const createMockPlugin = (
           {
             ...cardFixture,
             ...(sharedContext.get(cardFixture.id)
-              ? { context: sharedContext.get(cardFixture.id) }
+              ? {
+                  context: sharedContext.get(
+                    cardFixture.id,
+                  ),
+                }
               : {}),
           },
         ]

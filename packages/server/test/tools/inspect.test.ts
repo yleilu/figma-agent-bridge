@@ -124,7 +124,8 @@ describe('handleInspect (rebuilt — Rule B)', () => {
         reply: {
           id: '1:42',
           type: 'FRAME',
-          context: '---\npurpose: CTA\n---\n## Notes\nlong body',
+          context:
+            '---\npurpose: CTA\n---\n## Notes\nlong body',
         },
       }),
     )

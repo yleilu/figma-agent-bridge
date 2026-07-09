@@ -703,7 +703,9 @@ const buildNode = (
   }
 
   const context = str(raw.context)
-  if (context !== undefined && context !== '') out.context = context
+  if (context !== undefined && context !== '') {
+    out.context = context
+  }
 
   out.size = sizeOf(raw)
 

@@ -417,7 +417,9 @@ describe('specToFigma — pass-through fields', () => {
 
   it('passes context through unchanged (round-trip)', () => {
     expect(
-      specToFigma({ context: '---\npurpose: x\n---\n' } as never),
+      specToFigma({
+        context: '---\npurpose: x\n---\n',
+      } as never),
     ).toMatchObject({ context: '---\npurpose: x\n---\n' })
     expect(specToFigma({} as never).context).toBeUndefined()
   })

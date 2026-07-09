@@ -706,7 +706,8 @@ describe('handleGetComponents', () => {
               name: 'Button',
               key: 'btn-key',
               type: 'COMPONENT',
-              context: '---\npurpose: CTA\n---\n## Notes\nlong body',
+              context:
+                '---\npurpose: CTA\n---\n## Notes\nlong body',
             },
           ],
           remote: [],
@@ -714,9 +715,14 @@ describe('handleGetComponents', () => {
       }),
     )
     const out = YAML.parse(result.content[0].text) as {
-      results: { context?: string; contextSummary?: string }[]
+      results: {
+        context?: string
+        contextSummary?: string
+      }[]
     }
-    expect(out.results[0].contextSummary).toBe('purpose: CTA')
+    expect(out.results[0].contextSummary).toBe(
+      'purpose: CTA',
+    )
     expect(out.results[0].context).toBeUndefined()
   })
 

@@ -328,15 +328,21 @@ describe('handleSearch (rebuilt — Rule A)', () => {
             name: 'Card',
             type: 'FRAME',
             size: [320, 200],
-            context: '---\npurpose: CTA\n---\n## Notes\nlong body',
+            context:
+              '---\npurpose: CTA\n---\n## Notes\nlong body',
           },
         ],
       }),
     )
     const out = YAML.parse(result.content[0].text) as {
-      results: { context?: string; contextSummary?: string }[]
+      results: {
+        context?: string
+        contextSummary?: string
+      }[]
     }
-    expect(out.results[0].contextSummary).toBe('purpose: CTA')
+    expect(out.results[0].contextSummary).toBe(
+      'purpose: CTA',
+    )
     expect(out.results[0].context).toBeUndefined()
   })
 
