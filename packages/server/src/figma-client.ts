@@ -60,6 +60,14 @@ type Pending<T> = {
 
 const JOIN_TIMEOUT_MS = 3e4
 
+// Normalize a relay WebSocket URL to its HTTP origin (for the /channels REST
+// registry). The single source of this ws→http conversion — shared by discover,
+// the MCP server bootstrap, and the live-verify script.
+export const toHttpUrl = (relayUrl: string): string =>
+  relayUrl
+    .replace('wss://', 'https://')
+    .replace('ws://', 'http://')
+
 export const discoverChannels = async (
   relayHttpUrl: string,
 ): Promise<ChannelInfo[]> => {
@@ -101,9 +109,7 @@ export const createFigmaClient = (
     ) => Promise<unknown> | unknown
   >()
 
-  const relayHttpUrl = relayUrl
-    .replace('wss://', 'https://')
-    .replace('ws://', 'http://')
+  const relayHttpUrl = toHttpUrl(relayUrl)
 
   const rejectAll = (reason: string) => {
     pending.forEach(({ reject, timer }) => {

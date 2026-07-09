@@ -28,6 +28,7 @@ import { DEFAULT_PORT } from '@figma-agent-bridge/shared'
 import {
   createFigmaClient,
   discoverChannels,
+  toHttpUrl,
 } from './figma-client'
 import type { FigmaClient } from './figma-client'
 import { handleExport } from './tools/export'
@@ -96,9 +97,7 @@ const resolveRelay = (): {
       : DEFAULT_PORT
   const wsUrl =
     process.env.RELAY_URL ?? `ws://localhost:${port}`
-  const httpUrl = wsUrl
-    .replace('wss://', 'https://')
-    .replace('ws://', 'http://')
+  const httpUrl = toHttpUrl(wsUrl)
   return { wsUrl, httpUrl }
 }
 

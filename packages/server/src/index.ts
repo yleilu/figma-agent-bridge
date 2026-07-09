@@ -59,7 +59,10 @@ import {
   searchComponentsParamsSchema,
   reindexParamsSchema,
 } from '@figma-agent-bridge/shared/tool-params'
-import { createFigmaClient } from './figma-client'
+import {
+  createFigmaClient,
+  toHttpUrl,
+} from './figma-client'
 import {
   handleConnect,
   handleStatus,
@@ -157,9 +160,7 @@ if (process.argv.includes('--relay')) {
 
   const relayUrl =
     process.env.RELAY_URL ?? `ws://localhost:${port}`
-  const relayHttpUrl = relayUrl
-    .replace('wss://', 'https://')
-    .replace('ws://', 'http://')
+  const relayHttpUrl = toHttpUrl(relayUrl)
   const client = createFigmaClient(relayUrl)
   wireFeedback(client)
 
