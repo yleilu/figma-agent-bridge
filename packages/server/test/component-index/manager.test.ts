@@ -88,4 +88,31 @@ describe('IndexManager', () => {
     expect(out.indexState).toBe('warm')
     expect(out.count).toBe(3)
   })
+
+  it(
+    'rehydrates a warm index from disk in a second manager ' +
+      '(no rebuild)',
+    async () => {
+      const mgrA = new IndexManager()
+      await mgrA.reindex('file-a', async () =>
+        reply(['Button']),
+      )
+      const mgrB = new IndexManager()
+      let calls = 0
+      const out = await mgrB.search(
+        'file-a',
+        'button',
+        10,
+        async () => {
+          calls += 1
+          return reply([])
+        },
+      )
+      // served from the on-disk cache, no getComponents call
+      expect(calls).toBe(0)
+      expect(out.results.map(r => r.name)).toEqual([
+        'Button',
+      ])
+    },
+  )
 })

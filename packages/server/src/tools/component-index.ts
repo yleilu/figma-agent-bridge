@@ -90,18 +90,20 @@ export const handleSearchComponents = async (
     return target.result
   }
   try {
+    const validType =
+      type === 'COMPONENT' || type === 'COMPONENT_SET'
+        ? type
+        : undefined
     const out = await manager.search(
       target.fileKey,
       query,
       limit ?? DEFAULT_LIMIT,
       getComponentsVia(client),
+      validType,
     )
-    const filtered = type
-      ? out.results.filter(r => r.type === type)
-      : out.results
     return textResult(
       YAML.stringify({
-        results: filtered,
+        results: out.results,
         indexState: out.indexState,
         truncated: out.truncated,
       }),

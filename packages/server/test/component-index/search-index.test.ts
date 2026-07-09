@@ -74,3 +74,43 @@ describe('INDEX_OPTIONS_VERSION', () => {
     expect(INDEX_OPTIONS_VERSION.length).toBeGreaterThan(0)
   })
 })
+
+describe('type filter', () => {
+  it(
+    'narrows before the limit ' +
+      '(truncated reflects the filtered set)',
+    () => {
+      const recs = [
+        rec('1', 'Alpha Button'),
+        rec('2', 'Beta Button'),
+        rec('3', 'Gamma Button'),
+      ]
+      recs[1].type = 'COMPONENT_SET'
+      const idx = buildIndex(recs)
+      // 2 COMPONENTs match 'button'; limit 1 -> 1 result +
+      // truncated
+      const onlyComponents = searchIndex(
+        idx,
+        'button',
+        1,
+        'COMPONENT',
+      )
+      expect(onlyComponents.results).toHaveLength(1)
+      expect(
+        onlyComponents.results.every(
+          r => r.type === 'COMPONENT',
+        ),
+      ).toBe(true)
+      expect(onlyComponents.truncated).toBe(true)
+      // filter to the single SET -> 1 result, not truncated
+      const onlySets = searchIndex(
+        idx,
+        'button',
+        5,
+        'COMPONENT_SET',
+      )
+      expect(onlySets.results.map(r => r.id)).toEqual(['2'])
+      expect(onlySets.truncated).toBe(false)
+    },
+  )
+})

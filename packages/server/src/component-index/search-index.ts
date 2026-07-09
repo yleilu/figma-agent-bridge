@@ -43,15 +43,23 @@ export type SearchResult = {
 /**
  * Run a query, bounded to top-N.
  * `truncated` = more matched than `limit`.
+ * Optional `type` filters results before slicing so
+ * truncated reflects the type-constrained set.
  */
 export const searchIndex = (
   idx: MiniSearch<ComponentIndexRecord>,
   query: string,
   limit: number,
+  type?: 'COMPONENT' | 'COMPONENT_SET',
 ): SearchResult => {
-  const hits = idx.search(
-    query,
-  ) as unknown as ComponentIndexRecord[]
+  const filter = type
+    ? (r: ComponentIndexRecord) => r.type === type
+    : undefined
+  const hits = idx.search(query, {
+    filter: filter as
+      | ((result: unknown) => boolean)
+      | undefined,
+  }) as unknown as ComponentIndexRecord[]
   return {
     results: hits.slice(0, limit),
     truncated: hits.length > limit,

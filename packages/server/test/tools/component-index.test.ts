@@ -104,6 +104,58 @@ describe('handleSearchComponents', () => {
   })
 })
 
+describe('handleSearchComponents type filter', () => {
+  it(
+    'returns only the requested type ' +
+      '(truncated reflects filtered set)',
+    async () => {
+      const mgr = new IndexManager()
+      const mixedReply = {
+        local: [
+          {
+            id: '1',
+            key: 'k1',
+            name: 'Alpha Button',
+            type: 'COMPONENT',
+            page: 'p',
+            properties: [],
+            variantAxes: {},
+          },
+          {
+            id: '2',
+            key: 'k2',
+            name: 'Beta Button',
+            type: 'COMPONENT_SET',
+            page: 'p',
+            properties: [],
+            variantAxes: {},
+          },
+        ],
+        remote: [],
+      }
+      const res = await handleSearchComponents(
+        {
+          fileId: 'f',
+          query: 'button',
+          type: 'COMPONENT_SET',
+        },
+        stubClient({ reply: mixedReply }),
+        mgr,
+      )
+      const out = parse(res.content[0].text)
+      expect(
+        out.results.every(
+          (r: { type: string }) =>
+            r.type === 'COMPONENT_SET',
+        ),
+      ).toBe(true)
+      expect(
+        out.results.map((r: { id: string }) => r.id),
+      ).toEqual(['2'])
+    },
+  )
+})
+
 describe('handleReindex', () => {
   it('rebuilds and reports count', async () => {
     const mgr = new IndexManager()

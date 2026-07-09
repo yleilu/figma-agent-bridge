@@ -73,12 +73,15 @@ export class IndexManager {
   /**
    * Search a file, building on cold/stale
    * (rehydrating from disk if possible).
+   * Optional `type` filters before slicing so
+   * results and truncated reflect the filtered set.
    */
   async search(
     fileKey: string,
     query: string,
     limit: number,
     getComponents: GetComponents,
+    type?: 'COMPONENT' | 'COMPONENT_SET',
   ): Promise<SearchOutput> {
     let entry = this.files.get(fileKey)
     if (!entry) {
@@ -107,6 +110,7 @@ export class IndexManager {
       entry.index,
       query,
       limit,
+      type,
     )
     return { results, indexState: entry.state, truncated }
   }
