@@ -25,8 +25,27 @@ related:
 >
 > The **component index** feature layers two further MCP tools —
 > `search_components` and `reindex` — specified in
-> `docs/specs/component-index.md` (not re-catalogued here). With those, the
-> shipped MCP surface is **49 tools**.
+> `docs/specs/component-index.md` (not re-catalogued here). These are **non-facade
+> meta-tools** (outside the `figma.*` facade count), like `record_feedback`.
+>
+> **Count is a formula, not a hand-summed aggregate (stops silent rot).** The one
+> hand-maintained number is the **facade group-sum = 47**. The exposed MCP surface is
+> then **`47 facade + K non-facade meta-tools`**, where the non-facade meta-tools are
+> `record_feedback` (shipped), `search_components` + `reindex` (shipped), plus the
+> **planned, not-yet-shipped** `pull_changes` (change-feed.md) and the three registry
+> tools `register_library` / `unregister_library` / `list_libraries`
+> (team-library-registry.md). Do not restate a hardcoded total (a bare "49" already
+> wrongly omits `record_feedback`).
+>
+> The **change feed** (docs/specs/change-feed.md) adds one **planned, not-yet-shipped**
+> non-facade meta-tool `pull_changes({fileKey}) → {changes, state}` — a destructive
+> buffer **drain** (deliberately **not** `get_*`; non-idempotent; codes `INVALID_PARAM` /
+> `DISCONNECTED`). It must **not** inflate the shipped facade count.
+>
+> The **team-library registry** (docs/specs/team-library-registry.md) adds three
+> acknowledged non-facade meta-tools — `register_library`, `unregister_library`,
+> `list_libraries` (all take `fileKey`) — outside the `figma.*` facade count. They are
+> **not yet present** in the shipped surface.
 
 > The tool layer only — opinions (design-system-first, audit verdicts, layout
 > inference) are skill-layer (P1) and deliberately absent.
@@ -211,7 +230,9 @@ Format: `name(params) → returns` — purpose · principle/checklist need.
 
 **Count = 47** (auditable per group): Session 2 · Read-nodes 4 · Read-query 3 · Read-DS 4 · Read-meta 2 · Write-nodes 5 · Write-structure 8 · Write-pages 3 · Write-components 5 · Write-DS 6 · Write-meta 2 · Handoff 2 · Batch 1 = **47**.
 
-**`record_feedback` — deliberate meta-tool, outside the 47 (T6/T7 exception).** The facade
+**`record_feedback` — deliberate meta-tool, outside the 47 (T6/T7 exception).**
+`record_feedback({category, title, description, tool?}) → {…}` (see
+[[figma-bridge/docs/specs/feedback-system]]). The facade
 rule (T6/T7) requires every tool to map to a real `figma.*` capability. `record_feedback` is
 the sole exception — it captures bridge-experience friction and has no Figma API counterpart.
 It is admitted knowingly and quarantined: placed in its own conceptual `feedback` group, absent
@@ -222,7 +243,7 @@ Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle
 ### Session (2)
 - `connect({fileKey?, fileName?}) → {fileKey, fileName, connected, available[]}` — pair the MCP server to a **specific file's** plugin, targeted by `fileKey` (or `fileName`), and return the currently **available** files `available:[{fileKey, fileName, connectedAt}]` (the relay availability registry). When the target is ambiguous or **not available**, it does **not** guess — it returns an error listing `available[]` and asks the agent to choose (B3). The raw channel is now an internal detail (server resolves `fileKey`→channel). *(`fileKey` needs `enablePrivatePluginApi`; `fileName` is the fallback id — see overview *Connection lifecycle*.)* · B1, B3; §2 connect.
 - `status() → {connected, fileKey, fileName, available[], currentPage, selection[], viewport}` — the paired file + the **availability set** + live context in one read (live context is best-effort; failures degrade, they don't throw) · B1, B3, T4; §2 read-what-user-sees.
-- *(plugin teardown = internal `close_plugin` command, not a tool — transport/dev-reload lifecycle, see overview *Connection lifecycle*; T6. The B3 `targetFileKey` guard is **server-stamped** on every command from the current connection — not a per-tool param — so the 47-tool surface stays unchanged.)*
+- *(plugin teardown = internal `close_plugin` command, not a tool — transport/dev-reload lifecycle, see overview *Connection lifecycle*; T6. **Addressing (B3):** tools take an explicit per-call **`fileKey`** param naming their target file (canonical; per [[figma-bridge/docs/specs/overview|overview.md]] — the source of truth). **Follow-up (pending code change):** the shipped core tools currently **server-stamp** `targetFileKey` from the current connection rather than accept a per-call `fileKey`; migrating them to the per-call param is not yet done.)*
 
 ### Read — nodes (4)
 - `inspect({nodeId?, pageId?, depth?, budget?, fields?, profile?, match?}) → {view, truncated[]}` — compact lossy view, drill-by-id (Rule B); each node carries a read-only **`contextSummary`** (the frontmatter slice of `context`, capped at `CONTEXT_SUMMARY_MAX_BYTES` = 512, rendered as a YAML block scalar; server-derived, **not** `fields`/`profile`-projectable; omitted when absent); omit both ids to inspect the current selection (multi-select returns a `SELECTION` forest) · **T3 inspect**, T4; §1 human view, §3 deep/large trees, §13 CSS-handoff data.
@@ -297,7 +318,7 @@ Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle
 - **D2 — Projection.** `fields:[...]` allow-list **+ presets** (`minimal/layout/style/text/full`); no deny-list. Same param on every node-returning read.
 - **D3 — Batch.** One `batch` tool, one shape `{op?, ops:[{op?,…}]}` — top-level `op` default (homogeneous, compact) or per-entry `op` (heterogeneous); in-order, partial-success, best-effort; ordering guarantees are within-op only (cross-entry deps are the agent's to sequence); entries warn like single calls. Scope is WRITE ops over existing targets (create-* excluded).
 - **D4 — Defaults.** `get_node`/`get_nodes` depth=0 (fidelity-first); `inspect` budget-adaptive level-fill (no budget → depth=0; `depth=-1` → all). Same rule, job-tuned defaults.
-- **D5 — Naming.** `get_X` / `create_X`+`update_X`; `set_X` only for whole-state writes; `inspect`/`get_node` the one deliberate two-name split (encodes T3). **Documented naming exceptions** (read-many vs write-one, or operation-shaped): `list_pages`↔`create_page`/`set_current_page` and `get_components`↔`create_component`/`update_component` (plural enumeration read vs singular promote/edit-one write); `set_focus` (viewport writer). Genuinely **operational** capabilities use verb names (`boolean_op`, `flatten`, `combine_variants`, `swap_component`, `clone_node`, `reparent_node`, `reorder_children`, `apply_style`, `bind_variable`, `create_from_svg`) — the get/create/update/set scheme governs CRUD-shaped tools, not every tool.
+- **D5 — Naming.** `get_X` / `create_X`+`update_X`; `set_X` only for whole-state writes; `inspect`/`get_node` the one deliberate two-name split (encodes T3). **Documented naming exceptions** (read-many vs write-one, or operation-shaped): `list_pages`↔`create_page`/`set_current_page` and `get_components`↔`create_component`/`update_component` (plural enumeration read vs singular promote/edit-one write); `set_focus` (viewport writer). Genuinely **operational** capabilities use verb names (`boolean_op`, `flatten`, `combine_variants`, `swap_component`, `clone_node`, `reparent_node`, `reorder_children`, `apply_style`, `bind_variable`, `create_from_svg`) — the get/create/update/set scheme governs CRUD-shaped tools, not every tool. **Reads that consume/drain server state (non-idempotent) take a consumption verb, never `get_`** — exemplar `pull_changes` (change-feed.md), which pops+clears a buffer, so a `get_` prefix would falsely imply an idempotent read.
 - **Image fills — both.** `image(url|hash){…}` grammar atom (one-step, server-creates-for-url, deduped) **and** `create_image({url|bytes})→{hash}` tool (the only raw-bytes / reuse path). Two capabilities, not two paths.
 - **Coverage restorations (6 + review).** Added: `get_reactions`/`set_reactions`; `boolean_op`+`flatten`; image-fill (atom + `create_image`); `get_plugin_data`/`set_plugin_data`; `create_page`/`set_current_page`/`duplicate_page`; variable **mode lifecycle** on `update_variables`. Review pass added: `set_focus` (scroll-to-node), `search` `characters` projection (text inventory), `match.type` array, expose-nested-prop gated on `update_component` (🟠).
 

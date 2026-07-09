@@ -71,7 +71,7 @@ the server, draining them via `pull_changes`, and the plugin-layer hook that gat
 | Layer | Responsibility here |
 |---|---|
 | **Bridge** | Plugin event listeners → enriched `document_changed` push (**B1**); server buffers per `fileKey` (**B3**); the count mirror file. Carries changes faithfully; compacts events but never interprets node *meaning*. |
-| **Tool** | `pull_changes({fileId})` — drains and returns the buffer in a compact, bounded envelope (**T4/T10**). Pure capability, **no opinion** (**T6**). |
+| **Tool** | `pull_changes({fileKey})` — drains and returns the buffer in a compact, bounded envelope (**T4/T10**). Pure capability, **no opinion** (**T6**). |
 | **Plugin** | The `UserPromptSubmit` hook + count gate — the *opinion* that the agent should check for user edits before acting (**P1**). Lives in the Claude Code plugin, never in the tool. |
 
 Keeping the "when to check" opinion in the hook (not baked into the tool) is what lets a client
@@ -97,7 +97,7 @@ Deliberately excluded: `stylechange` (redundant with `documentchange`), `drop`, 
 ## Change record & push payload
 
 Each change becomes one record. Records ride inside the **existing `document_changed` relay frame**,
-whose params today carry only `fileId`:
+whose params today carry only `fileKey`:
 
 ```
 ChangeRecord = {
@@ -113,7 +113,7 @@ ChangeRecord = {
 }
 
 // relay frame:  { command: "document_changed",
-//                 params: { fileId, epoch, changes: ChangeRecord[], at } }
+//                 params: { fileKey, epoch, changes: ChangeRecord[], at } }
 ```
 
 `name` is included on create/update/page because it materially helps the agent reason
@@ -146,7 +146,7 @@ Per `fileKey`, held in the **MCP server's memory** (not the plugin, not the rela
 **Why per-server, not per-plugin:** the buffer belongs to the *consumer*. The plugin pushes one
 change; the relay **broadcasts** it to every other channel member; each session's server buffers and
 drains **independently**. This makes both topologies correct for free:
-- *One session, many files* — one buffer per `fileKey`; `pull_changes(fileId)` drains the one asked for.
+- *One session, many files* — one buffer per `fileKey`; `pull_changes(fileKey)` drains the one asked for.
 - *Many sessions, one file* — each server holds its own buffer fed by the broadcast; one session's
   drain never empties another's view. A plugin-side buffer would be a single shared thing with a
   drain race.
@@ -231,7 +231,7 @@ Flow per user turn:
 2. `pendingCount === 0` → **inject nothing.** Quiet turns stay free (the original token-cost goal).
 3. `pendingCount > 0` → inject a terse reminder: *"The user changed N node(s) in Figma; call
    `pull_changes` before acting on existing nodes."*
-4. The agent calls `pull_changes({fileId})` → server returns the collapsed diff **and clears the
+4. The agent calls `pull_changes({fileKey})` → server returns the collapsed diff **and clears the
    buffer** (count resets to 0).
 5. The agent reasons over `user prompt + diff`, then acts or responds.
 
@@ -240,13 +240,13 @@ session-scoped identifier — mechanism flagged in Open questions.)*
 
 ## Tool surface
 
-Takes `fileId` (a `fileKey`) — consistent with
+Takes `fileKey` (the canonical per-call file-identity param) — consistent with
 [[figma-bridge/docs/specs/component-index|component-index.md]] and **B3** (the surface addresses files
 per-call, not a single implicit connected file). Obeys `overview.md`'s `{error, code}` envelope.
 
 | Tool | Contract | Error codes |
 |---|---|---|
-| `pull_changes` | `{fileId}` → `{changes, state}` — **drains** the buffer | `INVALID_PARAM`, `DISCONNECTED` |
+| `pull_changes` | `{fileKey}` → `{changes, state}` — **drains** the buffer | `INVALID_PARAM`, `DISCONNECTED` |
 
 - Named with a **consumption verb**, not `get_*`: it mutates server state on read (a queue pop, non-
   idempotent — a second immediate call returns an empty `"ok"`), so a read-only `get_` prefix would
@@ -295,8 +295,10 @@ flowchart TB
 ## Integration with the component index
 
 Both subsystems consume `documentchange`. Today the plugin's single listener is **gated to
-`INDEX_STALE_TYPES`** (COMPONENT / COMPONENT_SET / INSTANCE) and posts an `index-stale` UI message
-that becomes the `document_changed` frame → the server's `markStale(fileId)`. The Change Feed needs
+`INDEX_STALE_TYPES`** — the stale-trigger type set is **owned by**
+[[figma-bridge/docs/specs/component-index|component-index.md]] (which types mark the index stale),
+not restated here — and posts an `index-stale` UI message
+that becomes the `document_changed` frame → the server's `markStale(fileKey)`. The Change Feed needs
 **all** change types, so it enriches that same frame with `changes[]`. The enrichment **must preserve
 the `INDEX_STALE_TYPES` gate for the `markStale` signal** — the component index must keep re-projecting
 only on component edits, not on every keystroke-level change. The two concerns share one push frame but

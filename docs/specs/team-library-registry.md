@@ -107,16 +107,18 @@ the tools below are its primitives.
 
 ## Tool surface
 
-All tools take `fileId` and obey `overview.md`'s `{error, code}` envelope. `register_library` /
+All tools take `fileKey` and obey `overview.md`'s `{error, code}` envelope. `register_library` /
 `unregister_library` / `list_libraries` are **first-party** tools (no `figma.*` library-enumeration
 exists); like `record_feedback` they are classified as non-facade in `tool-surface.md`, outside the
-`figma.*` tool-count invariant.
+`figma.*` tool-count invariant. All error codes below are declared in
+[[figma-bridge/docs/specs/overview|overview.md]]'s single authoritative `ErrorCode` enum (including
+`LIBRARY_UNPUBLISHED` and `WRONG_FILE`).
 
 | Tool | Contract | Error codes |
 |---|---|---|
-| `register_library` | `{fileId, name}` (run in the library's home file) → harvest published, register, enable for `fileId` | `INVALID_PARAM`, `LIBRARY_UNPUBLISHED`, `WRONG_FILE` |
-| `unregister_library` | `{fileId, libraryFileKey}` → disable / remove | `INVALID_PARAM`, `NOT_FOUND` |
-| `list_libraries` | `{fileId}` → `{ enabled[], available[], usedButUnregistered[] }` with per-library status | `INVALID_PARAM` |
+| `register_library` | `{fileKey, name}` (run in the library's home file) → harvest published, register, enable for `fileKey` | `INVALID_PARAM`, `LIBRARY_UNPUBLISHED`, `WRONG_FILE` |
+| `unregister_library` | `{fileKey, libraryFileKey}` → disable / remove | `INVALID_PARAM`, `NODE_NOT_FOUND` |
+| `list_libraries` | `{fileKey}` → `{ enabled[], available[], usedButUnregistered[] }` with per-library status | `INVALID_PARAM` |
 
 `search_components` (defined in [[figma-bridge/docs/specs/component-index|Component Index]]) gains the
 `source: 'team-library'` results and the enabled-library scope described above.

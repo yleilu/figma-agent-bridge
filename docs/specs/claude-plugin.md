@@ -96,7 +96,7 @@ figma-agent-bridge/                       repo == marketplace
 │   │   ├── figma-designer.md             frontmatter: tools:, model: (§6.2)
 │   │   └── figma-reviewer.md             (§6.5)
 │   ├── hooks/
-│   │   ├── hooks.json                    SessionStart → bootstrap
+│   │   ├── hooks.json                    SessionStart → bootstrap; UserPromptSubmit → change-feed nudge (§ change-feed.md)
 │   │   └── bootstrap                     extensionless bash; downloads binary
 │   └── README.md                         install + Figma-plugin-import steps
 ├── packages/                             the Bun monorepo — UNCHANGED except build target
@@ -112,7 +112,9 @@ Conventions confirmed from real plugins: MCP config lives in `.mcp.json` at plug
 `name, description, version, author, homepage, repository, license, keywords`; skills are
 `skills/<name>/SKILL.md`; agents are flat `agents/<name>.md` with `tools:`/`model:`
 frontmatter; hooks are `hooks/hooks.json` + sibling scripts (extensionless to avoid
-Windows auto-`bash` mangling).
+Windows auto-`bash` mangling). Beyond the `SessionStart → bootstrap` hook, `hooks.json`
+also holds a **`UserPromptSubmit` count-gated nudge hook** — the "check changes before
+acting" reminder specified in [[figma-bridge/docs/specs/change-feed|change-feed.md]].
 
 ## 5. The MCP binary — build → release → bootstrap
 

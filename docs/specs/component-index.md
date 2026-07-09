@@ -46,8 +46,9 @@ searchable, and kept current — is maintained over the file's **local** compone
   `"enablePrivatePluginApi": true` — permitted because the plugin is distributed by **manifest import**
   (the flag is rejected only on Community-published plugins). `figma.root.id` is `"0:0"` for every file
   and is not a file identifier.
-- Every tool takes a **`fileId`** (a `fileKey`); the index and its cache are keyed by `fileKey`. A
-  `fileId` resolves to the plugin connected for that file; addressing **multiple** files concurrently is
+- Every tool takes a **`fileKey`** (the canonical per-call file-identity param); the index and its
+  cache are keyed by `fileKey`. A
+  `fileKey` resolves to the plugin connected for that file; addressing **multiple** files concurrently is
   provided by the **multi-file workspace foundation**, with which this subsystem integrates through
   `fileKey`.
 
@@ -88,8 +89,8 @@ detected (see the registry).
 
 - **Agent-only:** match and return; the agent's LLM makes the final choice. No custom ranking — the
   search library's default ordering is surfaced as-is.
-- `search_components({ fileId, query, type?, limit? })` → a bounded **top-N** (T10), scoped to
-  `fileId`. Matching is **MiniSearch** multi-field (name, description, context) with prefix + fuzzy; the
+- `search_components({ fileKey, query, type?, limit? })` → a bounded **top-N** (T10), scoped to
+  `fileKey`. Matching is **MiniSearch** multi-field (name, description, context) with prefix + fuzzy; the
   agent re-queries with a synonym if needed.
 - The result is a **bounded ranked set, not a paginated list**: because ranking is per-query, there is
   no stable position cursor — so unlike Rule-A list reads, `search_components` returns no `cursor`, and a
@@ -117,7 +118,10 @@ digests keep the cache honest **without ever projecting just to decide whether t
 
 The projected records are cached, keyed by `fileKey`. The serialized **MiniSearch index is the on-disk
 cache**, stamped with a version that covers both the record shape and the index config, so either change
-invalidates a stale cache.
+invalidates a stale cache. The store lives at
+**`~/.figma-agent-bridge/component-index/<sanitized-fileKey>.json`**; the `fileKey` sanitizer is (to be)
+shared with the Change Feed ([[figma-bridge/docs/specs/change-feed|change-feed.md]], which writes its
+count mirror under a sibling `changes/<sanitized-fileKey>/` path with the same sanitizer).
 
 ### Freshness
 
@@ -127,7 +131,12 @@ The index is built once (a full projection) and then kept current, cheapest-mech
   **`stale`** when a `COMPONENT`/`COMPONENT_SET` (or a node within one) changes — a cheap signal, no
   projection. The server then re-projects the affected components (before the next search, or eagerly
   debounced). `documentchange` is a **nudge**, not the source of truth, so its exact granularity is not
-  load-bearing — correctness comes from re-projection.
+  load-bearing — correctness comes from re-projection. This path — `documentchange` → `index-stale` UI
+  message → `document_changed` frame → `markStale(fileKey)` — is **shared with the Change Feed**
+  ([[figma-bridge/docs/specs/change-feed|change-feed.md]]), which enriches the same frame with an
+  all-types `changes[]` + `epoch`. The `INDEX_STALE_TYPES` gate (`COMPONENT` / `COMPONENT_SET` /
+  `INSTANCE`) on the `markStale` signal **must be preserved**: the feed consumes **all** change types,
+  but the index keeps re-projecting **only** on component edits.
 - **Reconcile on connect.** A cheap membership enumerate diffed against the cache re-projects
   **added / removed / renamed** components. A property-only edit made while the plugin was *closed* is
   the one residual gap — closed by the live signal on reconnect or an explicit `reindex`.
@@ -138,12 +147,12 @@ The index is built once (a full projection) and then kept current, cheapest-mech
 
 ## Tool surface
 
-Both tools take `fileId` and obey `overview.md`'s `{error, code}` envelope.
+Both tools take `fileKey` and obey `overview.md`'s `{error, code}` envelope.
 
 | Tool | Contract | Error codes |
 |---|---|---|
-| `search_components` | `{fileId, query, type?, limit?}` → `{results, indexState, truncated}` | `INVALID_PARAM` |
-| `reindex` | `{fileId}` → force a full rebuild → `{indexState, count}` | `INVALID_PARAM` |
+| `search_components` | `{fileKey, query, type?, limit?}` → `{results, indexState, truncated}` | `INVALID_PARAM` |
+| `reindex` | `{fileKey}` → force a full rebuild → `{indexState, count}` | `INVALID_PARAM` |
 
 - `search_components` is named to avoid collision with the shipped `search` node-finder (T1: one
   concept, one name). `get_components` is the underlying scan/projection primitive that feeds the index;

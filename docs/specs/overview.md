@@ -87,6 +87,11 @@ drives one specific file with no ambiguity (B3). The lifecycle contract:
   `fileName: null` was a timing bug (the register frame was sent before the main-thread file
   name arrived); the fix carries `fileKey`+`fileName` on register (re-sending if the name
   arrives late).
+- **Addressing model (B3) — this spec is the single source of truth.** Every tool takes an
+  explicit **per-call `fileKey`** parameter naming the file it operates on (identity per B3, the
+  canonical param name everywhere); `connect` establishes the pairing/availability. The `fileKey`
+  is not server-stamped from the connection — the agent addresses files per-call. Other specs link
+  here rather than restating it.
 - **Targeting + guard (B3).** The agent names a target file by `fileKey`; the server resolves
   it against the availability registry and drives only that file's channel. An **unavailable**
   target (file closed / never matched) **fails and asks the agent to choose** — never a silent
@@ -128,7 +133,7 @@ Every call returns the MCP `ToolResult`:
 
 Errors are uniform: `{ error: string, code: ErrorCode }`, emitted as one JSON `text` block.
 
-`ErrorCode = 'NODE_NOT_FOUND' | 'INVALID_PARAM' | 'FONT_LOAD_FAILED' | 'DISCONNECTED' | 'TIMEOUT' | 'UNSUPPORTED_NODE_TYPE' | 'API_UNAVAILABLE' | 'WRONG_EDITOR'`.
+`ErrorCode = 'NODE_NOT_FOUND' | 'INVALID_PARAM' | 'FONT_LOAD_FAILED' | 'DISCONNECTED' | 'TIMEOUT' | 'UNSUPPORTED_NODE_TYPE' | 'API_UNAVAILABLE' | 'WRONG_EDITOR' | 'LIBRARY_UNPUBLISHED' | 'WRONG_FILE'`.
 
 The **server** owns the mapping — connection state plus known plugin error strings → a code —
 and adds the `code`. The plugin is unchanged this phase: it keeps returning `{ error: string }`
