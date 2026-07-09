@@ -96,8 +96,10 @@ Deliberately excluded: `stylechange` (redundant with `documentchange`), `drop`, 
 
 ## Change record & push payload
 
-Each change becomes one record. Records ride inside the **existing `document_changed` relay frame**,
-whose params today carry only `fileKey`:
+Each change becomes one record. Records ride inside the **existing `document_changed` relay frame**;
+its identity fields (`fileKey`, `epoch`) ride in **`meta`**, matching request-envelope's push shape
+`{ command, params:{changes,at}, meta:{fileKey,epoch} }`
+([[figma-bridge/docs/specs/request-envelope|request-envelope.md]]):
 
 ```
 ChangeRecord = {
@@ -113,7 +115,7 @@ ChangeRecord = {
 }
 
 // relay frame:  { command: "document_changed",
-//                 params: { fileKey, epoch, changes: ChangeRecord[], at } }
+//                 params: { changes: ChangeRecord[], at }, meta: { fileKey, epoch } }
 ```
 
 `name` is included on create/update/page because it materially helps the agent reason
@@ -121,8 +123,10 @@ ChangeRecord = {
 exposing only `id`, `type`, `removed:true`, so `name` is honestly absent there. `props[]` exists only
 on `PROPERTY_CHANGE`/`style_update` — create/delete carry no changed-property list.
 
-`epoch` is the plugin's monotonic **connection epoch** (a nonce set on each `register`/reconnect),
-used for `reset` detection (see Buffer model).
+`epoch` is the plugin's **connection nonce** (set on each `register`/reconnect), **compared for
+equality only** — a differing value means the plugin restarted — and used for `reset` detection (see
+Buffer model). It is a connection-level field owned by
+[[figma-bridge/docs/specs/request-envelope|request-envelope.md]].
 
 ## Server buffer model
 
@@ -201,7 +205,11 @@ write" is per-session: session A's edit must be filtered *for A* but is a real e
 B*. Correct handling needs the plugin to attribute each self-caused change to the **requesting
 session** and each server to drop only `source === mySessionId`. The `source` field reserves room for
 this; **v1 ships the single-session filter** (drop all plugin-caused changes — correct when one agent
-drives the file) and leaves cross-session attribution to a later revision.
+drives the file) and leaves cross-session attribution to a later revision. v1's filter therefore
+**does not key on `sessionId`** — it drops *all* plugin-caused changes without consulting it — so
+v1's **only** `sessionId` consumer is the count-file path (below); attributing changes by `sessionId`
+is the forward-compat multi-session work
+([[figma-bridge/docs/specs/request-envelope|request-envelope.md]]).
 
 ## Count mirror & the hook (plugin layer)
 
@@ -225,6 +233,24 @@ the count file is **namespaced per session**:
   debounce with the existing 300 ms.
 - The full log stays in memory; only the count touches disk.
 
+The `sessionId` written into the count-file path is the Claude Code `session_id`, injected into each
+MCP call by a **`PreToolUse` hook** (not a handoff file — mechanism owned by
+[[figma-bridge/docs/specs/request-envelope|request-envelope.md]]). The server writes
+`changes/<sanitized-fileKey>/<sessionId>.json` with that injected id; the `UserPromptSubmit` hook
+reads it with its **native** `session_id` — the same value — so no correlation dance is needed.
+
+**Fallback — no `sessionId` on the call (unattributed signal, never a silent never-on, T7).** The
+server keys this degrade on **presence, not source**: whenever a command carries **no** `sessionId`
+(the observable signal that the injecting `PreToolUse` hook is absent), it writes a **session-agnostic
+sentinel** `~/.figma-agent-bridge/changes/<sanitized-fileKey>/_unattributed.json` (same `{pendingCount,
+updatedAt}` shape) instead of a session-scoped file — otherwise the nudge would silently never fire (a
+missing file reads as `0`). The `UserPromptSubmit` hook, finding no session-scoped file for its
+`session_id`, **falls back to this sentinel** and reads it as "nudge unconditionally when pending." This
+is the concrete mechanism request-envelope's Fallback case 2 defers here — the degrade is documented,
+never a silent zero. *(Residual: if the hook is absent and a confused agent supplies a stray
+`sessionId`, the server writes `<stray>.json` rather than the sentinel and the hook misses both — a
+benign nudge misroute in the single-session model, never a data hazard.)*
+
 Flow per user turn:
 
 1. `UserPromptSubmit` hook reads the count file(s) for the session's connected `fileKey`(s).
@@ -235,8 +261,9 @@ Flow per user turn:
    buffer** (count resets to 0).
 5. The agent reasons over `user prompt + diff`, then acts or responds.
 
-*(The hook needs the `sessionId` to read the right file; the server and hook share it via a
-session-scoped identifier — mechanism flagged in Open questions.)*
+*(The hook needs the `sessionId` to read the right file; it uses its **native** `session_id` — the
+same value the `PreToolUse` hook injects into the server's calls (see Count mirror above) — so both
+sides agree on the count-file path with no handoff file or correlation step.)*
 
 ## Tool surface
 
@@ -355,8 +382,10 @@ Figma Plugin API facts that shape this design:
 2. **Buffer cap size** — the per-map limit that trades memory for how often `reset` fires on a heavy
    manual editing burst.
 3. **Self-write TTL** — starting at 2 s; tune against the POC.
-4. **Shared `sessionId`** — the concrete identifier the server and the `UserPromptSubmit` hook both
-   use to agree on the count-file path.
+4. **Shared `sessionId`** — ✅ **resolved by
+   [[figma-bridge/docs/specs/request-envelope|request-envelope.md]]:** the identifier is the Claude
+   Code `session_id`, injected into each MCP call by a `PreToolUse` hook and read natively by the
+   `UserPromptSubmit` hook (the same value) — no separate correlation mechanism.
 5. **Multi-session** — promote `source` attribution + the already-per-session count path to full
    cross-session filtering, if real usage shows two agents on one file.
 ```

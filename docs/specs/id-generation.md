@@ -91,8 +91,11 @@ export const genToken = (size = 8): string =>
   `crypto.randomUUID()`, `Math.random()` id strings, or ad-hoc char loops remain in
   application code. This is the enforceable rule: a fresh identifier is a helper call.
 - **Correlation ids (`genId`)** — the relay's system-message reply ids and
-  per-connection client id; the server's command-send and notify ids; the plugin UI's
-  relay request id and its index-stale push id.
+  per-connection client id; the server's command-send and notify ids (the request's
+  `meta.requestId` is `genId('cmd')`, per
+  [[figma-bridge/docs/specs/request-envelope|request-envelope.md]]); the plugin UI's
+  relay request id and its index-stale push id. *(The request `sessionId` is **not** minted
+  here — it is the Claude Code `session_id`, hook-injected, per request-envelope.)*
 - **Channel token (`genToken(8)`)** — the per-session channel name for a **never-saved**
   file, which has no stable `figma.fileKey`. A **saved** file's channel is
   **deterministic** (`file-${fileKey}`, see [[figma-bridge/docs/specs/component-index]]

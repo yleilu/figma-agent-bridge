@@ -38,6 +38,9 @@ diagnostic). A handshake flags both immediately.
 - **App semver, per [[figma-bridge/docs/principles|B2]]** — each side reports its **app version**
   (`APP_VERSION`, the root `package.json` semver, frozen into the build). A breaking change bumps
   the **minor**; a patch is non-breaking. There is **no** separate protocol-version constant.
+  `appVersion` is **connection-level** — reported once in the register handshake and compared
+  **major.minor** — **not** a per-request header (contrast the per-request `meta` block owned by
+  [[figma-bridge/docs/specs/request-envelope|request-envelope.md]]).
 - **Plugin reports it on register** — add `version: string` to `registerMessageSchema`
   (`packages/shared/src/ws-schemas.ts`, today `{ type, channel, fileName }`). The plugin sends its
   `APP_VERSION` on join/register.
@@ -61,10 +64,14 @@ diagnostic). A handshake flags both immediately.
 - Tool names/commands are unaffected; this rides the existing register/connect path.
 - **Per-file channels extend this same schema.** The
   [[figma-bridge/docs/specs/overview|per-file channel]] change adds **`fileKey`** to
-  `registerMessageSchema` and a **`targetFileKey`** to the command envelope (the B3 identity
-  guard) — a **breaking wire change**, so it **bumps the minor** (B2) and trips *this* handshake
-  on a mixed-version plugin/server. The relay stays semantics-free — it stores `fileKey` in the
-  availability registry but gains no logic (B1); the server owns targeting and the compare.
+  `registerMessageSchema` and a **`meta.fileKey`** to the command envelope (the B3 identity
+  guard; the `meta` envelope is owned by
+  [[figma-bridge/docs/specs/request-envelope|request-envelope.md]]) — a **breaking wire change**,
+  so it **bumps the minor** (B2) and trips *this* handshake on a mixed-version plugin/server. The
+  **`meta{}` wrapping itself** — generalizing the old flat `targetFileKey` into a `meta` block — is
+  likewise a breaking wire change → **minor bump** (B2). The relay stays semantics-free — it stores
+  `fileKey` in the availability registry but gains no logic (B1); the server owns targeting and the
+  compare.
 
 ## Testing
 

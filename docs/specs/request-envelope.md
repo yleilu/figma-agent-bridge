@@ -126,10 +126,12 @@ supports `PreToolUse` with a matcher. So:
 - The hook MUST **forcibly overwrite** any pre-existing value: emit `updatedInput: { …args, sessionId }`
   with `sessionId` written **last**. `{ sessionId, …args }` (agent value wins) is **forbidden** — the
   key order is a security rule, not incidental.
-- The server MUST treat `arguments.sessionId` as **untrusted**. It is authoritative only because the
-  hook overwrote it. When the hook's contribution cannot be relied on (the Fallback), the server
-  **unconditionally** mints/degrades and **ignores** any agent-supplied value — never "mint only if
-  absent."
+- The server cannot structurally tell a hook-injected `sessionId` from an agent-supplied one, so it
+  keys on **presence, not source**: it uses whatever `sessionId` arrives and, when **none** arrives,
+  degrades (the Fallback). Because the hook forcibly overwrites when present, the arriving value *is*
+  the hook's on the hardened path. The residual — hook absent **and** the agent supplies a stray value
+  — is a benign **count-file misroute** (a missed/false nudge, never a data hazard: it selects only a
+  count-file path and grants no access); multi-session `source` forgery is hardened forward-compat.
 - Defense-in-depth: the server is 1:1 with a CC session, so it MAY cache the first injected `sessionId`
   and ignore the arguments field thereafter for its own writes. The plugin still receives `sessionId`
   **per command** in `meta` (forward-compat multi-session attribution; the v1 plugin ignores it — its
@@ -140,12 +142,13 @@ and must never be mistaken for "quiet turn":
 
 1. **Whole hook bundle absent** (no `PreToolUse` *and* no `UserPromptSubmit`): no `sessionId` and no
    count-gated nudge at all — the count file is moot; change-feed runs without the proactive nudge.
-2. **`PreToolUse` absent but `UserPromptSubmit` present** (the path-desync case): the server has no
-   trustworthy `sessionId`, so it MUST emit an explicit **unattributed signal** the change-feed hook
-   can read as "nudge unconditionally" — never a silent zero. The exact mechanism (a session-agnostic
-   sentinel vs. a `fileKey`-level aggregate) is owned by
-   [[figma-bridge/docs/specs/change-feed|change-feed.md]]; this spec only fixes the requirement: **the
-   degrade is never a silent never-on.**
+2. **No `sessionId` on the call** (`PreToolUse` absent, `UserPromptSubmit` present): the server keys
+   the degrade on **presence** — when a command carries **no** `sessionId`, it writes an explicit
+   **unattributed signal** the change-feed hook reads as "nudge unconditionally" — never a silent
+   zero. The mechanism (a session-agnostic sentinel) is owned by
+   [[figma-bridge/docs/specs/change-feed|change-feed.md]]; this spec fixes the requirement: **the
+   degrade is never a silent never-on.** (A *stray* agent-supplied `sessionId` with the hook absent
+   routes to a wrong count file instead of the sentinel — the benign misroute noted in the Trust rule.)
 
 ## `requestId` — the server header
 
@@ -198,5 +201,5 @@ This spec is the new SSOT; the following must be aligned in the cascade (they cu
 1. **Reserved-field pass-through** — confirm at implementation that a `PreToolUse` `updatedInput`
    value for a field marked reserved (present but not model-advertised) survives MCP schema validation
    and reaches the server. (Declaring it on the schema is the hedge; verify it isn't stripped.)
-2. **Unattributed-signal mechanism** — the concrete change-feed degrade for Fallback case 2 (sentinel
-   file vs. `fileKey`-level aggregate); owned by change-feed.md.
+2. **Unattributed-signal mechanism** — RESOLVED: change-feed writes a session-agnostic sentinel
+   (`changes/<fileKey>/_unattributed.json`), read as "nudge unconditionally." See change-feed.md.

@@ -50,7 +50,9 @@ searchable, and kept current — is maintained over the file's **local** compone
   cache are keyed by `fileKey`. A
   `fileKey` resolves to the plugin connected for that file; addressing **multiple** files concurrently is
   provided by the **multi-file workspace foundation**, with which this subsystem integrates through
-  `fileKey`.
+  `fileKey`. The `fileKey` addressing model is owned by [[figma-bridge/docs/specs/overview|overview.md]];
+  its wire envelope by [[figma-bridge/docs/specs/request-envelope|request-envelope.md]] (this spec is a
+  consumer of both).
 
 ## Component taxonomy
 

@@ -90,14 +90,18 @@ drives one specific file with no ambiguity (B3). The lifecycle contract:
 - **Addressing model (B3) — this spec is the single source of truth.** Every tool takes an
   explicit **per-call `fileKey`** parameter naming the file it operates on (identity per B3, the
   canonical param name everywhere); `connect` establishes the pairing/availability. The `fileKey`
-  is not server-stamped from the connection — the agent addresses files per-call. Other specs link
+  is not server-stamped from the connection — the agent addresses files per-call. On the wire it
+  rides in the command's `meta` block — the request-metadata mechanism is owned by
+  [[figma-bridge/docs/specs/request-envelope|request-envelope.md]]. Other specs link
   here rather than restating it.
 - **Targeting + guard (B3).** The agent names a target file by `fileKey`; the server resolves
   it against the availability registry and drives only that file's channel. An **unavailable**
   target (file closed / never matched) **fails and asks the agent to choose** — never a silent
   fallback to another available file, not even the only one open. Defense-in-depth: each command
-  carries its `targetFileKey`, and the plugin **refuses to execute if `figma.fileKey` doesn't
-  match** — so a stale registry entry can never land a write in the wrong file.
+  carries its `meta.fileKey`, and the plugin **refuses to execute if `figma.fileKey` doesn't
+  match** — so a stale registry entry can never land a write in the wrong file. The command
+  envelope that carries `meta.fileKey` is defined by
+  [[figma-bridge/docs/specs/request-envelope|request-envelope.md]].
 - **`close_plugin` (internal lifecycle command, not a tool).** A relay command that calls
   `figma.closePlugin()` for a deterministic teardown, used by the dev `rebuild → close →
   reopen` reload loop so new plugin code is picked up. It is **deliberately not** an MCP tool:
