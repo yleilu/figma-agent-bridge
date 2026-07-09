@@ -1,20 +1,12 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import type { FeedbackItem } from '@figma-agent-bridge/shared'
-import { APP_VERSION } from '@figma-agent-bridge/shared'
+import { APP_VERSION, genId, genToken } from '@figma-agent-bridge/shared'
 import { deriveChannel } from '../file-channel'
 
 type RelayState = {
   status: 'disconnected' | 'connecting' | 'connected'
   channel: string | null
   error: string | null
-}
-
-const generateChannel = (): string => {
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
-
-  return Array.from({ length: 8 }, () =>
-    chars.charAt(Math.floor(Math.random() * chars.length)),
-  ).join('')
 }
 
 export const useRelay = () => {
@@ -56,7 +48,7 @@ export const useRelay = () => {
       const socket = wsRef.current
       const ch = channelRef.current
       if (!socket || !ch) return Promise.reject(new Error('Not connected'))
-      const id = crypto.randomUUID()
+      const id = genId('req')
       return new Promise((resolve, reject) => {
         feedbackPending.current.set(id, { resolve, reject })
         socket.send(
@@ -107,9 +99,7 @@ export const useRelay = () => {
               type: 'message',
               channel: staleChannel,
               message: {
-                id: `stale-${Date.now()}-${Math.floor(
-                  Math.random() * 1e9,
-                )}`,
+                id: genId('stale'),
                 command: 'document_changed',
                 params: { fileId: msg.fileKey ?? null },
               },
@@ -195,7 +185,7 @@ export const useRelay = () => {
           channel = deriveChannel(fk)
         } else {
           if (sessionChannelRef.current === null) {
-            sessionChannelRef.current = generateChannel()
+            sessionChannelRef.current = genToken(8)
           }
           channel = sessionChannelRef.current
         }
