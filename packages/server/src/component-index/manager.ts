@@ -30,6 +30,10 @@ export type GetComponents = () => Promise<{
 
 type Entry = {
   index: MiniSearch<ComponentIndexRecord>
+  // Membership fingerprint of the projected set —
+  // forward-scaffold for the spec's reconcile-on-connect
+  // gate. The shipped manager full-rebuilds on cold/stale,
+  // so this is stored, not yet read.
   membership: string
   state: IndexState
 }

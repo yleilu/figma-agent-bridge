@@ -12,8 +12,10 @@ export type ComponentIndexRecord = {
   description?: string
   variantAxes?: Record<string, string[]>
   /**
-   * content digest of the projected definitions
-   * — see computeSignature
+   * Content digest of the projected definitions (see
+   * computeSignature). Forward-scaffold for the
+   * signature-gated per-record reconcile — stamped now,
+   * consumed once reconcile ships (deferred).
    */
   signature: string
   context?: unknown

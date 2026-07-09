@@ -88,7 +88,7 @@ detected (see the registry).
 
 - **Agent-only:** match and return; the agent's LLM makes the final choice. No custom ranking — the
   search library's default ordering is surfaced as-is.
-- `search_components({ fileId, query, type?, source?, limit? })` → a bounded **top-N** (T10), scoped to
+- `search_components({ fileId, query, type?, limit? })` → a bounded **top-N** (T10), scoped to
   `fileId`. Matching is **MiniSearch** multi-field (name, description, context) with prefix + fuzzy; the
   agent re-queries with a synonym if needed.
 - The result is a **bounded ranked set, not a paginated list**: because ranking is per-query, there is
@@ -142,7 +142,7 @@ Both tools take `fileId` and obey `overview.md`'s `{error, code}` envelope.
 
 | Tool | Contract | Error codes |
 |---|---|---|
-| `search_components` | `{fileId, query, type?, source?, limit?}` → `{results, indexState, truncated}` | `INVALID_PARAM` |
+| `search_components` | `{fileId, query, type?, limit?}` → `{results, indexState, truncated}` | `INVALID_PARAM` |
 | `reindex` | `{fileId}` → force a full rebuild → `{indexState, count}` | `INVALID_PARAM` |
 
 - `search_components` is named to avoid collision with the shipped `search` node-finder (T1: one
