@@ -1,20 +1,25 @@
 // packages/shared/src/ws-schemas.ts
 import { z } from 'zod'
 
-// `command` is present on a REQUEST (server -> plugin) but omitted on a
-// RESPONSE (plugin -> server), which carries only { id, result|error }. The
-// relay is a forwarder and must accept both, so `command` is optional. (The
-// crash guard from review finding #5 is preserved by `id` + `message` being
-// required.)
+export const metaSchema = z.object({
+  // fileKey the request is addressed to (B3); null when unbound. Absent on replies.
+  fileKey: z.string().nullable().optional(),
+  // Reserved header — hook-injected session id (request-envelope.md); not used yet.
+  sessionId: z.string().optional(),
+  // genId('cmd') per request; correlates a reply to its command (pending map key).
+  requestId: z.string().optional(),
+  // Plugin connection nonce for change-feed pushes (forward-compat; not used here).
+  epoch: z.string().optional(),
+})
+
+// `command` is present on a REQUEST/PUSH (server↔plugin) but omitted on a bare
+// REPLY, which carries only { meta:{requestId}, result|error }. Every field is
+// optional: the relay is a forwarder that validates the outer channel frame,
+// and handleMessage null-guards `command`/`meta.requestId` before acting.
 export const commandMessageSchema = z.object({
-  id: z.string(),
   command: z.string().optional(),
   params: z.record(z.unknown()).optional(),
-  // Stamped by the server on every REQUEST (server -> plugin) to address the
-  // command to exactly one file (principle B3); null when no target is bound.
-  // Optional because the same envelope also carries plugin RESPONSES
-  // ({ id, result|error }), which have no target.
-  targetFileKey: z.string().nullable().optional(),
+  meta: metaSchema.optional(),
   result: z.unknown().optional(),
   error: z.string().optional(),
 })

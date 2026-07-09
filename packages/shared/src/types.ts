@@ -40,15 +40,23 @@ export type RelayOutgoing = BroadcastMessage | SystemMessage
 
 // --- Command types ---
 
+// --- Request metadata (request-envelope.md) ---
+// Rides every frame. Commands carry { fileKey, sessionId?, requestId };
+// replies carry { requestId }; pushes carry { fileKey, epoch } (change-feed,
+// forward-compat — not implemented here). Generalizes the old flat
+// targetFileKey/id.
+export type Meta = {
+  fileKey?: string | null
+  sessionId?: string
+  requestId?: string
+  epoch?: string
+}
+
 export type CommandMessage = {
-  id: string
-  // Present on a request (server -> plugin), omitted on a response
-  // (plugin -> server), which carries only { id, result|error }.
+  // Present on a request/push (server↔plugin), omitted on a bare reply.
   command?: string
   params?: Record<string, unknown>
-  // Target file the request is addressed to (B3). Optional (absent on
-  // responses); null when the server has no bound target.
-  targetFileKey?: string | null
+  meta?: Meta
   result?: unknown
   error?: string
 }
