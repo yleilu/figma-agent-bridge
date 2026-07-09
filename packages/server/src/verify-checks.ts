@@ -1447,8 +1447,13 @@ const tier3: Check[] = [
             .filter(
               (id): id is string => typeof id === 'string',
             )
-          if (kidIds[0] !== undefined) childA = kidIds[0]
-          if (kidIds[1] !== undefined) childB = kidIds[1]
+          const [firstKid, secondKid] = kidIds
+          if (firstKid !== undefined) {
+            childA = firstKid
+          }
+          if (secondKid !== undefined) {
+            childB = secondKid
+          }
         }
       }
 
