@@ -55,7 +55,7 @@ export const useRelay = () => {
           JSON.stringify({
             type: 'message',
             channel: ch,
-            message: { id, command, params },
+            message: { command, params, meta: { requestId: id } },
           }),
         )
       })
@@ -88,8 +88,11 @@ export const useRelay = () => {
       }
 
       // Unsolicited freshness push: the component index on the server marks
-      // this file stale. Not a command reply — carries a command the server
-      // handles (document_changed), no id/target guard needed (plugin→server).
+      // this file stale. This is a PUSH, not a request — it carries a command
+      // the server handles (document_changed) but NO meta and NO requestId, so
+      // the server dispatches it by command + params.fileId and sends back no
+      // reply (a reply would fan a stray frame to every joined channel). No
+      // id/target guard needed (plugin→server, unsolicited).
       if (msg.type === 'index-stale') {
         const staleWs = wsRef.current
         const staleChannel = channelRef.current
@@ -99,7 +102,6 @@ export const useRelay = () => {
               type: 'message',
               channel: staleChannel,
               message: {
-                id: genId('stale'),
                 command: 'document_changed',
                 params: { fileId: msg.fileKey ?? null },
               },
@@ -121,7 +123,11 @@ export const useRelay = () => {
             type: 'message',
             channel,
             message: {
-              id: msg.id,
+              // Echo the command's requestId in meta so the server correlates
+              // this reply to its pending command. msg.id here is the internal
+              // command-result id, which was seeded from meta.requestId when the
+              // inbound command was forwarded to the sandbox below.
+              meta: { requestId: msg.id },
               result: msg.result,
             },
           }),
@@ -246,7 +252,9 @@ export const useRelay = () => {
               return
             }
 
-            const replyId = msg.id as string | undefined
+            const replyId = (
+              msg.meta as { requestId?: string } | undefined
+            )?.requestId
             if (
               !msg.command &&
               replyId &&
@@ -262,20 +270,25 @@ export const useRelay = () => {
             }
 
             if (msg.command) {
+              // The command's identity rides in meta (request-envelope.md):
+              // requestId correlates the reply, fileKey is the B3 target the
+              // sandbox guards against. Forward both into the internal
+              // execute-command message (whose fields keep their names).
+              const meta = msg.meta as
+                | { requestId?: string; fileKey?: string | null }
+                | undefined
               parent.postMessage(
                 {
                   pluginMessage: {
                     type: 'execute-command',
-                    id: msg.id,
+                    id: meta?.requestId,
                     command: msg.command,
                     params:
                       (msg.params as Record<
                         string,
                         unknown
                       >) ?? {},
-                    targetFileKey:
-                      (msg.targetFileKey as
-                        string | null | undefined) ?? null,
+                    targetFileKey: meta?.fileKey ?? null,
                   },
                 },
                 '*',
