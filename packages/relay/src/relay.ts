@@ -193,6 +193,8 @@ const handleRegister = (
   fileName: string | null,
   fileKey: string | null,
   version: string | undefined,
+  currentPage?: string,
+  selected?: number,
 ) => {
   if (
     ctx.clientChannels.get(ws.data.id)?.has(channel) !==
@@ -205,6 +207,36 @@ const handleRegister = (
     entry.fileName = fileName
     entry.fileKey = fileKey
     entry.version = version
+    if (currentPage !== undefined) {
+      entry.currentPage = currentPage
+    }
+    if (selected !== undefined) {
+      entry.selected = selected
+    }
+  }
+}
+
+const handlePresence = (
+  ctx: RelayContext,
+  ws: ServerWebSocket<WsData>,
+  channel: string,
+  currentPage?: string,
+  selected?: number,
+) => {
+  if (
+    ctx.clientChannels.get(ws.data.id)?.has(channel) !==
+    true
+  ) {
+    return
+  }
+  const entry = ctx.channelRegistry.get(channel)
+  if (entry !== undefined) {
+    if (currentPage !== undefined) {
+      entry.currentPage = currentPage
+    }
+    if (selected !== undefined) {
+      entry.selected = selected
+    }
   }
 }
 
@@ -325,6 +357,16 @@ export const startRelay = (
             frame.fileName,
             frame.fileKey ?? null,
             frame.version,
+            frame.currentPage,
+            frame.selected,
+          )
+        } else if (frame.type === 'presence') {
+          handlePresence(
+            ctx,
+            ws,
+            frame.channel,
+            frame.currentPage,
+            frame.selected,
           )
         } else if (frame.type === 'message') {
           handleMessage(ctx, ws, frame.channel, frame)
