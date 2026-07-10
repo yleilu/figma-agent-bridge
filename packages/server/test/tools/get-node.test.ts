@@ -8,7 +8,7 @@ import { describe, expect, it } from 'bun:test'
 import YAML from 'yaml'
 import { handleGetNode } from '@figma-agent-bridge/server/tools/read'
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
 import cardFixture from '../fixtures/card-node-raw.json'
 
 type Sent = {
@@ -17,11 +17,10 @@ type Sent = {
 }
 
 const stubClient = (opts: {
-  connected?: boolean
   reply?: unknown
   sent?: Sent[]
-}): FigmaClient => ({
-  joinChannel: async () => 'ch',
+}): ScopedFigmaClient => ({
+  fileKey: 'fk-test',
   sendCommand: async (
     command: string,
     params?: Record<string, unknown>,
@@ -29,22 +28,9 @@ const stubClient = (opts: {
     opts.sent?.push({ command, params })
     return opts.reply ?? null
   },
-  disconnect: () => {},
-  isConnected: () => opts.connected ?? true,
-  currentChannel: () => 'ch',
 })
 
 describe('handleGetNode (rebuilt — NodeSpec)', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleGetNode(
-      { nodeId: '1:42' },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('sends COMMANDS.GET_NODE with {nodeId, depth}', async () => {
     const sent: Sent[] = []
     await handleGetNode(
@@ -120,13 +106,10 @@ describe('handleGetNode (rebuilt — NodeSpec)', () => {
   })
 
   it('maps a thrown plugin error to a tool-formatted message', async () => {
-    const client: FigmaClient = {
-      joinChannel: async () => '',
+    const client: ScopedFigmaClient = {
+      fileKey: 'fk-test',
       sendCommand: () =>
         Promise.reject(new Error('plugin exploded')),
-      disconnect: () => {},
-      isConnected: () => true,
-      currentChannel: () => 'ch',
     }
     const result = await handleGetNode(
       { nodeId: '1:42' },

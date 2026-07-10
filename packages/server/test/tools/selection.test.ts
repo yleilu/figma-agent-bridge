@@ -11,7 +11,7 @@ import {
   handleSetSelection,
 } from '@figma-agent-bridge/server/tools/selection'
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
 
 type Sent = {
   command: string
@@ -19,11 +19,10 @@ type Sent = {
 }
 
 const stubClient = (opts: {
-  connected?: boolean
   reply?: unknown
   sent?: Sent[]
-}): FigmaClient => ({
-  joinChannel: async () => 'ch',
+}): ScopedFigmaClient => ({
+  fileKey: 'fk-test',
   sendCommand: async (
     command: string,
     params?: Record<string, unknown>,
@@ -31,24 +30,13 @@ const stubClient = (opts: {
     opts.sent?.push({ command, params })
     return opts.reply ?? null
   },
-  disconnect: () => {},
-  isConnected: () => opts.connected ?? true,
-  currentChannel: () => 'ch',
 })
 
 describe('handleGetSelection', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleGetSelection(
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('sends COMMANDS.GET_SELECTION', async () => {
     const sent: Sent[] = []
     await handleGetSelection(
+      {},
       stubClient({ sent, reply: [] }),
     )
     expect(sent[0].command).toBe(COMMANDS.GET_SELECTION)
@@ -56,6 +44,7 @@ describe('handleGetSelection', () => {
 
   it('emits the [{id,name,type}] list as YAML', async () => {
     const result = await handleGetSelection(
+      {},
       stubClient({
         reply: [
           { id: '1:1', name: 'Card', type: 'FRAME' },
@@ -78,6 +67,7 @@ describe('handleGetSelection', () => {
 
   it('returns a failure message when the plugin returns null', async () => {
     const result = await handleGetSelection(
+      {},
       stubClient({ reply: null }),
     )
     expect(result.content[0].text).toContain('Failed')
@@ -85,16 +75,6 @@ describe('handleGetSelection', () => {
 })
 
 describe('handleSetSelection', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleSetSelection(
-      { nodeIds: ['1:1'] },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('sends COMMANDS.SET_SELECTION with {nodeIds}', async () => {
     const sent: Sent[] = []
     await handleSetSelection(

@@ -7,6 +7,22 @@ import { z } from 'zod'
 // versions; the live server now imports the canonical NodeSpec-based shapes
 // from `tool-params.ts`, so those were retired here in M3-E.
 export const createFromSvgParamsSchema = z.object({
+  // fileKey + sessionId MIRROR fileTargetParamsSchema (tool-params.ts); inlined
+  // here rather than spread because this module is barrel-exported and importing
+  // tool-params.ts would reintroduce a barrel-export cycle. Keep the two
+  // describe() strings in sync with the mixin's.
+  fileKey: z
+    .string()
+    .min(1)
+    .describe(
+      'Stable Figma fileKey of the file this call operates on (from status/connect available[]). Required — the server never guesses which file (B3).',
+    ),
+  sessionId: z
+    .string()
+    .optional()
+    .describe(
+      'Reserved — server-managed. Do NOT set. Injected by the session PreToolUse hook (request-envelope.md); ignored by this surface today.',
+    ),
   parentId: z
     .string()
     .describe(

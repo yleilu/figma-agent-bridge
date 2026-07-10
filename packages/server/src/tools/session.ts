@@ -1,8 +1,4 @@
-import {
-  COMMANDS,
-  APP_VERSION,
-  majorMinor,
-} from '@figma-agent-bridge/shared'
+import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { ChannelInfo } from '@figma-agent-bridge/shared'
 import type { FigmaClient } from '../figma-client'
 import { discoverChannels } from '../figma-client'
@@ -11,32 +7,9 @@ import {
   type ToolResult,
   textResult,
   errorMessage,
+  protocolMismatch,
+  synthKey,
 } from './shared'
-
-// Returns an actionable error if the channel's plugin reports a version whose
-// major.minor differs from the server's (a breaking difference, per B2), else null.
-// `undefined` info (channel not in the registry) → no error (best-effort); a plugin
-// that reports no version at all is treated as incompatible.
-const protocolMismatch = (
-  info: ChannelInfo | undefined,
-): string | null => {
-  if (info === undefined) {
-    return null
-  }
-  const theirs = info.version
-  if (
-    theirs !== undefined &&
-    majorMinor(theirs) === majorMinor(APP_VERSION)
-  ) {
-    return null
-  }
-  const got = theirs ?? '(none)'
-  return (
-    `Figma plugin version '${got}' is incompatible with server version ` +
-    `'${APP_VERSION}' (major.minor mismatch) — reinstall/update the Figma plugin ` +
-    `(or update the MCP server if it is the older side).`
-  )
-}
 
 // --- target resolution (B3): match a connect request to exactly ONE file ---
 // fileKey is the stable identity and wins; fileName is the fallback; with
@@ -110,16 +83,19 @@ const askMessage = (
   )
 }
 
-// The registry snapshot returned to the agent on connect + status.
+// The registry snapshot returned to the agent on connect + status. Each entry's
+// fileKey is the SYNTHETIC key (synthKey): a saved file exposes its real
+// figma.fileKey, an unsaved file (fileKey === null) is surfaced as its session
+// channel so the agent can read AND address it (requireFile auto-joins by it).
 const availableView = (
   available: ChannelInfo[],
 ): {
-  fileKey: string | null
+  fileKey: string
   fileName: string | null
   connectedAt: number
 }[] =>
   available.map(c => ({
-    fileKey: c.fileKey,
+    fileKey: synthKey(c),
     fileName: c.fileName,
     connectedAt: c.connectedAt,
   }))
@@ -160,19 +136,26 @@ export const handleConnect = async (
     if (relayHttpUrl !== undefined) {
       available = await discoverChannels(relayHttpUrl)
       info = available.find(c => c.channel === channel)
-      const mismatch = protocolMismatch(info)
-      if (mismatch !== null) {
-        return textResult(mismatch)
+      // Only version-check a channel the registry actually knows: a discovered
+      // channel gets the B2 gate, but a raw explicit channel absent from
+      // /channels is the deliberate escape hatch — join it, don't misreport it
+      // as a '(none)' version skew (an unregistered channel ≠ a version mismatch).
+      if (info !== undefined) {
+        const mismatch = protocolMismatch(info.version)
+        if (mismatch !== null) {
+          return textResult(mismatch)
+        }
       }
     }
     try {
-      await client.joinChannel(
-        channel,
-        info?.fileKey ?? null,
-      )
+      // A never-registered channel (no discovery) is addressed by its own
+      // channel as the synthetic fileKey; a discovered one uses synthKey(info).
+      const joinedKey =
+        info !== undefined ? synthKey(info) : channel
+      await client.joinChannel(channel, joinedKey)
       return connectResult({
         channel,
-        fileKey: info?.fileKey ?? null,
+        fileKey: joinedKey,
         fileName: info?.fileName ?? null,
         available,
       })
@@ -216,16 +199,16 @@ export const handleConnect = async (
   }
 
   const { info } = resolution
-  const mismatch = protocolMismatch(info)
+  const mismatch = protocolMismatch(info.version)
   if (mismatch !== null) {
     return textResult(mismatch)
   }
 
   try {
-    await client.joinChannel(info.channel, info.fileKey)
+    await client.joinChannel(info.channel, synthKey(info))
     return connectResult({
       channel: info.channel,
-      fileKey: info.fileKey,
+      fileKey: synthKey(info),
       fileName: info.fileName,
       available,
     })
@@ -234,75 +217,84 @@ export const handleConnect = async (
   }
 }
 
+// Per-file live-context reads run in parallel and are BEST-EFFORT, so bound each
+// so status never blocks on an unresponsive plugin (default command timeout is
+// 30s — far too long for a status probe that degrades to "no live context").
+const STATUS_LIVE_TIMEOUT_MS = 2500
+
 /**
- * status() → { connected, fileKey, fileName, channel, available[],
- *              protocolVersion, currentPage, selection[], viewport }.
+ * status() → { connected, joined[], available[] } where each joined entry is
+ * { fileKey, fileName, channel, protocolVersion, currentPage, selection[],
+ *   viewport }.
  *
- * Connection identity (fileKey/channel) is known SERVER-side (fileKey from the
- * client's join target); fileName + protocolVersion + available[] come from the
- * relay registry (/channels); the LIVE context (currentPage / selection /
- * viewport) is read from the plugin via COMMANDS.STATUS and merged in. The live
- * read is best-effort: a failed round-trip still reports connection state (never
- * a throw, never a hallucinated context).
+ * Reports EVERY joined file (multi-file, B3) — not a single currentFileKey. The
+ * connection identity (fileKey/channel) is known SERVER-side; fileName +
+ * protocolVersion + available[] come from the relay registry (/channels); the
+ * LIVE context (currentPage / selection / viewport) is read PER FILE from its
+ * plugin via COMMANDS.STATUS and merged in. Each live read is best-effort and
+ * bounded: a failed/slow round-trip still reports connection state for that file
+ * (never a throw, never a hallucinated context).
  */
 export const handleStatus = async (
   client: FigmaClient,
   relayHttpUrl?: string,
 ): Promise<ToolResult> => {
-  if (!client.isConnected()) {
+  const files = client.joinedFiles()
+  if (files.length === 0) {
     return textResult('disconnected')
   }
-  const channel = client.currentChannel()
-  const fileKey = client.currentFileKey()
 
-  let fileName: string | null = null
-  let protocolVersion: string | undefined
-  let available: {
-    fileKey: string | null
-    fileName: string | null
-    connectedAt: number
-  }[] = []
+  let available: ReturnType<typeof availableView> = []
+  let infos: ChannelInfo[] = []
   if (relayHttpUrl !== undefined) {
-    const infos = await discoverChannels(relayHttpUrl)
+    infos = await discoverChannels(relayHttpUrl)
     available = availableView(infos)
-    const mine = infos.find(
-      c => channel !== null && c.channel === channel,
-    )
-    fileName = mine?.fileName ?? null
-    protocolVersion = mine?.version
   }
 
-  let live: {
-    currentPage?: { id: string; name: string }
-    selection?: { id: string; name: string; type: string }[]
-    viewport?: {
-      center: { x: number; y: number }
-      zoom: number
-    }
-  } = {}
-  try {
-    const raw = (await client.sendCommand(
-      COMMANDS.STATUS,
-      {},
-    )) as typeof live | null
-    if (raw !== null && typeof raw === 'object') {
-      live = raw
-    }
-  } catch {
-    // Best-effort: a failed live-context read still reports connection state.
-  }
+  // One best-effort live read PER joined file (never throws — a failed round
+  // trip still reports connection state, never a hallucinated context).
+  const joined = await Promise.all(
+    files.map(async fileKey => {
+      const channel = client.channelFor(fileKey)
+      const mine = infos.find(c => synthKey(c) === fileKey)
+      let live: {
+        currentPage?: { id: string; name: string }
+        selection?: {
+          id: string
+          name: string
+          type: string
+        }[]
+        viewport?: {
+          center: { x: number; y: number }
+          zoom: number
+        }
+      } = {}
+      try {
+        const raw = (await client.sendCommand(
+          fileKey,
+          COMMANDS.STATUS,
+          {},
+          STATUS_LIVE_TIMEOUT_MS,
+        )) as typeof live | null
+        if (raw !== null && typeof raw === 'object') {
+          live = raw
+        }
+      } catch {
+        // Best-effort per file.
+      }
+      return {
+        fileKey,
+        fileName: mine?.fileName ?? null,
+        channel,
+        protocolVersion: mine?.version,
+        currentPage: live.currentPage,
+        selection: live.selection,
+        viewport: live.viewport,
+      }
+    }),
+  )
 
   return textResult(
-    JSON.stringify({
-      connected: true,
-      fileKey,
-      fileName,
-      channel,
-      available,
-      protocolVersion,
-      currentPage: live.currentPage,
-      selection: live.selection,
-      viewport: live.viewport,
-    }),
+    JSON.stringify({ connected: true, joined, available }),
   )
 }

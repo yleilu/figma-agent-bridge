@@ -12,7 +12,7 @@
 // throw and never a silent no-op.
 
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '../figma-client'
+import type { ScopedFigmaClient } from '../figma-client'
 import {
   type StyleCategory,
   HEX_RE,
@@ -23,7 +23,6 @@ import {
 } from '../serialize/value-convert'
 import {
   type ToolResult,
-  requireConnected,
   formatMutationResult,
   errorMessage,
   textResult,
@@ -60,13 +59,8 @@ export const handleCreateVariables = async (
     modes?: string[]
     variables: CreateVariableSpec[]
   },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     // Parse COLOR valuesByMode to {r,g,b[,a]}; other types pass through.
     // aliases / scopes / codeSyntax / hiddenFromPublishing forward as-is (the
@@ -135,13 +129,8 @@ export const handleUpdateVariables = async (
     renameModes?: { from: string; to: string }[]
     variables?: UpdateVariableSpec[]
   },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     // Parse COLOR value edits to {r,g,b[,a]}. The variable's resolved type is
     // not known here, so a value matching a hex atom is parsed; non-hex values
@@ -211,13 +200,8 @@ type CreateStyleSpec = {
  */
 export const handleCreateStyles = async (
   { styles }: { styles: CreateStyleSpec[] },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   // Convert each entry's atom server-side, in array order. A malformed atom is
   // recorded as that entry's error and NOT sent to the plugin.
   const converted: ({
@@ -316,13 +300,8 @@ type UpdateStyleSpec = {
  */
 export const handleUpdateStyles = async (
   { styles }: { styles: UpdateStyleSpec[] },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   // Convert each entry's value atom (if any) server-side, in array order. A
   // malformed atom is recorded as that entry's error and NOT sent to the plugin.
   const converted: (Record<string, unknown> | null)[] = []
@@ -408,13 +387,8 @@ export const handleApplyStyle = async (
     styleId: string
     field: string
   },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const result = (await client.sendCommand(
       COMMANDS.APPLY_STYLE,

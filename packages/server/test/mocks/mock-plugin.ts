@@ -1941,22 +1941,22 @@ export const createMockPlugin = (
     socket: WebSocket,
     cmd: CommandMessage,
   ): void => {
+    const requestId = cmd.meta?.requestId
     // B3 identity guard (mirrors the real plugin's code.ts, via the same
-    // shared isTargetMismatch/targetGuardError): a command addressed to a
-    // DIFFERENT file is refused with a byte-identical typed error and NOT
+    // shared isTargetMismatch/targetGuardError): a command whose meta.fileKey ≠
+    // this plugin's fileKey is refused with a byte-identical typed error and NOT
     // executed. Only fires when this plugin knows its own fileKey AND the
-    // command carries a target — when either is null the guard can't verify
-    // and degrades honestly (executes), faithful to the undefined-figma.fileKey
-    // path.
-    if (isTargetMismatch(fileKey, cmd.targetFileKey)) {
+    // command carries a target — when either is null the guard can't verify and
+    // degrades honestly (executes), faithful to the undefined-figma.fileKey path.
+    if (isTargetMismatch(fileKey, cmd.meta?.fileKey)) {
       const refusal: ChannelMessage = {
         type: 'message',
         channel,
         message: {
-          id: cmd.id,
+          meta: { requestId },
           result: {
             error: targetGuardError(
-              String(cmd.targetFileKey),
+              String(cmd.meta?.fileKey),
               String(fileKey),
             ),
           },
@@ -1967,17 +1967,17 @@ export const createMockPlugin = (
     }
 
     const { result, error } = runCommand(
-      cmd.command,
+      cmd.command!,
       cmd.params,
     )
 
-    // The real Figma plugin replies with { id, result|error } and NO command
-    // (see figma-plugin/src/hooks/useRelay.ts). Mirror that here so the mock
-    // exercises the real response shape through the relay's frame validation.
+    // The real Figma plugin replies with { meta:{requestId}, result|error } and
+    // NO command (see figma-plugin/src/hooks/useRelay.ts). Mirror that here so
+    // the mock exercises the real response shape through the relay's validation.
     const resolved: CommandMessage =
       error !== undefined
-        ? { id: cmd.id, error }
-        : { id: cmd.id, result }
+        ? { meta: { requestId }, error }
+        : { meta: { requestId }, result }
 
     const reply: ChannelMessage = {
       type: 'message',

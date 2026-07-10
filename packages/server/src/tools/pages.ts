@@ -9,24 +9,18 @@
 // error, otherwise JSON.stringify of the plugin reply.
 
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '../figma-client'
+import type { ScopedFigmaClient } from '../figma-client'
 import {
   type ToolResult,
   textResult,
-  requireConnected,
   formatMutationResult,
   errorMessage,
 } from './shared'
 
 export const handleCreatePage = async (
   { name }: { name: string },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const result = (await client.sendCommand(
       COMMANDS.CREATE_PAGE,
@@ -43,13 +37,8 @@ export const handleCreatePage = async (
 
 export const handleSetCurrentPage = async (
   { pageId }: { pageId: string },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const result = (await client.sendCommand(
       COMMANDS.SET_CURRENT_PAGE,
@@ -66,13 +55,8 @@ export const handleSetCurrentPage = async (
 
 export const handleDuplicatePage = async (
   { pageId, name }: { pageId: string; name?: string },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const result = (await client.sendCommand(
       COMMANDS.DUPLICATE_PAGE,

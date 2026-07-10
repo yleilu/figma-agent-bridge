@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'bun:test'
 import YAML from 'yaml'
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
 import {
   handleGetStyles,
   handleGetComponents,
@@ -20,11 +20,10 @@ type Sent = {
 }
 
 const stubClient = (opts: {
-  connected?: boolean
   reply?: unknown
   sent?: Sent[]
-}): FigmaClient => ({
-  joinChannel: async () => 'ch',
+}): ScopedFigmaClient => ({
+  fileKey: 'fk-test',
   sendCommand: async (
     command: string,
     params?: Record<string, unknown>,
@@ -32,9 +31,6 @@ const stubClient = (opts: {
     opts.sent?.push({ command, params })
     return opts.reply ?? null
   },
-  disconnect: () => {},
-  isConnected: () => opts.connected ?? true,
-  currentChannel: () => 'ch',
 })
 
 const stylesReply = {
@@ -88,16 +84,6 @@ const stylesReply = {
 }
 
 describe('handleGetStyles', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleGetStyles(
-      {},
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.GET_STYLES with {type,id}', async () => {
     const sent: Sent[] = []
     await handleGetStyles(
@@ -383,16 +369,6 @@ describe('handleGetComponents', () => {
       { key: 'remote-key', name: 'Icon', library: 'Lib' },
     ],
   }
-
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleGetComponents(
-      {},
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
 
   it('forwards COMMANDS.GET_COMPONENTS', async () => {
     const sent: Sent[] = []
@@ -771,16 +747,6 @@ describe('handleListFonts', () => {
       { family: 'Roboto', styles: ['Regular'] },
     ],
   }
-
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleListFonts(
-      {},
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
 
   it('forwards COMMANDS.LIST_FONTS and emits Rule-A results', async () => {
     const sent: Sent[] = []

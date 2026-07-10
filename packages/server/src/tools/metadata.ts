@@ -8,12 +8,11 @@
 
 import YAML from 'yaml'
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '../figma-client'
+import type { ScopedFigmaClient } from '../figma-client'
 import { paginateList, CursorError } from '../read/paginate'
 import {
   type ToolResult,
   textResult,
-  requireConnected,
   formatMutationResult,
   errorMessage,
   cursorRejected,
@@ -36,13 +35,8 @@ export const handleGetReactions = async (
     limit,
     cursor,
   }: { nodeId: string; limit?: number; cursor?: string },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const raw = (await client.sendCommand(
       COMMANDS.GET_REACTIONS,
@@ -113,13 +107,8 @@ export const handleGetPluginData = async (
     nodeId,
     namespace,
   }: { nodeId: string; namespace?: string },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const raw = (await client.sendCommand(
       COMMANDS.GET_PLUGIN_DATA,
@@ -180,13 +169,8 @@ export const handleGetAnnotations = async (
     limit,
     cursor,
   }: { nodeId?: string; limit?: number; cursor?: string },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const raw = (await client.sendCommand(
       COMMANDS.GET_ANNOTATIONS,
@@ -262,13 +246,8 @@ export const handleSetPluginData = async (
     value: string
     namespace?: string
   },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const result = (await client.sendCommand(
       COMMANDS.SET_PLUGIN_DATA,
@@ -297,13 +276,8 @@ export const handleSetReactions = async (
     nodeId,
     reactions,
   }: { nodeId: string; reactions: unknown[] },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const result = (await client.sendCommand(
       COMMANDS.SET_REACTIONS,
@@ -331,13 +305,8 @@ export const handleSetAnnotations = async (
     nodeId,
     annotations,
   }: { nodeId: string; annotations: unknown[] },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const result = (await client.sendCommand(
       COMMANDS.SET_ANNOTATIONS,

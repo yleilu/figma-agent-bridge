@@ -11,7 +11,7 @@
 import { describe, expect, it } from 'bun:test'
 import { handleCreateNode } from '@figma-agent-bridge/server/tools/create-node'
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
 
 type Sent = {
   command: string
@@ -19,11 +19,10 @@ type Sent = {
 }
 
 const stubClient = (opts: {
-  connected?: boolean
   reply?: unknown
   sent?: Sent[]
-}): FigmaClient => ({
-  joinChannel: async () => 'ch',
+}): ScopedFigmaClient => ({
+  fileKey: 'fk-test',
   sendCommand: async (
     command: string,
     params?: Record<string, unknown>,
@@ -38,22 +37,9 @@ const stubClient = (opts: {
       }
     )
   },
-  disconnect: () => {},
-  isConnected: () => opts.connected ?? true,
-  currentChannel: () => 'ch',
 })
 
 describe('handleCreateNode (rebuilt — single NodeSpec)', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleCreateNode(
-      { spec: { type: 'FRAME' } },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('sends COMMANDS.CREATE_NODE with {spec, parentId}', async () => {
     const sent: Sent[] = []
     await handleCreateNode(
@@ -220,13 +206,10 @@ describe('handleCreateNode (rebuilt — single NodeSpec)', () => {
   })
 
   it('maps a thrown plugin error to a tool-formatted message', async () => {
-    const client: FigmaClient = {
-      joinChannel: async () => '',
+    const client: ScopedFigmaClient = {
+      fileKey: 'fk-test',
       sendCommand: () =>
         Promise.reject(new Error('plugin exploded')),
-      disconnect: () => {},
-      isConnected: () => true,
-      currentChannel: () => 'ch',
     }
     const result = await handleCreateNode(
       { spec: { type: 'FRAME' } },

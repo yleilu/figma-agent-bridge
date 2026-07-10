@@ -23,7 +23,7 @@ import type {
   Profile,
 } from '@figma-agent-bridge/shared/read-model'
 import type { NodeSpec } from '@figma-agent-bridge/shared/node-spec'
-import type { FigmaClient } from '../figma-client'
+import type { ScopedFigmaClient } from '../figma-client'
 import { buildMatcher } from '../read/match'
 import { projectNode } from '../read/project'
 import { contextSummaryOf } from '../read/context-summary'
@@ -31,7 +31,6 @@ import { paginateList, CursorError } from '../read/paginate'
 import {
   type ToolResult,
   textResult,
-  requireConnected,
   errorMessage,
   cursorRejected,
 } from './shared'
@@ -98,13 +97,8 @@ export const handleSearch = async (
     limit?: number
     cursor?: string
   },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     // The plugin scans the scope and returns flat candidate nodes (it does NOT
     // match/project/paginate — that is the server's job below). `depth` bounds

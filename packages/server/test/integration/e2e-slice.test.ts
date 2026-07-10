@@ -21,8 +21,10 @@ import {
   stopRelay,
 } from '@figma-agent-bridge/relay/relay'
 import { createFigmaClient } from '@figma-agent-bridge/server/figma-client'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
-import { handleConnect } from '@figma-agent-bridge/server/tools/session'
+import type {
+  FigmaClient,
+  ScopedFigmaClient,
+} from '@figma-agent-bridge/server/figma-client'
 import {
   handleGetNode,
   handleGetNodes,
@@ -63,10 +65,12 @@ import { createMockPlugin } from '../mocks/mock-plugin'
 const TEST_PORT = 3101
 const RELAY_URL = `ws://localhost:${TEST_PORT}`
 const TEST_CHANNEL = 'e2e-slice-channel'
+const FK = 'fk-slice'
 
 describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   let server: Server<{ id: string }>
   let client: FigmaClient
+  let scoped: ScopedFigmaClient
   let plugin: ReturnType<typeof createMockPlugin> | null =
     null
 
@@ -78,9 +82,11 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
       channel: TEST_CHANNEL,
       documentName: 'Slice Doc',
       pageName: 'Main',
+      fileKey: FK,
     })
     await plugin.start()
-    await handleConnect({ channel: TEST_CHANNEL }, client)
+    await client.joinChannel(TEST_CHANNEL, FK)
+    scoped = client.forFile(FK)
   })
 
   afterEach(() => {
@@ -96,7 +102,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('get_node emits a NodeSpec with atom fills and child id-stubs', async () => {
     const result = await handleGetNode(
       { nodeId: '1:42', depth: 0 },
-      client,
+      scoped,
     )
     const spec = YAML.parse(
       result.content[0].text,
@@ -119,7 +125,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('inspect returns a truncation receipt under a tight budget', async () => {
     const result = await handleInspect(
       { nodeId: '1:42', budget: 50 },
-      client,
+      scoped,
     )
     const out = YAML.parse(result.content[0].text) as {
       view: Record<string, unknown>
@@ -136,7 +142,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('inspect with no budget + no depth defaults to depth=0', async () => {
     const result = await handleInspect(
       { nodeId: '1:42' },
-      client,
+      scoped,
     )
     const out = YAML.parse(result.content[0].text) as {
       view: { children: { childCount: number }[] }
@@ -151,7 +157,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     // Read the node as a NodeSpec.
     const read = await handleGetNode(
       { nodeId: '1:42', depth: 0 },
-      client,
+      scoped,
     )
     const spec = YAML.parse(read.content[0].text) as {
       fills: string[]
@@ -164,7 +170,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     // resolve to a literal anyway by the documented T2 asymmetry.)
     const updated = await handleUpdateNode(
       { nodeId: '1:42', patch: { fills: ['#FF0000'] } },
-      client,
+      scoped,
     )
 
     // The mock echoes the CONVERTED spec (Figma objects, not atom strings), so
@@ -182,7 +188,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('update_node forwards a parsed SOLID paint to the plugin (converted, not atom)', async () => {
     const result = await handleUpdateNode(
       { nodeId: '1:42', patch: { fills: ['#00FF00'] } },
-      client,
+      scoped,
     )
     const reply = JSON.parse(result.content[0].text) as {
       spec: { fills: { type: string; color: unknown }[] }
@@ -211,7 +217,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
           },
         },
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const reply = JSON.parse(result.content[0].text) as {
@@ -231,7 +237,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
         nodeId: 'incompat:1',
         patch: { sizing: ['FILL', 'FILL'] },
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const reply = JSON.parse(result.content[0].text) as {
@@ -251,7 +257,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
         nodeId: 'incompat:1',
         patch: { opacity: 0.5 },
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const reply = JSON.parse(result.content[0].text) as {
@@ -279,7 +285,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
         nodeId: 'incompat:1',
         patch: { constraints: ['MIN', 'STRETCH'] },
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const reply = JSON.parse(result.content[0].text) as {
@@ -305,7 +311,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
         variableId: 'degrade:var',
         field: 'fills',
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     expect(result.content[0].text).toContain(
@@ -323,7 +329,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
         variableId: 'degrade:var',
         field: 'itemSpacing',
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const { text } = result.content[0]
@@ -341,7 +347,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
         variableId: 'var:123',
         field: 'itemSpacing',
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const data = JSON.parse(result.content[0].text) as {
@@ -360,7 +366,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
         variableId: 'err:missing',
         field: 'fills',
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).toContain('Error')
     expect(result.content[0].text).toContain(
@@ -371,7 +377,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   // 6 — bind_variable happy + read-back shows var()
   it('bind_variable happy path + read-back shows the var(...) wrapper atom', async () => {
     // get_variables → pick a variable id.
-    const vars = await handleGetVariables({}, client)
+    const vars = await handleGetVariables({}, scoped)
     expect(vars.content[0].text).toContain('Brand/Primary')
 
     // bind (happy path — no err:/degrade: prefix).
@@ -381,7 +387,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
         variableId: 'var:123',
         field: 'fills',
       },
-      client,
+      scoped,
     )
     expect(bind.content[0].text).not.toContain('Error:')
 
@@ -389,7 +395,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     // (the card fixture's fill carries boundVariables.color → var:123).
     const read = await handleGetNode(
       { nodeId: '1:42', depth: 0 },
-      client,
+      scoped,
     )
     const spec = YAML.parse(read.content[0].text) as {
       fills: string[]
@@ -412,7 +418,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
         },
         parentId: 'page:1',
       },
-      client,
+      scoped,
     )
     const reply = JSON.parse(result.content[0].text) as {
       id: string
@@ -445,7 +451,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
         },
         parentId: 'page:1',
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).toContain('create_tree')
   })
@@ -459,7 +465,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
         spec: { type: 'SLOT', name: 'Slot' },
         parentId: 'page:1',
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const reply = JSON.parse(result.content[0].text) as {
@@ -476,7 +482,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('search applies the name match server-side', async () => {
     const result = await handleSearch(
       { match: { name: 'Card' } },
-      client,
+      scoped,
     )
     const out = YAML.parse(result.content[0].text) as {
       results: { name: string; type: string }[]
@@ -491,7 +497,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('search applies a match.type array (any-of) server-side', async () => {
     const result = await handleSearch(
       { match: { type: ['TEXT', 'INSTANCE'] } },
-      client,
+      scoped,
     )
     const out = YAML.parse(result.content[0].text) as {
       results: { type: string }[]
@@ -505,7 +511,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
 
   // 11 — search pagination: a tight limit truncates and yields a resumable cursor.
   it('search paginates with limit + cursor across the relay', async () => {
-    const page1 = await handleSearch({ limit: 2 }, client)
+    const page1 = await handleSearch({ limit: 2 }, scoped)
     const out1 = YAML.parse(page1.content[0].text) as {
       results: { id: string }[]
       truncated: boolean
@@ -517,7 +523,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
 
     const page2 = await handleSearch(
       { limit: 2, cursor: out1.cursor },
-      client,
+      scoped,
     )
     const out2 = YAML.parse(page2.content[0].text) as {
       results: { id: string }[]
@@ -535,7 +541,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('search surfaces a plugin-side {error} for an unresolvable scope=node id', async () => {
     const result = await handleSearch(
       { scope: 'node', nodeId: 'nope:1' },
-      client,
+      scoped,
     )
     const { text } = result.content[0]
     expect(text).toContain('Error')
@@ -546,14 +552,14 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   // 11b — B2: depth bounds the scan SCOPE across the relay. depth=0 keeps only
   // the page's level-0 node (Card); the default scans the whole subtree (4).
   it('search depth bounds the scan scope across the relay', async () => {
-    const shallow = await handleSearch({ depth: 0 }, client)
+    const shallow = await handleSearch({ depth: 0 }, scoped)
     const outShallow = YAML.parse(
       shallow.content[0].text,
     ) as { results: { id: string }[] }
     expect(outShallow.results).toHaveLength(1)
     expect(outShallow.results[0].id).toBe('1:42')
 
-    const full = await handleSearch({}, client)
+    const full = await handleSearch({}, scoped)
     const outFull = YAML.parse(full.content[0].text) as {
       results: { id: string }[]
     }
@@ -565,7 +571,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('search reverse-lookup instancesOf matches across the relay (B3)', async () => {
     const result = await handleSearch(
       { match: { instancesOf: 'Button' } },
-      client,
+      scoped,
     )
     const out = YAML.parse(result.content[0].text) as {
       results: { id: string; type: string }[]
@@ -580,7 +586,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('search reverse-lookup styleId / variableId match across the relay (B3)', async () => {
     const byStyle = await handleSearch(
       { match: { styleId: 'S:card-fill' } },
-      client,
+      scoped,
     )
     const outStyle = YAML.parse(
       byStyle.content[0].text,
@@ -591,7 +597,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
 
     const byVar = await handleSearch(
       { match: { variableId: 'V:brand' } },
-      client,
+      scoped,
     )
     const outVar = YAML.parse(byVar.content[0].text) as {
       results: { id: string }[]
@@ -607,7 +613,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
         fields: ['id', 'type', 'characters'],
         match: { type: ['TEXT', 'FRAME'] },
       },
-      client,
+      scoped,
     )
     const out = YAML.parse(result.content[0].text) as {
       results: {
@@ -628,7 +634,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('get_nodes returns NodeSpec results over the relay', async () => {
     const result = await handleGetNodes(
       { nodeIds: ['1:42'], depth: 0 },
-      client,
+      scoped,
     )
     const out = YAML.parse(result.content[0].text) as {
       results: { type: string; fills: string[] }[]
@@ -644,14 +650,14 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('set_selection reports selectedCount and get_selection reads the list', async () => {
     const set = await handleSetSelection(
       { nodeIds: ['1:42', '1:43'] },
-      client,
+      scoped,
     )
     const setOut = JSON.parse(set.content[0].text) as {
       selectedCount: number
     }
     expect(setOut.selectedCount).toBe(2)
 
-    const get = await handleGetSelection(client)
+    const get = await handleGetSelection({}, scoped)
     const list = YAML.parse(get.content[0].text) as {
       id: string
       name: string
@@ -666,7 +672,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('set_selection with an empty array clears (selectedCount:0)', async () => {
     const set = await handleSetSelection(
       { nodeIds: [] },
-      client,
+      scoped,
     )
     expect(set.content[0].text).not.toContain('Error:')
     const out = JSON.parse(set.content[0].text) as {
@@ -682,7 +688,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('set_selection surfaces unresolved ids as a warning (count diverges)', async () => {
     const set = await handleSetSelection(
       { nodeIds: ['1:42', 'missing:1'] },
-      client,
+      scoped,
     )
     expect(set.content[0].text).not.toContain('Error:')
     const out = JSON.parse(set.content[0].text) as {
@@ -701,7 +707,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('set_selection degrades (warns) on a cross-page id instead of erroring', async () => {
     const set = await handleSetSelection(
       { nodeIds: ['1:42', 'xpage:9'] },
-      client,
+      scoped,
     )
     expect(set.content[0].text).not.toContain('Error:')
     const out = JSON.parse(set.content[0].text) as {
@@ -720,7 +726,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
 
   // 14 — list_pages returns the Rule A document + page shape over the relay.
   it('list_pages returns { docName, results, truncated } over the relay', async () => {
-    const result = await handleListPages({}, client)
+    const result = await handleListPages({}, scoped)
     const out = YAML.parse(result.content[0].text) as {
       docName: string
       results: {
@@ -742,7 +748,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   // 15 — get_styles renders each style VALUE to a view atom over the relay,
   // including the grid render path (gridToAtom).
   it('get_styles renders paint→hex, text→font and grid→columns atoms over the relay', async () => {
-    const result = await handleGetStyles({}, client)
+    const result = await handleGetStyles({}, scoped)
     const out = YAML.parse(result.content[0].text) as {
       results: { type: string; value: string }[]
       truncated: boolean
@@ -759,7 +765,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
 
   // 16 — get_variables: modes present, COLOR valuesByMode → hex, scopes/codeSyntax.
   it('get_variables surfaces modes + scopes/codeSyntax and renders COLOR to hex', async () => {
-    const result = await handleGetVariables({}, client)
+    const result = await handleGetVariables({}, scoped)
     const { text } = result.content[0]
     expect(text).toContain('modes')
     expect(text).toContain('#FF0000')
@@ -769,7 +775,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
 
   // 17 — get_components: a result carries variant axes + key over the relay.
   it('get_components carries variant axes and key over the relay', async () => {
-    const result = await handleGetComponents({}, client)
+    const result = await handleGetComponents({}, scoped)
     const out = YAML.parse(result.content[0].text) as {
       results: {
         name: string
@@ -790,7 +796,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   // plugin skips the O(document) all-instances remote-discovery scan unless
   // includeRemote is set, so the default reply carries NO remote components.
   it('get_components returns only local components by default (no remote scan)', async () => {
-    const result = await handleGetComponents({}, client)
+    const result = await handleGetComponents({}, scoped)
     const out = YAML.parse(result.content[0].text) as {
       results: { name: string }[]
       truncated: boolean
@@ -809,7 +815,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('get_components adds remote components when includeRemote is true', async () => {
     const result = await handleGetComponents(
       { includeRemote: true },
-      client,
+      scoped,
     )
     const out = YAML.parse(result.content[0].text) as {
       results: { name: string }[]
@@ -826,7 +832,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('get_components paginates with limit + cursor across the relay', async () => {
     const page1 = await handleGetComponents(
       { includeRemote: true, limit: 1 },
-      client,
+      scoped,
     )
     const out1 = YAML.parse(page1.content[0].text) as {
       results: { name: string }[]
@@ -843,7 +849,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
         limit: 1,
         cursor: out1.cursor,
       },
-      client,
+      scoped,
     )
     const out2 = YAML.parse(page2.content[0].text) as {
       results: { name: string }[]
@@ -872,6 +878,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   // is exercised end-to-end over the real relay.
   it('get_components degrades a malformed set to a warning, good components still returned', async () => {
     const errChannel = 'e2e-slice-cserr-channel'
+    const errFk = 'fk-slice-cserr'
     const errClient = createFigmaClient(RELAY_URL)
     const errPlugin = createMockPlugin({
       relayUrl: RELAY_URL,
@@ -879,13 +886,15 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
       documentName: 'Slice Doc',
       pageName: 'Main',
       componentSetError: true,
+      fileKey: errFk,
     })
     await errPlugin.start()
-    await handleConnect({ channel: errChannel }, errClient)
+    await errClient.joinChannel(errChannel, errFk)
+    const errScoped = errClient.forFile(errFk)
     try {
       const result = await handleGetComponents(
         {},
-        errClient,
+        errScoped,
       )
       const out = YAML.parse(result.content[0].text) as {
         results: { name: string }[]
@@ -919,7 +928,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
 
   // 18 — list_fonts returns families grouped with styles over the relay.
   it('list_fonts returns families with styles over the relay', async () => {
-    const result = await handleListFonts({}, client)
+    const result = await handleListFonts({}, scoped)
     const out = YAML.parse(result.content[0].text) as {
       results: { family: string; styles: string[] }[]
       truncated: boolean
@@ -933,7 +942,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('export SVG returns text content with <svg over the relay', async () => {
     const result = await handleExport(
       { nodeId: '1:42', format: 'SVG' },
-      client,
+      scoped,
     )
     const item = result.content[0] as {
       type: string
@@ -949,7 +958,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('get_reactions returns { results, truncated } over the relay', async () => {
     const result = await handleGetReactions(
       { nodeId: '1:42' },
-      client,
+      scoped,
     )
     const out = YAML.parse(result.content[0].text) as {
       results: { trigger: { type: string } }[]
@@ -964,7 +973,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('get_plugin_data reads pluginData and (with namespace) sharedPluginData over the relay', async () => {
     const own = await handleGetPluginData(
       { nodeId: '1:42' },
-      client,
+      scoped,
     )
     const ownOut = YAML.parse(own.content[0].text) as {
       pluginData: Record<string, string>
@@ -976,7 +985,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
 
     const shared = await handleGetPluginData(
       { nodeId: '1:42', namespace: 'ns' },
-      client,
+      scoped,
     )
     const sharedOut = YAML.parse(
       shared.content[0].text,
@@ -991,7 +1000,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('get_plugin_data forwards a node-not-found warning over the relay', async () => {
     const result = await handleGetPluginData(
       { nodeId: 'degrade:gone' },
-      client,
+      scoped,
     )
     const out = YAML.parse(result.content[0].text) as {
       pluginData: Record<string, string>
@@ -1008,7 +1017,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('get_annotations returns { results, truncated } over the relay', async () => {
     const result = await handleGetAnnotations(
       { nodeId: '1:42' },
-      client,
+      scoped,
     )
     const out = YAML.parse(result.content[0].text) as {
       results: { label: string; categoryId: string }[]
@@ -1023,7 +1032,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('get_annotations surfaces a not-found warning for an unresolvable nodeId over the relay', async () => {
     const result = await handleGetAnnotations(
       { nodeId: 'degrade:gone' },
-      client,
+      scoped,
     )
     const out = YAML.parse(result.content[0].text) as {
       results: unknown[]
@@ -1042,7 +1051,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   // plugin tags only on this no-explicit-id selection path — so the read passes
   // no nodeId, NOT a sentinel.
   it('get_annotations tags each annotation with its source nodeId on a selection-based multi-read (no explicit nodeId)', async () => {
-    const result = await handleGetAnnotations({}, client)
+    const result = await handleGetAnnotations({}, scoped)
     const out = YAML.parse(result.content[0].text) as {
       results: { label: string; nodeId: string }[]
     }
@@ -1056,7 +1065,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('get_annotations returns bare annotations (no nodeId tag) for an explicit nodeId', async () => {
     const result = await handleGetAnnotations(
       { nodeId: '1:42' },
-      client,
+      scoped,
     )
     const out = YAML.parse(result.content[0].text) as {
       results: { label: string; nodeId?: string }[]
@@ -1072,7 +1081,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
         nodeId: '1:42',
         annotations: [{ label: 'Review', categoryId: 'c' }],
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error')
   })
@@ -1088,6 +1097,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
       channel: TEST_CHANNEL,
       documentName: 'Slice Doc',
       pageName: 'Main',
+      fileKey: FK,
       selection: [
         {
           id: '1:42',
@@ -1148,13 +1158,14 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
       ],
     })
     await plugin.start()
-    await handleConnect({ channel: TEST_CHANNEL }, client)
+    await client.joinChannel(TEST_CHANNEL, FK)
+    scoped = client.forFile(FK)
 
     // No nodeId/pageId → inspect the current selection. depth=-1 keeps the
     // whole forest so we can assert both selected nodes are present.
     const result = await handleInspect(
       { depth: -1 },
-      client,
+      scoped,
     )
     const out = YAML.parse(result.content[0].text) as {
       view: {
@@ -1171,7 +1182,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     // A tight budget over the whole forest must cut something, and every
     // receipt id must be a real, drillable node id.
     const budget = 70
-    const tight = await handleInspect({ budget }, client)
+    const tight = await handleInspect({ budget }, scoped)
     const tightOut = YAML.parse(tight.content[0].text) as {
       view: { type: string }
       truncated: { id: string; childCount: number }[]
@@ -1213,7 +1224,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
           },
         ],
       },
-      client,
+      scoped,
     )
     const out = JSON.parse(result.content[0].text) as {
       collectionId: string
@@ -1261,7 +1272,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
           },
         ],
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const out = JSON.parse(result.content[0].text) as {
@@ -1294,7 +1305,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
           },
         ],
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     expect(result.content[0].text).toContain(
@@ -1315,7 +1326,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
           },
         ],
       },
-      client,
+      scoped,
     )
     const out = JSON.parse(result.content[0].text) as {
       collectionId: string
@@ -1339,7 +1350,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('update_variables degrade path reports success-with-warning over the relay', async () => {
     const result = await handleUpdateVariables(
       { collectionId: 'degrade:col', addModes: ['X'] },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     expect(result.content[0].text).toContain(
@@ -1359,7 +1370,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
           { from: 'degrade:Light', to: 'Dark' },
         ],
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     expect(result.content[0].text).toContain(
@@ -1382,7 +1393,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
           },
         ],
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     expect(result.content[0].text).toContain(
@@ -1411,7 +1422,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
           },
         ],
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const out = JSON.parse(result.content[0].text) as {
@@ -1432,7 +1443,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('create_variables collection-factory failure surfaces as an error over the relay', async () => {
     const result = await handleCreateVariables(
       { collection: 'err:Brand', variables: [] },
-      client,
+      scoped,
     )
     expect(result.content[0].text).toContain('Error')
     expect(result.content[0].text).toContain(
@@ -1451,7 +1462,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
         modes: ['Light'],
         variables: [],
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const out = JSON.parse(result.content[0].text) as {
@@ -1475,7 +1486,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
           },
         ],
       },
-      client,
+      scoped,
     )
     const out = JSON.parse(result.content[0].text) as {
       results: {
@@ -1517,7 +1528,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
           },
         ],
       },
-      client,
+      scoped,
     )
     const out = JSON.parse(result.content[0].text) as {
       results: {
@@ -1560,7 +1571,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
           },
         ],
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     const out = JSON.parse(result.content[0].text) as {
@@ -1581,7 +1592,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
   it('apply_style reports success over the relay', async () => {
     const result = await handleApplyStyle(
       { nodeId: '1:42', styleId: 'S:1', field: 'fill' },
-      client,
+      scoped,
     )
     const out = JSON.parse(result.content[0].text) as {
       id: string
@@ -1599,7 +1610,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
         styleId: 'S:1',
         field: 'text',
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).not.toContain('Error:')
     expect(result.content[0].text).toContain('not applied')
@@ -1615,7 +1626,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
         styleId: 'missing:S',
         field: 'fill',
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).toContain('Error')
     expect(result.content[0].text).toContain(
@@ -1633,7 +1644,7 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
         styleId: 'wrongcat:S',
         field: 'text',
       },
-      client,
+      scoped,
     )
     expect(result.content[0].text).toContain('Error')
     expect(result.content[0].text.toLowerCase()).toContain(

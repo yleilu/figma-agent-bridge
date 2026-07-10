@@ -136,7 +136,7 @@ describe('relay', () => {
         type: 'message',
         channel: 'broadcast-channel',
         message: {
-          id: 'cmd-1',
+          meta: { requestId: 'cmd-1' },
           command: 'ping',
         },
       }),
@@ -145,7 +145,7 @@ describe('relay', () => {
     const broadcast =
       (await nextMessage2()) as BroadcastMessage
     expect(broadcast.type).toBe('broadcast')
-    expect(broadcast.message.id).toBe('cmd-1')
+    expect(broadcast.message.meta?.requestId).toBe('cmd-1')
     expect(broadcast.message.command).toBe('ping')
 
     await closeWs(ws1)
@@ -439,14 +439,17 @@ describe('relay', () => {
       JSON.stringify({
         type: 'message',
         channel: 'echo-ch',
-        message: { id: 'cmd-x', command: 'noop' },
+        message: {
+          meta: { requestId: 'cmd-x' },
+          command: 'noop',
+        },
       }),
     )
 
     // ws2 receives the broadcast
     const broadcast = (await next2()) as BroadcastMessage
     expect(broadcast.type).toBe('broadcast')
-    expect(broadcast.message.id).toBe('cmd-x')
+    expect(broadcast.message.meta?.requestId).toBe('cmd-x')
 
     // ws1 must NOT receive its own broadcast: send a marker join and assert
     // the next frame ws1 sees is the system reply, not the broadcast

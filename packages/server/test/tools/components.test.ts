@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'bun:test'
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import { setInstanceParamsSchema } from '@figma-agent-bridge/shared/tool-params'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
 import {
   handleCreateComponent,
   handleUpdateComponent,
@@ -24,11 +24,10 @@ type Sent = {
 }
 
 const stubClient = (opts: {
-  connected?: boolean
   reply?: unknown
   sent?: Sent[]
-}): FigmaClient => ({
-  joinChannel: async () => 'ch',
+}): ScopedFigmaClient => ({
+  fileKey: 'fk-test',
   sendCommand: async (
     command: string,
     params?: Record<string, unknown>,
@@ -36,22 +35,9 @@ const stubClient = (opts: {
     opts.sent?.push({ command, params })
     return opts.reply ?? null
   },
-  disconnect: () => {},
-  isConnected: () => opts.connected ?? true,
-  currentChannel: () => 'ch',
 })
 
 describe('handleCreateComponent (promote-only, un-overloaded)', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleCreateComponent(
-      { nodeId: '1:5' },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.CREATE_COMPONENT with {nodeId,name,description} (no spec/parentId)', async () => {
     const sent: Sent[] = []
     await handleCreateComponent(
@@ -121,16 +107,6 @@ describe('handleCreateComponent (promote-only, un-overloaded)', () => {
 })
 
 describe('handleUpdateComponent', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleUpdateComponent(
-      { componentId: 'c:1' },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.UPDATE_COMPONENT with {componentId,add,edit,delete,description,expose}', async () => {
     const sent: Sent[] = []
     await handleUpdateComponent(
@@ -279,16 +255,6 @@ describe('handleUpdateComponent', () => {
 })
 
 describe('handleCombineVariants', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleCombineVariants(
-      { componentIds: ['c:1', 'c:2'] },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('guards <2 components in the handler WITHOUT sending a command', async () => {
     const sent: Sent[] = []
     const result = await handleCombineVariants(
@@ -412,16 +378,6 @@ describe('handleCombineVariants', () => {
 })
 
 describe('handleSwapComponent', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleSwapComponent(
-      { instanceId: 'i:1', mainComponentId: 'c:1' },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.SWAP_COMPONENT with {instanceId,mainComponentId} (local path)', async () => {
     const sent: Sent[] = []
     await handleSwapComponent(
@@ -540,16 +496,6 @@ describe('handleSwapComponent', () => {
 })
 
 describe('handleSetInstance', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleSetInstance(
-      { instanceId: 'i:1' },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.SET_INSTANCE with {instanceId,properties,overrides}', async () => {
     const sent: Sent[] = []
     await handleSetInstance(

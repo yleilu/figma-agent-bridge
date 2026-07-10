@@ -117,7 +117,37 @@ describe('handleConnect version handshake', () => {
     )
     const res = await handleStatus(client, HTTP)
     const parsed = JSON.parse(text(res))
-    expect(parsed.protocolVersion).toBe(APP_VERSION)
+    expect(parsed.joined[0].protocolVersion).toBe(
+      APP_VERSION,
+    )
+    client.disconnect()
+    plugin.stop()
+  })
+
+  it('status merges the per-file live context from a responding plugin', async () => {
+    const plugin = createMockPlugin({
+      relayUrl: WS,
+      channel: 'st-live',
+      documentName: 'Live',
+    })
+    await plugin.start()
+    const client = createFigmaClient(WS)
+    await handleConnect(
+      { channel: 'st-live' },
+      client,
+      HTTP,
+      PORT,
+    )
+
+    const out = JSON.parse(
+      text(await handleStatus(client, HTTP)),
+    )
+    const entry = out.joined[0]
+    expect(entry.currentPage.id).toBe('page:1')
+    expect(entry.selection).toHaveLength(1)
+    expect(entry.selection[0].id).toBe('1:42')
+    expect(entry.viewport.zoom).toBe(1.5)
+
     client.disconnect()
     plugin.stop()
   })
@@ -127,6 +157,8 @@ describe('handleConnect version handshake', () => {
       relayUrl: WS,
       channel: 'st-ch2',
       documentName: 'Status File',
+      // Register the plugin's identity so status matches it by synthKey.
+      fileKey: 'key-s',
     })
     await plugin.start()
     const client = createFigmaClient(WS)
@@ -136,9 +168,9 @@ describe('handleConnect version handshake', () => {
     const res = await handleStatus(client, HTTP)
     const out = JSON.parse(text(res))
     expect(out.connected).toBe(true)
-    expect(out.channel).toBe('st-ch2')
-    expect(out.fileKey).toBe('key-s')
-    expect(out.fileName).toBe('Status File')
+    expect(out.joined[0].channel).toBe('st-ch2')
+    expect(out.joined[0].fileKey).toBe('key-s')
+    expect(out.joined[0].fileName).toBe('Status File')
     expect(Array.isArray(out.available)).toBe(true)
     expect(out.available.length).toBeGreaterThanOrEqual(1)
 
@@ -245,5 +277,111 @@ describe('handleConnect file targeting', () => {
     client.disconnect()
     a.close()
     b.close()
+  })
+
+  it('surfaces a synthetic fileKey (= channel) for an unsaved file', async () => {
+    const u = await registerRaw('sess-x', 'Untitled', null)
+    const client = createFigmaClient(WS)
+    const out = JSON.parse(
+      text(
+        await handleConnect(
+          { channel: 'sess-x' },
+          client,
+          HTTP,
+          PORT,
+        ),
+      ),
+    )
+    expect(out.fileKey).toBe('sess-x')
+    expect(
+      out.available.find(
+        (f: { fileKey: string }) => f.fileKey === 'sess-x',
+      ),
+    ).toBeDefined()
+    client.disconnect()
+    u.close()
+  })
+
+  it('joins an explicit channel that is NOT in the registry (escape hatch)', async () => {
+    // A registered file exists, but the caller targets a different, unregistered
+    // channel directly. info is undefined (channel unknown to /channels) → NO
+    // version check → the join proceeds. It must NOT be misreported as a
+    // '(none)' version skew (an unregistered channel ≠ a version mismatch).
+    const a = await registerRaw('ch-a', 'Design A', 'key-a')
+    const client = createFigmaClient(WS)
+
+    const res = await handleConnect(
+      { channel: 'ch-raw' },
+      client,
+      HTTP,
+      PORT,
+    )
+    const out = JSON.parse(text(res))
+    expect(out.connected).toBe(true)
+    expect(out.channel).toBe('ch-raw')
+    expect(out.fileKey).toBe('ch-raw')
+    expect(client.channelFor('ch-raw')).toBe('ch-raw')
+
+    client.disconnect()
+    a.close()
+  })
+})
+
+describe('connect/status multi-file contract', () => {
+  let server: ReturnType<typeof startRelay>
+  beforeEach(() => {
+    server = startRelay(PORT)
+  })
+  afterEach(() => {
+    stopRelay(server)
+  })
+
+  it('connect pre-joins a named fileKey and can then drive it', async () => {
+    const a = await registerRaw('ch-a', 'Design A', 'key-a')
+    const client = createFigmaClient(WS)
+    const out = JSON.parse(
+      text(
+        await handleConnect(
+          { fileKey: 'key-a' },
+          client,
+          HTTP,
+          PORT,
+        ),
+      ),
+    )
+    expect(out.connected).toBe(true)
+    expect(out.fileKey).toBe('key-a')
+    expect(client.channelFor('key-a')).toBe('ch-a')
+    client.disconnect()
+    a.close()
+  })
+
+  it('status reports ALL joined files + availability', async () => {
+    const a = await registerRaw('ch-a', 'Design A', 'key-a')
+    const b = await registerRaw('ch-b', 'Design B', 'key-b')
+    const client = createFigmaClient(WS)
+    await client.joinChannel('ch-a', 'key-a')
+    await client.joinChannel('ch-b', 'key-b')
+    const out = JSON.parse(
+      text(await handleStatus(client, HTTP)),
+    )
+    expect(out.connected).toBe(true)
+    expect(
+      out.joined
+        .map((f: { fileKey: string }) => f.fileKey)
+        .sort(),
+    ).toEqual(['key-a', 'key-b'])
+    expect(out.available.length).toBe(2)
+    client.disconnect()
+    a.close()
+    b.close()
+  })
+
+  it('status reports disconnected when nothing is joined', async () => {
+    const client = createFigmaClient(WS)
+    expect(
+      text(await handleStatus(client, HTTP)),
+    ).toContain('disconnected')
+    client.disconnect()
   })
 })

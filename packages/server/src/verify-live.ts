@@ -28,8 +28,12 @@ import { DEFAULT_PORT } from '@figma-agent-bridge/shared'
 import {
   createFigmaClient,
   discoverChannels,
+  toHttpUrl,
 } from './figma-client'
-import type { FigmaClient } from './figma-client'
+import type {
+  FigmaClient,
+  ScopedFigmaClient,
+} from './figma-client'
 import { handleExport } from './tools/export'
 import { handleSetFocus } from './tools/structure'
 import { handleDeleteNode } from './tools/structure'
@@ -96,9 +100,7 @@ const resolveRelay = (): {
       : DEFAULT_PORT
   const wsUrl =
     process.env.RELAY_URL ?? `ws://localhost:${port}`
-  const httpUrl = wsUrl
-    .replace('wss://', 'https://')
-    .replace('ws://', 'http://')
+  const httpUrl = toHttpUrl(wsUrl)
   return { wsUrl, httpUrl }
 }
 
@@ -106,10 +108,14 @@ const connect = async (
   client: FigmaClient,
   channelArg: string | undefined,
   httpUrl: string,
-): Promise<string> => {
+): Promise<{ channel: string; fileKey: string }> => {
+  // Always discover so we can resolve the channel's fileKey (B3): a joined file
+  // is now addressed by its fileKey, synthesized from the channel for an
+  // unsaved (null-fileKey) file.
+  const found = await discoverChannels(httpUrl)
   let channel = channelArg
+  let fileKey: string | undefined
   if (channel === undefined) {
-    const found = await discoverChannels(httpUrl)
     if (found.length === 0) {
       throw new Error(
         `No Figma plugins connected on ${httpUrl}. Open a Figma file, run the Agent Bridge plugin, click Connect, then re-run with --channel <id> (or with exactly one plugin connected for auto-discovery).`,
@@ -127,17 +133,23 @@ const connect = async (
       )
     }
     channel = found[0].channel
+    fileKey = found[0].fileKey ?? found[0].channel
     log(
-      `Auto-discovered the only connected channel: ${channel}`,
+      `Auto-discovered the only connected channel: ${channel} (fileKey: ${fileKey})`,
     )
+  } else {
+    // Explicit --channel: use its registered fileKey if known, else address it
+    // by the channel itself (synthetic key — same rule as an unsaved file).
+    const info = found.find(c => c.channel === channel)
+    fileKey = info?.fileKey ?? channel
   }
-  await client.joinChannel(channel)
+  await client.joinChannel(channel, fileKey)
   if (!client.isConnected()) {
     throw new Error(
       `Joined channel ${channel} but the client is not reporting connected — is the plugin still running?`,
     )
   }
-  return channel
+  return { channel, fileKey }
 }
 
 // ---------------------------------------------------------------------------
@@ -146,7 +158,7 @@ const connect = async (
 
 /** Export the node as a PNG and write it to <out>/<id>.png. */
 const capturePng = async (
-  client: FigmaClient,
+  client: ScopedFigmaClient,
   nodeId: string,
   outDir: string,
 ): Promise<string | null> => {
@@ -173,7 +185,7 @@ const capturePng = async (
  * plugin export is not enough — e.g. seeing surrounding context).
  */
 const screencapture = async (
-  client: FigmaClient,
+  client: ScopedFigmaClient,
   nodeId: string,
   outDir: string,
 ): Promise<string | null> => {
@@ -208,7 +220,8 @@ type CheckRecord = {
 }
 
 const runCheck = async (
-  client: FigmaClient,
+  client: ScopedFigmaClient,
+  fullClient: FigmaClient,
   check: Check,
 ): Promise<{
   record: CheckRecord
@@ -217,7 +230,7 @@ const runCheck = async (
   const started = Date.now()
   let outcome: CheckOutcome
   try {
-    outcome = await check.run(client)
+    outcome = await check.run(client, fullClient)
   } catch (err) {
     outcome = {
       ok: false,
@@ -326,8 +339,13 @@ const main = async (): Promise<number> => {
 
   const client = createFigmaClient(wsUrl)
   let channel: string
+  let fileKey: string
   try {
-    channel = await connect(client, args.channel, httpUrl)
+    ;({ channel, fileKey } = await connect(
+      client,
+      args.channel,
+      httpUrl,
+    ))
   } catch (err) {
     log('')
     log(
@@ -336,7 +354,12 @@ const main = async (): Promise<number> => {
     client.disconnect()
     return 2
   }
-  log(`Connected to channel: ${channel}`)
+  log(
+    `Connected to channel: ${channel} (fileKey: ${fileKey})`,
+  )
+  // Every file-addressed handler runs through this scoped view (fileKey
+  // captured); the unscoped `client` is still passed to session tools (status).
+  const scoped = client.forFile(fileKey)
 
   const records: CheckRecord[] = []
   const createdNodes = new Set<string>()
@@ -344,6 +367,7 @@ const main = async (): Promise<number> => {
   for (const check of CHECK_LIST) {
     log(`\n▶ ${check.id} — ${check.name}`)
     const { record, outcome } = await runCheck(
+      scoped,
       client,
       check,
     )
@@ -358,7 +382,7 @@ const main = async (): Promise<number> => {
     ) {
       try {
         const png = await capturePng(
-          client,
+          scoped,
           outcome.exportNodeId,
           args.out,
         )
@@ -367,7 +391,7 @@ const main = async (): Promise<number> => {
         }
         if (args.screencapture) {
           const shot = await screencapture(
-            client,
+            scoped,
             outcome.exportNodeId,
             args.out,
           )
@@ -393,7 +417,7 @@ const main = async (): Promise<number> => {
       try {
         const r = await handleDeleteNode(
           { nodeId: id },
-          client,
+          scoped,
         )
         if (!r.content[0]?.text.startsWith('Error:')) {
           deleted++

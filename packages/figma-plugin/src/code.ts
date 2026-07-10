@@ -4266,9 +4266,12 @@ const handleCommand = async (
 
 figma.ui.onmessage = async (msg: PluginMessage) => {
   if (msg.type === 'execute-command') {
-    // B3 identity guard: refuse a command addressed to a different file.
-    // If our fileKey is unknown (never-saved / no private API) the guard
-    // can't verify and does NOT refuse — degrade honestly.
+    // B3 identity guard: refuse a command addressed to a different file. The
+    // target originates from the wire command's meta.fileKey (request-envelope
+    // .md); useRelay forwards it into this internal execute-command message,
+    // whose field keeps the name targetFileKey. If our fileKey is unknown
+    // (never-saved / no private API) the guard can't verify and does NOT
+    // refuse — degrade honestly.
     const localFileKey = figma.fileKey ?? null
     const targetFileKey = msg.targetFileKey ?? null
     if (isTargetMismatch(localFileKey, targetFileKey)) {

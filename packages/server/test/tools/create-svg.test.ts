@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
 import { handleCreateFromSvg } from '@figma-agent-bridge/server/tools/create-svg'
 
 const createMockClient = (
@@ -7,13 +7,10 @@ const createMockClient = (
     cmd: string,
     params: Record<string, unknown>,
   ) => unknown,
-): FigmaClient => ({
-  joinChannel: () => Promise.resolve(''),
+): ScopedFigmaClient => ({
+  fileKey: 'fk-test',
   sendCommand: (cmd, params) =>
     Promise.resolve(handler(cmd, params ?? {})),
-  disconnect: () => undefined,
-  isConnected: () => true,
-  currentChannel: () => 'test-ch',
 })
 
 describe('handleCreateFromSvg', () => {
@@ -73,33 +70,11 @@ describe('handleCreateFromSvg', () => {
     expect(sentParams.size).toEqual([100, 100])
   })
 
-  it('returns error when not connected', async () => {
-    const client: FigmaClient = {
-      joinChannel: () => Promise.resolve(''),
-      sendCommand: () => Promise.resolve(null),
-      disconnect: () => undefined,
-      isConnected: () => false,
-      currentChannel: () => null,
-    }
-
-    const result = await handleCreateFromSvg(
-      { parentId: '1:2', svg: '<svg></svg>' },
-      client,
-    )
-
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('maps a thrown plugin error to a tool-formatted message', async () => {
-    const client: FigmaClient = {
-      joinChannel: () => Promise.resolve(''),
+    const client: ScopedFigmaClient = {
+      fileKey: 'fk-test',
       sendCommand: () =>
         Promise.reject(new Error('plugin exploded')),
-      disconnect: () => undefined,
-      isConnected: () => true,
-      currentChannel: () => 'test-ch',
     }
 
     const result = await handleCreateFromSvg(

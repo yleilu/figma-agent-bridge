@@ -118,6 +118,14 @@ ChangeRecord = {
 //                 params: { changes: ChangeRecord[], at }, meta: { fileKey, epoch } }
 ```
 
+> **Shipped-code deviation (as of the fileKey multi-file migration):** the CURRENTLY shipped
+> `document_changed` push is still the pre-change-feed staleness signal — `{ command:
+> "document_changed", params: { fileId } }` with **no `meta`** (the migration deliberately did NOT
+> move `fileId`→`meta.fileKey`, because `onRequest` forwards only `params` and reshaping it would
+> silently stop `markStale` firing). The `meta:{fileKey,epoch}` shape above lands when change-feed
+> is implemented, together with the `onRequest` params/meta-forwarding change. Spec and shipped code
+> disagree here on purpose; do not "fix" the push to `meta` before that work.
+
 `name` is included on create/update/page because it materially helps the agent reason
 (*"Button/Primary was moved"*) and is cheap for non-deletes; a deleted node becomes a `RemovedNode`
 exposing only `id`, `type`, `removed:true`, so `name` is honestly absent there. `props[]` exists only

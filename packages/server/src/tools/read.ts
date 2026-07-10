@@ -8,7 +8,7 @@ import type {
   NodeSpec,
   NodeSpecOrStub,
 } from '@figma-agent-bridge/shared/node-spec'
-import type { FigmaClient } from '../figma-client'
+import type { ScopedFigmaClient } from '../figma-client'
 import { toNodeSpec } from '../serialize/node-spec-reader'
 import { truncateTree, isStub } from '../read/truncate-tree'
 import { buildMatcher } from '../read/match'
@@ -18,7 +18,6 @@ import { paginateList, CursorError } from '../read/paginate'
 import {
   type ToolResult,
   textResult,
-  requireConnected,
   errorMessage,
   cursorRejected,
 } from './shared'
@@ -100,13 +99,8 @@ export const handleInspect = async (
     profile?: Profile
     match?: Match
   },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const raw = (await client.sendCommand(
       COMMANDS.INSPECT,
@@ -206,13 +200,8 @@ export const handleGetNode = async (
     fields?: string[]
     profile?: Profile
   },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const raw = (await client.sendCommand(
       COMMANDS.GET_NODE,
@@ -257,13 +246,8 @@ export const handleGetNodes = async (
     fields?: string[]
     profile?: Profile
   },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const raw = (await client.sendCommand(
       COMMANDS.GET_NODES,
@@ -316,13 +300,8 @@ export const handleGetNodes = async (
  */
 export const handleListPages = async (
   { limit, cursor }: { limit?: number; cursor?: string },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   try {
     const raw = (await client.sendCommand(
       COMMANDS.LIST_PAGES,

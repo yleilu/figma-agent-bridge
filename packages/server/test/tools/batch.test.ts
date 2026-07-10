@@ -13,7 +13,7 @@
 
 import { describe, expect, it } from 'bun:test'
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
 import { handleBatch } from '@figma-agent-bridge/server/tools/batch'
 
 type SentOp = {
@@ -38,12 +38,11 @@ type PerOpReply = {
  * converted params back so conversion is assertable.
  */
 const stubClient = (opts: {
-  connected?: boolean
   sent?: Sent[]
   simulate?: (op: SentOp, index: number) => PerOpReply
   reply?: unknown
-}): FigmaClient => ({
-  joinChannel: async () => 'ch',
+}): ScopedFigmaClient => ({
+  fileKey: 'fk-test',
   sendCommand: async (
     command: string,
     params?: Record<string, unknown>,
@@ -58,9 +57,6 @@ const stubClient = (opts: {
       ((op: SentOp) => ({ ok: true, result: op.params }))
     return { results: ops.map((op, i) => simulate(op, i)) }
   },
-  disconnect: () => {},
-  isConnected: () => opts.connected ?? true,
-  currentChannel: () => 'ch',
 })
 
 type BatchOut = {
@@ -82,16 +78,6 @@ const parse = (text: string): BatchOut =>
   JSON.parse(text) as BatchOut
 
 describe('handleBatch', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleBatch(
-      { op: 'delete_node', ops: [{ nodeId: '1:1' }] },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('homogeneous: a top-level op runs over N targets (entries omit op)', async () => {
     const sent: Sent[] = []
     const result = await handleBatch(

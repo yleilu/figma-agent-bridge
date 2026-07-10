@@ -10,7 +10,7 @@ import YAML from 'yaml'
 import { handleInspect } from '@figma-agent-bridge/server/tools/read'
 import { estimateTokens } from '@figma-agent-bridge/server/read/budget'
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
 import deepTree from '../fixtures/deep-tree-raw.json'
 import cardNode from '../fixtures/card-node-raw.json'
 
@@ -20,11 +20,10 @@ type Sent = {
 }
 
 const stubClient = (opts: {
-  connected?: boolean
   reply?: unknown
   sent?: Sent[]
-}): FigmaClient => ({
-  joinChannel: async () => 'ch',
+}): ScopedFigmaClient => ({
+  fileKey: 'fk-test',
   sendCommand: async (
     command: string,
     params?: Record<string, unknown>,
@@ -32,9 +31,6 @@ const stubClient = (opts: {
     opts.sent?.push({ command, params })
     return opts.reply ?? null
   },
-  disconnect: () => {},
-  isConnected: () => opts.connected ?? true,
-  currentChannel: () => 'ch',
 })
 
 const parse = (
@@ -49,16 +45,6 @@ const parse = (
   }
 
 describe('handleInspect (rebuilt — Rule B)', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleInspect(
-      { nodeId: '10:0' },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('sends COMMANDS.INSPECT', async () => {
     const sent: Sent[] = []
     await handleInspect(

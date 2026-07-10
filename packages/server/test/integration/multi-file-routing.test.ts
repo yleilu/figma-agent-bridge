@@ -78,8 +78,8 @@ describe('multi-file targeting: connect by fileKey routes correctly', () => {
     const statusRes = await handleStatus(client, HTTP_URL)
     const status = JSON.parse(
       statusRes.content[0].text,
-    ) as { currentPage: { name: string } }
-    expect(status.currentPage.name).toBe('Page A')
+    ) as { joined: { currentPage: { name: string } }[] }
+    expect(status.joined[0].currentPage.name).toBe('Page A')
   })
 
   it('connect({fileKey:"key-B"}) routes commands to File B', async () => {
@@ -95,7 +95,7 @@ describe('multi-file targeting: connect by fileKey routes correctly', () => {
     const statusRes = await handleStatus(client, HTTP_URL)
     const status = JSON.parse(
       statusRes.content[0].text,
-    ) as { currentPage: { name: string } }
-    expect(status.currentPage.name).toBe('Page B')
+    ) as { joined: { currentPage: { name: string } }[] }
+    expect(status.joined[0].currentPage.name).toBe('Page B')
   })
 })

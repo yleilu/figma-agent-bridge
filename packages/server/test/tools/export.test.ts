@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'bun:test'
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
 import { handleExport } from '@figma-agent-bridge/server/tools/export'
 
 describe('handleExport', () => {
   it('sends COMMANDS.EXPORT and returns MCP image content for PNG', async () => {
     let sent = ''
-    const mockClient: FigmaClient = {
-      joinChannel: () => Promise.resolve(''),
+    const mockClient: ScopedFigmaClient = {
+      fileKey: 'fk-test',
       sendCommand: cmd => {
         sent = cmd
         if (cmd === COMMANDS.EXPORT) {
@@ -20,9 +20,6 @@ describe('handleExport', () => {
 
         return Promise.resolve(null)
       },
-      disconnect: () => undefined,
-      isConnected: () => true,
-      currentChannel: () => 'test-ch',
     }
 
     const result = await handleExport(
@@ -42,8 +39,8 @@ describe('handleExport', () => {
   })
 
   it('returns MCP image content for JPG', async () => {
-    const mockClient: FigmaClient = {
-      joinChannel: () => Promise.resolve(''),
+    const mockClient: ScopedFigmaClient = {
+      fileKey: 'fk-test',
       sendCommand: cmd => {
         if (cmd === COMMANDS.EXPORT) {
           return Promise.resolve({
@@ -55,9 +52,6 @@ describe('handleExport', () => {
 
         return Promise.resolve(null)
       },
-      disconnect: () => undefined,
-      isConnected: () => true,
-      currentChannel: () => 'test-ch',
     }
 
     const result = await handleExport(
@@ -78,8 +72,8 @@ describe('handleExport', () => {
   it('returns MCP text content for SVG', async () => {
     const svgString =
       '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect fill="red"/></svg>'
-    const mockClient: FigmaClient = {
-      joinChannel: () => Promise.resolve(''),
+    const mockClient: ScopedFigmaClient = {
+      fileKey: 'fk-test',
       sendCommand: cmd => {
         if (cmd === COMMANDS.EXPORT) {
           return Promise.resolve({
@@ -91,9 +85,6 @@ describe('handleExport', () => {
 
         return Promise.resolve(null)
       },
-      disconnect: () => undefined,
-      isConnected: () => true,
-      currentChannel: () => 'test-ch',
     }
 
     const result = await handleExport(
@@ -111,8 +102,8 @@ describe('handleExport', () => {
 
   it('defaults to PNG format and scale 1', async () => {
     const sentParams: Record<string, unknown>[] = []
-    const mockClient: FigmaClient = {
-      joinChannel: () => Promise.resolve(''),
+    const mockClient: ScopedFigmaClient = {
+      fileKey: 'fk-test',
       sendCommand: (cmd, params) => {
         if (cmd === COMMANDS.EXPORT) {
           sentParams.push(params as Record<string, unknown>)
@@ -126,9 +117,6 @@ describe('handleExport', () => {
 
         return Promise.resolve(null)
       },
-      disconnect: () => undefined,
-      isConnected: () => true,
-      currentChannel: () => 'test-ch',
     }
 
     await handleExport({ nodeId: '1:42' }, mockClient)
@@ -137,35 +125,11 @@ describe('handleExport', () => {
     expect(sentParams[0].scale).toBe(1)
   })
 
-  it('returns error when not connected', async () => {
-    const mockClient: FigmaClient = {
-      joinChannel: () => Promise.resolve(''),
-      sendCommand: () => Promise.resolve(null),
-      disconnect: () => undefined,
-      isConnected: () => false,
-      currentChannel: () => null,
-    }
-
-    const result = await handleExport(
-      { nodeId: '1:42' },
-      mockClient,
-    )
-    const item = result.content[0] as {
-      type: string
-      text: string
-    }
-
-    expect(item.text).toContain('Not connected')
-  })
-
   it('maps a thrown plugin error to a tool-formatted message', async () => {
-    const client: FigmaClient = {
-      joinChannel: () => Promise.resolve(''),
+    const client: ScopedFigmaClient = {
+      fileKey: 'fk-test',
       sendCommand: () =>
         Promise.reject(new Error('plugin exploded')),
-      disconnect: () => undefined,
-      isConnected: () => true,
-      currentChannel: () => 'test-ch',
     }
 
     const result = await handleExport(
@@ -179,13 +143,10 @@ describe('handleExport', () => {
   })
 
   it('surfaces a plugin-side {error} (not-found) instead of the generic mask', async () => {
-    const mockClient: FigmaClient = {
-      joinChannel: () => Promise.resolve(''),
+    const mockClient: ScopedFigmaClient = {
+      fileKey: 'fk-test',
       sendCommand: () =>
         Promise.resolve({ error: 'Node not found: 1:99' }),
-      disconnect: () => undefined,
-      isConnected: () => true,
-      currentChannel: () => 'test-ch',
     }
     const result = await handleExport(
       { nodeId: '1:99' },
@@ -200,17 +161,14 @@ describe('handleExport', () => {
   })
 
   it('returns Unexpected response when data is not a string', async () => {
-    const mockClient: FigmaClient = {
-      joinChannel: () => Promise.resolve(''),
+    const mockClient: ScopedFigmaClient = {
+      fileKey: 'fk-test',
       sendCommand: () =>
         Promise.resolve({
           format: 'PNG',
           scale: 1,
           data: 123,
         }),
-      disconnect: () => undefined,
-      isConnected: () => true,
-      currentChannel: () => 'test-ch',
     }
     const result = await handleExport(
       { nodeId: '1:42' },

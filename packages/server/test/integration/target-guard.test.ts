@@ -17,7 +17,11 @@ const WS_URL = `ws://localhost:${PORT}`
 
 type Frame = {
   type: string
-  message: { id: string; result?: unknown; error?: string }
+  message: {
+    meta?: { requestId?: string; fileKey?: string | null }
+    result?: unknown
+    error?: string
+  }
 }
 
 const connectRaw = (url: string): Promise<WebSocket> =>
@@ -77,16 +81,15 @@ describe('targetFileKey identity guard (mock refuses mismatched targets)', () =>
         type: 'message',
         channel: 'guard-ch',
         message: {
-          id: 'm1',
+          meta: { fileKey: 'file-B', requestId: 'm1' },
           command: 'get_selection',
           params: {},
-          targetFileKey: 'file-B',
         },
       }),
     )
     const miss = await missP
     expect(miss.type).toBe('broadcast')
-    expect(miss.message.id).toBe('m1')
+    expect(miss.message.meta?.requestId).toBe('m1')
     expect(miss.message.error).toBeUndefined()
     const missErr = (
       miss.message.result as { error?: string }
@@ -101,15 +104,14 @@ describe('targetFileKey identity guard (mock refuses mismatched targets)', () =>
         type: 'message',
         channel: 'guard-ch',
         message: {
-          id: 'm2',
+          meta: { fileKey: 'file-A', requestId: 'm2' },
           command: 'get_selection',
           params: {},
-          targetFileKey: 'file-A',
         },
       }),
     )
     const ok = await okP
-    expect(ok.message.id).toBe('m2')
+    expect(ok.message.meta?.requestId).toBe('m2')
     expect(ok.message.error).toBeUndefined()
     expect(ok.message.result).toEqual(CARD)
 
@@ -120,15 +122,14 @@ describe('targetFileKey identity guard (mock refuses mismatched targets)', () =>
         type: 'message',
         channel: 'guard-ch',
         message: {
-          id: 'm3',
+          meta: { fileKey: null, requestId: 'm3' },
           command: 'get_selection',
           params: {},
-          targetFileKey: null,
         },
       }),
     )
     const un = await unP
-    expect(un.message.id).toBe('m3')
+    expect(un.message.meta?.requestId).toBe('m3')
     expect(un.message.error).toBeUndefined()
     expect(un.message.result).toEqual(CARD)
 
@@ -160,10 +161,9 @@ describe('targetFileKey identity guard (mock refuses mismatched targets)', () =>
         type: 'message',
         channel: 'unsaved-guard-ch',
         message: {
-          id: 'n1',
+          meta: { fileKey: 'file-B', requestId: 'n1' },
           command: 'get_selection',
           params: {},
-          targetFileKey: 'file-B',
         },
       }),
     )

@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'bun:test'
 import { handleUpdateNode } from '@figma-agent-bridge/server/tools/update'
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
 
 type Sent = {
   command: string
@@ -15,11 +15,10 @@ type Sent = {
 }
 
 const stubClient = (opts: {
-  connected?: boolean
   reply?: unknown
   sent?: Sent[]
-}): FigmaClient => ({
-  joinChannel: async () => 'ch',
+}): ScopedFigmaClient => ({
+  fileKey: 'fk-test',
   sendCommand: async (
     command: string,
     params?: Record<string, unknown>,
@@ -34,22 +33,9 @@ const stubClient = (opts: {
       }
     )
   },
-  disconnect: () => {},
-  isConnected: () => opts.connected ?? true,
-  currentChannel: () => 'ch',
 })
 
 describe('handleUpdateNode', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleUpdateNode(
-      { nodeId: '1:1', patch: { opacity: 0.5 } },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.UPDATE_NODE with {nodeId, spec}', async () => {
     const sent: Sent[] = []
     await handleUpdateNode(

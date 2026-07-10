@@ -27,7 +27,7 @@
 
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { NodeSpec } from '@figma-agent-bridge/shared/node-spec'
-import type { FigmaClient } from '../figma-client'
+import type { ScopedFigmaClient } from '../figma-client'
 import { specToFigma } from '../serialize/node-spec-writer'
 import {
   type StyleCategory,
@@ -39,7 +39,6 @@ import {
 } from '../serialize/value-convert'
 import {
   type ToolResult,
-  requireConnected,
   errorMessage,
   textResult,
 } from './shared'
@@ -291,13 +290,8 @@ export const handleBatch = async (
     op: defaultOp,
     ops,
   }: { op?: string; ops: BatchEntry[] },
-  client: FigmaClient,
+  client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  const guard = requireConnected(client)
-  if (guard) {
-    return guard
-  }
-
   // Resolve + convert each entry server-side, in array order. A missing op or a
   // malformed atom is recorded as that entry's error and NOT sent to the plugin;
   // a placeholder keeps the sent ops index-aligned with the plugin's replies.

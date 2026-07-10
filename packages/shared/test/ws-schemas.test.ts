@@ -10,6 +10,7 @@ import {
   systemMessageSchema,
   relayOutgoingSchema,
   commandMessageSchema,
+  metaSchema,
 } from '@figma-agent-bridge/shared/ws-schemas'
 import {
   majorMinor,
@@ -257,32 +258,64 @@ describe('registerMessageSchema fileKey', () => {
   })
 })
 
-describe('commandMessageSchema targetFileKey', () => {
-  it('round-trips targetFileKey on a request', () => {
-    const parsed = commandMessageSchema.parse({
-      id: 'cmd-1',
-      command: 'inspect',
-      params: {},
-      targetFileKey: 'FILEKEY123',
+describe('meta envelope', () => {
+  it('accepts a command frame with meta { fileKey, requestId }', () => {
+    const r = commandMessageSchema.safeParse({
+      command: 'ping',
+      params: { a: 1 },
+      meta: { fileKey: 'fk-1', requestId: 'cmd-1' },
     })
-    expect(parsed.targetFileKey).toBe('FILEKEY123')
+    expect(r.success).toBe(true)
   })
-
-  it('accepts a null targetFileKey (no bound target)', () => {
-    const parsed = commandMessageSchema.parse({
-      id: 'cmd-1',
-      command: 'inspect',
-      targetFileKey: null,
-    })
-    expect(parsed.targetFileKey).toBeNull()
-  })
-
-  it('accepts a plugin RESPONSE with no targetFileKey', () => {
-    // Responses carry only { id, result|error } — no target. Must still parse.
-    const parsed = commandMessageSchema.parse({
-      id: 'cmd-1',
+  it('accepts a reply frame with meta { requestId } and result', () => {
+    const r = commandMessageSchema.safeParse({
+      meta: { requestId: 'cmd-1' },
       result: { ok: true },
     })
-    expect(parsed.targetFileKey).toBeUndefined()
+    expect(r.success).toBe(true)
+  })
+  it('metaSchema tolerates sessionId + epoch (forward-compat)', () => {
+    expect(
+      metaSchema.safeParse({
+        fileKey: 'fk',
+        requestId: 'r',
+        sessionId: 's',
+        epoch: 'e',
+      }).success,
+    ).toBe(true)
+  })
+
+  it('round-trips meta.fileKey on a request', () => {
+    const parsed = commandMessageSchema.parse({
+      command: 'inspect',
+      params: {},
+      meta: { fileKey: 'FILEKEY123', requestId: 'cmd-1' },
+    })
+    expect(parsed.meta?.fileKey).toBe('FILEKEY123')
+  })
+
+  it('accepts a null meta.fileKey (no bound target)', () => {
+    const parsed = commandMessageSchema.parse({
+      command: 'inspect',
+      meta: { fileKey: null, requestId: 'cmd-1' },
+    })
+    expect(parsed.meta?.fileKey).toBeNull()
+  })
+
+  it('accepts a plugin RESPONSE with meta { requestId } only', () => {
+    // Responses carry only { meta:{requestId}, result|error } — no fileKey.
+    const parsed = commandMessageSchema.parse({
+      meta: { requestId: 'cmd-1' },
+      result: { ok: true },
+    })
+    expect(parsed.meta?.fileKey).toBeUndefined()
+  })
+
+  it('accepts a meta-less push (document_changed forward-compat)', () => {
+    const r = commandMessageSchema.safeParse({
+      command: 'document_changed',
+      params: { fileId: 'fk-1' },
+    })
+    expect(r.success).toBe(true)
   })
 })

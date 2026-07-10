@@ -82,18 +82,21 @@ describe('figma-client', () => {
   it('connects to relay and joins channel', async () => {
     const client = createFigmaClient(WS_URL)
 
-    const result = await client.joinChannel('test-ch')
+    const result = await client.joinChannel(
+      'test-ch',
+      'fk-test',
+    )
 
     expect(result).toContain('test-ch')
     expect(client.isConnected()).toBe(true)
-    expect(client.currentChannel()).toBe('test-ch')
+    expect(client.channelFor('fk-test')).toBe('test-ch')
 
     client.disconnect()
   })
 
   it('sends command and receives response', async () => {
     const client = createFigmaClient(WS_URL)
-    await client.joinChannel('echo-ch')
+    await client.joinChannel('echo-ch', 'fk-echo')
 
     // Set up echo mock plugin
     const plugin = await connectRaw()
@@ -123,7 +126,7 @@ describe('figma-client', () => {
         type: 'message',
         channel: 'echo-ch',
         message: {
-          id: message.id,
+          meta: { requestId: message.meta?.requestId },
           command: message.command,
           result: { echo: message.command },
         },
@@ -131,9 +134,13 @@ describe('figma-client', () => {
       plugin.send(JSON.stringify(reply))
     }
 
-    const response = await client.sendCommand('ping', {
-      value: 42,
-    })
+    const response = await client.sendCommand(
+      'fk-echo',
+      'ping',
+      {
+        value: 42,
+      },
+    )
 
     expect(response).toEqual({ echo: 'ping' })
 
@@ -143,7 +150,7 @@ describe('figma-client', () => {
 
   it('notify broadcasts a fire-and-forget frame with no reply expected', async () => {
     const client = createFigmaClient(WS_URL)
-    await client.joinChannel('notify-ch')
+    await client.joinChannel('notify-ch', 'fk-notify')
 
     const plugin = await connectRaw()
     const nextMessage = createMessageQueue(plugin)
@@ -180,7 +187,7 @@ describe('figma-client', () => {
   it('onRequest handles an inbound command and replies with a correlated result', async () => {
     const CHANNEL = 'req-ch'
     const client = createFigmaClient(WS_URL)
-    await client.joinChannel(CHANNEL)
+    await client.joinChannel(CHANNEL, 'fk-req')
 
     const rawPlugin = await connectRaw()
     const pluginQueue = createMessageQueue(rawPlugin)
@@ -202,7 +209,7 @@ describe('figma-client', () => {
         type: 'message',
         channel: CHANNEL,
         message: {
-          id: 'req-1',
+          meta: { requestId: 'req-1' },
           command: 'feedback-sync',
           params: { marker: 7 },
         },
@@ -211,7 +218,7 @@ describe('figma-client', () => {
 
     const reply = (await pluginQueue()) as BroadcastMessage
     expect(reply.type).toBe('broadcast')
-    expect(reply.message.id).toBe('req-1')
+    expect(reply.message.meta?.requestId).toBe('req-1')
     expect(
       (reply.message.result as { echoed: number }).echoed,
     ).toBe(7)
@@ -223,7 +230,7 @@ describe('figma-client', () => {
   it('onRequest replies with an error when the handler throws', async () => {
     const CHANNEL = 'req-err-ch'
     const client = createFigmaClient(WS_URL)
-    await client.joinChannel(CHANNEL)
+    await client.joinChannel(CHANNEL, 'fk-req-err')
 
     const rawPlugin = await connectRaw()
     const pluginQueue = createMessageQueue(rawPlugin)
@@ -241,7 +248,7 @@ describe('figma-client', () => {
         type: 'message',
         channel: CHANNEL,
         message: {
-          id: 'req-2',
+          meta: { requestId: 'req-2' },
           command: 'send-feedback',
           params: {},
         },
@@ -249,7 +256,7 @@ describe('figma-client', () => {
     )
 
     const reply = (await pluginQueue()) as BroadcastMessage
-    expect(reply.message.id).toBe('req-2')
+    expect(reply.message.meta?.requestId).toBe('req-2')
     expect(reply.message.error).toContain('boom')
 
     await closeWs(rawPlugin)
@@ -258,12 +265,17 @@ describe('figma-client', () => {
 
   it('times out when no response', async () => {
     const client = createFigmaClient(WS_URL)
-    await client.joinChannel('timeout-ch')
+    await client.joinChannel('timeout-ch', 'fk-timeout')
 
     let caught: Error | null = null
 
     try {
-      await client.sendCommand('slow', {}, 500)
+      await client.sendCommand(
+        'fk-timeout',
+        'slow',
+        {},
+        500,
+      )
     } catch (err) {
       caught = err as Error
     }
@@ -274,26 +286,30 @@ describe('figma-client', () => {
     client.disconnect()
   })
 
-  it('rejects a concurrent join while one is in progress', async () => {
+  it('dedupes concurrent joins of the SAME file to one resolved promise', async () => {
     const client = createFigmaClient(WS_URL)
+    const [r1, r2] = await Promise.all([
+      client.joinChannel('dedupe-ch', 'fk-dedupe'),
+      client.joinChannel('dedupe-ch', 'fk-dedupe'),
+    ])
+    expect(r1).toContain('dedupe-ch')
+    expect(r2).toContain('dedupe-ch')
+    expect(client.joinedFiles()).toEqual(['fk-dedupe'])
+    client.disconnect()
+  })
 
-    const first = client.joinChannel('serial-ch')
-    let caught: Error | null = null
-    try {
-      await client.joinChannel('serial-ch-2')
-    } catch (err) {
-      caught = err as Error
-    }
-
-    expect(caught).not.toBeNull()
-    expect((caught as Error).message).toBe(
-      'Join already in progress',
-    )
-
-    // first join still resolves normally
-    const result = await first
-    expect(result).toContain('serial-ch')
-
+  it('concurrent joins of DIFFERENT files both succeed (queued)', async () => {
+    const client = createFigmaClient(WS_URL)
+    const [ra, rb] = await Promise.all([
+      client.joinChannel('q-a', 'fk-q-a'),
+      client.joinChannel('q-b', 'fk-q-b'),
+    ])
+    expect(ra).toContain('q-a')
+    expect(rb).toContain('q-b')
+    expect(client.joinedFiles().sort()).toEqual([
+      'fk-q-a',
+      'fk-q-b',
+    ])
     client.disconnect()
   })
 
@@ -327,7 +343,10 @@ describe('figma-client', () => {
       `ws://127.0.0.1:${SILENT_PORT}`,
     )
 
-    const joinPromise = client.joinChannel('drop-ch')
+    const joinPromise = client.joinChannel(
+      'drop-ch',
+      'fk-drop',
+    )
     // Give the socket a tick to open + send the join frame.
     await Bun.sleep(50)
     // Tear down the silent server to force an onclose → rejectAll.
@@ -362,7 +381,7 @@ describe('figma-client', () => {
 
     let caught: Error | null = null
     try {
-      await client.joinChannel('never-ch')
+      await client.joinChannel('never-ch', 'fk-never')
     } catch (err) {
       caught = err as Error
     }
@@ -376,7 +395,7 @@ describe('figma-client', () => {
 
   it('ignores a malformed inbound frame and still serves later commands', async () => {
     const client = createFigmaClient(WS_URL)
-    await client.joinChannel('robust-ch')
+    await client.joinChannel('robust-ch', 'fk-robust')
 
     const plugin = await connectRaw()
     const nextMessage = createMessageQueue(plugin)
@@ -401,7 +420,7 @@ describe('figma-client', () => {
         type: 'message',
         channel: 'robust-ch',
         message: {
-          id: msg.message.id,
+          meta: { requestId: msg.message.meta?.requestId },
           command: msg.message.command,
           result: { ok: true },
         },
@@ -410,6 +429,7 @@ describe('figma-client', () => {
     }
 
     const response = await client.sendCommand(
+      'fk-robust',
       'ping',
       {},
       2000,
@@ -425,7 +445,7 @@ describe('figma-client', () => {
 
     let caught: Error | null = null
     try {
-      await client.sendCommand('noop')
+      await client.sendCommand('fk-none', 'noop')
     } catch (err) {
       caught = err as Error
     }
@@ -433,20 +453,20 @@ describe('figma-client', () => {
     expect(caught).not.toBeNull()
     expect((caught as Error).message).toBe('Not connected')
     expect(client.isConnected()).toBe(false)
-    expect(client.currentChannel()).toBeNull()
+    expect(client.joinedFiles()).toEqual([])
   })
 
   it('two sequential joins reuse a single OPEN socket', async () => {
     const client = createFigmaClient(WS_URL)
 
-    const r1 = await client.joinChannel('seq-a')
+    const r1 = await client.joinChannel('seq-a', 'fk-seq-a')
     expect(r1).toContain('seq-a')
 
     // Second join after the first resolved: socket is OPEN, connect()
-    // must reuse it (no throw, channel switches).
-    const r2 = await client.joinChannel('seq-b')
+    // must reuse it (no throw; the second file joins on the same socket).
+    const r2 = await client.joinChannel('seq-b', 'fk-seq-b')
     expect(r2).toContain('seq-b')
-    expect(client.currentChannel()).toBe('seq-b')
+    expect(client.channelFor('fk-seq-b')).toBe('seq-b')
 
     client.disconnect()
   })
@@ -488,7 +508,7 @@ describe('figma-client', () => {
 
     let caught: Error | null = null
     try {
-      await client.joinChannel('full-ch')
+      await client.joinChannel('full-ch', 'fk-full')
     } catch (err) {
       caught = err as Error
     }
@@ -496,7 +516,7 @@ describe('figma-client', () => {
     expect(caught).not.toBeNull()
     expect((caught as Error).message).toContain('Error:')
     expect(client.isConnected()).toBe(false)
-    expect(client.currentChannel()).toBeNull()
+    expect(client.joinedFiles()).toEqual([])
 
     client.disconnect()
     rejectServer.stop(true)
@@ -507,10 +527,15 @@ describe('figma-client', () => {
 
     // Kick a join and immediately disconnect to leave ws === null,
     // then a new join must create a brand-new socket (CONNECTING path).
-    client.joinChannel('connecting-ch').catch(() => {})
+    client
+      .joinChannel('connecting-ch', 'fk-connecting')
+      .catch(() => {})
     client.disconnect()
 
-    const result = await client.joinChannel('fresh-ch')
+    const result = await client.joinChannel(
+      'fresh-ch',
+      'fk-fresh',
+    )
     expect(result).toContain('fresh-ch')
     expect(client.isConnected()).toBe(true)
 
@@ -519,10 +544,15 @@ describe('figma-client', () => {
 
   it('rejects an in-flight sendCommand when the socket closes', async () => {
     const client = createFigmaClient(WS_URL)
-    await client.joinChannel('inflight-ch')
+    await client.joinChannel('inflight-ch', 'fk-inflight')
 
     // No plugin echoes back, so this command stays pending.
-    const cmd = client.sendCommand('slow', {}, 30_000)
+    const cmd = client.sendCommand(
+      'fk-inflight',
+      'slow',
+      {},
+      30_000,
+    )
     await Bun.sleep(50)
     stopRelay(server)
 
@@ -583,7 +613,7 @@ describe('discoverChannels', () => {
   })
 })
 
-describe('figma-client targetFileKey stamping', () => {
+describe('figma-client meta stamping', () => {
   const CAP_PORT = 3099
   const CAP_WS = `ws://localhost:${CAP_PORT}`
 
@@ -592,9 +622,11 @@ describe('figma-client targetFileKey stamping', () => {
       type?: string
       channel?: string
       message?: {
-        id: string
         command?: string
-        targetFileKey?: string | null
+        meta?: {
+          fileKey?: string | null
+          requestId?: string
+        }
       }
     }[] = []
     const server = Bun.serve({
@@ -627,28 +659,164 @@ describe('figma-client targetFileKey stamping', () => {
     return { server, frames }
   }
 
-  it('tracks the joined fileKey and stamps it on outbound commands', async () => {
+  it('stamps meta { fileKey, requestId } on outbound commands', async () => {
     const { server, frames } = startCaptureServer(CAP_PORT)
     const client = createFigmaClient(CAP_WS)
 
     await client.joinChannel('cap-ch', 'file-key-123')
-    expect(client.currentFileKey()).toBe('file-key-123')
+    expect(client.channelFor('file-key-123')).toBe('cap-ch')
 
     // Fire a command; the capture server never replies, so do not await it.
     // Attach a no-op catch so the teardown disconnect (which rejects the still
     // -pending command) does not surface as an unhandled rejection.
     void client
-      .sendCommand('status', { foo: 'bar' })
+      .sendCommand('file-key-123', 'status', { foo: 'bar' })
       .catch(() => {})
     await Bun.sleep(30)
 
     const cmdFrame = frames.find(f => f.type === 'message')
     expect(cmdFrame?.message?.command).toBe('status')
-    expect(cmdFrame?.message?.targetFileKey).toBe(
+    expect(cmdFrame?.message?.meta?.fileKey).toBe(
       'file-key-123',
+    )
+    expect(typeof cmdFrame?.message?.meta?.requestId).toBe(
+      'string',
     )
 
     client.disconnect()
     server.stop(true)
+  })
+})
+
+describe('figma-client multi-file + meta', () => {
+  let server: Server<{ id: string }>
+
+  beforeEach(() => {
+    server = startRelay(TEST_PORT)
+  })
+  afterEach(() => {
+    stopRelay(server)
+  })
+
+  it('routes a command by fileKey and stamps meta { fileKey, requestId }', async () => {
+    const client = createFigmaClient(WS_URL)
+    await client.joinChannel('ch-a', 'fk-a')
+    await client.joinChannel('ch-b', 'fk-b')
+    expect(client.joinedFiles().sort()).toEqual([
+      'fk-a',
+      'fk-b',
+    ])
+    expect(client.channelFor('fk-a')).toBe('ch-a')
+    expect(client.channelFor('fk-missing')).toBeNull()
+
+    const pluginA = await connectRaw()
+    const queueA = createMessageQueue(pluginA)
+    pluginA.send(
+      JSON.stringify({ type: 'join', channel: 'ch-a' }),
+    )
+    await queueA()
+    pluginA.onmessage = (event: MessageEvent) => {
+      const msg = JSON.parse(
+        event.data as string,
+      ) as BroadcastMessage
+      if (msg.type !== 'broadcast') {
+        return
+      }
+      // Echo the meta.fileKey back and correlate by meta.requestId.
+      const reply: ChannelMessage = {
+        type: 'message',
+        channel: 'ch-a',
+        message: {
+          meta: { requestId: msg.message.meta?.requestId },
+          result: {
+            on: 'a',
+            target: msg.message.meta?.fileKey,
+          },
+        },
+      }
+      pluginA.send(JSON.stringify(reply))
+    }
+
+    const res = await client.sendCommand('fk-a', 'ping', {})
+    expect(res).toEqual({ on: 'a', target: 'fk-a' })
+
+    await closeWs(pluginA)
+    client.disconnect()
+  })
+
+  it('forFile routes without a fileKey arg and lifts sessionId into meta when present', async () => {
+    const client = createFigmaClient(WS_URL)
+    await client.joinChannel('ch-s', 'fk-s')
+    expect(client.forFile('fk-s').fileKey).toBe('fk-s')
+
+    const plugin = await connectRaw()
+    const q = createMessageQueue(plugin)
+    plugin.send(
+      JSON.stringify({ type: 'join', channel: 'ch-s' }),
+    )
+    await q()
+    plugin.onmessage = (event: MessageEvent) => {
+      const msg = JSON.parse(
+        event.data as string,
+      ) as BroadcastMessage
+      if (msg.type !== 'broadcast') {
+        return
+      }
+      // Echo back the meta the server stamped, so the test can assert it.
+      plugin.send(
+        JSON.stringify({
+          type: 'message',
+          channel: 'ch-s',
+          message: {
+            meta: {
+              requestId: msg.message.meta?.requestId,
+            },
+            result: {
+              scopedTarget: msg.message.meta?.fileKey,
+              session: msg.message.meta?.sessionId ?? null,
+            },
+          },
+        } satisfies ChannelMessage),
+      )
+    }
+
+    // No sessionId → meta.sessionId is absent (null echoed).
+    expect(
+      await client.forFile('fk-s').sendCommand('ping', {}),
+    ).toEqual({
+      scopedTarget: 'fk-s',
+      session: null,
+    })
+    // sessionId supplied at forFile time → it lands in meta.sessionId.
+    expect(
+      await client
+        .forFile('fk-s', { sessionId: 's-9' })
+        .sendCommand('ping', {}),
+    ).toEqual({ scopedTarget: 'fk-s', session: 's-9' })
+
+    await closeWs(plugin)
+    client.disconnect()
+  })
+
+  it('sendCommand rejects for a fileKey that was never joined', async () => {
+    const client = createFigmaClient(WS_URL)
+    await client.joinChannel('ch-a', 'fk-a')
+    let caught: Error | null = null
+    try {
+      await client.sendCommand('fk-b', 'ping', {})
+    } catch (err) {
+      caught = err as Error
+    }
+    expect(caught?.message).toBe('Not joined to file fk-b')
+    client.disconnect()
+  })
+
+  it('disconnect clears every joined file', async () => {
+    const client = createFigmaClient(WS_URL)
+    await client.joinChannel('ch-a', 'fk-a')
+    await client.joinChannel('ch-b', 'fk-b')
+    client.disconnect()
+    expect(client.joinedFiles()).toEqual([])
+    expect(client.isConnected()).toBe(false)
   })
 })

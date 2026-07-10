@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'bun:test'
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
 import {
   handleCloneNode,
   handleReparentNode,
@@ -22,11 +22,10 @@ type Sent = {
 }
 
 const stubClient = (opts: {
-  connected?: boolean
   reply?: unknown
   sent?: Sent[]
-}): FigmaClient => ({
-  joinChannel: async () => 'ch',
+}): ScopedFigmaClient => ({
+  fileKey: 'fk-test',
   sendCommand: async (
     command: string,
     params?: Record<string, unknown>,
@@ -34,22 +33,9 @@ const stubClient = (opts: {
     opts.sent?.push({ command, params })
     return opts.reply ?? null
   },
-  disconnect: () => {},
-  isConnected: () => opts.connected ?? true,
-  currentChannel: () => 'ch',
 })
 
 describe('handleCloneNode', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleCloneNode(
-      { nodeId: '1:1' },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.CLONE_NODE with {nodeId,parentId,index,count}', async () => {
     const sent: Sent[] = []
     await handleCloneNode(
@@ -116,16 +102,6 @@ describe('handleCloneNode', () => {
 })
 
 describe('handleReparentNode', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleReparentNode(
-      { nodeId: '1:1', parentId: '1:2' },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.REPARENT_NODE with {nodeId,parentId,index}', async () => {
     const sent: Sent[] = []
     await handleReparentNode(
@@ -181,16 +157,6 @@ describe('handleReparentNode', () => {
 })
 
 describe('handleReorderChildren', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleReorderChildren(
-      { parentId: '1:1', nodeIds: ['1:2'] },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.REORDER_CHILDREN with {parentId,nodeIds}', async () => {
     const sent: Sent[] = []
     await handleReorderChildren(
@@ -266,16 +232,6 @@ describe('handleReorderChildren', () => {
 })
 
 describe('handleBooleanOp', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleBooleanOp(
-      { op: 'UNION', nodeIds: ['1:1', '1:2'] },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.BOOLEAN_OP with {op,nodeIds,parentId}', async () => {
     const sent: Sent[] = []
     await handleBooleanOp(
@@ -333,16 +289,6 @@ describe('handleBooleanOp', () => {
 })
 
 describe('handleFlatten', () => {
-  it('returns the not-connected guard when disconnected', async () => {
-    const result = await handleFlatten(
-      { nodeIds: ['1:1'] },
-      stubClient({ connected: false }),
-    )
-    expect(result.content[0].text).toContain(
-      'Not connected',
-    )
-  })
-
   it('forwards COMMANDS.FLATTEN with {nodeIds,parentId}', async () => {
     const sent: Sent[] = []
     await handleFlatten(

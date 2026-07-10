@@ -12,8 +12,10 @@ import {
   stopRelay,
 } from '@figma-agent-bridge/relay/relay'
 import { createFigmaClient } from '@figma-agent-bridge/server/figma-client'
-import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
-import { handleConnect } from '@figma-agent-bridge/server/tools/session'
+import type {
+  FigmaClient,
+  ScopedFigmaClient,
+} from '@figma-agent-bridge/server/figma-client'
 import {
   handleGetNode,
   handleInspect,
@@ -25,10 +27,12 @@ import { createMockPlugin } from '../mocks/mock-plugin'
 const TEST_PORT = 3131
 const RELAY_URL = `ws://localhost:${TEST_PORT}`
 const TEST_CHANNEL = 'e2e-context-channel'
+const FK = 'fk-context'
 
 describe('context round-trip e2e (mock plugin over real relay)', () => {
   let server: Server<{ id: string }>
   let client: FigmaClient
+  let scoped: ScopedFigmaClient
   let plugin: ReturnType<typeof createMockPlugin> | null =
     null
 
@@ -40,9 +44,11 @@ describe('context round-trip e2e (mock plugin over real relay)', () => {
       channel: TEST_CHANNEL,
       documentName: 'Slice Doc',
       pageName: 'Main',
+      fileKey: FK,
     })
     await plugin.start()
-    await handleConnect({ channel: TEST_CHANNEL }, client)
+    await client.joinChannel(TEST_CHANNEL, FK)
+    scoped = client.forFile(FK)
   })
 
   afterEach(() => {
@@ -59,15 +65,15 @@ describe('context round-trip e2e (mock plugin over real relay)', () => {
       '---\npurpose: CTA\n---\n## Notes\nlong body here'
     await handleUpdateNode(
       { nodeId: '1:42', patch: { context: value } },
-      client,
+      scoped,
     )
     const gn = YAML.parse(
-      (await handleGetNode({ nodeId: '1:42' }, client))
+      (await handleGetNode({ nodeId: '1:42' }, scoped))
         .content[0].text,
     ) as { context?: string }
     expect(gn.context).toBe(value)
     const ins = YAML.parse(
-      (await handleInspect({ nodeId: '1:42' }, client))
+      (await handleInspect({ nodeId: '1:42' }, scoped))
         .content[0].text,
     ) as {
       view: { context?: string; contextSummary?: string }
@@ -85,17 +91,17 @@ describe('context round-trip e2e (mock plugin over real relay)', () => {
         key: 'context',
         value: big,
       },
-      client,
+      scoped,
     )
     expect(
       YAML.parse(
-        (await handleGetNode({ nodeId: '1:42' }, client))
+        (await handleGetNode({ nodeId: '1:42' }, scoped))
           .content[0].text,
       ).context,
     ).toBe(big)
     const res = await handleUpdateNode(
       { nodeId: '1:42', patch: { context: big } },
-      client,
+      scoped,
     )
     expect(res.content[0].text).toMatch(/limit is 2048/)
   })
