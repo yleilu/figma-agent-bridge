@@ -20,6 +20,14 @@ export const useRelay = () => {
   const errorRef = useRef<string | null>(null)
   const fileNameRef = useRef<string | null>(null)
   const fileKeyRef = useRef<string | null>(null)
+  // Presence (Plugin Presence): current page name + selection count, mirrored
+  // from code.ts's identity/presence pushes. Written in BOTH the persistent
+  // identity listener and requestIdentity's one-shot handler — the latter is
+  // load-bearing because the register frame (sent from the ws 'system'
+  // branch) reads these refs before the persistent listener would otherwise
+  // have populated them.
+  const currentPageRef = useRef<string | null>(null)
+  const selectedRef = useRef<number | null>(null)
   // Per-session channel for a never-saved file (no stable fileKey).
   // Stable across reconnects within this session; a reload starts a new
   // session. A saved file never uses this — its channel is deterministic.
@@ -84,6 +92,34 @@ export const useRelay = () => {
       if (msg.type === 'identity') {
         fileKeyRef.current = msg.fileKey ?? null
         fileNameRef.current = msg.fileName ?? null
+        currentPageRef.current = msg.currentPage ?? null
+        selectedRef.current =
+          typeof msg.selected === 'number' ? msg.selected : null
+        return
+      }
+
+      // Presence push (Plugin Presence): code.ts sends this (debounced) on
+      // currentpagechange/selectionchange. Mirror the refs so a later
+      // register/reconnect carries fresh values, and forward a presence
+      // frame to the relay so the channel registry can enrich discovery.
+      // MUST sit above the `command-result` gate below (same placement as
+      // index-stale) since this isn't a command-result frame.
+      if (msg.type === 'presence') {
+        currentPageRef.current = msg.currentPage ?? null
+        selectedRef.current =
+          typeof msg.selected === 'number' ? msg.selected : null
+        const presenceWs = wsRef.current
+        const presenceChannel = channelRef.current
+        if (presenceWs && presenceChannel) {
+          presenceWs.send(
+            JSON.stringify({
+              type: 'presence',
+              channel: presenceChannel,
+              currentPage: msg.currentPage,
+              selected: msg.selected,
+            }),
+          )
+        }
         return
       }
 
@@ -154,6 +190,9 @@ export const useRelay = () => {
           if (m?.type === 'identity') {
             fileKeyRef.current = m.fileKey ?? null
             fileNameRef.current = m.fileName ?? null
+            currentPageRef.current = m.currentPage ?? null
+            selectedRef.current =
+              typeof m.selected === 'number' ? m.selected : null
             finish()
           }
         }
@@ -223,6 +262,8 @@ export const useRelay = () => {
                 fileKey: fileKeyRef.current,
                 fileName: fileNameRef.current,
                 version: APP_VERSION,
+                currentPage: currentPageRef.current ?? undefined,
+                selected: selectedRef.current ?? undefined,
               }),
             )
 

@@ -24,9 +24,32 @@ const fileIdentity = () => ({
   type: 'identity' as const,
   fileKey: figma.fileKey ?? null,
   fileName: figma.root.name,
+  currentPage: figma.currentPage.name,
+  selected: figma.currentPage.selection.length,
 })
 
 figma.ui.postMessage(fileIdentity())
+
+// Presence (Plugin Presence): the current page name + selection count,
+// pushed to the UI (debounced) so the relay's channel registry can enrich
+// discovery — mirrors the index-stale debounce below, just on different
+// trigger events (currentpagechange / selectionchange instead of
+// documentchange).
+let presenceTimer: ReturnType<typeof setTimeout> | undefined
+const pushPresence = () => {
+  if (presenceTimer !== undefined) {
+    clearTimeout(presenceTimer)
+  }
+  presenceTimer = setTimeout(() => {
+    figma.ui.postMessage({
+      type: 'presence',
+      currentPage: figma.currentPage.name,
+      selected: figma.currentPage.selection.length,
+    })
+  }, 300)
+}
+figma.on('currentpagechange', pushPresence)
+figma.on('selectionchange', pushPresence)
 
 // Component-index freshness: on a component-relevant document change, nudge the
 // server to mark this file's index stale (debounced). It only SIGNALS — the
