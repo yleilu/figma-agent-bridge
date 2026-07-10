@@ -403,7 +403,8 @@ describe('connect/status multi-file contract', () => {
     const res = await handleStatus(client, HTTP)
     const out = JSON.parse(text(res))
     const entry = out.available.find(
-      (f: { fileKey: string }) => f.fileKey === 'key-enrich',
+      (f: { fileKey: string }) =>
+        f.fileKey === 'key-enrich',
     )
     expect(entry).toMatchObject({
       fileKey: 'key-enrich',
