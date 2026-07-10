@@ -93,11 +93,17 @@ const availableView = (
   fileKey: string
   fileName: string | null
   connectedAt: number
+  version?: string
+  currentPage?: string
+  selected?: number
 }[] =>
   available.map(c => ({
     fileKey: synthKey(c),
     fileName: c.fileName,
     connectedAt: c.connectedAt,
+    version: c.version,
+    currentPage: c.currentPage,
+    selected: c.selected,
   }))
 
 const connectResult = (r: {
