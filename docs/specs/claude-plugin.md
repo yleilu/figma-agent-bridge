@@ -12,6 +12,7 @@ related:
   - "[[figma-bridge/docs/specs/overview]]"
   - "[[figma-bridge/docs/specs/tool-surface]]"
   - "[[figma-bridge/docs/specs/feedback-system]]"
+  - "[[figma-bridge/docs/specs/plugin-presence]]"
   - "[[figma-bridge/docs/deferred-capabilities]]"
 ---
 
@@ -96,7 +97,7 @@ figma-agent-bridge/                       repo == marketplace
 │   │   ├── figma-designer.md             frontmatter: tools:, model: (§6.2)
 │   │   └── figma-reviewer.md             (§6.5)
 │   ├── hooks/
-│   │   ├── hooks.json                    SessionStart → bootstrap; PreToolUse → inject session_id; UserPromptSubmit → change-feed nudge (§ change-feed.md)
+│   │   ├── hooks.json                    SessionStart → bootstrap; PreToolUse → inject session_id; UserPromptSubmit → presence status block (§ plugin-presence.md)
 │   │   └── bootstrap                     extensionless bash; downloads binary
 │   └── README.md                         install + Figma-plugin-import steps
 ├── packages/                             the Bun monorepo — UNCHANGED except build target
@@ -118,7 +119,7 @@ holds **two change-related hooks**: (1) a **new `PreToolUse`** hook, matcher
 reserved `sessionId` header — see
 [[figma-bridge/docs/specs/request-envelope|request-envelope.md]]); and (2) the
 **`UserPromptSubmit`** presence hook — injecting the always-on status block that surfaces plugin/file
-availability and pending user edits ("check changes before acting") — which uses its **native**
+availability and pending user edits (passive plugin/file awareness) — which uses its **native**
 `session_id` (the same value the `PreToolUse` hook injects), specified in
 [[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]] (folding in the change-feed count,
 [[figma-bridge/docs/specs/change-feed|change-feed.md]]).

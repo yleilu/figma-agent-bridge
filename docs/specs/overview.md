@@ -11,6 +11,7 @@ related:
   - "[[figma-bridge/docs/principles]]"
   - "[[figma-bridge/docs/architecture]]"
   - "[[figma-bridge/docs/specs/tool-surface]]"
+  - "[[figma-bridge/docs/specs/plugin-presence]]"
   - "[[figma-bridge/docs/specs/expression-formats]]"
 ---
 

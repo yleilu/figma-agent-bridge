@@ -13,6 +13,7 @@ related:
   - "[[figma-bridge/docs/specs/overview]]"
   - "[[figma-bridge/docs/specs/tool-surface]]"
   - "[[figma-bridge/docs/specs/component-index]]"
+  - "[[figma-bridge/docs/specs/plugin-presence]]"
   - "[[figma-bridge/docs/specs/claude-plugin]]"
   - "[[figma-bridge/docs/principles]]"
 ---
@@ -42,7 +43,7 @@ agent drains only on turns where something actually changed.
 
 It is **pull-based by necessity**: an LLM agent only perceives state when *it* calls a tool. Even
 MCP resource subscriptions (`notifications/resources/updated`) never reach the model's reasoning
-loop, so the design is a pollable tool plus a hook that reminds the agent to poll — not a stream.
+loop, so the design is a pollable tool plus a hook that surfaces the pending count — not a stream.
 
 **It is a hint, not a guarantee (T7).** Like the component index's use of the same event, the feed
 is a *nudge*: it reduces stale-action surprises and lets the agent re-plan proactively, but it never
@@ -53,7 +54,9 @@ loudly** (`NODE_NOT_FOUND`). The feed's job is to make that rare, not to replace
 ## Scope
 
 **Covers:** capturing user edits from Figma events while connected, buffering them per `fileKey` on
-the server, draining them via `pull_changes`, and the plugin-layer hook that gates the nudge.
+the server, draining them via `pull_changes`, and the count mirror that feeds `pending_edits` into the
+always-on presence block (the `UserPromptSubmit` hook is owned by
+[[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]]).
 
 **Does not cover:**
 - **Offline change tracking.** Figma fires no events while the plugin is closed and exposes no

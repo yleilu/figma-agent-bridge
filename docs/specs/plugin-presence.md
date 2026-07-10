@@ -122,9 +122,10 @@ figma_bridge:
 | `recently_offline[]` | previous online set minus current (hook's `last-online.json`) | one-turn transition |
 
 - **Unsaved files:** `fileKey` is `null` in the registry; the block uses the entry's `channel` (the
-  `synthKey`) as both the address **and** the `pending_edits` count-file key — consistent with how unsaved
-  files are addressed everywhere ([[figma-bridge/docs/specs/overview|overview.md]]); the Change Feed keys
-  that file's buffer and count by the same `synthKey`.
+  `synthKey` — the per-session channel an unsaved file registers under, per
+  [[figma-bridge/docs/specs/overview|overview.md]]) as both the address **and** the `pending_edits`
+  count-file key — consistent with how unsaved files are addressed everywhere; the Change Feed keys that
+  file's buffer and count by the same `synthKey`.
 - **`pending_edits` counts mutations only** (nodes + styles), never selection/page navigation — a `0`
   means "no user *edits*," so navigation alone never inflates it (**T4/T7**), matching the count mirror's
   own rule.

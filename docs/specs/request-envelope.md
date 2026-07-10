@@ -102,7 +102,7 @@ a per-call file.
 ## `sessionId` — the hook-injected header, and how the server gets it
 
 `sessionId` is the **Claude Code `session_id`** — the sender identity the change-feed uses so the
-server and the change-feed hook agree on a per-session count file. It is ambient platform identity:
+server and the presence hook agree on a per-session count file. It is ambient platform identity:
 **the agent never authors it.** The sourcing constraint that shapes this design:
 
 - **Hooks receive `session_id`** natively (stdin JSON); stable across the session.
@@ -144,7 +144,7 @@ and must never be mistaken for "quiet turn":
    presence block at all — the count file is moot; the agent gets no proactive change signal.
 2. **No `sessionId` on the call** (`PreToolUse` absent, `UserPromptSubmit` present): the server keys
    the degrade on **presence** — when a command carries **no** `sessionId`, it writes an explicit
-   **unattributed signal** the change-feed hook reads as "nudge unconditionally" — never a silent
+   **unattributed signal** the presence hook reads as "nudge unconditionally" — never a silent
    zero. The mechanism (a session-agnostic sentinel) is owned by
    [[figma-bridge/docs/specs/change-feed|change-feed.md]]; this spec fixes the requirement: **the
    degrade is never a silent never-on.** (A *stray* agent-supplied `sessionId` with the hook absent
