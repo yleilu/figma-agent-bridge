@@ -232,7 +232,8 @@ rule (T6/T7) requires every tool to map to a real `figma.*` capability. `record_
 the sole exception — it captures bridge-experience friction and has no Figma API counterpart.
 It is admitted knowingly and quarantined: placed in its own conceptual `feedback` group, absent
 from `COMMANDS` and the verify-live `ALL_TOOLS` catalogue, so the 47 count is unchanged.
-Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle commands. See
+Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle commands (as is the new
+`ping` liveness probe — [[figma-bridge/docs/specs/connection-liveness|connection-liveness.md]]). See
 [[figma-bridge/docs/specs/feedback-system]].
 
 ### Session (2)

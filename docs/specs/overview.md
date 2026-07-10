@@ -12,6 +12,7 @@ related:
   - "[[figma-bridge/docs/architecture]]"
   - "[[figma-bridge/docs/specs/tool-surface]]"
   - "[[figma-bridge/docs/specs/plugin-presence]]"
+  - "[[figma-bridge/docs/specs/connection-liveness]]"
   - "[[figma-bridge/docs/specs/expression-formats]]"
 ---
 
@@ -81,8 +82,10 @@ drives one specific file with no ambiguity (B3). The lifecycle contract:
 - **Availability, not activity (the availability registry).** The relay maintains
   `{ fileKey → { channel, fileName, connectedAt } }` — the files with a **live plugin**
   (reachable/writable). A plugin's `register` adds its entry; an explicit `leave` frame (a clean plugin
-  close), the socket's `close`, or a missed heartbeat (`DEFAULT_HEARTBEAT_INTERVAL = 30_000` ms → dead
-  within ~2 ticks), removes it, so **closing a file drops it from the set**. This is availability — a transport fact — not
+  close), the socket's `close`, or a missed heartbeat (`DEFAULT_HEARTBEAT_INTERVAL = 10_000` ms → dead
+  within ~2 ticks), removes it, so **closing a file drops it from the set**. The interval and the
+  companion **command-liveness watchdog** (which fast-fails a command sent to a plugin that died mid-use)
+  are owned by [[figma-bridge/docs/specs/connection-liveness|connection-liveness.md]]. This is availability — a transport fact — not
   activity: Figma exposes no "frontmost/active file" signal, so the agent never guesses which
   file is meant. `fileName` is populated **reliably at register time**: the prior
   `fileName: null` was a timing bug (the register frame was sent before the main-thread file

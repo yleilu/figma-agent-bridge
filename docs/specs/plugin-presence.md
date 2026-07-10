@@ -14,6 +14,7 @@ related:
   - "[[figma-bridge/docs/specs/change-feed]]"
   - "[[figma-bridge/docs/specs/version-handshake]]"
   - "[[figma-bridge/docs/specs/request-envelope]]"
+  - "[[figma-bridge/docs/specs/connection-liveness]]"
   - "[[figma-bridge/docs/specs/claude-plugin]]"
   - "[[figma-bridge/docs/principles]]"
 ---
@@ -195,7 +196,9 @@ The availability registry's removal triggers — socket `close`, a missed heartb
   clean close shows up on the very next turn.
 - **Unclean exit** — a crash, a closed Figma tab, or a dropped network — sends no `leave`; the heartbeat
   reaps the channel within ~2 missed ticks. During that window the file still appears in `online` — the
-  residual staleness the block is honest about (Limitations).
+  residual staleness the block is honest about (Limitations). A file the agent *acts on* in that window
+  fails fast via the command-liveness watchdog rather than lingering
+  ([[figma-bridge/docs/specs/connection-liveness|connection-liveness.md]]).
 
 **`recently_offline` is a one-turn transition.** The hook keeps `last-online.json` — the `{fileKey, name}`
 of each file online at the previous `UserPromptSubmit` (an **absent** baseline, e.g. on the first turn,
@@ -309,7 +312,9 @@ Figma / Claude Code facts that shape this design:
 ## Limitations (honesty — T7)
 
 - **Best-effort, not authoritative.** A crashed/tab-closed plugin lingers in `online` until the heartbeat
-  reaps it (~2 missed ticks); a version-skewed plugin is **not** pre-flagged in the block (the hook cannot
+  reaps it (~2 missed ticks — the interval is owned by
+  [[figma-bridge/docs/specs/connection-liveness|connection-liveness.md]], which also fast-fails a command
+  sent to it); a version-skewed plugin is **not** pre-flagged in the block (the hook cannot
   run the server's compare) — it surfaces through the loud `INCOMPATIBLE` failure on first use. The block
   reduces surprise; the loud failures (`DISCONNECTED` / `INCOMPATIBLE` / `WRONG_FILE`) remain the real
   guard.
