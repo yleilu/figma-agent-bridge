@@ -32,6 +32,12 @@ Read the request carefully. Identify:
 - **Constraints** the user has stated (style, tokens, components, page).
 - **Ambiguities** that would block correct output — ask before building, not after.
 
+### 1.5 Address the file
+
+Call `status()`. If one file is joined, use its `fileKey` for the whole session; if
+several, confirm which before building. Pass `fileKey` on every read/mutate call. (Full
+multi-file / error model: the `figma-connection` skill.)
+
 ### 2. Plan before touching the canvas
 
 Before calling any mutating tool, produce a short written plan in this order:
@@ -76,6 +82,9 @@ structure, missing content — fix it before self-review.
 ### 5. Self-review via the figma-reviewer skill
 
 Run the **figma-reviewer skill** as a self-check before calling the build done.
+Pass the session `fileKey` (and the just-built target's node id) into the invocation —
+alongside the already-established design-system context — so the reviewer targets the
+right file and does not re-resolve or mis-target.
 The figma-reviewer skill checks five dimensions: design-system adherence, consistency,
 accessibility, layout and structure hygiene, and fidelity to intent.
 
@@ -121,6 +130,8 @@ build over a tool limitation; work around it and keep going.
 
 ## What not to do
 
+- Do not call a file tool without its `fileKey`.
+- Do not guess a file when multiple are joined — ask.
 - Do not start building without checking for an existing design system.
 - Do not hardcode a value that has a token in the file.
 - Do not create a component when an existing one can be reused (or instanced).

@@ -8,6 +8,10 @@ description: Tool-usage patterns and limits for the figma-design skill. Load whe
 Exact patterns for the calls that get wrong most often. Each entry shows the form
 that works, the form that doesn't (when relevant), and why.
 
+> **Convention:** every file tool also takes a required `fileKey` (from `status()`) — see
+> the `set_instance` example under **Limits** for the full inline shape. It is omitted from
+> the snippets below for brevity; add it to every call. (Addressing doctrine: `figma-connection`.)
+
 ---
 
 ## Instance text override — compound child id
@@ -132,7 +136,7 @@ components already have `variantProperties` set, `combine_variants` merges them.
 
 `update_component` with `add: [{type: "TEXT", name: "Label", defaultValue: "x"}]`
 creates the property definition on the component, but it is **not bound** to any
-specific text node. Consequently `set_instance({..., properties: {Label: "Revenue"}})`
+specific text node. Consequently `set_instance({ fileKey, nodeId, properties: {Label: "Revenue"} })`
 sets the property value on the instance object but no text node changes.
 
 **Workaround:** use the compound-id override path described above. File the binding

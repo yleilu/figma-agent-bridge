@@ -32,9 +32,12 @@ Sonnet handles most reviews. Escalate to opus when:
 
 Before checking any dimension, build a faithful picture of the target:
 
-1. **Identify the target.** If the user named a frame or node, resolve its id via
-   `get_selection` (if "my selection") or `get_node` / `inspect` by name. If no target is
-   specified and there is no selection, ask.
+1. **Identify the target.** Resolve **which file** and which node. For the file, use the
+   `fileKey` figma-designer passed you (self-review); on a cold on-request review, resolve
+   it via `status().joined[]`. Pass that `fileKey` on every call. A `WRONG_FILE` response
+   means the fileKey is unknown/unavailable — **ASK which file, never guess.** For the node,
+   if the user named a frame or node, resolve its id via `get_selection` (if "my selection")
+   or `get_node` / `inspect` by name. If no target is specified and there is no selection, ask.
 
 2. **`inspect` the target.** Get the full node tree — structure, properties, children,
    auto-layout settings, fills, text styles. This is the primary read; it gives you
@@ -184,7 +187,8 @@ If a finding **cannot be fixed** with the available tools (e.g. requires `delete
 
 When `figma-designer` calls this agent as its self-review gate:
 
-- The target is the frame just built — use the node id returned by the last build call.
+- The target is the frame just built — use the node id returned by the last build call,
+  and the `fileKey` figma-designer passed you — **do not re-resolve** either.
 - The design-system context is already established — do not re-scan.
 - Emit the full report (Phase 3); if blockers or warnings are found, report them back to
   `figma-designer` for iteration before the build is called done.

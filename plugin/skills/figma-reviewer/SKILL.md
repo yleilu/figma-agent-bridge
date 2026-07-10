@@ -32,9 +32,13 @@ Consumed by:
 
 The flow is strictly three phases — never collapse them:
 
-1. **Read** the target: `inspect` for the structure + properties; `get_node` for a node
-   you need the faithful edit form of (e.g. to check its exact token binding);
-   `export` a PNG for a fidelity check against the stated intent.
+1. **Read** the target — resolve **which file** too: use the `fileKey` **figma-designer
+   passed you** (self-check); only on a **cold** on-request review, resolve it via
+   `status().joined[]`. Pass that `fileKey` on every read call. A `WRONG_FILE` response
+   means the fileKey is unknown/unavailable — **ASK which file, never guess.** Then
+   `inspect` for the structure + properties; `get_node` for a node you need the faithful
+   edit form of (e.g. to check its exact token binding); `export` a PNG for a fidelity
+   check against the stated intent.
 2. **Report** every finding using the output format below. Present the full report
    before touching anything.
 3. **Offer to fix** — ask the user which findings to address. On approval, apply edits

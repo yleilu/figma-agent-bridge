@@ -1,10 +1,11 @@
 ---
 name: figma-connection
 description: >-
-  Use when the Figma MCP reports a version mismatch or a connection problem — the
-  handshake says the plugin and server versions are incompatible, or tools time out /
-  say disconnected. Guides the user through the fix: reinstall/update the Figma plugin,
-  or diagnose a stale server, and how to confirm the fix.
+  Use when the Figma MCP raises an addressing or connection question — which file to
+  target, driving multiple files at once, or a WRONG_FILE / DISCONNECTED / INCOMPATIBLE
+  response — or when the version handshake says the plugin and server are incompatible, or
+  tools time out / say disconnected. Carries the fileKey addressing doctrine and guides the
+  fix: reinstall/update the Figma plugin, or diagnose a stale server, and how to confirm it.
 version: 0.1.0
 ---
 
@@ -12,6 +13,24 @@ version: 0.1.0
 
 Diagnose and fix a version mismatch or lost connection between the Figma plugin and
 the MCP server.
+
+---
+
+## Addressing a file
+
+**Every file tool needs a `fileKey`.** After `connect`/`status`, read the target file's
+`fileKey` from `status().joined[]` (or `connect().available[]`) and pass it on **every**
+file-addressed call — the server never guesses which file (B3).
+
+- **Multiple files:** one agent can drive several at once; address each by its own `fileKey`.
+- **`WRONG_FILE`** (unknown/unavailable fileKey) → the server lists the available files and
+  asks you to choose — **ASK, never retry with a guessed fileKey.**
+- **`DISCONNECTED`** = no plugin for that file (open/reopen it).
+- **`INCOMPATIBLE`** = plugin↔server version skew (reconnecting won't help — update the
+  older side; see below).
+
+*(`connect` / `status` / `record_feedback` are the exceptions — they take no per-call
+`fileKey`.)*
 
 ---
 
@@ -71,7 +90,7 @@ If tools time out or return a disconnected error without a version mismatch mess
 
 ## Confirm the fix
 
-- `/channels` — lists connected channels; the entry for your file shows the plugin
-  version. Versions should match the server.
-- Run any tool (e.g. `get_document_info`) — if `connect` succeeds and the tool returns
-  a result, the handshake passed.
+- `status()` — returns per-file `protocolVersion` in `joined[]`; the entry for your file
+  shows the plugin version. Versions should match the server.
+- Run any file tool with the target `fileKey` — if it returns a result (no `INCOMPATIBLE`
+  or `DISCONNECTED`), the handshake passed.

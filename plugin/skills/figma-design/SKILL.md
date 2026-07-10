@@ -19,6 +19,16 @@ selection). There is no create-only vs. edit split.
 
 ---
 
+## Address the file first
+
+Call `status()`; read the target file's `fileKey` from `joined[]` (or `available[]` on a
+cold start — the server auto-joins an available file on first use) and pass it on **every**
+subsequent file-tool call. If several files are joined and the target is ambiguous, **ask —
+never guess.** (`connect` / `status` take no `fileKey`.) Full multi-file / error model:
+`figma-connection`.
+
+---
+
 ## Start-of-work guard — is there a design system?
 
 Design-system-first is a **decision**, not a mandate. Before building, detect whether
