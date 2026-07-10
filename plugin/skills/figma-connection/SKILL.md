@@ -88,6 +88,27 @@ If tools time out or return a disconnected error without a version mismatch mess
 
 ---
 
+## Presence status block
+
+Every turn starts with an injected `figma_bridge:` YAML block (see
+`docs/specs/plugin-presence.md`) — passive awareness, not something you fetch. Read it before
+acting:
+
+- **`online[]`** — the files you can address right now, each with its `fileKey`. `current_page`
+  and `selected` say where the user is in that file at this moment.
+- **`pending_edits` on a file** — if it's `> 0`, **call `pull_changes({fileKey})` before acting
+  on that file's existing nodes**: the user edited them since your last read, and acting blind
+  risks clobbering their change. `pending_edits` may be absent (the Change Feed it depends on
+  isn't shipped everywhere yet) — treat an absent field as "unknown, no pending signal," not as
+  zero.
+- **`recently_offline[]`** — a file you were just using went offline since last turn; expect
+  `DISCONNECTED` if you address it now — re-plan around it or ask the user to reopen it rather
+  than retrying blind.
+- **`relay: unreachable` or an empty `online: []`** — no Figma files are connected; there's
+  nothing to address until one comes online.
+
+---
+
 ## Confirm the fix
 
 - `status()` — returns per-file `protocolVersion` in `joined[]`; the entry for your file
