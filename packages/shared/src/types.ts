@@ -34,10 +34,24 @@ export type RegisterMessage = {
   selected?: number
 }
 
+export type PresenceMessage = {
+  type: 'presence'
+  channel: string
+  currentPage?: string
+  selected?: number
+}
+
+export type LeaveMessage = {
+  type: 'leave'
+  channel: string
+}
+
 export type RelayIncoming =
   | JoinMessage
   | ChannelMessage
   | RegisterMessage
+  | PresenceMessage
+  | LeaveMessage
 export type RelayOutgoing = BroadcastMessage | SystemMessage
 
 // --- Command types ---

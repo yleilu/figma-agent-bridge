@@ -5,6 +5,8 @@ import {
   joinMessageSchema,
   channelMessageSchema,
   registerMessageSchema,
+  presenceMessageSchema,
+  leaveMessageSchema,
   relayIncomingSchema,
   broadcastMessageSchema,
   systemMessageSchema,
@@ -20,6 +22,8 @@ import type {
   JoinMessage,
   ChannelMessage,
   RegisterMessage,
+  PresenceMessage,
+  LeaveMessage,
   BroadcastMessage,
   SystemMessage,
   CommandMessage,
@@ -53,6 +57,15 @@ assertEqual<
     z.infer<typeof registerMessageSchema>,
     RegisterMessage
   >
+>()
+assertEqual<
+  Equal<
+    z.infer<typeof presenceMessageSchema>,
+    PresenceMessage
+  >
+>()
+assertEqual<
+  Equal<z.infer<typeof leaveMessageSchema>, LeaveMessage>
 >()
 assertEqual<
   Equal<
@@ -151,6 +164,24 @@ describe('ws-schemas relayIncomingSchema', () => {
       channel: 'x',
     })
     expect(r.success).toBe(false)
+  })
+
+  it('parses a presence frame', () => {
+    const r = relayIncomingSchema.safeParse({
+      type: 'presence',
+      channel: 'file-abc',
+      currentPage: 'Icons',
+      selected: 2,
+    })
+    expect(r.success).toBe(true)
+  })
+
+  it('parses a leave frame', () => {
+    const r = relayIncomingSchema.safeParse({
+      type: 'leave',
+      channel: 'file-abc',
+    })
+    expect(r.success).toBe(true)
   })
 })
 

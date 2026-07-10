@@ -49,12 +49,26 @@ export const registerMessageSchema = z.object({
   selected: z.number().optional(),
 })
 
+export const presenceMessageSchema = z.object({
+  type: z.literal('presence'),
+  channel: z.string().min(1),
+  currentPage: z.string().optional(),
+  selected: z.number().optional(),
+})
+
+export const leaveMessageSchema = z.object({
+  type: z.literal('leave'),
+  channel: z.string().min(1),
+})
+
 export const relayIncomingSchema = z.discriminatedUnion(
   'type',
   [
     joinMessageSchema,
     channelMessageSchema,
     registerMessageSchema,
+    presenceMessageSchema,
+    leaveMessageSchema,
   ],
 )
 
