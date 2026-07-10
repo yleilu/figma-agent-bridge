@@ -45,6 +45,8 @@ export const registerMessageSchema = z.object({
   // the version handshake catches skew separately.
   fileKey: z.string().nullable().optional(),
   version: z.string().optional(),
+  currentPage: z.string().optional(),
+  selected: z.number().optional(),
 })
 
 export const relayIncomingSchema = z.discriminatedUnion(

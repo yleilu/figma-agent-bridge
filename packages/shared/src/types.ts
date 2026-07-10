@@ -30,6 +30,8 @@ export type RegisterMessage = {
   fileName: string | null
   fileKey?: string | null
   version?: string
+  currentPage?: string
+  selected?: number
 }
 
 export type RelayIncoming =
@@ -71,6 +73,10 @@ export type ChannelInfo = {
   fileKey: string | null
   connectedAt: number
   version?: string
+  // Presence enrichment: page NAME the plugin is currently viewing.
+  currentPage?: string
+  // Presence enrichment: count of currently selected nodes.
+  selected?: number
 }
 
 // --- M2 parsed output types ---

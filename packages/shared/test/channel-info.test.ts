@@ -20,3 +20,19 @@ describe('ChannelInfo fileKey', () => {
     expect(unsaved.fileKey).toBeNull()
   })
 })
+
+describe('ChannelInfo presence fields', () => {
+  it('carries optional presence fields', () => {
+    const info: ChannelInfo = {
+      channel: 'file-abc',
+      fileName: 'Design',
+      fileKey: 'abc',
+      connectedAt: 0,
+      version: '0.2.0',
+      currentPage: 'Icons',
+      selected: 2,
+    }
+    expect(info.currentPage).toBe('Icons')
+    expect(info.selected).toBe(2)
+  })
+})
