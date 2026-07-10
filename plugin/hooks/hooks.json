@@ -6,6 +6,13 @@
           { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/bootstrap\"", "async": false, "timeout": 300 }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/presence\"", "async": false, "timeout": 10 }
+        ]
+      }
     ]
   }
 }
