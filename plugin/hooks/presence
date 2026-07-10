@@ -33,9 +33,11 @@ else
 fi
 
 # recently_offline: baseline {fileKey,name} whose fileKey is NOT in the current set (carry the name)
+# self-healing read: a killed-mid-write / garbage baseline parses as empty (2>/dev/null || '[]')
+# so a corrupt file never wedges the hook — it's overwritten by the atomic rewrite below.
 NOW_KEYS="$(echo "$CH" | jq '[ .[] | (.fileKey // .channel) ]')"
 if [[ -f "$LAST" ]]; then
-  GONE="$(jq --argjson now "$NOW_KEYS" '[ (.online // [])[] | select(.fileKey as $k | ($now | index($k)) | not) ]' "$LAST")"
+  GONE="$(jq --argjson now "$NOW_KEYS" '[ (.online // [])[] | select(.fileKey as $k | ($now | index($k)) | not) ]' "$LAST" 2>/dev/null || echo '[]')"
   if [[ "$(echo "$GONE" | jq 'length')" -gt 0 ]]; then
     echo "  recently_offline:"
     echo "$GONE" | jq -r '.[] | "    - name: " + (.name|@json) + "\n      fileKey: " + (.fileKey|@json)'
@@ -43,4 +45,5 @@ if [[ -f "$LAST" ]]; then
 fi
 
 # rewrite baseline as {fileKey,name} pairs (current set) so a future drop can render its name
-echo "$CH" | jq '{ online: [ .[] | { fileKey: (.fileKey // .channel), name: (.fileName // "(unsaved)") } ] }' > "$LAST"
+# atomic: write to .tmp then mv, so a kill mid-write can't leave a half-written (corrupt) baseline
+echo "$CH" | jq '{ online: [ .[] | { fileKey: (.fileKey // .channel), name: (.fileName // "(unsaved)") } ] }' > "$LAST.tmp" && mv -f "$LAST.tmp" "$LAST"
