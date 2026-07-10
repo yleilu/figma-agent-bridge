@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+PORT="${FIGMA_BRIDGE_RELAY_PORT:-18080}"
+STATE_DIR="${PRESENCE_STATE_DIR:-$HOME/.figma-agent-bridge/hook}"
+LAST="$STATE_DIR/last-online.json"
+mkdir -p "$STATE_DIR"
+
+# fetch /channels (test hook: PRESENCE_TEST_CHANNELS bypasses curl)
+if [[ -n "${PRESENCE_TEST_CHANNELS:-}" ]]; then CH="$PRESENCE_TEST_CHANNELS"; RELAY_OK=1
+elif CH="$(curl -fsS --max-time 3 "http://localhost:$PORT/channels" 2>/dev/null)"; then RELAY_OK=1
+else RELAY_OK=0; fi
+
+# degraded: relay unreachable — empty list, do NOT rewrite the baseline (survives the blip)
+if [[ "$RELAY_OK" -eq 0 ]]; then
+  printf 'figma_bridge:\n  relay: unreachable\n  online: []\n'
+  exit 0
+fi
+
+# online[] — jq @json quotes+escapes every string value → always YAML-safe (names with : # " etc.)
+if [[ "$(echo "$CH" | jq 'length')" -eq 0 ]]; then
+  printf 'figma_bridge:\n  relay: connected\n  online: []\n'
+else
+  echo "$CH" | jq -r '
+    "figma_bridge:",
+    "  relay: connected",
+    "  online:",
+    (.[] | "    - name: " + ((.fileName // "(unsaved)")|@json)
+         + "\n      fileKey: " + ((.fileKey // .channel)|@json)
+         + (if .version          then "\n      version: "      + (.version|@json)     else "" end)
+         + (if .currentPage      then "\n      current_page: " + (.currentPage|@json) else "" end)
+         + (if .selected != null then "\n      selected: "     + (.selected|tostring) else "" end))
+  '
+fi
+
+# recently_offline: baseline {fileKey,name} whose fileKey is NOT in the current set (carry the name)
+NOW_KEYS="$(echo "$CH" | jq '[ .[] | (.fileKey // .channel) ]')"
+if [[ -f "$LAST" ]]; then
+  GONE="$(jq --argjson now "$NOW_KEYS" '[ (.online // [])[] | select(.fileKey as $k | ($now | index($k)) | not) ]' "$LAST")"
+  if [[ "$(echo "$GONE" | jq 'length')" -gt 0 ]]; then
+    echo "  recently_offline:"
+    echo "$GONE" | jq -r '.[] | "    - name: " + (.name|@json) + "\n      fileKey: " + (.fileKey|@json)'
+  fi
+fi
+
+# rewrite baseline as {fileKey,name} pairs (current set) so a future drop can render its name
+echo "$CH" | jq '{ online: [ .[] | { fileKey: (.fileKey // .channel), name: (.fileName // "(unsaved)") } ] }' > "$LAST"
