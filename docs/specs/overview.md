@@ -79,14 +79,18 @@ drives one specific file with no ambiguity (B3). The lifecycle contract:
   best-effort.
 - **Availability, not activity (the availability registry).** The relay maintains
   `{ fileKey → { channel, fileName, connectedAt } }` — the files with a **live plugin**
-  (reachable/writable). A plugin's `register` adds its entry; the socket's `close`, or a missed
-  heartbeat (`DEFAULT_HEARTBEAT_INTERVAL = 30_000` ms → dead within ~2 ticks), removes it, so
-  **closing a file drops it from the set**. This is availability — a transport fact — not
+  (reachable/writable). A plugin's `register` adds its entry; an explicit `leave` frame (a clean plugin
+  close), the socket's `close`, or a missed heartbeat (`DEFAULT_HEARTBEAT_INTERVAL = 30_000` ms → dead
+  within ~2 ticks), removes it, so **closing a file drops it from the set**. This is availability — a transport fact — not
   activity: Figma exposes no "frontmost/active file" signal, so the agent never guesses which
   file is meant. `fileName` is populated **reliably at register time**: the prior
   `fileName: null` was a timing bug (the register frame was sent before the main-thread file
   name arrived); the fix carries `fileKey`+`fileName` on register (re-sending if the name
-  arrives late).
+  arrives late). The entry also carries the plugin `version` (the **B2** handshake) and is
+  **enriched** with the user's `currentPage` and `selected` count — presence fields the plugin
+  self-reports (initial on `register`, refreshed via a dedicated `presence` frame that leaves the
+  connection-level fields untouched) for passive turn-start awareness, owned by
+  [[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]].
 - **Addressing model (B3) — this spec is the single source of truth.** Every tool takes an
   explicit **per-call `fileKey`** parameter naming the file it operates on (identity per B3, the
   canonical param name everywhere); `connect` establishes the pairing/availability. The `fileKey`

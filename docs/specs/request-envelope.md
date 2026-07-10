@@ -141,7 +141,7 @@ supports `PreToolUse` with a matcher. So:
 and must never be mistaken for "quiet turn":
 
 1. **Whole hook bundle absent** (no `PreToolUse` *and* no `UserPromptSubmit`): no `sessionId` and no
-   count-gated nudge at all — the count file is moot; change-feed runs without the proactive nudge.
+   presence block at all — the count file is moot; the agent gets no proactive change signal.
 2. **No `sessionId` on the call** (`PreToolUse` absent, `UserPromptSubmit` present): the server keys
    the degrade on **presence** — when a command carries **no** `sessionId`, it writes an explicit
    **unattributed signal** the change-feed hook reads as "nudge unconditionally" — never a silent

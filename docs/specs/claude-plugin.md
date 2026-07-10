@@ -116,10 +116,12 @@ Windows auto-`bash` mangling). Beyond the `SessionStart → bootstrap` hook, `ho
 holds **two change-related hooks**: (1) a **new `PreToolUse`** hook, matcher
 `mcp__figma-bridge__*`, that injects its native `session_id` into each MCP call's arguments (the
 reserved `sessionId` header — see
-[[figma-bridge/docs/specs/request-envelope|request-envelope.md]]); and (2) the change-feed
-**`UserPromptSubmit`** count-gated nudge hook — the "check changes before acting" reminder — which
-uses its **native** `session_id` (the same value the `PreToolUse` hook injects), specified in
-[[figma-bridge/docs/specs/change-feed|change-feed.md]].
+[[figma-bridge/docs/specs/request-envelope|request-envelope.md]]); and (2) the
+**`UserPromptSubmit`** presence hook — injecting the always-on status block that surfaces plugin/file
+availability and pending user edits ("check changes before acting") — which uses its **native**
+`session_id` (the same value the `PreToolUse` hook injects), specified in
+[[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]] (folding in the change-feed count,
+[[figma-bridge/docs/specs/change-feed|change-feed.md]]).
 
 ## 5. The MCP binary — build → release → bootstrap
 

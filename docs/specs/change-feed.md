@@ -35,9 +35,10 @@ nodes that have moved or no longer exist and acts on ghosts.
 
 The Change Feed gives the agent a cheap way to ask *"what did the user change since I last looked?"*
 right before it acts. While the plugin is connected it records document mutations into a **per-file,
-in-memory buffer on the MCP server**; a `pull_changes` tool **drains** that buffer on demand; and a
-**count-gated Claude Code hook** nudges the agent to drain only on turns where something actually
-changed — so quiet turns cost nothing.
+in-memory buffer on the MCP server**; a `pull_changes` tool **drains** that buffer on demand; and the
+pending-edit **count** is surfaced to the agent each turn — as the `pending_edits` field of the
+always-on presence block ([[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]]) — so the
+agent drains only on turns where something actually changed.
 
 It is **pull-based by necessity**: an LLM agent only perceives state when *it* calls a tool. Even
 MCP resource subscriptions (`notifications/resources/updated`) never reach the model's reasoning
@@ -72,10 +73,10 @@ the server, draining them via `pull_changes`, and the plugin-layer hook that gat
 |---|---|
 | **Bridge** | Plugin event listeners → enriched `document_changed` push (**B1**); server buffers per `fileKey` (**B3**); the count mirror file. Carries changes faithfully; compacts events but never interprets node *meaning*. |
 | **Tool** | `pull_changes({fileKey})` — drains and returns the buffer in a compact, bounded envelope (**T4/T10**). Pure capability, **no opinion** (**T6**). |
-| **Plugin** | The `UserPromptSubmit` hook + count gate — the *opinion* that the agent should check for user edits before acting (**P1**). Lives in the Claude Code plugin, never in the tool. |
+| **Plugin** | The count mirror feeds `pending_edits` in the always-on presence block; the `UserPromptSubmit` hook that injects it is owned by [[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]], and the *opinion* that the agent should check for user edits before acting (**P1**) lives in the figma skill that reads the block, never in the tool. |
 
-Keeping the "when to check" opinion in the hook (not baked into the tool) is what lets a client
-without the hook still call `pull_changes` deliberately, and lets the opinion evolve independently.
+Keeping the "when to check" opinion in the plugin layer (the skill, not the tool) is what lets a client
+without it still call `pull_changes` deliberately, and lets the opinion evolve independently.
 
 ## Events captured
 
@@ -219,10 +220,11 @@ v1's **only** `sessionId` consumer is the count-file path (below); attributing c
 is the forward-compat multi-session work
 ([[figma-bridge/docs/specs/request-envelope|request-envelope.md]]).
 
-## Count mirror & the hook (plugin layer)
+## Count mirror
 
-The hook runs in the Claude Code session as a separate process and **cannot read the server's
-memory** — so it cannot see whether anything changed. The server therefore mirrors a **count only**
+The `UserPromptSubmit` hook (owned by [[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]])
+runs in the Claude Code session as a separate process and **cannot read the server's memory** — so it
+cannot see whether anything changed. The server therefore mirrors a **count only**
 to disk, reusing the established home-dir convention (alongside `component-index/<fileKey>.json`) and
 the **same fileKey sanitizer** as `component-index/store.ts` (today a private `fileName` const — to be
 hoisted to a shared util). To avoid the deferred many-sessions-one-file case corrupting a shared path,
@@ -261,17 +263,24 @@ benign nudge misroute in the single-session model, never a data hazard.)*
 
 Flow per user turn:
 
-1. `UserPromptSubmit` hook reads the count file(s) for the session's connected `fileKey`(s).
-2. `pendingCount === 0` → **inject nothing.** Quiet turns stay free (the original token-cost goal).
-3. `pendingCount > 0` → inject a terse reminder: *"The user changed N node(s) in Figma; call
-   `pull_changes` before acting on existing nodes."*
-4. The agent calls `pull_changes({fileKey})` → server returns the collapsed diff **and clears the
-   buffer** (count resets to 0).
+1. The presence hook reads the count file(s) for the session's connected `fileKey`(s) and folds each
+   into the always-on block as `pending_edits`
+   ([[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]]).
+2. `pending_edits === 0` → the block still injects (presence is always-on), signalling "no user edits —
+   safe to act on existing nodes."
+3. `pending_edits > 0` → the figma skill reading the block calls `pull_changes({fileKey})` before
+   acting on existing nodes.
+4. The server returns the collapsed diff **and clears the buffer** (count resets to 0).
 5. The agent reasons over `user prompt + diff`, then acts or responds.
 
-*(The hook needs the `sessionId` to read the right file; it uses its **native** `session_id` — the
-same value the `PreToolUse` hook injects into the server's calls (see Count mirror above) — so both
-sides agree on the count-file path with no handoff file or correlation step.)*
+In the always-on presence block the count is a **data field** (`pending_edits`), not a gate — shown every
+turn even when `0` ([[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]] owns the injection).
+The agent's *drain* is still gated on `pending_edits > 0`, so `pull_changes` runs only on turns that
+actually changed.
+
+*(The hook needs the `sessionId` to read the right count file; it uses its **native** `session_id` — the
+same value the `PreToolUse` hook injects into the server's calls (see above) — so both sides agree on the
+count-file path with no handoff file or correlation step.)*
 
 ## Tool surface
 
@@ -319,14 +328,14 @@ flowchart TB
         CF["changes/fileKey/sessionId.json\ncount mirror (mutations only)"]
     end
     subgraph CC["Claude Code plugin"]
-        HK["UserPromptSubmit hook\n(count-gated nudge)"]
+        HK["UserPromptSubmit hook\n(always-on presence block —\nsee plugin-presence.md)"]
     end
     L --> G --> UM -->|document_changed frame| BC
     BC --> BUF
     BUF -->|leading-edge count| CF
     CF -->|reads count| HK
-    HK -->|nudge when pending| Agent
-    Agent -->|pull_changes: drain| BUF
+    HK -->|pending_edits in block| Agent
+    Agent -->|pull_changes when pending| BUF
     BUF -->|collapsed diff + state| Agent
 ```
 
