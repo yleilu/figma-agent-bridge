@@ -50,6 +50,20 @@ export const useRelay = () => {
     setFeedbackItems(prev => ({ ...prev, [item.path]: item }))
   }, [])
 
+  // Plugin Presence (Task 8): best-effort clean-close signal. Sends a
+  // `leave` frame so the relay drops the channel immediately instead of
+  // waiting for the ~60s heartbeat timeout. Fired from the `leave` push
+  // (code.ts's figma.on('close') listener, forwarded via window message
+  // below) and from disconnect().
+  const sendLeave = useCallback(() => {
+    const ws = wsRef.current
+    if (ws?.readyState === WebSocket.OPEN && channelRef.current) {
+      ws.send(
+        JSON.stringify({ type: 'leave', channel: channelRef.current }),
+      )
+    }
+  }, [])
+
   // Send a correlated request over the relay and resolve on its reply.
   const request = useCallback(
     (command: string, params: Record<string, unknown>): Promise<unknown> => {
@@ -129,6 +143,17 @@ export const useRelay = () => {
       // the server dispatches it by command + params.fileId and sends back no
       // reply (a reply would fan a stray frame to every joined channel). No
       // id/target guard needed (plugin→server, unsolicited).
+      // Clean-close signal (Plugin Presence, Task 8): code.ts's
+      // figma.on('close') listener pushes this so the UI can tell the
+      // relay to drop the channel immediately rather than waiting for the
+      // heartbeat. MUST sit above the `command-result` gate below (same
+      // placement as presence/index-stale) since this isn't a
+      // command-result frame.
+      if (msg.type === 'leave') {
+        sendLeave()
+        return
+      }
+
       if (msg.type === 'index-stale') {
         const staleWs = wsRef.current
         const staleChannel = channelRef.current
@@ -176,7 +201,7 @@ export const useRelay = () => {
     return () => {
       window.removeEventListener('message', handler)
     }
-  }, [])
+  }, [sendLeave])
 
   // Ask code.ts for the file identity and resolve when it replies (or
   // after a short timeout, so connect never blocks forever). This is the
@@ -381,6 +406,11 @@ export const useRelay = () => {
   const disconnect = useCallback(() => {
     const ws = wsRef.current
     if (ws) {
+      // Best-effort clean-close signal (Plugin Presence, Task 8): let the
+      // relay drop the channel immediately instead of waiting for the
+      // heartbeat. Must fire before ws.close() while the socket is still
+      // open.
+      sendLeave()
       ws.close()
       wsRef.current = null
       channelRef.current = null
@@ -390,7 +420,7 @@ export const useRelay = () => {
       channel: null,
       error: null,
     })
-  }, [])
+  }, [sendLeave])
 
   return {
     ...state,

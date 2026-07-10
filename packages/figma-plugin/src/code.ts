@@ -91,6 +91,16 @@ figma.on('documentchange', event => {
   }, 300)
 })
 
+// Plugin Presence (Task 8): best-effort clean-close signal. On a clean
+// close, tell the UI to send a `leave` frame so the relay drops the
+// channel immediately instead of waiting for the ~60s heartbeat timeout.
+// KNOWN RISK: figma.on('close') may not fire on every close path (or the
+// iframe may be torn down before the UI can flush the frame) — that's
+// acceptable, the heartbeat is the backstop.
+figma.on('close', () => {
+  figma.ui.postMessage({ type: 'leave' })
+})
+
 type PluginMessage =
   | {
       type: 'execute-command'
