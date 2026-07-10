@@ -49,7 +49,7 @@ server or platform provides it.** Everything below follows from that one distinc
 |---|---|---|---|
 | `fileKey` | **param** (agent-selected) | an existing file identity the agent picks per call, sent in `arguments` | relay channel routing, plugin B3 guard, per-file index / change-feed buffers |
 | `sessionId` | **header** (platform, hook-injected — **reserved, agent never sets**) | the Claude Code `session_id`, injected into each call's `arguments` by a `PreToolUse` hook (see Sourcing) | change-feed **count-file path** (v1); multi-session `source` attribution (forward-compat) |
-| `requestId` | **header** (server) | `genId('cmd')`, per request (this is today's frame `id`) | request↔reply correlation (the pending map) |
+| `requestId` | **header** (server) | `genId('cmd')`, per request — the correlation id | request↔reply correlation (the pending map) |
 
 ### Connection-level — established once, **never** per-request
 
@@ -103,12 +103,12 @@ a per-call file.
 
 `sessionId` is the **Claude Code `session_id`** — the sender identity the change-feed uses so the
 server and the change-feed hook agree on a per-session count file. It is ambient platform identity:
-**the agent never authors it.** Sourcing fact (verified against the Claude Code docs, 2026-07-09):
+**the agent never authors it.** The sourcing constraint that shapes this design:
 
 - **Hooks receive `session_id`** natively (stdin JSON); stable across the session.
 - **MCP servers do NOT** — a spawned stdio server gets only `CLAUDE_PROJECT_DIR`.
 
-Mechanism (also verified): a **`PreToolUse` hook** can rewrite a call's arguments via
+Mechanism: a **`PreToolUse` hook** can rewrite a call's arguments via
 `hookSpecificOutput.updatedInput`, and the change **propagates to MCP tools**; plugin `hooks.json`
 supports `PreToolUse` with a matcher. So:
 
@@ -152,7 +152,7 @@ and must never be mistaken for "quiet turn":
 
 ## `requestId` — the server header
 
-`genId('cmd')` minted per `sendCommand` (already present today as the frame `id`), globally unique
+`genId('cmd')` minted per `sendCommand` — the correlation id carried on the frame — globally unique
 across channels (nanoid, never a per-channel counter — the pending map is keyed by it alone, so it
 must stay global). Correlation only; the agent never sees it. The reply echoes it as `meta.requestId`.
 
@@ -179,27 +179,6 @@ Handlers never touch addressing or identity — the wrapper reads them and scope
   agent-*chosen* value (the file target) must be a schema param; ambient values are headers.
 - **MCP servers get no session id from Claude Code** (only `CLAUDE_PROJECT_DIR`); the CC `session_id`
   reaches the server via a **`PreToolUse` hook injecting it into the call** (`updatedInput`,
-  propagates to MCP tools — verified). No file, no correlation.
+  which propagates to MCP tools). No file, no correlation.
 - **Reuse the existing store root.** All server-side state lives under `~/.figma-agent-bridge/`
   (alongside `component-index/`, `feedbacks/`, change-feed `changes/`) — no new storage convention.
-
-## Cascade reconciliations (Phase 2 of the revisions plan)
-
-This spec is the new SSOT; the following must be aligned in the cascade (they currently drift):
-
-- **`targetFileKey` → `meta.fileKey`** in `overview.md` (Targeting + guard) and `version-handshake.md`
-  (the guard field); both defer here for the envelope shape. The `meta{}` wrapping is itself the
-  breaking wire change → minor bump (B2).
-- **Push frame shape** in `change-feed.md`: move `fileKey`/`epoch` from `params` into `meta`; keep
-  `changes`/`at` in `params`.
-- **`fileTargetParamsSchema` + reserved `sessionId`** added to `tool-surface.md`.
-- **`epoch`** wording in `change-feed.md`: "nonce, compared for equality" (drop "monotonic").
-- **Close change-feed Open-Q** on "the shared session identifier" — answered here.
-
-## Open questions
-
-1. **Reserved-field pass-through** — confirm at implementation that a `PreToolUse` `updatedInput`
-   value for a field marked reserved (present but not model-advertised) survives MCP schema validation
-   and reaches the server. (Declaring it on the schema is the hedge; verify it isn't stripped.)
-2. **Unattributed-signal mechanism** — RESOLVED: change-feed writes a session-agnostic sentinel
-   (`changes/<fileKey>/_unattributed.json`), read as "nudge unconditionally." See change-feed.md.

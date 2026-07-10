@@ -16,11 +16,10 @@ related:
 
 # Version / Protocol Handshake
 
-> **Status:** implemented (shipped on `dev`). A **standalone, buildable** feature that landed **before** the Claude
-> Code plugin milestone ([[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]]) — that
-> milestone assumes this is in place and only *specializes* the mismatch UX. This reinstates a
-> **real** version check: a prior server+relay review removed the app-level Ping/Pong that carried
-> `name`+`version` (it was never wired to a handshake); this wires one.
+> A **standalone** feature the Claude Code plugin milestone
+> ([[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]]) assumes is in place and only
+> *specializes* (the mismatch UX). It defines a **real** version check: the app-level Ping/Pong
+> carries `name`+`version` but is not wired to a handshake on its own; this wires one.
 
 ## Purpose
 

@@ -15,10 +15,6 @@ related:
 
 > Governed by [[figma-bridge/docs/principles|the principles]] (T8 — one expression grammar, one source of truth; T1 — symmetric facade; T4 — token efficiency).
 
-> **Status — target design.** This describes the intended grammar. The shipped
-> `expression-parser.ts` still implements the older per-type syntaxes; migrating
-> the parser to this grammar is a follow-up, tracked with the M4 surface.
-
 ## Why this format exists
 
 This is the **inspect / view** representation (principle T3). Its job is to let an

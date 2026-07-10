@@ -118,13 +118,8 @@ ChangeRecord = {
 //                 params: { changes: ChangeRecord[], at }, meta: { fileKey, epoch } }
 ```
 
-> **Shipped-code deviation (as of the fileKey multi-file migration):** the CURRENTLY shipped
-> `document_changed` push is still the pre-change-feed staleness signal — `{ command:
-> "document_changed", params: { fileId } }` with **no `meta`** (the migration deliberately did NOT
-> move `fileId`→`meta.fileKey`, because `onRequest` forwards only `params` and reshaping it would
-> silently stop `markStale` firing). The `meta:{fileKey,epoch}` shape above lands when change-feed
-> is implemented, together with the `onRequest` params/meta-forwarding change. Spec and shipped code
-> disagree here on purpose; do not "fix" the push to `meta` before that work.
+The server's push handler reads `meta.fileKey` to route the frame to the right per-file buffer (the
+relay forwards both `params` and `meta`).
 
 `name` is included on create/update/page because it materially helps the agent reason
 (*"Button/Primary was moved"*) and is cheap for non-deletes; a deleted node becomes a `RemovedNode`
@@ -141,7 +136,10 @@ Buffer model). It is a connection-level field owned by
 Per `fileKey`, held in the **MCP server's memory** (not the plugin, not the relay). It holds:
 
 - A **node map** keyed by node id, and a **separate style map** keyed by style id — kept apart
-  because their collapse algebra differs and node/style id spaces are distinct. Each collapses to
+  because their collapse algebra differs and node/style id spaces are distinct. Each map is
+  **bounded** (a cap on the number of distinct changed ids it holds); exceeding the cap drops a
+  distinct change and makes the next drain `reset` (see below). The exact cap is a tuning detail
+  trading memory against how often a heavy manual-edit burst forces `reset`. Each collapses to
   **net effect**:
 
   | Sequence on one id | Net record |
@@ -190,7 +188,7 @@ unretrieved is new." Consequences, accepted deliberately:
 - *Mid-turn gap.* Edits the user makes *after* a drain surface on the next drain. The agent re-drains
   before a critical batch if it needs the freshest view.
 
-## Self-write filtering  *(POC-gated — see Validation)*
+## Self-write filtering
 
 The agent's own writes arrive as `documentchange` too, with `origin: 'LOCAL'` — identical to the
 user's edits, so **origin cannot distinguish them**. Filtering happens **at the source**, where the
@@ -203,10 +201,12 @@ plugin knows its own writes:
   Correlation is **definitive for create/delete** (the command's target/returned id is known) and
   id+prop+TTL for property changes. The TTL exists because `documentchange` is async/batched — it
   fires *after* the command handler returns, so a synchronous "I'm writing" flag would already be
-  cleared. **Starting TTL: 2 s** (tunable — see Open questions).
-- Each surviving record is stamped `source: "user"`; the residual race (a real user edit dropped as
-  self-caused) is **inherent**, not something the POC removes — the POC tunes the TTL to make it
-  negligible and confirms create/delete correlation is exact.
+  cleared. The TTL is short (on the order of a couple of seconds) — a tuning detail traded against
+  the false-drop window, not a contract.
+- Each surviving record is stamped `source: "user"`; the residual race — a real user edit on the
+  *same id+prop* within the sub-second self-write window, dropped as self-caused — is **inherent** to
+  source-side filtering, not eliminable. A short single-use TTL makes it negligible; create/delete
+  correlation is exact (the command's target/returned id is known).
 
 **Multi-session attribution is forward-compat, not built now.** When two sessions edit one file, "my
 write" is per-session: session A's edit must be filtered *for A* but is a real external change *for
@@ -281,7 +281,7 @@ per-call, not a single implicit connected file). Obeys `overview.md`'s `{error, 
 
 | Tool | Contract | Error codes |
 |---|---|---|
-| `pull_changes` | `{fileKey}` → `{changes, state}` — **drains** the buffer | `INVALID_PARAM`, `DISCONNECTED` |
+| `pull_changes` | `{fileKey}` → `{changes, state}` — **drains** the buffer | `INVALID_PARAM` (own) + `DISCONNECTED` / `WRONG_FILE` / `INCOMPATIBLE` (from the `withFile`/`requireFile` gate) |
 
 - Named with a **consumption verb**, not `get_*`: it mutates server state on read (a queue pop, non-
   idempotent — a second immediate call returns an empty `"ok"`), so a read-only `get_` prefix would
@@ -291,13 +291,16 @@ per-call, not a single implicit connected file). Obeys `overview.md`'s `{error, 
 - The envelope is `{changes, state}`, deliberately diverging from D1's list shape
   `{results, truncated, cursor?}` — this is an **event drain**, not a paginated list read, so it is
   cursorless by design.
-- The `{error, code}` codes are the **`overview.md` contract**; note that enum is not yet implemented
-  in code (errors are currently plain strings) and `DISCONNECTED` today maps to a **global** socket
-  check, not a per-`fileKey` one — the per-file distinction lands with the availability registry.
+- `pull_changes` is a **file-addressed tool**, so its addressing/version errors — `DISCONNECTED` (no
+  plugin for this `fileKey`), `WRONG_FILE` (unavailable `fileKey` — ASK, never guess), and
+  `INCOMPATIBLE` (version skew) — come from the shared file-gate (`withFile`/`requireFile`) that every
+  file tool inherits; `DISCONNECTED` is per-`fileKey`, not a global socket check. `INVALID_PARAM` is
+  the tool's own. Addressing/error mechanics: [[figma-bridge/docs/specs/overview|overview.md]] +
+  [[figma-bridge/docs/specs/request-envelope|request-envelope.md]].
 
 **Relationship to current-state reads (T1).** `select`/`page` records report *events* ("the user just
 changed selection/page"), which is a different concept from the current-state reads `get_selection` /
-`status().selection` / `list_pages`. They coexist without violating "one concept, one name."
+`status().joined[].selection` / `list_pages`. They coexist without violating "one concept, one name."
 
 ## Data flow
 
@@ -371,29 +374,4 @@ Figma Plugin API facts that shape this design:
   large editing session with suspicion; the real guard is that acting on a deleted node fails loudly.
 - **Continuously-connected only.** Any disconnect (plugin or server) is surfaced as `reset`, never a
   silent gap — but only *detected* disconnects; a dropped frame within a live connection is not.
-
-## Validation (before implementation)
-
-- **POC the self-write filter against the real plugin.** Confirm the touched-id + single-use TTL
-  reconciliation drops agent-caused `documentchange` records without dropping genuine user edits,
-  across create/delete/property and under batching. This is the one mechanism that must be proven live
-  (the headless mock can't exercise Figma's async batch timing) before the rest is built. Tune the TTL.
-- Confirm `documentchange` STYLE_* subtypes carry a usable style `id`, and that `currentpagechange` /
-  `selectionchange` reductions stay single-slot under rapid firing.
-- Confirm the enriched frame preserves the component index's `markStale` gating (no re-projection
-  regression).
-
-## Open questions
-
-1. **Nudge wording & cap** — how much the hook injects (bare count vs. a few sample ids) without
-   pre-empting the `pull_changes` drain.
-2. **Buffer cap size** — the per-map limit that trades memory for how often `reset` fires on a heavy
-   manual editing burst.
-3. **Self-write TTL** — starting at 2 s; tune against the POC.
-4. **Shared `sessionId`** — ✅ **resolved by
-   [[figma-bridge/docs/specs/request-envelope|request-envelope.md]]:** the identifier is the Claude
-   Code `session_id`, injected into each MCP call by a `PreToolUse` hook and read natively by the
-   `UserPromptSubmit` hook (the same value) — no separate correlation mechanism.
-5. **Multi-session** — promote `source` attribution + the already-per-session count path to full
-   cross-session filtering, if real usage shows two agents on one file.
 ```

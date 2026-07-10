@@ -15,7 +15,7 @@ related:
 
 # figma-agent-bridge — Feedback System
 
-> **Status — design spec.** Greenfield feature, not yet built. Defines a dogfooding
+> Defines a dogfooding
 > loop: the agent records friction it hits while driving the MCP, the human reviews it in
 > the Figma plugin, and one click files it as a comment on a GitHub issue via a CloudFlare
 > Worker. Governed by `docs/principles.md`; transport reuses `docs/architecture.md`

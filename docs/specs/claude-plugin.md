@@ -132,8 +132,8 @@ nearest "compiled" precedent).
 **Build.** `packages/server` + the relay entrypoint → `bun build --compile` → a **dual-mode**
 `figma-mcp-<os>-<arch>` (darwin-arm64 first): `--relay` runs the shared relay, otherwise the
 MCP stdio server (§8). **Production config is compiled in** via `bun build --define` — the
-feedback **Worker URL** (§7). The Worker **secret is *not* compiled in** (a shipped binary can't
-safely embed a shared secret — §7/§11); nothing else needs baking, so the shipped binary is a
+feedback **Worker URL** (§7). The Worker **secret is *not* compiled in** (a distributed binary can't
+safely embed a shared secret — §7/§11); nothing else needs baking, so the distributed binary is a
 production artifact and the user configures nothing.
 
 **Release.** A git tag triggers CI to build per-`os-arch` binaries and attach them to a
@@ -165,7 +165,7 @@ guarded `Setup`+`SessionStart` bootstrap; the official hooks docs show the same
 ```
 `.mcp.json` at plugin root is the **one reliable location**: inline `mcpServers` in
 `plugin.json` (Claude Code #16143) and `mcpServers` in `.claude/settings.json` (#32145) are
-both currently dropped.
+both dropped by the platform.
 
 **First-run ordering risk.** If the MCP server is launched before the `SessionStart` hook
 finishes downloading, the first launch fails. Mitigation: the hook runs **synchronously**
@@ -427,7 +427,7 @@ This milestone **packages** that mechanism and adds the plugin-layer pieces:
   figma-plugin — both bundled by the plugin install.
 - **The production Worker URL is compiled into the binary** (a build-time constant), so the
   endpoint needs no user config; env may override for dev. **The Worker
-  *secret* is NOT compiled in** — a shipped binary can't safely embed a shared secret
+  *secret* is NOT compiled in** — a distributed binary can't safely embed a shared secret
   (extractable); it's resolved at runtime (env / per-install token / another mitigation — §11).
 - **`figma-feedback` skill (§6.3)** — new: the plugin-layer *when + how to report* guidance
   (bugs + proposals formats), used by `figma-designer` (auto) and the main agent (manual). It
@@ -435,7 +435,7 @@ This milestone **packages** that mechanism and adds the plugin-layer pieces:
   milestone** — it supersedes feedback-system.md's *Out of scope* note that deferred the
   when-to-record skill (updated there).
 
-Local Markdown capture works today; **Send → GitHub** goes live when the Worker is deployed
+Local Markdown capture is the built-in path; **Send → GitHub** goes live when the Worker is deployed
 (URL already compiled in). The shared-**secret** handling for a *distributed* binary is the
 open piece — see §11.
 
@@ -445,7 +445,7 @@ open piece — see §11.
 is most of what remains after install (see [[figma-bridge/docs/specs/overview|overview.md]] →
 Connection lifecycle):
 - The Figma plugin **auto-connects** on launch and rejoins its own channel, so a reload is
-  deterministic. *(Shipped: a persisted `channel-id`. **Per-file channels** — a prerequisite
+  deterministic. *(The plugin persists a `channel-id`. **Per-file channels** — a prerequisite
   change landing with this work — bind that channel to `fileKey` instead; a breaking wire
   change that bumps the minor, see overview *Connection lifecycle* / version-handshake.md.)*
 - The MCP server **auto-discovers the relay port** and **auto-starts a shared relay** if none
@@ -469,7 +469,7 @@ build-order step 1 (§10) is done.**
 built **first**; this milestone **does not depend on its mechanism** and doesn't spec it. The
 plugin's only version touch-point is a small, later **diagnosis / response skill**: when the
 handshake reports a mismatch (or a connection is off), the skill guides the user through the fix
-(*reinstall the Figma plugin*, diagnose a stale server). The handshake has **now shipped** (app-semver, major.minor per B2), so this skill is authored as `figma-connection` in the skills/agents plan (Plan B) — no longer deferred.
+(*reinstall the Figma plugin*, diagnose a stale server). The handshake is a prerequisite spec (app-semver, major.minor per B2), so this skill is authored as `figma-connection` in the skills/agents plan (Plan B) — not deferred.
 
 ## 9. Testing — remote-VM clean room
 
@@ -507,7 +507,7 @@ investing in skill/agent content.
 
 - **Feedback Send (Worker → GitHub)** — deferred; local Markdown capture now
   ([[figma-bridge/docs/specs/feedback-system|feedback-system.md]]). The Worker URL compiles
-  in cleanly, but the **shared secret for a *distributed* binary is unresolved** — a shipped
+  in cleanly, but the **shared secret for a *distributed* binary is unresolved** — a distributed
   binary can't safely embed it (extractable → Worker spam). Decide: per-install token,
   Worker-side rate-limiting, or accept the risk.
 - **Windows/Linux binaries + polyglot hook wrapper** — deferred; darwin-arm64 first.

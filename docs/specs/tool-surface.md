@@ -16,12 +16,8 @@ related:
 
 # figma-agent-bridge — Tool Surface
 
-> **Status — spec of record.** This is the shipped **47-tool** surface (M1–M3, on
-> `dev`) — the contract of record for the MCP tool layer. The implementation matches
-> it: server handlers in `packages/server/src/tools/*`, param schemas in
-> `packages/shared/src/tool-params.ts`, plugin commands in
-> `packages/figma-plugin/src/code.ts`. Governed by `docs/principles.md` (T1–T10, B1,
-> P1).
+> **Spec of record.** This is the **47-tool** facade surface — the contract of record
+> for the MCP tool layer. Governed by `docs/principles.md` (T1–T10, B1, P1).
 >
 > The **component index** feature layers two further MCP tools —
 > `search_components` and `reindex` — specified in
@@ -31,21 +27,20 @@ related:
 > **Count is a formula, not a hand-summed aggregate (stops silent rot).** The one
 > hand-maintained number is the **facade group-sum = 47**. The exposed MCP surface is
 > then **`47 facade + K non-facade meta-tools`**, where the non-facade meta-tools are
-> `record_feedback` (shipped), `search_components` + `reindex` (shipped), plus the
-> **planned, not-yet-shipped** `pull_changes` (change-feed.md) and the three registry
-> tools `register_library` / `unregister_library` / `list_libraries`
-> (team-library-registry.md). Do not restate a hardcoded total (a bare "49" already
-> wrongly omits `record_feedback`).
+> `record_feedback`, `search_components`, `reindex`, `pull_changes` (change-feed.md),
+> and the three registry tools `register_library` / `unregister_library` /
+> `list_libraries` (team-library-registry.md). Do not restate a hardcoded total (a bare
+> "49" already wrongly omits `record_feedback`).
 >
-> The **change feed** (docs/specs/change-feed.md) adds one **planned, not-yet-shipped**
-> non-facade meta-tool `pull_changes({fileKey}) → {changes, state}` — a destructive
-> buffer **drain** (deliberately **not** `get_*`; non-idempotent; codes `INVALID_PARAM` /
-> `DISCONNECTED`). It must **not** inflate the shipped facade count.
+> The **change feed** (docs/specs/change-feed.md) adds one non-facade meta-tool
+> `pull_changes({fileKey}) → {changes, state}` — a destructive buffer **drain**
+> (deliberately **not** `get_*`; non-idempotent; codes `INVALID_PARAM` own, plus the
+> file-gate's `DISCONNECTED` / `WRONG_FILE` / `INCOMPATIBLE`). It must **not** inflate
+> the facade count.
 >
 > The **team-library registry** (docs/specs/team-library-registry.md) adds three
-> acknowledged non-facade meta-tools — `register_library`, `unregister_library`,
-> `list_libraries` (all take `fileKey`) — outside the `figma.*` facade count. They are
-> **not yet present** in the shipped surface.
+> non-facade meta-tools — `register_library`, `unregister_library`, `list_libraries`
+> (all take `fileKey`) — outside the `figma.*` facade count.
 
 > The tool layer only — opinions (design-system-first, audit verdicts, layout
 > inference) are skill-layer (P1) and deliberately absent.
@@ -243,7 +238,7 @@ Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle
 ### Session (2)
 - `connect({fileKey?, fileName?}) → {fileKey, fileName, connected, available[]}` — pair the MCP server to a **specific file's** plugin, targeted by `fileKey` (or `fileName`), and return the currently **available** files `available:[{fileKey, fileName, connectedAt}]` (the relay availability registry). When the target is ambiguous or **not available**, it does **not** guess — it returns an error listing `available[]` and asks the agent to choose (B3). The raw channel is now an internal detail (server resolves `fileKey`→channel). *(`fileKey` needs `enablePrivatePluginApi`; `fileName` is the fallback id — see overview *Connection lifecycle*.)* · B1, B3; §2 connect.
 - `status() → {connected, joined:[{fileKey, fileName, channel, currentPage, selection[], viewport, protocolVersion}], available[]}` — **every joined file** (multi-file) with its best-effort live context, plus the **availability set**, in one read (live context is best-effort; failures degrade, they don't throw) · B1, B3, T4; §2 read-what-user-sees.
-- *(plugin teardown = internal `close_plugin` command, not a tool — transport/dev-reload lifecycle, see overview *Connection lifecycle*; T6. **Addressing (B3):** tools take an explicit per-call **`fileKey`** param naming their target file (canonical; per [[figma-bridge/docs/specs/overview|overview.md]] and [[figma-bridge/docs/specs/request-envelope|request-envelope.md]] — the addressing/envelope source of truth). The param is carried by a shared **`fileTargetParamsSchema` mixin** — a required **`fileKey`** plus a **reserved, server-managed** optional **`sessionId`** (marked *do not set — injected by the session `PreToolUse` hook*, per request-envelope) — **spread into every file-addressed tool** so "required" is one definition, not per-tool. It is a **param-schema mixin, not a new tool** — the 47-facade count is unchanged. The **session/transport and non-file meta-tools are the exceptions:** `connect({fileKey?})` (discovery), `status()` (no per-call file), and `record_feedback` (global feedback store, no file) address the *connection* or a non-file store, not a per-call file, and do **not** spread the mixin. `requestId` is a **server header** (`genId('cmd')`), not a tool param. **Follow-up (pending code change):** the shipped core tools currently **server-stamp** the file target from the current connection rather than accept a per-call `fileKey`; migrating them to the mixin is not yet done.)*
+- *(plugin teardown = internal `close_plugin` command, not a tool — transport/dev-reload lifecycle, see overview *Connection lifecycle*; T6. **Addressing (B3):** tools take an explicit per-call **`fileKey`** param naming their target file (canonical; per [[figma-bridge/docs/specs/overview|overview.md]] and [[figma-bridge/docs/specs/request-envelope|request-envelope.md]] — the addressing/envelope source of truth). The param is carried by a shared **`fileTargetParamsSchema` mixin** — a required **`fileKey`** plus a **reserved, server-managed** optional **`sessionId`** (marked *do not set — injected by the session `PreToolUse` hook*, per request-envelope) — **spread into every file-addressed tool** so "required" is one definition, not per-tool. It is a **param-schema mixin, not a new tool** — the 47-facade count is unchanged. The **session/transport and non-file meta-tools are the exceptions:** `connect({fileKey?})` (discovery), `status()` (no per-call file), and `record_feedback` (global feedback store, no file) address the *connection* or a non-file store, not a per-call file, and do **not** spread the mixin. `requestId` is a **server header** (`genId('cmd')`), not a tool param.)*
 
 ### Read — nodes (4)
 - `inspect({nodeId?, pageId?, depth?, budget?, fields?, profile?, match?}) → {view, truncated[]}` — compact lossy view, drill-by-id (Rule B); each node carries a read-only **`contextSummary`** (the frontmatter slice of `context`, capped at `CONTEXT_SUMMARY_MAX_BYTES` = 512, rendered as a YAML block scalar; server-derived, **not** `fields`/`profile`-projectable; omitted when absent); omit both ids to inspect the current selection (multi-select returns a `SELECTION` forest) · **T3 inspect**, T4; §1 human view, §3 deep/large trees, §13 CSS-handoff data.
@@ -293,7 +288,7 @@ Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle
 - `update_component(componentId, {add?, edit?, delete?, description?, expose?}) → {id, properties, warnings[]}` — add/edit/delete all 4 property types, set description, **expose nested-instance property (🟠: feature-detected; on unavailability emits a `warnings[]` entry naming the dropped expose, never a silent no-op, T7)**; returns `properties` in the unified `[{id,name,type,defaultValue,variantOptions?}]` shape (same as `get_components`); round-trips create_component · T2, T7; §11 add-properties/description/expose, slot lifecycle (gated).
 - `combine_variants(componentIds[], {parentId?, name?}) → {id,key, warnings[]}` — combine ≥2 into a variant set; sole variant-combiner; warns if a variant name packs multiple axes into one property (e.g. `Style=PrimaryLarge`), nudging one-property-per-axis (T7/T9) · T6; §11 states/axes.
 - `swap_component(instanceId, {mainComponentId?, key?}) → {id, warnings[]}` — point an instance at a different main; accepts EITHER a LOCAL `mainComponentId` (node id, resolved directly) OR a remote `key` (resolved via `importComponentByKeyAsync`, T7-gated — degrades with a warning if the import fails); if both are given the LOCAL `mainComponentId` wins; warns on dropped overrides · T7; §11 migrate/swap.
-- `set_instance(instanceId, {properties?, overrides?}) → {id,…, warnings[]}` — the one instance-state path (set variant + BOOLEAN/TEXT/INSTANCE_SWAP via `setProperties`, plus per-node `overrides`); never auto-detaches; **read instance state via `get_node`** (NodeSpec `componentProperties`/`overrides` — the read twin); per-node `overrides` currently degrade with a warning (not yet applied) · T6, T9; §6/§11 configure + read-overrides.
+- `set_instance(instanceId, {properties?, overrides?}) → {id,…, warnings[]}` — the one instance-state path (set variant + BOOLEAN/TEXT/INSTANCE_SWAP via `setProperties`, plus per-node `overrides`); never auto-detaches; **read instance state via `get_node`** (NodeSpec `componentProperties`/`overrides` — the read twin); per-node `overrides` are accepted but degrade with a warning — applying them is reserved for a later phase (T7 degrade) · T6, T9; §6/§11 configure + read-overrides.
 - *(instance placement = `create_node`(INSTANCE) by key/id — no separate tool, T6.)*
 
 ### Write — design system (6)

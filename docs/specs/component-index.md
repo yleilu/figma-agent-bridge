@@ -156,7 +156,7 @@ Both tools take `fileKey` and obey `overview.md`'s `{error, code}` envelope.
 | `search_components` | `{fileKey, query, type?, limit?}` → `{results, indexState, truncated}` | `INVALID_PARAM` |
 | `reindex` | `{fileKey}` → force a full rebuild → `{indexState, count}` | `INVALID_PARAM` |
 
-- `search_components` is named to avoid collision with the shipped `search` node-finder (T1: one
+- `search_components` is named to avoid collision with the `search` node-finder (T1: one
   concept, one name). `get_components` is the underlying scan/projection primitive that feeds the index;
   `search_components` reads the index.
 - `truncated: true` means more components matched than `limit` — refine the query (no cursor; see
