@@ -186,6 +186,8 @@ const registerRaw = async (
   channel: string,
   fileName: string | null,
   fileKey: string | null,
+  currentPage?: string,
+  selected?: number,
 ): Promise<WebSocket> => {
   const ws = await new Promise<WebSocket>(
     (resolve, reject) => {
@@ -203,6 +205,8 @@ const registerRaw = async (
       fileName,
       fileKey,
       version: APP_VERSION,
+      currentPage,
+      selected,
     }),
   )
   await Bun.sleep(30)
@@ -383,5 +387,36 @@ describe('connect/status multi-file contract', () => {
       text(await handleStatus(client, HTTP)),
     ).toContain('disconnected')
     client.disconnect()
+  })
+
+  it('available[] surfaces version/currentPage/selected, hides channel', async () => {
+    const a = await registerRaw(
+      'ch-enrich',
+      'Enrich',
+      'key-enrich',
+      'Icons',
+      2,
+    )
+    const client = createFigmaClient(WS)
+    await client.joinChannel('ch-enrich', 'key-enrich')
+
+    const res = await handleStatus(client, HTTP)
+    const out = JSON.parse(text(res))
+    const entry = out.available.find(
+      (f: { fileKey: string }) =>
+        f.fileKey === 'key-enrich',
+    )
+    expect(entry).toMatchObject({
+      fileKey: 'key-enrich',
+      version: APP_VERSION,
+      currentPage: 'Icons',
+      selected: 2,
+    })
+    expect(
+      (entry as Record<string, unknown>).channel,
+    ).toBeUndefined()
+
+    client.disconnect()
+    a.close()
   })
 })

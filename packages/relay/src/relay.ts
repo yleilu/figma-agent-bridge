@@ -193,6 +193,8 @@ const handleRegister = (
   fileName: string | null,
   fileKey: string | null,
   version: string | undefined,
+  currentPage?: string,
+  selected?: number,
 ) => {
   if (
     ctx.clientChannels.get(ws.data.id)?.has(channel) !==
@@ -205,6 +207,62 @@ const handleRegister = (
     entry.fileName = fileName
     entry.fileKey = fileKey
     entry.version = version
+    if (currentPage !== undefined) {
+      entry.currentPage = currentPage
+    }
+    if (selected !== undefined) {
+      entry.selected = selected
+    }
+  }
+}
+
+const handlePresence = (
+  ctx: RelayContext,
+  ws: ServerWebSocket<WsData>,
+  channel: string,
+  currentPage?: string,
+  selected?: number,
+) => {
+  if (
+    ctx.clientChannels.get(ws.data.id)?.has(channel) !==
+    true
+  ) {
+    return
+  }
+  const entry = ctx.channelRegistry.get(channel)
+  if (entry !== undefined) {
+    if (currentPage !== undefined) {
+      entry.currentPage = currentPage
+    }
+    if (selected !== undefined) {
+      entry.selected = selected
+    }
+  }
+}
+
+const handleLeave = (
+  ctx: RelayContext,
+  ws: ServerWebSocket<WsData>,
+  channel: string,
+) => {
+  const { id } = ws.data
+  const joined = ctx.clientChannels.get(id)
+  if (joined?.has(channel) !== true) {
+    return
+  }
+
+  const members = ctx.channels.get(channel)
+  if (members !== undefined) {
+    members.delete(ws)
+    if (members.size === 0) {
+      ctx.channels.delete(channel)
+      ctx.channelRegistry.delete(channel)
+    }
+  }
+
+  joined.delete(channel)
+  if (joined.size === 0) {
+    ctx.clientChannels.delete(id)
   }
 }
 
@@ -325,7 +383,19 @@ export const startRelay = (
             frame.fileName,
             frame.fileKey ?? null,
             frame.version,
+            frame.currentPage,
+            frame.selected,
           )
+        } else if (frame.type === 'presence') {
+          handlePresence(
+            ctx,
+            ws,
+            frame.channel,
+            frame.currentPage,
+            frame.selected,
+          )
+        } else if (frame.type === 'leave') {
+          handleLeave(ctx, ws, frame.channel)
         } else if (frame.type === 'message') {
           handleMessage(ctx, ws, frame.channel, frame)
         }

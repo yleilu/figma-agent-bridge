@@ -45,6 +45,20 @@ export const registerMessageSchema = z.object({
   // the version handshake catches skew separately.
   fileKey: z.string().nullable().optional(),
   version: z.string().optional(),
+  currentPage: z.string().optional(),
+  selected: z.number().optional(),
+})
+
+export const presenceMessageSchema = z.object({
+  type: z.literal('presence'),
+  channel: z.string().min(1),
+  currentPage: z.string().optional(),
+  selected: z.number().optional(),
+})
+
+export const leaveMessageSchema = z.object({
+  type: z.literal('leave'),
+  channel: z.string().min(1),
 })
 
 export const relayIncomingSchema = z.discriminatedUnion(
@@ -53,6 +67,8 @@ export const relayIncomingSchema = z.discriminatedUnion(
     joinMessageSchema,
     channelMessageSchema,
     registerMessageSchema,
+    presenceMessageSchema,
+    leaveMessageSchema,
   ],
 )
 

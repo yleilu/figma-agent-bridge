@@ -384,6 +384,204 @@ describe('relay', () => {
       await closeWs(ws1)
       await closeWs(ws2)
     })
+
+    it('register carries currentPage/selected onto the registry', async () => {
+      const ws = await connect()
+      const nextMessage = createMessageQueue(ws)
+
+      ws.send(
+        JSON.stringify({ type: 'join', channel: 'file-p' }),
+      )
+      await nextMessage()
+
+      ws.send(
+        JSON.stringify({
+          type: 'register',
+          channel: 'file-p',
+          fileName: 'P',
+          fileKey: 'p',
+          version: '0.2.0',
+          currentPage: 'Icons',
+          selected: 2,
+        }),
+      )
+      await Bun.sleep(50)
+
+      const data = (await (
+        await fetch(`${HTTP_URL}/channels`)
+      ).json()) as ChannelInfo[]
+      const info = data.find(c => c.channel === 'file-p')
+      expect(info?.currentPage).toBe('Icons')
+      expect(info?.selected).toBe(2)
+
+      await closeWs(ws)
+    })
+
+    it('presence frame updates currentPage/selected in place', async () => {
+      const ws = await connect()
+      const nextMessage = createMessageQueue(ws)
+
+      ws.send(
+        JSON.stringify({ type: 'join', channel: 'file-q' }),
+      )
+      await nextMessage()
+
+      ws.send(
+        JSON.stringify({
+          type: 'register',
+          channel: 'file-q',
+          fileName: 'Q',
+          fileKey: 'q',
+          currentPage: 'Page 1',
+          selected: 0,
+        }),
+      )
+      await Bun.sleep(30)
+
+      ws.send(
+        JSON.stringify({
+          type: 'presence',
+          channel: 'file-q',
+          currentPage: 'Icons',
+          selected: 5,
+        }),
+      )
+      await Bun.sleep(30)
+
+      const data = (await (
+        await fetch(`${HTTP_URL}/channels`)
+      ).json()) as ChannelInfo[]
+      const info = data.find(c => c.channel === 'file-q')
+      expect(info?.currentPage).toBe('Icons')
+      expect(info?.selected).toBe(5)
+
+      await closeWs(ws)
+    })
+
+    it('ignores presence for a channel the client never joined', async () => {
+      const ws = await connect()
+
+      ws.send(
+        JSON.stringify({
+          type: 'presence',
+          channel: 'file-unjoined',
+          currentPage: 'X',
+          selected: 1,
+        }),
+      )
+      await Bun.sleep(30)
+
+      const data = (await (
+        await fetch(`${HTTP_URL}/channels`)
+      ).json()) as ChannelInfo[]
+      const info = data.find(
+        c => c.channel === 'file-unjoined',
+      )
+      expect(info).toBeUndefined()
+
+      await closeWs(ws)
+    })
+
+    it('leave frame reaps the channel from the registry', async () => {
+      const ws = await connect()
+      const nextMessage = createMessageQueue(ws)
+
+      ws.send(
+        JSON.stringify({ type: 'join', channel: 'file-l' }),
+      )
+      await nextMessage()
+
+      ws.send(
+        JSON.stringify({
+          type: 'register',
+          channel: 'file-l',
+          fileName: 'L',
+          fileKey: 'l',
+        }),
+      )
+      await Bun.sleep(30)
+
+      const present = (await (
+        await fetch(`${HTTP_URL}/channels`)
+      ).json()) as ChannelInfo[]
+      expect(
+        present.some(c => c.channel === 'file-l'),
+      ).toBe(true)
+
+      ws.send(
+        JSON.stringify({
+          type: 'leave',
+          channel: 'file-l',
+        }),
+      )
+      await Bun.sleep(30)
+
+      const gone = (await (
+        await fetch(`${HTTP_URL}/channels`)
+      ).json()) as ChannelInfo[]
+      expect(gone.some(c => c.channel === 'file-l')).toBe(
+        false,
+      )
+
+      await closeWs(ws)
+    })
+
+    it('leave for one channel does not drop another', async () => {
+      const ws = await connect()
+      const nextMessage = createMessageQueue(ws)
+
+      ws.send(
+        JSON.stringify({
+          type: 'join',
+          channel: 'file-a1',
+        }),
+      )
+      await nextMessage()
+      ws.send(
+        JSON.stringify({
+          type: 'join',
+          channel: 'file-a2',
+        }),
+      )
+      await nextMessage()
+
+      ws.send(
+        JSON.stringify({
+          type: 'register',
+          channel: 'file-a1',
+          fileName: 'A1',
+          fileKey: 'a1',
+        }),
+      )
+      ws.send(
+        JSON.stringify({
+          type: 'register',
+          channel: 'file-a2',
+          fileName: 'A2',
+          fileKey: 'a2',
+        }),
+      )
+      await Bun.sleep(30)
+
+      ws.send(
+        JSON.stringify({
+          type: 'leave',
+          channel: 'file-a1',
+        }),
+      )
+      await Bun.sleep(30)
+
+      const data = (await (
+        await fetch(`${HTTP_URL}/channels`)
+      ).json()) as ChannelInfo[]
+      expect(data.some(c => c.channel === 'file-a1')).toBe(
+        false,
+      )
+      const a2 = data.find(c => c.channel === 'file-a2')
+      expect(a2?.fileKey).toBe('a2')
+
+      await closeWs(ws)
+    })
   })
 
   it('ignores register for a channel the client never joined', async () => {

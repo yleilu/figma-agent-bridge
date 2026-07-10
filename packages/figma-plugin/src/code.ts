@@ -24,9 +24,32 @@ const fileIdentity = () => ({
   type: 'identity' as const,
   fileKey: figma.fileKey ?? null,
   fileName: figma.root.name,
+  currentPage: figma.currentPage.name,
+  selected: figma.currentPage.selection.length,
 })
 
 figma.ui.postMessage(fileIdentity())
+
+// Presence (Plugin Presence): the current page name + selection count,
+// pushed to the UI (debounced) so the relay's channel registry can enrich
+// discovery — mirrors the index-stale debounce below, just on different
+// trigger events (currentpagechange / selectionchange instead of
+// documentchange).
+let presenceTimer: ReturnType<typeof setTimeout> | undefined
+const pushPresence = () => {
+  if (presenceTimer !== undefined) {
+    clearTimeout(presenceTimer)
+  }
+  presenceTimer = setTimeout(() => {
+    figma.ui.postMessage({
+      type: 'presence',
+      currentPage: figma.currentPage.name,
+      selected: figma.currentPage.selection.length,
+    })
+  }, 300)
+}
+figma.on('currentpagechange', pushPresence)
+figma.on('selectionchange', pushPresence)
 
 // Component-index freshness: on a component-relevant document change, nudge the
 // server to mark this file's index stale (debounced). It only SIGNALS — the
@@ -66,6 +89,16 @@ figma.on('documentchange', event => {
       fileKey: figma.fileKey ?? null,
     })
   }, 300)
+})
+
+// Plugin Presence (Task 8): best-effort clean-close signal. On a clean
+// close, tell the UI to send a `leave` frame so the relay drops the
+// channel immediately instead of waiting for the ~60s heartbeat timeout.
+// KNOWN RISK: figma.on('close') may not fire on every close path (or the
+// iframe may be torn down before the UI can flush the frame) — that's
+// acceptable, the heartbeat is the backstop.
+figma.on('close', () => {
+  figma.ui.postMessage({ type: 'leave' })
 })
 
 type PluginMessage =

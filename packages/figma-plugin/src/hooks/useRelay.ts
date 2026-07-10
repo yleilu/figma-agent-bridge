@@ -20,6 +20,14 @@ export const useRelay = () => {
   const errorRef = useRef<string | null>(null)
   const fileNameRef = useRef<string | null>(null)
   const fileKeyRef = useRef<string | null>(null)
+  // Presence (Plugin Presence): current page name + selection count, mirrored
+  // from code.ts's identity/presence pushes. Written in BOTH the persistent
+  // identity listener and requestIdentity's one-shot handler — the latter is
+  // load-bearing because the register frame (sent from the ws 'system'
+  // branch) reads these refs before the persistent listener would otherwise
+  // have populated them.
+  const currentPageRef = useRef<string | null>(null)
+  const selectedRef = useRef<number | null>(null)
   // Per-session channel for a never-saved file (no stable fileKey).
   // Stable across reconnects within this session; a reload starts a new
   // session. A saved file never uses this — its channel is deterministic.
@@ -40,6 +48,20 @@ export const useRelay = () => {
   )
   const upsert = useCallback((item: FeedbackItem) => {
     setFeedbackItems(prev => ({ ...prev, [item.path]: item }))
+  }, [])
+
+  // Plugin Presence (Task 8): best-effort clean-close signal. Sends a
+  // `leave` frame so the relay drops the channel immediately instead of
+  // waiting for the ~60s heartbeat timeout. Fired from the `leave` push
+  // (code.ts's figma.on('close') listener, forwarded via window message
+  // below) and from disconnect().
+  const sendLeave = useCallback(() => {
+    const ws = wsRef.current
+    if (ws?.readyState === WebSocket.OPEN && channelRef.current) {
+      ws.send(
+        JSON.stringify({ type: 'leave', channel: channelRef.current }),
+      )
+    }
   }, [])
 
   // Send a correlated request over the relay and resolve on its reply.
@@ -84,6 +106,34 @@ export const useRelay = () => {
       if (msg.type === 'identity') {
         fileKeyRef.current = msg.fileKey ?? null
         fileNameRef.current = msg.fileName ?? null
+        currentPageRef.current = msg.currentPage ?? null
+        selectedRef.current =
+          typeof msg.selected === 'number' ? msg.selected : null
+        return
+      }
+
+      // Presence push (Plugin Presence): code.ts sends this (debounced) on
+      // currentpagechange/selectionchange. Mirror the refs so a later
+      // register/reconnect carries fresh values, and forward a presence
+      // frame to the relay so the channel registry can enrich discovery.
+      // MUST sit above the `command-result` gate below (same placement as
+      // index-stale) since this isn't a command-result frame.
+      if (msg.type === 'presence') {
+        currentPageRef.current = msg.currentPage ?? null
+        selectedRef.current =
+          typeof msg.selected === 'number' ? msg.selected : null
+        const presenceWs = wsRef.current
+        const presenceChannel = channelRef.current
+        if (presenceWs && presenceChannel) {
+          presenceWs.send(
+            JSON.stringify({
+              type: 'presence',
+              channel: presenceChannel,
+              currentPage: msg.currentPage,
+              selected: msg.selected,
+            }),
+          )
+        }
         return
       }
 
@@ -93,6 +143,17 @@ export const useRelay = () => {
       // the server dispatches it by command + params.fileId and sends back no
       // reply (a reply would fan a stray frame to every joined channel). No
       // id/target guard needed (plugin→server, unsolicited).
+      // Clean-close signal (Plugin Presence, Task 8): code.ts's
+      // figma.on('close') listener pushes this so the UI can tell the
+      // relay to drop the channel immediately rather than waiting for the
+      // heartbeat. MUST sit above the `command-result` gate below (same
+      // placement as presence/index-stale) since this isn't a
+      // command-result frame.
+      if (msg.type === 'leave') {
+        sendLeave()
+        return
+      }
+
       if (msg.type === 'index-stale') {
         const staleWs = wsRef.current
         const staleChannel = channelRef.current
@@ -140,7 +201,7 @@ export const useRelay = () => {
     return () => {
       window.removeEventListener('message', handler)
     }
-  }, [])
+  }, [sendLeave])
 
   // Ask code.ts for the file identity and resolve when it replies (or
   // after a short timeout, so connect never blocks forever). This is the
@@ -154,6 +215,9 @@ export const useRelay = () => {
           if (m?.type === 'identity') {
             fileKeyRef.current = m.fileKey ?? null
             fileNameRef.current = m.fileName ?? null
+            currentPageRef.current = m.currentPage ?? null
+            selectedRef.current =
+              typeof m.selected === 'number' ? m.selected : null
             finish()
           }
         }
@@ -223,6 +287,8 @@ export const useRelay = () => {
                 fileKey: fileKeyRef.current,
                 fileName: fileNameRef.current,
                 version: APP_VERSION,
+                currentPage: currentPageRef.current ?? undefined,
+                selected: selectedRef.current ?? undefined,
               }),
             )
 
@@ -340,6 +406,11 @@ export const useRelay = () => {
   const disconnect = useCallback(() => {
     const ws = wsRef.current
     if (ws) {
+      // Best-effort clean-close signal (Plugin Presence, Task 8): let the
+      // relay drop the channel immediately instead of waiting for the
+      // heartbeat. Must fire before ws.close() while the socket is still
+      // open.
+      sendLeave()
       ws.close()
       wsRef.current = null
       channelRef.current = null
@@ -349,7 +420,7 @@ export const useRelay = () => {
       channel: null,
       error: null,
     })
-  }, [])
+  }, [sendLeave])
 
   return {
     ...state,
