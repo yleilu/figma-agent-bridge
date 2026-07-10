@@ -197,10 +197,12 @@ The availability registry's removal triggers — socket `close`, a missed heartb
   reaps the channel within ~2 missed ticks. During that window the file still appears in `online` — the
   residual staleness the block is honest about (Limitations).
 
-**`recently_offline` is a one-turn transition.** The hook keeps `last-online.json` — the set of
-`fileKey`s that were online at the previous `UserPromptSubmit` (an **absent** file, e.g. on the first
-turn, counts as the empty set). Each turn: `recently_offline` = the previous set minus the current online
-set; then the hook rewrites the file with the current set. A file therefore appears in `recently_offline`
+**`recently_offline` is a one-turn transition.** The hook keeps `last-online.json` — the `{fileKey, name}`
+of each file online at the previous `UserPromptSubmit` (an **absent** baseline, e.g. on the first turn,
+counts as empty). Each turn: `recently_offline` = the previous set minus the current online `fileKey`s,
+carrying each dropped file's stored `name` so the block can render it (the file is already gone from
+`/channels`, so its name survives only in this baseline); then the hook rewrites the file with the current
+set. A file therefore appears in `recently_offline`
 for **exactly the one turn** after it drops (a heads-up: *"the file you were using is gone"*), then falls
 out — pure current-state (`online`) can't express a disappearance, so this single transition is worth
 keeping.
