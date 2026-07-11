@@ -4,6 +4,8 @@ set -euo pipefail
 export WORKER_URL="${WORKER_URL:-https://example.invalid}"   # placeholder ok locally (feedback only)
 echo "=== stamp version ==="
 bun run stamp:version
+echo "=== build CC bundle ==="
+bun run build:bundle
 echo "=== build server binaries + .mcpb bundles ==="
 bun run build:mcpbs
 echo "=== build figma plugin ==="
@@ -16,6 +18,7 @@ cat <<EOF
 === built version ${VERSION} ===
 Server binaries + .mcpb bundles:
 $(ls -1 dist/figma-mcp-* dist/*.mcpb 2>/dev/null || true)
+Claude Code bundle: plugin/bin/server.js
 Figma plugin: packages/figma-plugin/dist/{code.js,ui.html}  (manifest: packages/figma-plugin/manifest.json)
 
 Install + test locally:

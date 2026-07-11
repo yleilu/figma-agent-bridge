@@ -16,13 +16,15 @@
     "server": "bun --silent run --filter @figma-agent-bridge/server start",
     "test": "bun --filter '@figma-agent-bridge/*' test && (cd test && bun test)",
     "typecheck": "bun --filter '@figma-agent-bridge/*' typecheck",
-    "verify": "bun run lint && bun run typecheck && bun run test",
+    "verify": "bun run lint && bun run typecheck && bun run test && bun run check:bundle",
+    "check:bundle": "bash scripts/check-bundle-fresh.sh",
     "build:binaries": "bash scripts/build-binaries.sh",
     "build:mcpb": "bash scripts/build-mcpb.sh",
     "build:mcpbs": "bash scripts/build-mcpbs.sh",
     "stamp:version": "bun run scripts/stamp-version.ts",
     "verify:live": "bun run packages/server/src/verify-live.ts",
-    "bundle:local": "bash scripts/bundle-local.sh"
+    "bundle:local": "bash scripts/bundle-local.sh",
+    "build:bundle": "bash scripts/build-bundle.sh"
   },
   "devDependencies": {
     "@jsdevtools/version-bump-prompt": "^6.1.0",
