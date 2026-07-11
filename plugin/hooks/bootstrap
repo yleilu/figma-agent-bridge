@@ -3,20 +3,25 @@
 # ${CLAUDE_PLUGIN_DATA}/bin, downloading from the GitHub Release if absent or
 # version-mismatched. Guarded + idempotent + SHA-256-verified before chmod +x.
 set -euo pipefail
-VERSION="0.0.1"                                    # bump per release (== plugin.json)
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+VERSION="$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "${PLUGIN_ROOT}/.claude-plugin/plugin.json" | head -1 | sed 's/.*"\([^"]*\)".*/\1/')"
 REPO="yleilu/figma-agent-bridge"
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
+case "$OS" in mingw*|msys*|cygwin*|windows*) OS=windows ;; esac
+EXT=""; [ "$OS" = "windows" ] && EXT=".exe"
 BIN_DIR="${CLAUDE_PLUGIN_DATA}/bin"
-BIN="${BIN_DIR}/figma-mcp"
-ASSET="${BOOTSTRAP_ASSET:-figma-mcp-${OS}-${ARCH}}"
+BIN="${BIN_DIR}/figma-mcp${EXT}"
+ASSET="${BOOTSTRAP_ASSET:-figma-mcp-${OS}-${ARCH}${EXT}}"
 BASE="${BOOTSTRAP_BASE_URL:-https://github.com/${REPO}/releases/download/v${VERSION}}"
 
-# No prebuilt binary for this platform yet → skip gracefully instead of a cryptic
+# Only built targets are supported → skip gracefully instead of a cryptic
 # curl 404 that would fail SessionStart. (BOOTSTRAP_ASSET override = test mode → skip guard.)
-if [ -z "${BOOTSTRAP_ASSET:-}" ] && [ "${OS}-${ARCH}" != "darwin-arm64" ]; then
-  echo "figma-agent-bridge: no prebuilt binary for ${OS}-${ARCH} yet — see https://github.com/${REPO}/releases" >&2
-  exit 0
+if [ -z "${BOOTSTRAP_ASSET:-}" ]; then
+  case "${OS}-${ARCH}" in
+    darwin-arm64|darwin-x64|windows-x64) ;;
+    *) echo "figma-agent-bridge: no prebuilt binary for ${OS}-${ARCH} yet — see https://github.com/${REPO}/releases" >&2; exit 0 ;;
+  esac
 fi
 
 # idempotent: present + version matches → done

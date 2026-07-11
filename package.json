@@ -18,6 +18,9 @@
     "typecheck": "bun --filter '@figma-agent-bridge/*' typecheck",
     "verify": "bun run lint && bun run typecheck && bun run test",
     "build:binaries": "bash scripts/build-binaries.sh",
+    "build:mcpb": "bash scripts/build-mcpb.sh",
+    "build:mcpbs": "bash scripts/build-mcpbs.sh",
+    "stamp:version": "bun run scripts/stamp-version.ts",
     "verify:live": "bun run packages/server/src/verify-live.ts"
   },
   "devDependencies": {
