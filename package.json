@@ -21,7 +21,8 @@
     "build:mcpb": "bash scripts/build-mcpb.sh",
     "build:mcpbs": "bash scripts/build-mcpbs.sh",
     "stamp:version": "bun run scripts/stamp-version.ts",
-    "verify:live": "bun run packages/server/src/verify-live.ts"
+    "verify:live": "bun run packages/server/src/verify-live.ts",
+    "bundle:local": "bash scripts/bundle-local.sh"
   },
   "devDependencies": {
     "@jsdevtools/version-bump-prompt": "^6.1.0",

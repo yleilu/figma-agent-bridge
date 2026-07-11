@@ -5,23 +5,27 @@ on:
 permissions:
   contents: write
 jobs:
-  build:
-    strategy:
-      matrix:
-        include:
-          - runner: macos-14
-            target: bun-darwin-arm64
-    runs-on: ${{ matrix.runner }}
+  release:
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
-      - name: Build binary
+      - name: Verify gate
+        run: bun run verify
+      - name: Build server binaries + .mcpb bundles
         env:
           WORKER_URL: ${{ secrets.FEEDBACK_WORKER_URL }}
-        run: bash scripts/build-binary.sh ${{ matrix.target }}
+        run: bun run build:mcpbs
+      - name: Build + package the Figma plugin
+        run: |
+          bun run --filter @figma-agent-bridge/figma-plugin build
+          ( cd packages/figma-plugin && zip -qr "$GITHUB_WORKSPACE/dist/figma-plugin.zip" manifest.json dist )
       - uses: softprops/action-gh-release@v2
         with:
           fail_on_unmatched_files: true
+          generate_release_notes: true
           files: |
             dist/figma-mcp-*
+            dist/*.mcpb
+            dist/figma-plugin.zip
