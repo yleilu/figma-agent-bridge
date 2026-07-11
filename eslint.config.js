@@ -13,6 +13,7 @@ export default [
       'dist/',
       'packages/figma-plugin/**',
       '.claude/**',
+      'plugin/bin/**',
     ],
   },
   plugins.stylistic,

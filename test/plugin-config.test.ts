@@ -17,11 +17,13 @@ describe('plugin config', () => {
     expect(p.name).toBe('figma-agent-bridge')
     expect(p.version).toMatch(/^\d+\.\d+\.\d+/)
   })
-  it('.mcp.json points the server at the bootstrapped binary', async () => {
+  it('.mcp.json runs the bundle via bun', async () => {
     const c = await read('plugin/.mcp.json')
-    expect(c.mcpServers['figma-agent-bridge'].command).toBe(
-      '${CLAUDE_PLUGIN_DATA}/bin/figma-mcp',
-    )
+    const entry = c.mcpServers['figma-agent-bridge']
+    expect(entry.command).toBe('bun')
+    expect(entry.args).toEqual([
+      '${CLAUDE_PLUGIN_ROOT}/bin/server.js',
+    ])
   })
   it('marketplace + plugin versions agree (bump together)', async () => {
     const m = await read('.claude-plugin/marketplace.json')
