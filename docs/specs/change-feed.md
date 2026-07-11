@@ -14,6 +14,7 @@ related:
   - "[[figma-bridge/docs/specs/tool-surface]]"
   - "[[figma-bridge/docs/specs/component-index]]"
   - "[[figma-bridge/docs/specs/plugin-presence]]"
+  - "[[figma-bridge/docs/specs/connection-liveness]]"
   - "[[figma-bridge/docs/specs/claude-plugin]]"
   - "[[figma-bridge/docs/principles]]"
 ---
@@ -306,8 +307,11 @@ per-call, not a single implicit connected file). Obeys `overview.md`'s `{error, 
 - `pull_changes` is a **file-addressed tool**, so its addressing/version errors — `DISCONNECTED` (no
   plugin for this `fileKey`), `WRONG_FILE` (unavailable `fileKey` — ASK, never guess), and
   `INCOMPATIBLE` (version skew) — come from the shared file-gate (`withFile`/`requireFile`) that every
-  file tool inherits; `DISCONNECTED` is per-`fileKey`, not a global socket check. `INVALID_PARAM` is
-  the tool's own. Addressing/error mechanics: [[figma-bridge/docs/specs/overview|overview.md]] +
+  file tool inherits; `DISCONNECTED` is per-`fileKey`, not a global socket check, and is made **prompt**
+  by the command-liveness watchdog ([[figma-bridge/docs/specs/connection-liveness|connection-liveness.md]]):
+  a `pull_changes` on a file whose plugin died *silently* fast-fails in seconds rather than hanging, and
+  the dead-channel marker short-circuits follow-up calls. `INVALID_PARAM` is the tool's own.
+  Addressing/error mechanics: [[figma-bridge/docs/specs/overview|overview.md]] +
   [[figma-bridge/docs/specs/request-envelope|request-envelope.md]].
 
 **Relationship to current-state reads (T1).** `select`/`page` records report *events* ("the user just
