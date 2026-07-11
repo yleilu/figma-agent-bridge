@@ -16,6 +16,7 @@
     "server": "bun --silent run --filter @figma-agent-bridge/server start",
     "test": "bun --filter '@figma-agent-bridge/*' test && (cd test && bun test)",
     "typecheck": "bun --filter '@figma-agent-bridge/*' typecheck",
+    "verify": "bun run lint && bun run typecheck && bun run test",
     "verify:live": "bun run packages/server/src/verify-live.ts"
   },
   "devDependencies": {
