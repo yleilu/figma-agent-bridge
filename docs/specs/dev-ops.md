@@ -90,18 +90,19 @@ flowchart LR
 
 ## 3. Distribution & install routes
 
-### 3.1 One runtime (Bun); a compiled binary for the packaged routes
+### 3.1 One runtime (Bun); a compiled binary for the designer routes
 
 The server + relay run on **Bun** — the same runtime used in development and testing, so there is no
 dev/prod runtime divergence and the test suite exercises the shipped runtime. How Bun reaches a
 user's machine depends on the route:
 
-- **The packaged routes** (Claude Code, Claude Desktop, Figma) deliver a **self-contained
-  Bun-compiled binary** — one file, nothing to install. It is cross-compiled per platform (macOS and
-  Windows) from a single build. The Claude Code plugin fetches the matching binary from the release
-  on first run; the Claude Desktop extension bundles it; the Figma route hands the user the download.
-- **The manual route** clones the repository and **runs from source under Bun** — a developer
-  cloning the repo already has, or readily installs, Bun.
+- **Designer-facing routes** (Claude Desktop, Figma) deliver a **self-contained Bun-compiled
+  binary** — one file, no toolchain. Cross-compiled per platform (macOS, Windows) from a single
+  build; the Claude Desktop extension bundles it and the Figma route hands the user the download.
+- **Developer-facing routes** (Claude Code, manual) run under the **user's own Bun**. The Claude
+  Code plugin ships a small **committed JS bundle** (deps inlined) that it runs with `bun`; the
+  manual route runs from source. Bun is a documented prerequisite (the plugin's README notes a
+  one-line check-install).
 
 Either way the server owns a loopback-bound relay (§2).
 
@@ -111,17 +112,18 @@ There are three entry points. **No single artifact is self-sufficient** — ever
 needs the fig-plugin in Figma, the server+relay on the machine, and the agent-side package in the
 agent. Whichever door a user enters bootstraps the other two, all pinned to the same version.
 
-| Route                   | User installs                | Server + relay arrive via                                                | fig-plugin arrives via                                |
-| ----------------------- | ---------------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------- |
-| **1a · Claude Code**    | the marketplace plugin       | the plugin fetches the matching Bun binary from the release on first run | the plugin's setup command links to the Figma install |
-| **1b · Claude Desktop** | the extension bundle         | a self-contained Bun binary bundled in the extension                     | the extension's onboarding links to the Figma install |
-| **2 · Figma**           | the fig-plugin (Org publish) | the plugin directs the user to the self-contained Bun binary             | _(already installed)_                                 |
-| **3 · Manual**          | clones the repo              | runs from source under Bun                                               | dev-imports the plugin                                |
+| Route                   | User installs                | Server + relay arrive via                                             | fig-plugin arrives via                                |
+| ----------------------- | ---------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------- |
+| **1a · Claude Code**    | the marketplace plugin       | the plugin ships a committed Bun JS bundle, run with the user's `bun` | the plugin's setup command links to the Figma install |
+| **1b · Claude Desktop** | the extension bundle         | a self-contained Bun binary bundled in the extension                  | the extension's onboarding links to the Figma install |
+| **2 · Figma**           | the fig-plugin (Org publish) | the plugin directs the user to the self-contained Bun binary          | _(already installed)_                                 |
+| **3 · Manual**          | clones the repo              | runs from source under Bun                                            | dev-imports the plugin                                |
 
 - **Claude Code.** The repository provides a marketplace manifest listing the plugin; the plugin
-  carries its skills, agents, commands, and an MCP configuration. On first run the plugin fetches the
-  matching self-contained Bun binary from the release (checksum-verified) into a persistent
-  per-plugin location and launches it — the developer needs no toolchain.
+  carries its skills, agents, commands, an MCP configuration, and a small **committed Bun JS bundle**
+  of the server. On install the bundle arrives with the plugin (no download); `.mcp.json` runs it
+  with the user's `bun`. Bun is the one prerequisite — the README documents a one-line
+  check-install. This keeps the developer route on the same runtime used in dev and test.
 - **Claude Desktop.** An extension bundle carrying a manifest and the **self-contained Bun binary**,
   installed by double-click, drag-into-settings, or the extensions panel; the binary runs directly
   with no toolchain. The manifest declares any install-time configuration, surfaced as a settings
@@ -214,7 +216,8 @@ A release is triggered by the human pushing a release tag. The release pipeline:
 2. **Gate** — run the headless gate (§4.1). A failing gate aborts the release; nothing is published
    on red.
 3. **Stamp** the single version-of-record into every artifact (§6.1).
-4. **Build** the Bun binary (macOS and Windows) and package the three products.
+4. **Build** the Bun binary for the designer routes (macOS and Windows) and package the products.
+   (The Claude Code JS bundle is committed in the plugin, not built at release.)
 5. **Changelog** — generate release notes from the Conventional Commits since the previous tag.
 6. **Publish** a release carrying the artifacts and the changelog, and publish the fig-plugin to the
    Figma Organization.
