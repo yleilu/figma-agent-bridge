@@ -3,6 +3,7 @@ import type {
   FigmaClient,
   ScopedFigmaClient,
 } from '@figma-agent-bridge/server/figma-client'
+import { PluginDisconnectedError } from '@figma-agent-bridge/server/figma-client'
 import type { ChannelInfo } from '@figma-agent-bridge/shared'
 import { textResult } from '@figma-agent-bridge/server/tools/shared'
 import { withFile } from '@figma-agent-bridge/server/tools/with-file'
@@ -21,6 +22,7 @@ const base = (over: Partial<FigmaClient>): FigmaClient => ({
   joinedFiles: () => [],
   channelFor: () => null,
   discover: () => Promise.resolve([] as ChannelInfo[]),
+  isInstanceDead: () => false,
   ...over,
 })
 
@@ -98,5 +100,33 @@ describe('withFile', () => {
       nodeId: '1:2',
     })
     expect(scopedSessionSeen).toBe('s-9')
+  })
+
+  it('returns errorEnvelope(DISCONNECTED) when the handler throws PluginDisconnectedError', async () => {
+    const client = base({ channelFor: () => 'ch-a' }) // already joined → gate ok
+    const wrapped = withFile(client, async () => {
+      throw new PluginDisconnectedError('fk-a')
+    })
+    const res = await wrapped({
+      fileKey: 'fk-a',
+      nodeId: '1:2',
+    })
+    const env = JSON.parse(res.content[0].text)
+    expect(env.code).toBe('DISCONNECTED')
+    expect(env.error).toContain('fk-a')
+  })
+
+  it('rethrows non-PluginDisconnectedError errors from the handler', async () => {
+    const client = base({ channelFor: () => 'ch-a' })
+    const wrapped = withFile(client, async () => {
+      throw new Error('boom')
+    })
+    let caught: Error | null = null
+    try {
+      await wrapped({ fileKey: 'fk-a', nodeId: '1:2' })
+    } catch (err) {
+      caught = err as Error
+    }
+    expect(caught?.message).toBe('boom')
   })
 })

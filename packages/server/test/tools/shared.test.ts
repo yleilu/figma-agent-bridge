@@ -117,6 +117,7 @@ const makeClient = (
   joinedFiles: () => [],
   channelFor: () => null,
   discover: () => Promise.resolve([]),
+  isInstanceDead: () => false,
   ...over,
 })
 
@@ -245,6 +246,38 @@ describe('requireFile', () => {
       ).toBe('INCOMPATIBLE')
     }
     expect(joinCalled).toBe(false) // no join, no dispatch — refused loudly, not a 30s hang
+  })
+
+  // connection-liveness.md: the watchdog (L6) declares an unresponsive instance
+  // dead by fileKey → connectedAt. requireFile must fast-fail DISCONNECTED while
+  // the /channels entry's connectedAt still matches the declared-dead value,
+  // BEFORE auto-joining — the server is not joined here (channelFor → null), so
+  // the discover() branch is reached and the marker check applies.
+  it('DISCONNECTED when the watchdog has declared this instance dead (connectedAt still matches)', async () => {
+    let joinCalled = false
+    const client = makeClient({
+      channelFor: () => null,
+      discover: () =>
+        Promise.resolve([
+          info('ch-dead', 'fk-dead', 'Dead Design'),
+        ]).then(list =>
+          list.map(c => ({ ...c, connectedAt: 100 })),
+        ),
+      isInstanceDead: (fileKey, connectedAt) =>
+        fileKey === 'fk-dead' && connectedAt === 100,
+      joinChannel: () => {
+        joinCalled = true
+        return Promise.resolve('ok')
+      },
+    })
+    const r = await requireFile(client, 'fk-dead')
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(
+        JSON.parse(r.result.content[0].text).code,
+      ).toBe('DISCONNECTED')
+    }
+    expect(joinCalled).toBe(false) // marker fast-fails before auto-join
   })
 })
 

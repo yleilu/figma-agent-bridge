@@ -1,5 +1,6 @@
 // packages/shared/test/commands.test.ts
 import { describe, expect, it } from 'bun:test'
+import { APP_VERSION } from '../src'
 import {
   COMMANDS,
   type Command,
@@ -8,8 +9,9 @@ import {
 // The frozen tool catalogue (docs/specs/tool-surface.md → the 49-tool
 // surface: the 47 base tools + the 2 component-index tools). Hard-coded
 // here so a dropped or renamed command fails CI — honoring the "never
-// drop API items" rule. document_changed is an internal plugin→server
-// push (not an MCP tool) and is tracked separately in INTERNAL below.
+// drop API items" rule. document_changed and ping are internal
+// protocol commands (not MCP tools) and are tracked separately in
+// INTERNAL below.
 //
 // Grouped exactly as the catalogue groups them; the per-group counts
 // are asserted below so a regression points at the offending group.
@@ -83,7 +85,11 @@ const EXPECTED: Record<string, readonly string[]> = {
 
 // Non-tool protocol commands: wire commands that are not MCP tools.
 // document_changed is the unsolicited plugin→server freshness push.
-const INTERNAL: readonly string[] = ['document_changed']
+// ping is the app-level connection-liveness heartbeat (B2 wire change).
+const INTERNAL: readonly string[] = [
+  'document_changed',
+  'ping',
+]
 
 const EXPECTED_GROUP_COUNTS: Record<string, number> = {
   session: 2,
@@ -108,9 +114,9 @@ const EXPECTED_COMMANDS: readonly string[] = [
 ]
 
 describe('COMMANDS registry', () => {
-  it('has exactly 50 entries (49 tools + 1 internal)', () => {
-    expect(Object.keys(COMMANDS).length).toBe(50)
-    expect(EXPECTED_COMMANDS.length).toBe(50)
+  it('has exactly 51 entries (49 tools + 2 internal)', () => {
+    expect(Object.keys(COMMANDS).length).toBe(51)
+    expect(EXPECTED_COMMANDS.length).toBe(51)
   })
 
   it('per-group counts match the catalogue', () => {
@@ -146,5 +152,13 @@ describe('COMMANDS registry', () => {
       const cmd: Command = c as Command
       expect(typeof cmd).toBe('string')
     }
+  })
+
+  it('PING command exists', () => {
+    expect(COMMANDS.PING).toBe('ping')
+  })
+
+  it('version bumped to 0.3.x (ping is a B2 wire change)', () => {
+    expect(APP_VERSION.startsWith('0.3.')).toBe(true)
   })
 })

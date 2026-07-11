@@ -14,10 +14,14 @@ import {
   startRelay,
   stopRelay,
 } from '@figma-agent-bridge/relay/relay'
+import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
 import {
   createFigmaClient,
   discoverChannels,
+  PluginDisconnectedError,
 } from '@figma-agent-bridge/server/figma-client'
+import { COMMANDS } from '@figma-agent-bridge/shared'
+import { createMockPlugin } from './mocks/mock-plugin'
 
 const TEST_PORT = 3098
 const WS_URL = `ws://localhost:${TEST_PORT}`
@@ -570,6 +574,52 @@ describe('figma-client', () => {
   })
 })
 
+describe('isInstanceDead', () => {
+  // TEST-ONLY seam: the watchdog (L6) sets `deadInstances` directly via the
+  // closure; this cast reaches the same test-only setter to seed a dead
+  // entry ahead of that watchdog existing. Not part of the FigmaClient contract.
+  const seedDead = (
+    client: FigmaClient,
+    fileKey: string,
+    connectedAt: number,
+  ): void => {
+    const withSeam = client as unknown as {
+      __markDeadForTest: (
+        fileKey: string,
+        connectedAt: number,
+      ) => void
+    }
+    withSeam.__markDeadForTest(fileKey, connectedAt)
+  }
+
+  it('is true while the live connectedAt matches the declared-dead value', () => {
+    const client = createFigmaClient(WS_URL)
+    seedDead(client, 'fk-dead', 100)
+
+    expect(client.isInstanceDead('fk-dead', 100)).toBe(true)
+  })
+
+  it('self-clears on a fresher connectedAt (reconnect) and stays clear', () => {
+    const client = createFigmaClient(WS_URL)
+    seedDead(client, 'fk-dead', 100)
+
+    expect(client.isInstanceDead('fk-dead', 200)).toBe(
+      false,
+    )
+    // Marker was cleared by the mismatch above — still false on a second call.
+    expect(client.isInstanceDead('fk-dead', 200)).toBe(
+      false,
+    )
+  })
+
+  it('returns false for a fileKey with no declared-dead entry', () => {
+    const client = createFigmaClient(WS_URL)
+    expect(client.isInstanceDead('fk-never-dead', 1)).toBe(
+      false,
+    )
+  })
+})
+
 describe('discoverChannels', () => {
   let server: Server<{ id: string }>
 
@@ -818,5 +868,334 @@ describe('figma-client multi-file + meta', () => {
     client.disconnect()
     expect(client.joinedFiles()).toEqual([])
     expect(client.isConnected()).toBe(false)
+  })
+})
+
+// L5 — mock-plugin ping + controllable timing, for the L6 watchdog tests.
+describe('mock plugin: ping + timing knobs', () => {
+  let server: Server<{ id: string }>
+
+  beforeEach(() => {
+    server = startRelay(TEST_PORT)
+  })
+
+  afterEach(() => {
+    stopRelay(server)
+  })
+
+  it('answers ping with a pong reply', async () => {
+    const client = createFigmaClient(WS_URL)
+    const plugin = createMockPlugin({
+      relayUrl: WS_URL,
+      channel: 'ping-ch',
+      fileKey: 'fk-ping',
+    })
+    await plugin.start()
+    await client.joinChannel('ping-ch', 'fk-ping')
+
+    const res = await client.sendCommand(
+      'fk-ping',
+      COMMANDS.PING,
+      {},
+    )
+
+    expect(res).toEqual({ ok: true })
+
+    plugin.stop()
+    client.disconnect()
+  })
+
+  it('delays a real command reply while ping still pongs quickly (slow-alive)', async () => {
+    const client = createFigmaClient(WS_URL)
+    const plugin = createMockPlugin({
+      relayUrl: WS_URL,
+      channel: 'slow-ch',
+      fileKey: 'fk-slow',
+    })
+    await plugin.start()
+    await client.joinChannel('slow-ch', 'fk-slow')
+
+    plugin.delayCommand(COMMANDS.STATUS, 300)
+
+    const start = Date.now()
+    const statusElapsed = client
+      .sendCommand('fk-slow', COMMANDS.STATUS, {})
+      .then(() => Date.now() - start)
+    const pingElapsed = client
+      .sendCommand('fk-slow', COMMANDS.PING, {})
+      .then(() => Date.now() - start)
+
+    expect(await pingElapsed).toBeLessThan(150)
+    expect(await statusElapsed).toBeGreaterThanOrEqual(300)
+
+    plugin.stop()
+    client.disconnect()
+  })
+
+  it('silent mode withholds ALL replies incl. ping (dead)', async () => {
+    const client = createFigmaClient(WS_URL)
+    const plugin = createMockPlugin({
+      relayUrl: WS_URL,
+      channel: 'dead-ch',
+      fileKey: 'fk-dead',
+    })
+    await plugin.start()
+    await client.joinChannel('dead-ch', 'fk-dead')
+
+    plugin.setSilent(true)
+
+    const expectTimeout = (
+      p: Promise<unknown>,
+    ): Promise<string> =>
+      p.then(
+        () => {
+          throw new Error('expected a timeout, got a reply')
+        },
+        (err: Error) => err.message,
+      )
+
+    const [statusErr, pingErr] = await Promise.all([
+      expectTimeout(
+        client.sendCommand(
+          'fk-dead',
+          COMMANDS.STATUS,
+          {},
+          120,
+        ),
+      ),
+      expectTimeout(
+        client.sendCommand(
+          'fk-dead',
+          COMMANDS.PING,
+          {},
+          120,
+        ),
+      ),
+    ])
+
+    expect(statusErr).toContain('timed out')
+    expect(pingErr).toContain('timed out')
+
+    plugin.stop()
+    client.disconnect()
+  })
+})
+
+// L6 — the command-liveness watchdog (probe, not shorten, the command).
+describe('command-liveness watchdog (L6)', () => {
+  let server: Server<{ id: string }>
+
+  beforeEach(() => {
+    server = startRelay(TEST_PORT)
+  })
+  afterEach(() => {
+    stopRelay(server)
+  })
+
+  // Fast tuning so the loop runs in ~hundreds of ms instead of the ~2s
+  // production cadence. grace/ping = 100ms, 2 consecutive misses → dead.
+  const FAST = { graceMs: 100, pingMs: 100, maxMisses: 2 }
+
+  const connectedAtFor = async (
+    fileKey: string,
+  ): Promise<number | undefined> =>
+    (await discoverChannels(HTTP_URL)).find(
+      c => (c.fileKey ?? c.channel) === fileKey,
+    )?.connectedAt
+
+  it('keeps a slow-but-alive command alive via pings (does NOT reject)', async () => {
+    const client = createFigmaClient(
+      WS_URL,
+      undefined,
+      FAST,
+    )
+    const plugin = createMockPlugin({
+      relayUrl: WS_URL,
+      channel: 'wd-slow-ch',
+      fileKey: 'fk-wd-slow',
+    })
+    await plugin.start()
+    await client.joinChannel('wd-slow-ch', 'fk-wd-slow')
+
+    // Reply deferred well past grace + several ping cycles, but far under the
+    // real command timeout — the watchdog's pongs must keep it alive.
+    plugin.delayCommand(COMMANDS.STATUS, 600)
+
+    const res = await client.sendCommand(
+      'fk-wd-slow',
+      COMMANDS.STATUS,
+      {},
+      30_000,
+    )
+
+    // Resolves with the REAL status result, not a watchdog rejection.
+    expect(res).toMatchObject({
+      currentPage: { id: 'page:1' },
+    })
+    // The watchdog probed (armed) but never declared death.
+    expect(plugin.pings()).toBeGreaterThan(0)
+    const at = await connectedAtFor('fk-wd-slow')
+    expect(client.isInstanceDead('fk-wd-slow', at)).toBe(
+      false,
+    )
+    expect(client.channelFor('fk-wd-slow')).toBe(
+      'wd-slow-ch',
+    )
+
+    plugin.stop()
+    client.disconnect()
+  })
+
+  it('declares a silent plugin dead: rejects DISCONNECTED, marks instance, drops joined', async () => {
+    const client = createFigmaClient(
+      WS_URL,
+      undefined,
+      FAST,
+    )
+    const plugin = createMockPlugin({
+      relayUrl: WS_URL,
+      channel: 'wd-dead-ch',
+      fileKey: 'fk-wd-dead',
+    })
+    await plugin.start()
+    await client.joinChannel('wd-dead-ch', 'fk-wd-dead')
+
+    // Capture the live connectedAt BEFORE death: the relay never reaps on a
+    // watchdog death, so the entry (and its connectedAt) persist.
+    const deadAt = await connectedAtFor('fk-wd-dead')
+    expect(deadAt).not.toBeUndefined()
+
+    plugin.setSilent(true)
+
+    let caught: Error | null = null
+    try {
+      await client.sendCommand(
+        'fk-wd-dead',
+        COMMANDS.STATUS,
+        {},
+        30_000,
+      )
+    } catch (err) {
+      caught = err as Error
+    }
+
+    // Rejected in ~grace + 2 ping cycles with the typed error — NOT the 30s
+    // command timeout.
+    expect(caught).toBeInstanceOf(PluginDisconnectedError)
+    // Dead-channel marker set on the declared-dead connectedAt.
+    expect(
+      client.isInstanceDead('fk-wd-dead', deadAt),
+    ).toBe(true)
+    // Dropped from joined → the channel is gone for the next call.
+    expect(client.channelFor('fk-wd-dead')).toBeNull()
+
+    plugin.stop()
+    client.disconnect()
+  })
+
+  it('fast path: a prompt reply never arms the watchdog (no ping sent)', async () => {
+    const client = createFigmaClient(
+      WS_URL,
+      undefined,
+      FAST,
+    )
+    const plugin = createMockPlugin({
+      relayUrl: WS_URL,
+      channel: 'wd-fast-ch',
+      fileKey: 'fk-wd-fast',
+    })
+    await plugin.start()
+    await client.joinChannel('wd-fast-ch', 'fk-wd-fast')
+
+    // Default synchronous mock reply — well under the 100ms grace window.
+    const res = await client.sendCommand(
+      'fk-wd-fast',
+      COMMANDS.STATUS,
+      {},
+      30_000,
+    )
+    expect(res).toMatchObject({
+      currentPage: { id: 'page:1' },
+    })
+
+    // Give any (erroneously-armed) watchdog its full grace + a ping cycle to
+    // fire, then assert it never probed and left no death marker.
+    await Bun.sleep(FAST.graceMs + FAST.pingMs + 100)
+    expect(plugin.pings()).toBe(0)
+    const at = await connectedAtFor('fk-wd-fast')
+    expect(client.isInstanceDead('fk-wd-fast', at)).toBe(
+      false,
+    )
+
+    plugin.stop()
+    client.disconnect()
+  })
+
+  it('settles exactly once with no unhandled rejections (slow-alive + dead)', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason)
+    }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      // slow-alive: the real reply wins the race against the watchdog.
+      const c1 = createFigmaClient(WS_URL, undefined, FAST)
+      const p1 = createMockPlugin({
+        relayUrl: WS_URL,
+        channel: 'wd-once-ch',
+        fileKey: 'fk-wd-once',
+      })
+      await p1.start()
+      await c1.joinChannel('wd-once-ch', 'fk-wd-once')
+      p1.delayCommand(COMMANDS.STATUS, 350)
+      const settled1 = await c1
+        .sendCommand(
+          'fk-wd-once',
+          COMMANDS.STATUS,
+          {},
+          30_000,
+        )
+        .then(
+          () => 'resolved',
+          () => 'rejected',
+        )
+      expect(settled1).toBe('resolved')
+      p1.stop()
+      c1.disconnect()
+
+      // dead: the watchdog wins and rejects exactly once.
+      const c2 = createFigmaClient(WS_URL, undefined, FAST)
+      const p2 = createMockPlugin({
+        relayUrl: WS_URL,
+        channel: 'wd-once-dead-ch',
+        fileKey: 'fk-wd-once-dead',
+      })
+      await p2.start()
+      await c2.joinChannel(
+        'wd-once-dead-ch',
+        'fk-wd-once-dead',
+      )
+      p2.setSilent(true)
+      const settled2 = await c2
+        .sendCommand(
+          'fk-wd-once-dead',
+          COMMANDS.STATUS,
+          {},
+          30_000,
+        )
+        .then(
+          () => 'resolved',
+          () => 'rejected',
+        )
+      expect(settled2).toBe('rejected')
+      p2.stop()
+      c2.disconnect()
+
+      // Let any late/duplicate settlement or stray ping rejection surface.
+      await Bun.sleep(FAST.pingMs * 3)
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
   })
 })

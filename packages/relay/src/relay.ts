@@ -18,7 +18,7 @@ const MAX_TOTAL_CHANNELS = 1024
 const MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
 const RATE_TOKENS_PER_SEC = 50
 const RATE_BURST = 100
-const DEFAULT_HEARTBEAT_INTERVAL = 30_000
+export const DEFAULT_HEARTBEAT_INTERVAL = 10_000
 
 type WsData = { id: string }
 type RateState = { tokens: number; last: number }

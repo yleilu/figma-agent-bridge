@@ -1,6 +1,11 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import type { FeedbackItem, Meta } from '@figma-agent-bridge/shared'
-import { APP_VERSION, genId, genToken } from '@figma-agent-bridge/shared'
+import {
+  APP_VERSION,
+  COMMANDS,
+  genId,
+  genToken,
+} from '@figma-agent-bridge/shared'
 import { deriveChannel } from '../file-channel'
 
 type RelayState = {
@@ -331,6 +336,32 @@ export const useRelay = () => {
               if (msg.error)
                 p.reject(new Error(String(msg.error)))
               else p.resolve(msg.result)
+              return
+            }
+
+            // Liveness ping (connection-liveness.md): answer HERE in the UI
+            // iframe and NEVER forward to the main thread. A "slow" command
+            // means the main thread is busy; only the iframe's event loop
+            // stays free to pong, so a busy-but-alive plugin isn't
+            // false-killed by the watchdog. Must sit above the
+            // command-forward block below.
+            if (msg.command === COMMANDS.PING) {
+              const pingMeta = msg.meta as Meta | undefined
+              const requestId = pingMeta?.requestId
+              const pingWs = wsRef.current
+              const pingChannel = channelRef.current
+              if (requestId && pingWs && pingChannel) {
+                pingWs.send(
+                  JSON.stringify({
+                    type: 'message',
+                    channel: pingChannel,
+                    message: {
+                      meta: { requestId },
+                      result: { ok: true },
+                    },
+                  }),
+                )
+              }
               return
             }
 

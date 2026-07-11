@@ -8,6 +8,7 @@ import type {
 } from '@figma-agent-bridge/shared/types'
 import {
   APP_VERSION,
+  COMMANDS,
   isTargetMismatch,
   targetGuardError,
 } from '@figma-agent-bridge/shared'
@@ -112,6 +113,22 @@ type MockPluginOptions = {
 type MockPlugin = {
   start: () => Promise<void>
   stop: () => void
+  // Timing knobs (L5 — for the L6 watchdog tests only): DEFAULT is unchanged
+  // synchronous auto-answer, so every pre-existing mock-based test is
+  // unaffected unless a test opts in below.
+  //
+  // setSilent(true): withhold EVERY reply, including ping — models a fully
+  // dead plugin/socket (the watchdog should eventually declare it dead).
+  setSilent: (silent: boolean) => void
+  // delayCommand(command, ms): defer that command's reply by `ms` via
+  // setTimeout, WITHOUT delaying ping — models a slow-but-alive plugin (busy
+  // main thread, but the UI iframe's ping-answering event loop stays free),
+  // faithful to the real plugin's ping bypass in useRelay.ts.
+  delayCommand: (command: string, delayMs: number) => void
+  // pings(): count of liveness pings this plugin has RECEIVED (incremented on
+  // receipt, before the silent gate). Lets the L6 watchdog tests assert the
+  // fast path never armed the watchdog (zero pings).
+  pings: () => number
 }
 
 export const createMockPlugin = (
@@ -139,6 +156,18 @@ export const createMockPlugin = (
   // when present, and the get_components/get_styles fixtures below carry a raw
   // `description` (+ optional `context`) so the read surfacing is exercised e2e.
   const sharedContext = new Map<string, string>()
+
+  // L5 timing knobs — TEST INFRASTRUCTURE for the L6 watchdog tests only.
+  // `silent` withholds every reply (incl. ping); `delayedCommands` maps a
+  // command string to a reply-delay in ms (ping is never delayed). Both
+  // default to off, so every pre-existing mock-based test keeps the
+  // synchronous auto-answer it was written against.
+  let silent = false
+  const delayedCommands = new Map<string, number>()
+  // Count of liveness pings received (see MockPlugin.pings). Incremented on
+  // receipt regardless of the silent gate, so a silent-dead plugin still
+  // records the watchdog's probes.
+  let pingCount = 0
 
   // runCommand mirrors the real plugin's handleCommand: dispatch on the command
   // string and return { result?, error? }. Pulled out of handleBroadcast so the
@@ -174,6 +203,16 @@ export const createMockPlugin = (
         result = { results }
         break
       }
+
+      // ping (connection-liveness.md, L5): faithful to the real plugin, which
+      // now answers ping (useRelay.ts) — a bare liveness ack, no document
+      // state. handleBroadcast special-cases ping ABOVE this switch (bypasses
+      // the identity guard + the delay map, mirroring the real plugin's
+      // ping-answered-in-the-UI-iframe bypass), but it is still routed through
+      // runCommand (incl. via BATCH) so the reply shape stays centralized here.
+      case COMMANDS.PING:
+        result = { ok: true }
+        break
 
       case 'get_document_info':
         result = {
@@ -1942,6 +1981,40 @@ export const createMockPlugin = (
     cmd: CommandMessage,
   ): void => {
     const requestId = cmd.meta?.requestId
+    const isPing = cmd.command === COMMANDS.PING
+    if (isPing) {
+      pingCount += 1
+    }
+
+    // L5 silent mode: withhold EVERY reply, incl. ping — models a fully dead
+    // plugin/socket for the L6 watchdog tests. Nothing is sent, ever.
+    if (silent) {
+      return
+    }
+
+    // Liveness ping bypasses the identity guard below AND the delay map,
+    // faithful to the real plugin: useRelay.ts answers ping unconditionally in
+    // the UI iframe layer, above both the target-guard check and the
+    // main-thread command dispatch — so a busy-but-alive plugin still pongs.
+    if (isPing) {
+      const { result, error } = runCommand(
+        cmd.command!,
+        cmd.params,
+      )
+      const resolved: CommandMessage =
+        error !== undefined
+          ? { meta: { requestId }, error }
+          : { meta: { requestId }, result }
+      socket.send(
+        JSON.stringify({
+          type: 'message',
+          channel,
+          message: resolved,
+        } satisfies ChannelMessage),
+      )
+      return
+    }
+
     // B3 identity guard (mirrors the real plugin's code.ts, via the same
     // shared isTargetMismatch/targetGuardError): a command whose meta.fileKey ≠
     // this plugin's fileKey is refused with a byte-identical typed error and NOT
@@ -1966,26 +2039,39 @@ export const createMockPlugin = (
       return
     }
 
-    const { result, error } = runCommand(
-      cmd.command!,
-      cmd.params,
-    )
+    const sendReply = (): void => {
+      const { result, error } = runCommand(
+        cmd.command!,
+        cmd.params,
+      )
 
-    // The real Figma plugin replies with { meta:{requestId}, result|error } and
-    // NO command (see figma-plugin/src/hooks/useRelay.ts). Mirror that here so
-    // the mock exercises the real response shape through the relay's validation.
-    const resolved: CommandMessage =
-      error !== undefined
-        ? { meta: { requestId }, error }
-        : { meta: { requestId }, result }
+      // The real Figma plugin replies with { meta:{requestId}, result|error }
+      // and NO command (see figma-plugin/src/hooks/useRelay.ts). Mirror that
+      // here so the mock exercises the real response shape through the
+      // relay's validation.
+      const resolved: CommandMessage =
+        error !== undefined
+          ? { meta: { requestId }, error }
+          : { meta: { requestId }, result }
 
-    const reply: ChannelMessage = {
-      type: 'message',
-      channel,
-      message: resolved,
+      const reply: ChannelMessage = {
+        type: 'message',
+        channel,
+        message: resolved,
+      }
+
+      socket.send(JSON.stringify(reply))
     }
 
-    socket.send(JSON.stringify(reply))
+    // L5 delay knob: a command present in `delayedCommands` has its reply
+    // deferred by the mapped ms (models a slow-but-alive plugin). Absent (the
+    // default) → immediate synchronous reply, unchanged from before L5.
+    const delayMs = delayedCommands.get(cmd.command!)
+    if (delayMs !== undefined) {
+      setTimeout(sendReply, delayMs)
+    } else {
+      sendReply()
+    }
   }
 
   const start = (): Promise<void> =>
@@ -2049,5 +2135,18 @@ export const createMockPlugin = (
     }
   }
 
-  return { start, stop }
+  const setSilent = (value: boolean): void => {
+    silent = value
+  }
+
+  const delayCommand = (
+    command: string,
+    delayMs: number,
+  ): void => {
+    delayedCommands.set(command, delayMs)
+  }
+
+  const pings = (): number => pingCount
+
+  return { start, stop, setSilent, delayCommand, pings }
 }
