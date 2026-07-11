@@ -1,10 +1,21 @@
 {
   "name": "figma-agent-bridge",
-  "version": "0.0.1",
+  "version": "0.3.0",
   "description": "Drive Figma from Claude Code — design, review, and file feedback.",
-  "author": { "name": "Lei", "email": "l@tristone.io" },
+  "author": {
+    "name": "Lei",
+    "email": "l@tristone.io"
+  },
   "homepage": "https://github.com/yleilu/figma-agent-bridge",
-  "repository": { "type": "git", "url": "https://github.com/yleilu/figma-agent-bridge" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yleilu/figma-agent-bridge"
+  },
   "license": "MIT",
-  "keywords": ["figma", "design", "mcp", "agent"]
+  "keywords": [
+    "figma",
+    "design",
+    "mcp",
+    "agent"
+  ]
 }

@@ -18,6 +18,7 @@
     "typecheck": "bun --filter '@figma-agent-bridge/*' typecheck",
     "verify": "bun run lint && bun run typecheck && bun run test",
     "build:binaries": "bash scripts/build-binaries.sh",
+    "stamp:version": "bun run scripts/stamp-version.ts",
     "verify:live": "bun run packages/server/src/verify-live.ts"
   },
   "devDependencies": {
