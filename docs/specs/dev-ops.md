@@ -17,7 +17,7 @@ project's user-facing products, and the gates it must pass on the way. It is the
 truth for the **distribution model, versioning, the verify gates, the release pipeline, and the git
 model**.
 
-**What it does not govern:** the *creative* inner loop (idea → brainstorm → spec → plan →
+**What it does not govern:** the _creative_ inner loop (idea → brainstorm → spec → plan →
 implement) — that is individual working process. Runtime observability of end-user installs is also
 out of scope.
 
@@ -44,20 +44,20 @@ Development is **local-first**; GitHub is the **integration, release, and distri
 Three user-facing products plus one ops-deployed service, all built from one repository and carrying
 the **same version** (§6).
 
-| Product                                    | Contents                                                    | Runtime                            |
-| ------------------------------------------ | ----------------------------------------------------------- | ---------------------------------- |
-| **Agent-side package** *(two forms)*       | see below                                                   | —                                  |
-| **fig-plugin**                             | the Figma plugin                                            | Figma                              |
-| **server + relay**                         | one portable payload; the server owns the relay's lifecycle | a host-provided JavaScript runtime |
-| **feedback worker** *(not user-installed)* | edge worker                                                 | Cloudflare                         |
+| Product                                    | Contents                                             | Runtime    |
+| ------------------------------------------ | ---------------------------------------------------- | ---------- |
+| **Agent-side package** _(two forms)_       | see below                                            | —          |
+| **fig-plugin**                             | the Figma plugin                                     | Figma      |
+| **server + relay**                         | a Bun program; the server owns the relay's lifecycle | Bun        |
+| **feedback worker** _(not user-installed)_ | edge worker                                          | Cloudflare |
 
 The **agent-side package** ships in two forms, because the agent hosts are different systems with no
 shared plugin artifact:
 
-| Host | Form | Carries |
-|---|---|---|
-| **Claude Code** | repo **marketplace plugin** | skills + agents + commands + the MCP configuration that launches the server |
-| **Claude Desktop** | **extension bundle** | the server only — no skills/agents/commands |
+| Host               | Form                        | Carries                                                                     |
+| ------------------ | --------------------------- | --------------------------------------------------------------------------- |
+| **Claude Code**    | repo **marketplace plugin** | skills + agents + commands + the MCP configuration that launches the server |
+| **Claude Desktop** | **extension bundle**        | the server only — no skills/agents/commands                                 |
 
 Both wrap the **identical server + relay**; only the wrapper differs.
 
@@ -90,14 +90,19 @@ flowchart LR
 
 ## 3. Distribution & install routes
 
-### 3.1 One portable payload, no per-platform binaries
+### 3.1 One runtime (Bun); a compiled binary only where no toolchain can be assumed
 
-The server + relay ship as a **single portable payload** (a bundled JavaScript build), not
-per-platform compiled binaries. Every supported host already provides a JavaScript runtime — the
-Desktop host bundles one, the CLI host is itself a JavaScript application, and source installs supply
-their own — so the project never ships a runtime, and one payload covers every host. The relay
-exposes its socket through a **runtime-portable WebSocket server** so the same payload runs
-unmodified across hosts.
+The server + relay run on **Bun** — the same runtime used in development and testing, so there is no
+dev/prod runtime divergence and the test suite exercises the shipped runtime. How Bun reaches a
+user's machine depends on whether the route can assume a toolchain:
+
+- **Designer-facing routes** (Figma-plugin, Claude Desktop) receive a **self-contained Bun-compiled
+  binary** — one file, nothing to install. It is cross-compiled per platform (macOS and Windows)
+  from a single build.
+- **Developer-facing routes** (Claude Code, manual) **run from source under Bun**; their install
+  step ensures Bun is present, installing it if absent.
+
+Either way the server owns a loopback-bound relay (§2).
 
 ### 3.2 Install routes
 
@@ -105,22 +110,22 @@ There are three entry points. **No single artifact is self-sufficient** — ever
 needs the fig-plugin in Figma, the server+relay on the machine, and the agent-side package in the
 agent. Whichever door a user enters bootstraps the other two, all pinned to the same version.
 
-| Route | User installs | Server + relay arrive via | fig-plugin arrives via |
-|---|---|---|---|
-| **1a · Claude Code** | the marketplace plugin | rides inside the plugin (its MCP configuration launches the payload) | the plugin's setup command links to the Figma install |
-| **1b · Claude Desktop** | the extension bundle | bundled in the extension, run by the host runtime | the extension's onboarding links to the Figma install |
-| **2 · Figma** | the fig-plugin (Org publish) | the plugin directs the user to install the matching agent-side package | *(already installed)* |
-| **3 · Manual** | clones the repo | runs from source | dev-imports the plugin |
+| Route                   | User installs                | Server + relay arrive via                                                              | fig-plugin arrives via                                |
+| ----------------------- | ---------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| **1a · Claude Code**    | the marketplace plugin       | run from source under Bun — the plugin's install ensures Bun, then launches the server | the plugin's setup command links to the Figma install |
+| **1b · Claude Desktop** | the extension bundle         | a self-contained Bun binary bundled in the extension                                   | the extension's onboarding links to the Figma install |
+| **2 · Figma**           | the fig-plugin (Org publish) | the plugin directs the user to the self-contained Bun binary                           | _(already installed)_                                 |
+| **3 · Manual**          | clones the repo              | runs from source under Bun                                                             | dev-imports the plugin                                |
 
 - **Claude Code.** The repository provides a marketplace manifest listing the plugin; the plugin
-  carries its skills, agents, commands, and an MCP configuration that launches the bundled server
-  entrypoint by a path relative to the installed plugin. A persistent per-plugin data location
-  (which survives updates) is available should a future revision prefer to fetch the payload on
-  first run rather than carry it in the plugin.
-- **Claude Desktop.** An extension bundle carrying a manifest and the payload, installed by
-  double-click, drag-into-settings, or the extensions panel. The manifest declares any
-  install-time configuration, surfaced as a settings UI. Self-hosted bundles require no signing or
-  review; only a listing in the host's directory would.
+  carries its skills, agents, commands, and an MCP configuration that launches the server from
+  source under Bun. The plugin's install ensures Bun is present (installing it if absent), so a
+  developer needs no manual setup.
+- **Claude Desktop.** An extension bundle carrying a manifest and the **self-contained Bun binary**,
+  installed by double-click, drag-into-settings, or the extensions panel; the binary runs directly
+  with no toolchain. The manifest declares any install-time configuration, surfaced as a settings
+  UI. Self-hosted bundles require no signing or review; only a listing in the host's directory
+  would.
 - **fig-plugin.** The plugin reads the Figma file key through a **private Figma API**, which Figma
   permits only for private / Organization plugins. It is therefore **published privately to the
   Figma Organization**: one-click install into members' menu, no review, no dev-mode. Public Figma
@@ -129,7 +134,8 @@ agent. Whichever door a user enters bootstraps the other two, all pinned to the 
 
 ### 3.3 Platform & identity constraints
 
-- **Claude Desktop supports macOS and Windows only** (no Linux).
+- **Claude Desktop supports macOS and Windows only** (no Linux); the designer binary is compiled for
+  those two platforms.
 - The relay binds **loopback** (see §2).
 - The version-matched triplet is guaranteed by coordinated releases (§7) plus the runtime
   handshake (§6), not by an install-time version selector.
@@ -207,7 +213,8 @@ A release is triggered by the human pushing a release tag. The release pipeline:
 2. **Gate** — run the headless gate (§4.1). A failing gate aborts the release; nothing is published
    on red.
 3. **Stamp** the single version-of-record into every artifact (§6.1).
-4. **Build** the payload and package the three products.
+4. **Build** the Bun binary for the designer routes (macOS and Windows) and package the three
+   products.
 5. **Changelog** — generate release notes from the Conventional Commits since the previous tag.
 6. **Publish** a release carrying the artifacts and the changelog, and publish the fig-plugin to the
    Figma Organization.
