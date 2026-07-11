@@ -14,6 +14,7 @@ import type {
 } from '@figma-agent-bridge/shared/types'
 import { APP_VERSION } from '@figma-agent-bridge/shared'
 import {
+  DEFAULT_HEARTBEAT_INTERVAL,
   startRelay,
   stopRelay,
 } from '@figma-agent-bridge/relay/relay'
@@ -70,6 +71,12 @@ const closeWs = (ws: WebSocket): Promise<void> => {
     ws.close()
   })
 }
+
+describe('relay heartbeat default', () => {
+  it('default heartbeat interval is 10s (fast idle-death detection)', () => {
+    expect(DEFAULT_HEARTBEAT_INTERVAL).toBe(10_000)
+  })
+})
 
 describe('relay', () => {
   let server: Server<{ id: string }>
