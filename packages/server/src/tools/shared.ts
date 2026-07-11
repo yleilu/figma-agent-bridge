@@ -142,6 +142,17 @@ export const requireFile = async (
       ),
     }
   }
+  // Watchdog declared this instance dead — fast-fail until it reconnects (fresh
+  // connectedAt) or the heartbeat reaps it. connection-liveness.md.
+  if (client.isInstanceDead(fileKey, match.connectedAt)) {
+    return {
+      ok: false,
+      result: errorEnvelope(
+        'DISCONNECTED',
+        `${fileKey} is not responding`,
+      ),
+    }
+  }
   // B2 version gate — MUST live here, not only in connect. Every file tool flows
   // through requireFile; a plugin↔server major.minor skew produces a SILENT 30s
   // timeout (the old plugin never echoes meta.requestId), so refuse LOUDLY before

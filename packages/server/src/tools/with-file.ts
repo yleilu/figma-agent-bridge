@@ -20,7 +20,12 @@ import type {
   FigmaClient,
   ScopedFigmaClient,
 } from '../figma-client'
-import { requireFile, type ToolResult } from './shared'
+import { PluginDisconnectedError } from '../figma-client'
+import {
+  requireFile,
+  errorEnvelope,
+  type ToolResult,
+} from './shared'
 
 /**
  * The params a FILE-ADDRESSED handler actually receives: the schema's inferred
@@ -58,7 +63,14 @@ export const withFile =
     }
     const { fileKey, sessionId, ...rest } = args
     const scoped = client.forFile(fileKey, { sessionId })
-    return handler(rest as unknown as P, scoped)
+    try {
+      return await handler(rest as unknown as P, scoped)
+    } catch (e) {
+      if (e instanceof PluginDisconnectedError) {
+        return errorEnvelope('DISCONNECTED', e.message)
+      }
+      throw e
+    }
   }
 
 /**

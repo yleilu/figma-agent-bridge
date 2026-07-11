@@ -14,6 +14,7 @@ import {
   startRelay,
   stopRelay,
 } from '@figma-agent-bridge/relay/relay'
+import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
 import {
   createFigmaClient,
   discoverChannels,
@@ -567,6 +568,52 @@ describe('figma-client', () => {
     expect((caught as Error).message).toBe('Disconnected')
 
     server = startRelay(TEST_PORT)
+  })
+})
+
+describe('isInstanceDead', () => {
+  // TEST-ONLY seam: the watchdog (L6) sets `deadInstances` directly via the
+  // closure; this cast reaches the same test-only setter to seed a dead
+  // entry ahead of that watchdog existing. Not part of the FigmaClient contract.
+  const seedDead = (
+    client: FigmaClient,
+    fileKey: string,
+    connectedAt: number,
+  ): void => {
+    const withSeam = client as unknown as {
+      __markDeadForTest: (
+        fileKey: string,
+        connectedAt: number,
+      ) => void
+    }
+    withSeam.__markDeadForTest(fileKey, connectedAt)
+  }
+
+  it('is true while the live connectedAt matches the declared-dead value', () => {
+    const client = createFigmaClient(WS_URL)
+    seedDead(client, 'fk-dead', 100)
+
+    expect(client.isInstanceDead('fk-dead', 100)).toBe(true)
+  })
+
+  it('self-clears on a fresher connectedAt (reconnect) and stays clear', () => {
+    const client = createFigmaClient(WS_URL)
+    seedDead(client, 'fk-dead', 100)
+
+    expect(client.isInstanceDead('fk-dead', 200)).toBe(
+      false,
+    )
+    // Marker was cleared by the mismatch above — still false on a second call.
+    expect(client.isInstanceDead('fk-dead', 200)).toBe(
+      false,
+    )
+  })
+
+  it('returns false for a fileKey with no declared-dead entry', () => {
+    const client = createFigmaClient(WS_URL)
+    expect(client.isInstanceDead('fk-never-dead', 1)).toBe(
+      false,
+    )
   })
 })
 

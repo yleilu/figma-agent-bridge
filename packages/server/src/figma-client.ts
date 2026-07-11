@@ -50,6 +50,23 @@ export type FigmaClient = {
   joinedFiles: () => string[]
   channelFor: (fileKey: string) => string | null
   discover: () => Promise<ChannelInfo[]>
+  // connection-liveness.md: true while `fileKey`'s /channels entry's connectedAt
+  // still matches the watchdog's declared-dead value; self-clears (returns false
+  // thereafter) on a reconnect (fresher connectedAt) or once the entry is gone.
+  isInstanceDead: (
+    fileKey: string,
+    liveConnectedAt: number | undefined,
+  ) => boolean
+}
+
+// The watchdog (L6) throws this when an instance stops responding to liveness
+// pings; withFile maps it to errorEnvelope('DISCONNECTED', …) (instanceof check,
+// hence a VALUE export, not `export type`).
+export class PluginDisconnectedError extends Error {
+  constructor(public readonly fileKey: string) {
+    super(`Plugin for ${fileKey} is not responding`)
+    this.name = 'PluginDisconnectedError'
+  }
 }
 
 type Pending<T> = {
@@ -90,6 +107,9 @@ export const createFigmaClient = (
   let disconnected = false
   // Joined files: fileKey → channel. One socket, many channels (B3 multi-file).
   const joined = new Map<string, string>()
+  // Watchdog-declared-dead instances: fileKey → the dead instance's connectedAt
+  // (connection-liveness.md). Set by the watchdog (L6) directly via this closure.
+  const deadInstances = new Map<string, number>()
   // Dedupe concurrent joins for the SAME fileKey; serialize DISTINCT joins
   // through joinQueue so the single-slot handshake state below is never
   // clobbered by an overlapping join.
@@ -488,7 +508,22 @@ export const createFigmaClient = (
   const discover = (): Promise<ChannelInfo[]> =>
     discoverChannels(relayHttpUrl)
 
-  return {
+  const isInstanceDead = (
+    fileKey: string,
+    liveConnectedAt: number | undefined,
+  ): boolean => {
+    const dead = deadInstances.get(fileKey)
+    if (dead === undefined) {
+      return false
+    }
+    if (liveConnectedAt === dead) {
+      return true
+    }
+    deadInstances.delete(fileKey) // reconnect (fresh connectedAt) or gone → self-clear
+    return false
+  }
+
+  const client = {
     joinChannel,
     sendCommand,
     forFile,
@@ -499,5 +534,18 @@ export const createFigmaClient = (
     joinedFiles,
     channelFor,
     discover,
+    isInstanceDead,
+    // TEST-ONLY seam: the watchdog (L6) will set `deadInstances` directly via
+    // this closure once it exists. Until then, L4's tests reach it through
+    // this method to seed a dead entry. NOT part of the public FigmaClient
+    // type/contract — production code must never call it.
+    __markDeadForTest: (
+      fileKey: string,
+      connectedAt: number,
+    ): void => {
+      deadInstances.set(fileKey, connectedAt)
+    },
   }
+
+  return client
 }
