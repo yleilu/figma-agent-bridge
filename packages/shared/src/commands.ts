@@ -36,6 +36,7 @@ export const COMMANDS = {
   SEARCH_COMPONENTS: 'search_components',
   REINDEX: 'reindex',
   DOCUMENT_CHANGED: 'document_changed',
+  PING: 'ping',
 
   // --- read — node metadata & prototype (2) ---
   GET_PLUGIN_DATA: 'get_plugin_data',
