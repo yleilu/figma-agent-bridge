@@ -142,18 +142,19 @@ without waiting for the relay's heartbeat to reap the entry from `/channels`. Th
 `/channels` each call (there is no availability cache), so the marker lives beside it.
 
 - On a watchdog death, the server records the **dead instance's identity** — the `/channels` entry's
-  `connectedAt` and connection `epoch` (the nonce that changes on every register/reconnect) — as
-  **declared-dead**, and drops the file from its joined set. The **file gate** then returns
-  **`DISCONNECTED`** for that file — the plugin *was* live and died (not `WRONG_FILE`, which is for a
-  `fileKey` that was never available) — **only while the current `/channels` entry still matches the
-  declared-dead `connectedAt`/`epoch`** (no auto-join, no re-probe).
-- **Keyed on the instance, not the channel — this is load-bearing.** A saved file's channel id is
-  deterministic (`file-<fileKey>`), so a reconnect reuses the **same** channel and overwrites the
-  `/channels` entry **in place** — the entry never *disappears*, so a channel-string marker would stick
-  and wrongly `DISCONNECTED` the healthy reopened plugin. Keying on `connectedAt`/`epoch` makes the marker
-  **self-clear the instant a fresher instance registers** (the new entry no longer matches → the gate
-  stops suppressing). For an *idle* death with no reconnect, the entry is simply reaped by the heartbeat
-  and the marker becomes moot.
+  **`connectedAt`** (a fresh value minted by every `register`/reconnect) — as **declared-dead**, and drops
+  the file from its joined set. The **file gate** then returns **`DISCONNECTED`** for that file — the
+  plugin *was* live and died (not `WRONG_FILE`, which is for a `fileKey` that was never available) —
+  **only while the current `/channels` entry's `connectedAt` still matches the declared-dead value** (no
+  auto-join, no re-probe). (`connectedAt` is a real `ChannelInfo`/`/channels` field the gate reads; the
+  connection `epoch` is **not** — it rides only on frame `meta` — so the marker keys on `connectedAt`.)
+- **Keyed on the instance's `connectedAt`, not the channel — this is load-bearing.** A saved file's
+  channel id is deterministic (`file-<fileKey>`), so a reconnect reuses the **same** channel and
+  overwrites the `/channels` entry **in place** — the entry never *disappears*, so a channel-string
+  marker would stick and wrongly `DISCONNECTED` the healthy reopened plugin. A reconnect mints a fresh
+  `connectedAt`, so the overwritten entry no longer matches the declared-dead value → the marker
+  **self-clears the instant a fresher instance registers**. For an *idle* death with no reconnect, the
+  entry is simply reaped by the heartbeat and the marker becomes moot.
 - The server **does not tell the relay to reap.** The relay's heartbeat owns its own registry (clean
   layering — **B1**); the marker is purely the server's fast-fail bridge between *watchdog detection*
   (instant) and either *reconnect* (marker clears) or *heartbeat reap* (~one interval).
@@ -180,7 +181,7 @@ flowchart TB
     G -->|graceful close| LV["leave frame → relay removes now\n(plugin-presence.md)"]
     G -->|agent is acting on it| WD["watchdog: ping fails →\nreject command DISCONNECTED\n+ mark channel dead"]
     G -->|idle, no command in flight| HB["heartbeat (10s): missed pong →\nrelay reaps from /channels"]
-    WD --> MK["dead-channel marker →\nsubsequent commands fast-fail\nuntil /channels drops it"]
+    WD --> MK["dead-channel marker →\nsubsequent commands fast-fail\nuntil reconnect or heartbeat reap"]
     HB --> REG["/channels + presence block correct"]
     MK --> REG
     LV --> REG
