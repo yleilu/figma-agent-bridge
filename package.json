@@ -21,6 +21,7 @@
     "dev:server": "bun --silent run --filter @figma-agent-bridge/server start",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "install:local": "bash scripts/install-local.sh",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "release:stamp": "bun run scripts/stamp-version.ts",
