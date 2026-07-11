@@ -125,6 +125,10 @@ type MockPlugin = {
   // main thread, but the UI iframe's ping-answering event loop stays free),
   // faithful to the real plugin's ping bypass in useRelay.ts.
   delayCommand: (command: string, delayMs: number) => void
+  // pings(): count of liveness pings this plugin has RECEIVED (incremented on
+  // receipt, before the silent gate). Lets the L6 watchdog tests assert the
+  // fast path never armed the watchdog (zero pings).
+  pings: () => number
 }
 
 export const createMockPlugin = (
@@ -160,6 +164,10 @@ export const createMockPlugin = (
   // synchronous auto-answer it was written against.
   let silent = false
   const delayedCommands = new Map<string, number>()
+  // Count of liveness pings received (see MockPlugin.pings). Incremented on
+  // receipt regardless of the silent gate, so a silent-dead plugin still
+  // records the watchdog's probes.
+  let pingCount = 0
 
   // runCommand mirrors the real plugin's handleCommand: dispatch on the command
   // string and return { result?, error? }. Pulled out of handleBroadcast so the
@@ -1974,6 +1982,9 @@ export const createMockPlugin = (
   ): void => {
     const requestId = cmd.meta?.requestId
     const isPing = cmd.command === COMMANDS.PING
+    if (isPing) {
+      pingCount += 1
+    }
 
     // L5 silent mode: withhold EVERY reply, incl. ping — models a fully dead
     // plugin/socket for the L6 watchdog tests. Nothing is sent, ever.
@@ -2135,5 +2146,7 @@ export const createMockPlugin = (
     delayedCommands.set(command, delayMs)
   }
 
-  return { start, stop, setSilent, delayCommand }
+  const pings = (): number => pingCount
+
+  return { start, stop, setSilent, delayCommand, pings }
 }

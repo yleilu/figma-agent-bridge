@@ -1,4 +1,5 @@
 import {
+  COMMANDS,
   genId,
   relayOutgoingSchema,
 } from '@figma-agent-bridge/shared'
@@ -73,9 +74,21 @@ type Pending<T> = {
   resolve: (value: T) => void
   reject: (reason: Error) => void
   timer: ReturnType<typeof setTimeout>
+  // connection-liveness.md — the command-liveness watchdog stashes its teardown
+  // here so any OTHER settlement (real reply / real timeout) stops the loop and
+  // clears its grace timer. OPTIONAL: joinPending/rejectAll never set it.
+  teardown?: () => void
 }
 
 const JOIN_TIMEOUT_MS = 3e4
+
+// connection-liveness.md — command-liveness watchdog tuning. Production defaults
+// are ~2s per the spec (best-effort detection, false-kill margin); overridable
+// via the 3rd createFigmaClient arg so tests can drive the loop in ~hundreds of
+// ms with real timers instead of the full ~2s cadence.
+const WATCHDOG_GRACE_MS = 2_000
+const WATCHDOG_PING_MS = 2_000
+const WATCHDOG_MAX_MISSES = 2
 
 // Normalize a relay WebSocket URL to its HTTP origin (for the /channels REST
 // registry). The single source of this ws→http conversion — shared by discover,
@@ -102,7 +115,16 @@ export const discoverChannels = async (
 export const createFigmaClient = (
   relayUrl: string,
   joinTimeoutMs = JOIN_TIMEOUT_MS,
+  watchdog?: {
+    graceMs?: number
+    pingMs?: number
+    maxMisses?: number
+  },
 ): FigmaClient => {
+  const graceMs = watchdog?.graceMs ?? WATCHDOG_GRACE_MS
+  const pingMs = watchdog?.pingMs ?? WATCHDOG_PING_MS
+  const maxMisses =
+    watchdog?.maxMisses ?? WATCHDOG_MAX_MISSES
   let ws: WebSocket | null = null
   let disconnected = false
   // Joined files: fileKey → channel. One socket, many channels (B3 multi-file).
@@ -247,6 +269,9 @@ export const createFigmaClient = (
     ) {
       clearTimeout(req.timer)
       pending.delete(rid)
+      // connection-liveness.md — a real reply settles the command; tear the
+      // watchdog loop down so it stops probing (no-op if never armed).
+      req.teardown?.()
       if (message.error !== undefined) {
         req.reject(new Error(message.error))
       } else {
@@ -383,6 +408,10 @@ export const createFigmaClient = (
 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
+        // connection-liveness.md — the command's OWN timeout fired; tear the
+        // watchdog down (keyed by requestId; no `req` binding here) before we
+        // drop the entry.
+        pending.get(requestId)?.teardown?.()
         pending.delete(requestId)
         reject(new Error(`Command ${requestId} timed out`))
       }, timeoutMs)
@@ -404,6 +433,79 @@ export const createFigmaClient = (
         message: cmdMessage,
       }
       socket.send(JSON.stringify(msg))
+
+      // connection-liveness.md — command-liveness watchdog. When a dispatched
+      // command runs slow (no reply within the grace window), probe liveness
+      // with a CONCURRENT ping (short timeout) rather than shortening the real
+      // command's timeout. Consecutive missed pongs → declare the plugin dead:
+      // reject the pending real command with PluginDisconnectedError, set the
+      // dead-channel marker, and drop the file from `joined`. Never arm for the
+      // ping command itself (no recursion).
+      if (command !== COMMANDS.PING) {
+        let live = true
+        const graceTimer = setTimeout(() => {
+          void (async () => {
+            let misses = 0
+            while (live && pending.has(requestId)) {
+              try {
+                // Resolves on pong, rejects on the ping's own short timeout.
+                await dispatch(
+                  fileKey,
+                  COMMANDS.PING,
+                  {},
+                  pingMs,
+                )
+                misses = 0
+              } catch {
+                if (!live || !pending.has(requestId)) {
+                  break
+                }
+                if (++misses >= maxMisses) {
+                  // Ownership FIRST — the real reply may have landed during the
+                  // pings; declare dead ONLY if we still own the pending, else
+                  // we'd mark a LIVE instance dead.
+                  const at = (
+                    await discoverChannels(relayHttpUrl)
+                  ).find(
+                    c =>
+                      (c.fileKey ?? c.channel) === fileKey,
+                  )?.connectedAt
+                  const p = pending.get(requestId)
+                  if (p === undefined) {
+                    // Settled during the await → no-op, no mark.
+                    return
+                  }
+                  if (at !== undefined) {
+                    deadInstances.set(fileKey, at)
+                  }
+                  // Drop from joined → requireFile fast-fails the next call.
+                  joined.delete(fileKey)
+                  clearTimeout(p.timer)
+                  pending.delete(requestId)
+                  p.teardown?.()
+                  p.reject(
+                    new PluginDisconnectedError(fileKey),
+                  )
+                  return
+                }
+              }
+
+              await new Promise(r => {
+                setTimeout(r, pingMs)
+              })
+            }
+          })()
+        }, graceMs)
+        // Wire teardown so any OTHER settlement (reply / real timeout / death)
+        // stops the loop and clears the grace timer — settle-once.
+        const pend = pending.get(requestId)
+        if (pend !== undefined) {
+          pend.teardown = () => {
+            live = false
+            clearTimeout(graceTimer)
+          }
+        }
+      }
     })
   }
 
@@ -535,10 +637,13 @@ export const createFigmaClient = (
     channelFor,
     discover,
     isInstanceDead,
-    // TEST-ONLY seam: the watchdog (L6) will set `deadInstances` directly via
-    // this closure once it exists. Until then, L4's tests reach it through
-    // this method to seed a dead entry. NOT part of the public FigmaClient
-    // type/contract — production code must never call it.
+    // TEST-ONLY seam: the L6 watchdog now sets `deadInstances` directly via
+    // this closure on a real death (covered end-to-end by the watchdog tests).
+    // This seam is retained for the focused `isInstanceDead` unit tests, which
+    // must seed an EXACT connectedAt to exercise the marker's match / self-clear
+    // logic — a value the relay mints and a live death can't deterministically
+    // control. NOT part of the public FigmaClient type/contract — production
+    // code must never call it.
     __markDeadForTest: (
       fileKey: string,
       connectedAt: number,
