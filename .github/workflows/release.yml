@@ -16,10 +16,10 @@ jobs:
       - name: Build server binaries + .mcpb bundles
         env:
           WORKER_URL: ${{ secrets.FEEDBACK_WORKER_URL }}
-        run: bun run build:mcpbs
+        run: bun run build:mcpb
       - name: Build + package the Figma plugin
         run: |
-          bun run --filter @figma-agent-bridge/figma-plugin build
+          bun run build:plugin
           ( cd packages/figma-plugin && zip -qr "$GITHUB_WORKSPACE/dist/figma-plugin.zip" manifest.json dist )
       - uses: softprops/action-gh-release@v2
         with:

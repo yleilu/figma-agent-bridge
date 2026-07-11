@@ -70,7 +70,7 @@ no separate download needed for the Claude Code route.
 ## Releasing
 
 1. Bump the version in the root `package.json`.
-2. `bun run stamp:version` — propagates the version into all packages.
+2. `bun run release:stamp` — propagates the version into all packages.
 3. `bun run build:bundle` — rebuilds `plugin/bin/server.js` from source.
 4. Commit, tag (`v<version>`), and push — `release.yml` builds the designer binaries and `.mcpb` extensions.
    The Claude Code bundle (`plugin/bin/server.js`) is committed directly; no separate binary download needed.
