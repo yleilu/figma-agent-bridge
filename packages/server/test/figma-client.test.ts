@@ -19,6 +19,8 @@ import {
   createFigmaClient,
   discoverChannels,
 } from '@figma-agent-bridge/server/figma-client'
+import { COMMANDS } from '@figma-agent-bridge/shared'
+import { createMockPlugin } from './mocks/mock-plugin'
 
 const TEST_PORT = 3098
 const WS_URL = `ws://localhost:${TEST_PORT}`
@@ -865,5 +867,115 @@ describe('figma-client multi-file + meta', () => {
     client.disconnect()
     expect(client.joinedFiles()).toEqual([])
     expect(client.isConnected()).toBe(false)
+  })
+})
+
+// L5 — mock-plugin ping + controllable timing, for the L6 watchdog tests.
+describe('mock plugin: ping + timing knobs', () => {
+  let server: Server<{ id: string }>
+
+  beforeEach(() => {
+    server = startRelay(TEST_PORT)
+  })
+
+  afterEach(() => {
+    stopRelay(server)
+  })
+
+  it('answers ping with a pong reply', async () => {
+    const client = createFigmaClient(WS_URL)
+    const plugin = createMockPlugin({
+      relayUrl: WS_URL,
+      channel: 'ping-ch',
+      fileKey: 'fk-ping',
+    })
+    await plugin.start()
+    await client.joinChannel('ping-ch', 'fk-ping')
+
+    const res = await client.sendCommand(
+      'fk-ping',
+      COMMANDS.PING,
+      {},
+    )
+
+    expect(res).toEqual({ ok: true })
+
+    plugin.stop()
+    client.disconnect()
+  })
+
+  it('delays a real command reply while ping still pongs quickly (slow-alive)', async () => {
+    const client = createFigmaClient(WS_URL)
+    const plugin = createMockPlugin({
+      relayUrl: WS_URL,
+      channel: 'slow-ch',
+      fileKey: 'fk-slow',
+    })
+    await plugin.start()
+    await client.joinChannel('slow-ch', 'fk-slow')
+
+    plugin.delayCommand(COMMANDS.STATUS, 300)
+
+    const start = Date.now()
+    const statusElapsed = client
+      .sendCommand('fk-slow', COMMANDS.STATUS, {})
+      .then(() => Date.now() - start)
+    const pingElapsed = client
+      .sendCommand('fk-slow', COMMANDS.PING, {})
+      .then(() => Date.now() - start)
+
+    expect(await pingElapsed).toBeLessThan(150)
+    expect(await statusElapsed).toBeGreaterThanOrEqual(300)
+
+    plugin.stop()
+    client.disconnect()
+  })
+
+  it('silent mode withholds ALL replies incl. ping (dead)', async () => {
+    const client = createFigmaClient(WS_URL)
+    const plugin = createMockPlugin({
+      relayUrl: WS_URL,
+      channel: 'dead-ch',
+      fileKey: 'fk-dead',
+    })
+    await plugin.start()
+    await client.joinChannel('dead-ch', 'fk-dead')
+
+    plugin.setSilent(true)
+
+    const expectTimeout = (
+      p: Promise<unknown>,
+    ): Promise<string> =>
+      p.then(
+        () => {
+          throw new Error('expected a timeout, got a reply')
+        },
+        (err: Error) => err.message,
+      )
+
+    const [statusErr, pingErr] = await Promise.all([
+      expectTimeout(
+        client.sendCommand(
+          'fk-dead',
+          COMMANDS.STATUS,
+          {},
+          120,
+        ),
+      ),
+      expectTimeout(
+        client.sendCommand(
+          'fk-dead',
+          COMMANDS.PING,
+          {},
+          120,
+        ),
+      ),
+    ])
+
+    expect(statusErr).toContain('timed out')
+    expect(pingErr).toContain('timed out')
+
+    plugin.stop()
+    client.disconnect()
   })
 })
