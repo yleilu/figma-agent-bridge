@@ -10572,57 +10572,15 @@ var init_create_schemas = __esm(() => {
 });
 
 // package.json
-var package_default;
-var init_package = __esm(() => {
-  package_default = {
-    name: "figma-agent-bridge",
-    version: "0.3.0",
-    private: true,
-    type: "module",
-    workspaces: [
-      "packages/*"
-    ],
-    scripts: {
-      dev: "concurrently -n ui,code,relay -c blue,cyan,green 'cd packages/figma-plugin && bunx vite build --watch -c vite.config.ui.ts' 'cd packages/figma-plugin && bunx vite build --watch -c vite.config.code.ts' 'bun run packages/relay/src/index.ts'",
-      format: "prettier --write .",
-      "format:check": "prettier --check .",
-      lint: "eslint .",
-      "lint:fix": "eslint . --fix",
-      relay: "bun --silent run --filter @figma-agent-bridge/relay start",
-      server: "bun --silent run --filter @figma-agent-bridge/server start",
-      test: "bun --filter '@figma-agent-bridge/*' test && (cd test && bun test)",
-      typecheck: "bun --filter '@figma-agent-bridge/*' typecheck",
-      verify: "bun run lint && bun run typecheck && bun run test && bun run check:bundle",
-      "check:bundle": "bash scripts/check-bundle-fresh.sh",
-      "build:binaries": "bash scripts/build-binaries.sh",
-      "build:mcpb": "bash scripts/build-mcpb.sh",
-      "build:mcpbs": "bash scripts/build-mcpbs.sh",
-      "stamp:version": "bun run scripts/stamp-version.ts",
-      "verify:live": "bun run packages/server/src/verify-live.ts",
-      "bundle:local": "bash scripts/bundle-local.sh",
-      "build:bundle": "bash scripts/build-bundle.sh"
-    },
-    devDependencies: {
-      "@jsdevtools/version-bump-prompt": "^6.1.0",
-      "bun-types": "^1.3.10",
-      concurrently: "^9.2.1",
-      eslint: "^10",
-      "eslint-config-airbnb-extended": "^3.0.1",
-      "eslint-config-prettier": "^10.1.8",
-      "eslint-plugin-prettier": "^5.5.5",
-      prettier: "^3.8.1",
-      "prettier-plugin-packagejson": "^3.0.2",
-      typescript: "^5.9.3"
-    }
-  };
-});
+var name = "figma-agent-bridge", version2 = "0.3.0";
+var init_package = () => {};
 
 // packages/shared/src/constants.ts
 var APP_NAME, APP_VERSION, DEFAULT_PORT = 18080, majorMinor = (v) => v.split(".").slice(0, 2).join("."), CONTEXT_MAX_BYTES = 2048, CONTEXT_SUMMARY_MAX_BYTES = 512;
 var init_constants = __esm(() => {
   init_package();
-  APP_NAME = package_default.name;
-  APP_VERSION = package_default.version;
+  APP_NAME = name;
+  APP_VERSION = version2;
 });
 // packages/shared/src/node-spec-schema.ts
 var atomSchema, layoutSpecSchema, textRunSchema, textSpecSchema, exportSettingSchema, overrideEntrySchema, idStubSchema, nodeSpecBase, nodeSpecSchema, nodeSpecOrStubSchema, partialNodeSpecSchema, treeNodeSpecSchema;
@@ -11116,8 +11074,8 @@ var require_directives = __commonJS((exports) => {
         this.atNextDocument = false;
       }
       const parts = line.trim().split(/[ \t]+/);
-      const name = parts.shift();
-      switch (name) {
+      const name2 = parts.shift();
+      switch (name2) {
         case "%TAG": {
           if (parts.length !== 2) {
             onError(0, "%TAG directive should contain exactly two parts");
@@ -11134,18 +11092,18 @@ var require_directives = __commonJS((exports) => {
             onError(0, "%YAML directive should contain exactly one part");
             return false;
           }
-          const [version2] = parts;
-          if (version2 === "1.1" || version2 === "1.2") {
-            this.yaml.version = version2;
+          const [version3] = parts;
+          if (version3 === "1.1" || version3 === "1.2") {
+            this.yaml.version = version3;
             return true;
           } else {
-            const isValid2 = /^\d+\.\d+$/.test(version2);
-            onError(6, `Unsupported YAML version ${version2}`, isValid2);
+            const isValid2 = /^\d+\.\d+$/.test(version3);
+            onError(6, `Unsupported YAML version ${version3}`, isValid2);
             return false;
           }
         }
         default:
-          onError(0, `Unknown directive ${name}`, true);
+          onError(0, `Unknown directive ${name2}`, true);
           return false;
       }
     }
@@ -11242,9 +11200,9 @@ var require_anchors = __commonJS((exports) => {
   }
   function findNewAnchor(prefix, exclude) {
     for (let i = 1;; ++i) {
-      const name = `${prefix}${i}`;
-      if (!exclude.has(name))
-        return name;
+      const name2 = `${prefix}${i}`;
+      if (!exclude.has(name2))
+        return name2;
     }
   }
   function createNodeAnchors(doc2, prefix) {
@@ -12235,8 +12193,8 @@ var require_stringify = __commonJS((exports) => {
       tagObj = tags.find((t) => t.nodeClass && obj instanceof t.nodeClass);
     }
     if (!tagObj) {
-      const name = obj?.constructor?.name ?? (obj === null ? "null" : typeof obj);
-      throw new Error(`Tag not resolved for ${name} value`);
+      const name2 = obj?.constructor?.name ?? (obj === null ? "null" : typeof obj);
+      throw new Error(`Tag not resolved for ${name2} value`);
     }
     return tagObj;
   }
@@ -14046,14 +14004,14 @@ var require_Document = __commonJS((exports) => {
         version: "1.2"
       }, options);
       this.options = opt;
-      let { version: version2 } = opt;
+      let { version: version3 } = opt;
       if (options?._directives) {
         this.directives = options._directives.atDocument();
         if (this.directives.yaml.explicit)
-          version2 = this.directives.yaml.version;
+          version3 = this.directives.yaml.version;
       } else
-        this.directives = new directives.Directives({ version: version2 });
-      this.setSchema(version2, options);
+        this.directives = new directives.Directives({ version: version3 });
+      this.setSchema(version3, options);
       this.contents = value === undefined ? null : this.createNode(value, _replacer, options);
     }
     clone() {
@@ -14081,10 +14039,10 @@ var require_Document = __commonJS((exports) => {
       if (assertCollection(this.contents))
         this.contents.addIn(path, value);
     }
-    createAlias(node, name) {
+    createAlias(node, name2) {
       if (!node.anchor) {
         const prev = anchors.anchorNames(this);
-        node.anchor = !name || prev.has(name) ? anchors.findNewAnchor(name || "a", prev) : name;
+        node.anchor = !name2 || prev.has(name2) ? anchors.findNewAnchor(name2 || "a", prev) : name2;
       }
       return new Alias.Alias(node.anchor);
     }
@@ -14169,11 +14127,11 @@ var require_Document = __commonJS((exports) => {
         this.contents.setIn(path, value);
       }
     }
-    setSchema(version2, options = {}) {
-      if (typeof version2 === "number")
-        version2 = String(version2);
+    setSchema(version3, options = {}) {
+      if (typeof version3 === "number")
+        version3 = String(version3);
       let opt;
-      switch (version2) {
+      switch (version3) {
         case "1.1":
           if (this.directives)
             this.directives.yaml.version = "1.1";
@@ -14184,9 +14142,9 @@ var require_Document = __commonJS((exports) => {
         case "1.2":
         case "next":
           if (this.directives)
-            this.directives.yaml.version = version2;
+            this.directives.yaml.version = version3;
           else
-            this.directives = new directives.Directives({ version: version2 });
+            this.directives = new directives.Directives({ version: version3 });
           opt = { resolveKnownTags: true, schema: "core" };
           break;
         case null:
@@ -14195,7 +14153,7 @@ var require_Document = __commonJS((exports) => {
           opt = null;
           break;
         default: {
-          const sv = JSON.stringify(version2);
+          const sv = JSON.stringify(version3);
           throw new Error(`Expected '1.1', '1.2' or null as first argument, but found: ${sv}`);
         }
       }
@@ -14245,9 +14203,9 @@ var require_Document = __commonJS((exports) => {
 // node_modules/.bun/yaml@2.8.2/node_modules/yaml/dist/errors.js
 var require_errors2 = __commonJS((exports) => {
   class YAMLError extends Error {
-    constructor(name, pos, code, message) {
+    constructor(name2, pos, code, message) {
       super();
-      this.name = name;
+      this.name = name2;
       this.code = code;
       this.message = message;
       this.pos = pos;
@@ -14867,8 +14825,8 @@ var require_resolve_flow_collection = __commonJS((exports) => {
     if (ce?.source === expectedEnd)
       cePos = ce.offset + ce.source.length;
     else {
-      const name = fcName[0].toUpperCase() + fcName.substring(1);
-      const msg = atRoot ? `${name} must end with a ${expectedEnd}` : `${name} in block collection must be sufficiently indented and end with a ${expectedEnd}`;
+      const name2 = fcName[0].toUpperCase() + fcName.substring(1);
+      const msg = atRoot ? `${name2} must end with a ${expectedEnd}` : `${name2} in block collection must be sufficiently indented and end with a ${expectedEnd}`;
       onError(offset, atRoot ? "MISSING_CHAR" : "BAD_INDENT", msg);
       if (ce && ce.source.length !== 1)
         ee.unshift(ce);
@@ -17915,7 +17873,7 @@ var MAX_CHANNELS_PER_CONNECTION = 32, MAX_MEMBERS_PER_CHANNEL = 64, MAX_TOTAL_CH
     }
   };
   send(ws, reply);
-}, handleRegister = (ctx, ws, channel, fileName2, fileKey, version2, currentPage, selected) => {
+}, handleRegister = (ctx, ws, channel, fileName2, fileKey, version3, currentPage, selected) => {
   if (ctx.clientChannels.get(ws.data.id)?.has(channel) !== true) {
     return;
   }
@@ -17923,7 +17881,7 @@ var MAX_CHANNELS_PER_CONNECTION = 32, MAX_MEMBERS_PER_CHANNEL = 64, MAX_TOTAL_CH
   if (entry !== undefined) {
     entry.fileName = fileName2;
     entry.fileKey = fileKey;
-    entry.version = version2;
+    entry.version = version3;
     if (currentPage !== undefined) {
       entry.currentPage = currentPage;
     }
@@ -27822,11 +27780,11 @@ var listAvailable = (available) => available.map((c) => {
   return `- ${label} [fileKey: ${synthKey(c)}]`;
 }).join(`
 `);
-var protocolMismatch = (version2) => {
-  if (version2 !== undefined && majorMinor(version2) === majorMinor(APP_VERSION)) {
+var protocolMismatch = (version3) => {
+  if (version3 !== undefined && majorMinor(version3) === majorMinor(APP_VERSION)) {
     return null;
   }
-  const got = version2 ?? "(none)";
+  const got = version3 ?? "(none)";
   return `Figma plugin version '${got}' is incompatible with server version ` + `'${APP_VERSION}' (major.minor mismatch) \u2014 reinstall/update the Figma plugin ` + `(or update the MCP server if it is the older side).`;
 };
 var requireFile = async (client, fileKey) => {
@@ -27889,11 +27847,11 @@ var withFile = (client, handler) => async (args) => {
     throw e;
   }
 };
-var registerFileTool = (server, client, name, schema, handler) => {
-  server.tool(name, schema.shape, withFile(client, handler));
+var registerFileTool = (server, client, name2, schema, handler) => {
+  server.tool(name2, schema.shape, withFile(client, handler));
 };
-var registerSessionTool = (server, name, schema, handler) => {
-  server.tool(name, schema.shape, handler);
+var registerSessionTool = (server, name2, schema, handler) => {
+  server.tool(name2, schema.shape, handler);
 };
 
 // packages/server/src/tools/session.ts
@@ -29368,9 +29326,9 @@ var buildNode = (raw, remaining, parentBBox) => {
   const out = {
     type: str2(raw.type) ?? ""
   };
-  const name = str2(raw.name);
-  if (name !== undefined) {
-    out.name = name;
+  const name2 = str2(raw.name);
+  if (name2 !== undefined) {
+    out.name = name2;
   }
   const id2 = str2(raw.id);
   if (id2 !== undefined) {
@@ -30689,9 +30647,9 @@ var handleFlatten = async ({
 
 // packages/server/src/tools/pages.ts
 init_src();
-var handleCreatePage = async ({ name }, client) => {
+var handleCreatePage = async ({ name: name2 }, client) => {
   try {
-    const result = await client.sendCommand(COMMANDS.CREATE_PAGE, { name });
+    const result = await client.sendCommand(COMMANDS.CREATE_PAGE, { name: name2 });
     return formatMutationResult(result, "Failed to create page.");
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`);
@@ -30705,9 +30663,9 @@ var handleSetCurrentPage = async ({ pageId }, client) => {
     return textResult(`Error: ${errorMessage(err)}`);
   }
 };
-var handleDuplicatePage = async ({ pageId, name }, client) => {
+var handleDuplicatePage = async ({ pageId, name: name2 }, client) => {
   try {
-    const result = await client.sendCommand(COMMANDS.DUPLICATE_PAGE, { pageId, name });
+    const result = await client.sendCommand(COMMANDS.DUPLICATE_PAGE, { pageId, name: name2 });
     return formatMutationResult(result, "Failed to duplicate page.");
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`);
@@ -31242,11 +31200,11 @@ ${warningText}`);
 init_src();
 var handleCreateComponent = async ({
   nodeId,
-  name,
+  name: name2,
   description
 }, client) => {
   try {
-    const result = await client.sendCommand(COMMANDS.CREATE_COMPONENT, { nodeId, name, description });
+    const result = await client.sendCommand(COMMANDS.CREATE_COMPONENT, { nodeId, name: name2, description });
     return formatMutationResult(result, "Failed to create component.");
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`);
@@ -31277,13 +31235,13 @@ var handleUpdateComponent = async ({
 var handleCombineVariants = async ({
   componentIds,
   parentId,
-  name
+  name: name2
 }, client) => {
   if (componentIds.length < 2) {
     return textResult("Error: combine_variants requires at least 2 components.");
   }
   try {
-    const result = await client.sendCommand(COMMANDS.COMBINE_VARIANTS, { componentIds, parentId, name });
+    const result = await client.sendCommand(COMMANDS.COMBINE_VARIANTS, { componentIds, parentId, name: name2 });
     return formatMutationResult(result, "Failed to combine variants.");
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`);
@@ -31561,7 +31519,7 @@ ${import_yaml6.default.stringify(fm)}---
 
 ${body.trim()}
 `;
-var recordFeedback = async (input, version2) => {
+var recordFeedback = async (input, version3) => {
   const created = new Date().toISOString();
   const dir = resolveFeedbackDir();
   const relPath = `${input.category}/${compactStamp(created)}-${slugify(input.title)}.md`;
@@ -31569,7 +31527,7 @@ var recordFeedback = async (input, version2) => {
   const fm = {
     title: input.title,
     status: "pending",
-    version: version2,
+    version: version3,
     created,
     ...input.tool ? { tool: input.tool } : {}
   };
@@ -31582,7 +31540,7 @@ var recordFeedback = async (input, version2) => {
     category: input.category,
     title: input.title,
     description: input.description,
-    version: version2,
+    version: version3,
     created,
     ...input.tool ? { tool: input.tool } : {},
     status: "pending"
@@ -31660,9 +31618,9 @@ var markSent = (relPath, commentUrl) => rewrite(relPath, {
 var markFailed = (relPath) => rewrite(relPath, { status: "failed" });
 
 // packages/server/src/tools/feedback.ts
-var handleRecordFeedback = async (params, client, version2 = APP_VERSION) => {
+var handleRecordFeedback = async (params, client, version3 = APP_VERSION) => {
   try {
-    const item = await recordFeedback(params, version2);
+    const item = await recordFeedback(params, version3);
     client.notify("feedback-added", { item });
     return textResult(`Recorded feedback (${item.category}): ${item.title}`);
   } catch (err) {
