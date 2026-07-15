@@ -7,10 +7,7 @@
     "email": "l@tristone.io"
   },
   "homepage": "https://github.com/yleilu/figma-agent-bridge",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/yleilu/figma-agent-bridge"
-  },
+  "repository": "https://github.com/yleilu/figma-agent-bridge",
   "license": "MIT",
   "keywords": [
     "figma",
