@@ -118,6 +118,14 @@ const nodeSpecBase = {
   /** Collapse section contents — SECTION nodes only. */
   sectionContentsHidden: z.boolean().optional(),
 
+  /**
+   * M13 — Per-collection explicit variable mode pins (READ-ONLY map).
+   * Maps collectionId → modeId. Write via bind_variable's `mode` param.
+   * Omitted when absent/empty. NOT emitted by specToFigma (T8 — write is
+   * one-collection-per-call via bind_variable, not a node-spec field).
+   */
+  explicitVariableModes: z.record(z.string()).optional(),
+
   // text
   text: textSpecSchema.optional(),
 

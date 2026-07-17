@@ -799,6 +799,17 @@ const buildNode = (
   if (typeof raw.sectionContentsHidden === 'boolean') {
     out.sectionContentsHidden = raw.sectionContentsHidden
   }
+  // explicitVariableModes (M13) — per-collection mode pins; enriched by the
+  // plugin's exportNodeDocument (feature-detected; not in JSON_REST_V1).
+  // Omit when absent or empty to avoid bloating the NodeSpec.
+  if (
+    typeof raw.explicitVariableModes === 'object' &&
+    raw.explicitVariableModes !== null &&
+    Object.keys(raw.explicitVariableModes).length > 0
+  ) {
+    out.explicitVariableModes =
+      raw.explicitVariableModes as Record<string, string>
+  }
 
   const opacity = num(raw.opacity)
   if (opacity !== undefined && opacity < 1) {

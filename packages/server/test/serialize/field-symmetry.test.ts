@@ -106,6 +106,14 @@ const ALLOW_LIST: Record<string, string> = {
   // `blend` is emitted as `blendMode` in the payload (key rename).
   blend:
     'blend field is emitted as blendMode in the payload (plugin API key name)',
+
+  // M13 — `explicitVariableModes` is a READ map ({collectionId: modeId})
+  // populated by plugin export enrichment; its WRITE equivalent is
+  // bind_variable's `mode` param (one collection per call). The field must
+  // not be emitted by specToFigma (T8 — node↔collection relation stays out
+  // of the appearance grammar; write is via bind_variable, not node-spec).
+  explicitVariableModes:
+    'read-only map populated by plugin export enrichment; write is via bind_variable mode param (documented read-map/write-one asymmetry, T8)',
 }
 
 // ─── Representative write values for each nodeSpecBase key ───────────────────

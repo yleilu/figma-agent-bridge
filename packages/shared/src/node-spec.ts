@@ -167,6 +167,15 @@ export type NodeSpec = {
   /** Full round-trippable markdown note, stored in shared pluginData. Omitted on read when absent/empty. Verbatim; the server never parses it. Capped at CONTEXT_MAX_BYTES on write. */
   context?: string
 
+  /**
+   * M13 — Per-collection explicit variable mode pins (READ-ONLY). Maps
+   * collectionId → modeId for each collection this node has been explicitly
+   * pinned to. Populated by plugin export enrichment (feature-detected).
+   * Write side: use bind_variable's `mode` param (one collection per call).
+   * Omitted when absent or empty (no explicit pins).
+   */
+  explicitVariableModes?: Record<string, string>
+
   // children — reads: stubs past depth; writes: nested specs
   children?: NodeSpecOrStub[]
 }

@@ -414,10 +414,18 @@ export const handleListFonts = async (
   }
 }
 
-// ─── bind_variable (M2 slice — design-system write, T7) ───────────────────────
+// ─── bind_variable (M2 slice — design-system write, T7; M13 — mode param) ────
+
+/** Mode entry shape for the `mode` param. */
+type ModeEntry = {
+  modeId?: string
+  modeName?: string
+  clearMode?: boolean
+}
 
 /**
- * Bind a variable to a node field.
+ * Bind a variable to a node field and/or pin a frame to a variable-collection
+ * mode (M13 — setExplicitVariableModeForCollection).
  *
  * Routed through formatMutationResult: figma-client.sendCommand ONLY rejects on
  * the WS-level error field, so a plugin-side {error} resolves successfully and
@@ -425,23 +433,56 @@ export const handleListFonts = async (
  * — {id, warnings:[...]} with NO error (e.g. setBoundVariable unavailable, or a
  * non-bindable field) — is reported as success-with-warning, never a throw and
  * never a silent no-op (T7 feature-detect/warn honesty contract).
+ *
+ * Empty call guard: at least one of {field+variableId, mode} must be present.
+ * Enforced here (not in schema .refine()) because .refine() returns ZodEffects
+ * which lacks .shape — breaking registerFileTool's spread.
  */
 export const handleBindVariable = async (
   {
     nodeId,
     variableId,
     field,
-  }: { nodeId: string; variableId: string; field: string },
+    mode,
+  }: {
+    nodeId: string
+    variableId?: string
+    field?: string
+    mode?: Record<string, ModeEntry>
+  },
   client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
+  // Empty-call guard: must have a field binding or a mode map.
+  const hasFieldBinding =
+    variableId !== undefined && field !== undefined
+  const hasModeMap =
+    mode !== undefined && Object.keys(mode).length > 0
+  if (!hasFieldBinding && !hasModeMap) {
+    return textResult(
+      'Error: INVALID_PARAM — bind_variable requires at least one of: (variableId + field) for a field binding, or mode for a mode pin.',
+    )
+  }
+
   try {
+    // Build the command params: include field binding keys only when present.
+    const params: Record<string, unknown> = { nodeId }
+    if (variableId !== undefined) {
+      params.variableId = variableId
+    }
+    if (field !== undefined) {
+      params.field = field
+    }
+    if (mode !== undefined) {
+      params.mode = mode
+    }
+
     const result = (await client.sendCommand(
       COMMANDS.BIND_VARIABLE,
-      { nodeId, variableId, field },
+      params,
     )) as { error?: string } | null
     return formatMutationResult(
       result,
-      `Failed to bind variable ${variableId} to ${field}`,
+      `Failed to bind variable${variableId ? ` ${variableId} to ${field ?? ''}` : ''} / mode on node ${nodeId}`,
     )
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
