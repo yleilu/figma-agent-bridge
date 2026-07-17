@@ -365,6 +365,21 @@ export const flattenParamsSchema = z.object({
     ),
 })
 
+/** Params for `group_nodes`: group ≥1 existing nodes into a GROUP node. */
+export const groupNodesParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
+  nodeIds: z
+    .array(z.string())
+    .min(1)
+    .describe('Node IDs to group (at least 1).'),
+  parentId: z
+    .string()
+    .optional()
+    .describe(
+      "Parent for the resulting group. Omit to use the first node's parent.",
+    ),
+})
+
 // ---------------------------------------------------------------------------
 // Write tools — pages
 // ---------------------------------------------------------------------------
@@ -1259,6 +1274,7 @@ export const batchOpSchema = z.enum([
   'clone_node',
   'boolean_op',
   'flatten',
+  'group_nodes',
   'apply_style',
   'update_component',
   'combine_variants',

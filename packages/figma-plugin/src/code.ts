@@ -3677,6 +3677,63 @@ const handleCommand = async (
       }
     }
 
+    // group_nodes: group ≥1 existing nodes into a GROUP via figma.group.
+    // parentId omitted → first node's parent. Missing nodes/parent → {error}.
+    // T7: feature-detect figma.group before calling.
+    case COMMANDS.GROUP_NODES: {
+      if (typeof figma.group !== 'function') {
+        figma.notify(
+          'group_nodes: figma.group API is unavailable in this runtime.',
+          { error: true },
+        )
+        return {
+          error:
+            'group_nodes: figma.group is unavailable in this Figma runtime.',
+        }
+      }
+      const ids = (params.nodeIds as string[]) ?? []
+      const nodes: SceneNode[] = []
+      for (const id of ids) {
+        const n = await figma.getNodeByIdAsync(id)
+        if (n && 'type' in n) {
+          nodes.push(n as SceneNode)
+        }
+      }
+      if (nodes.length < 1) {
+        return {
+          error:
+            'group_nodes requires at least 1 resolvable node.',
+        }
+      }
+      let groupParent: ParentNode | null
+      if (params.parentId !== undefined) {
+        const p = await figma.getNodeByIdAsync(
+          params.parentId as string,
+        )
+        if (!p || !('appendChild' in p)) {
+          return {
+            error:
+              'Parent not found or cannot have children: ' +
+              params.parentId,
+          }
+        }
+        groupParent = p as ParentNode
+      } else {
+        groupParent = nodes[0].parent as ParentNode | null
+      }
+      if (!groupParent) {
+        return {
+          error: 'No parent for the grouped result.',
+        }
+      }
+      const group = figma.group(nodes, groupParent)
+      return {
+        id: group.id,
+        name: group.name,
+        type: group.type,
+      }
+    }
+
     // create_page: add a new page and name it.
     case COMMANDS.CREATE_PAGE: {
       const page = figma.createPage()

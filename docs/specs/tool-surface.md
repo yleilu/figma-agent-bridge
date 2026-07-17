@@ -25,7 +25,7 @@ related:
 > meta-tools** (outside the `figma.*` facade count), like `record_feedback`.
 >
 > **Count is a formula, not a hand-summed aggregate (stops silent rot).** The one
-> hand-maintained number is the **facade group-sum = 48**. The exposed MCP surface is
+> hand-maintained number is the **facade group-sum = 49**. The exposed MCP surface is
 > then **`48 facade + K non-facade meta-tools`**, where the non-facade meta-tools are
 > `record_feedback`, `search_components`, `reindex`, `pull_changes` (change-feed.md),
 > and the three registry tools `register_library` / `unregister_library` /
@@ -195,7 +195,7 @@ batch({ op?, ops: [ {op?, ...params}, ... ] }) -> { results, errors[] }
   `create_tree`, `create_from_svg`, `create_image`, `create_component`) is deliberately
   **excluded** — chaining new nodes stays `create_tree`'s job (ref-pool). The fan-out op set:
   `update_node`, `delete_node`, `set_selection`, `set_focus`, `reparent_node`,
-  `reorder_children`, `clone_node`, `boolean_op`, `flatten`, `apply_style`,
+  `reorder_children`, `clone_node`, `boolean_op`, `flatten`, `group_nodes`, `apply_style`,
   `update_component`, `combine_variants`, `swap_component`, `set_instance`, `bind_variable`,
   `create_styles`, `update_styles`, `delete_styles`, `create_variables`, `update_variables`, `delete_variables`,
   `set_plugin_data`, `set_reactions`, `set_annotations`, `create_page`, `set_current_page`, `duplicate_page`.
@@ -229,7 +229,7 @@ One grammar, two faces (T8, expression-formats.md):
 
 Format: `name(params) → returns` — purpose · principle/checklist need.
 
-**Count = 49** (auditable per group): Session 2 · Read-nodes 4 · Read-query 3 · Read-DS 4 · Read-meta 2 · Write-nodes 5 · Write-structure 8 · Write-pages 3 · Write-components 5 · Write-DS 8 · Write-meta 2 · Handoff 2 · Batch 1 = **49**.
+**Count = 50** (auditable per group): Session 2 · Read-nodes 4 · Read-query 3 · Read-DS 4 · Read-meta 2 · Write-nodes 5 · Write-structure 9 · Write-pages 3 · Write-components 5 · Write-DS 8 · Write-meta 2 · Handoff 2 · Batch 1 = **50**.
 
 **`record_feedback` — deliberate meta-tool, outside the 48 (T6/T7 exception).**
 `record_feedback({category, title, description, tool?}) → {…}` (see
@@ -237,7 +237,7 @@ Format: `name(params) → returns` — purpose · principle/checklist need.
 rule (T6/T7) requires every tool to map to a real `figma.*` capability. `record_feedback` is
 the sole exception — it captures bridge-experience friction and has no Figma API counterpart.
 It is admitted knowingly and quarantined: placed in its own conceptual `feedback` group, absent
-from `COMMANDS` and the verify-live `ALL_TOOLS` catalogue, so the 49 count is unchanged.
+from `COMMANDS` and the verify-live `ALL_TOOLS` catalogue, so the 50 count is unchanged.
 Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle commands (as is the new
 `ping` liveness probe — [[figma-bridge/docs/specs/connection-liveness|connection-liveness.md]]). See
 [[figma-bridge/docs/specs/feedback-system]].
@@ -275,7 +275,7 @@ Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle
 - `create_image({url|bytes}) → {hash}` — the **only** path for raw bytes + pre-creating a reusable hash; its hash feeds an `image(hash)` paint (inline `image(url)` is sugar for the URL case); supply exactly one of `url`/`bytes` · T9; §8/§9 image fill.
 - `update_node(nodeId, patch) → {id,…,warnings[]}` — the single mutation; `patch` is a partial NodeSpec (supplied field replaces wholesale, omitted untouched; supplied empty/whitespace `context` clears it, `context` size-capped — see *Create / update*); warns on no-op · T1/T6, T7; §9 all restyle/bulk-edit, §8 ABSOLUTE/constraints, basic props (name/lock/visible/opacity/blend/rotation).
 
-### Write — structure (8)
+### Write — structure (9)
 - `clone_node(nodeId, {parentId?, index?, count?}) → [{id,…}]` — raw duplication (one entry per clone) · T6; §10 duplicate, §8 grid.
 - `delete_node(nodeId) → {id,name,type[,currentPageId]}` — page-aware remove (info captured before removal). **PAGE semantics:** deleting the last remaining page → `{error}` (Figma forbids a pageless document); deleting the current page → auto-switch to adjacent sibling (rule: previous sibling, else next; `pages[idx-1] ?? pages[idx+1]`), then remove — reply includes `currentPageId` (machine-visible). `setCurrentPageAsync` absent → degrade: warn + skip remove, never throw. Non-PAGE nodes: unchanged path · T1/T6/T7; §9 cleanup.
 - `reparent_node(nodeId, parentId, {index?}) → {id,…,parentId}` — the one reparent path; an **auto-layout** parent governs position (re-flows into the layout), a **non-auto-layout** parent **preserves the node's visual position** (its absolute spot is kept, not its raw relative x/y) · §10 move-into-frame.
@@ -284,6 +284,7 @@ Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle
 - `set_focus(nodeIds[]) → {viewport}` — scroll + zoom the canvas to nodes (`figma.viewport.scrollAndZoomIntoView`); the viewport writer (`status` reads viewport); unresolvable ids are skipped · T7; §2 focus/scroll-to-node.
 - `boolean_op(op, nodeIds[], {parentId?}) → {id,…}` — union/subtract/intersect/exclude → BooleanOperationNode (`op`: UNION|SUBTRACT|INTERSECT|EXCLUDE; ≥2 nodes; `parentId` defaults to the first node's parent) · T6; §10 combine-shapes (restored).
 - `flatten(nodeIds[], {parentId?}) → {id,…}` — flatten to one vector (≥1 node; `parentId` defaults to the first node's parent) · T6; §10 flatten/icon-prep (restored).
+- `group_nodes(nodeIds[], {parentId?}) → {id,name,type}` — group ≥1 existing nodes into a GROUP via `figma.group()` (`parentId` defaults to the first node's parent; T7-gated: feature-detects `figma.group` availability); the GROUP reads back via `get_node` (T1/T2 round-trip with M10a). **Batch op-set member** — same shape as `boolean_op`/`flatten` (operation over existing ids) · T1, T2, T6, T7, T9; §10 group-for-layout.
 
 ### Write — pages (3 · restored)
 - `create_page(name) → {id,name}` — new page; write twin of `list_pages` · §2 create-page.

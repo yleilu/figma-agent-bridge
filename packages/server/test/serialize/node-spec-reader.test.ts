@@ -538,6 +538,95 @@ describe('toNodeSpec — sectionContentsHidden read-back', () => {
   })
 })
 
+// ─── GROUP read round-trip (M10a) ─────────────────────────────────────────────
+
+describe('toNodeSpec — GROUP read round-trip (M10a)', () => {
+  // A GROUP node from JSON_REST_V1: geometry comes from absoluteBoundingBox,
+  // children are walked, clipsContent is a frame-only concept and must NOT
+  // appear on a GROUP (even if the raw data carries it as false/undefined).
+  const groupRaw = {
+    id: '5:1',
+    name: 'My Group',
+    type: 'GROUP',
+    absoluteBoundingBox: {
+      x: 50,
+      y: 100,
+      width: 200,
+      height: 80,
+    },
+    children: [
+      {
+        id: '5:2',
+        name: 'Rect',
+        type: 'RECTANGLE',
+        absoluteBoundingBox: {
+          x: 60,
+          y: 110,
+          width: 80,
+          height: 30,
+        },
+      },
+      {
+        id: '5:3',
+        name: 'Ellipse',
+        type: 'ELLIPSE',
+        absoluteBoundingBox: {
+          x: 150,
+          y: 120,
+          width: 40,
+          height: 50,
+        },
+      },
+    ],
+  }
+
+  it('emits type GROUP', () => {
+    const spec = toNodeSpec(groupRaw as never, {
+      depth: -1,
+    })
+    expect(spec.type).toBe('GROUP')
+  })
+
+  it('emits the GROUP id and name', () => {
+    const spec = toNodeSpec(groupRaw as never, {
+      depth: -1,
+    })
+    expect(spec.id).toBe('5:1')
+    expect(spec.name).toBe('My Group')
+  })
+
+  it('derives size from absoluteBoundingBox', () => {
+    const spec = toNodeSpec(groupRaw as never, {
+      depth: -1,
+    })
+    expect(spec.size).toEqual([200, 80])
+  })
+
+  it('walks children and emits their types', () => {
+    const spec = toNodeSpec(groupRaw as never, {
+      depth: -1,
+    })
+    expect(Array.isArray(spec.children)).toBe(true)
+    expect(spec.children).toHaveLength(2)
+    const kids = spec.children as { type: string }[]
+    expect(kids[0].type).toBe('RECTANGLE')
+    expect(kids[1].type).toBe('ELLIPSE')
+  })
+
+  it('does NOT emit clipsContent (frame-only key) for a GROUP', () => {
+    // Even if the raw data somehow carries clipsContent:true (e.g. stale export),
+    // GROUP nodes must not propagate this frame-only flag.
+    const groupWithClips = {
+      ...groupRaw,
+      clipsContent: true,
+    }
+    const spec = toNodeSpec(groupWithClips as never, {
+      depth: -1,
+    })
+    expect(spec.clipsContent).toBeUndefined()
+  })
+})
+
 // ─── explicitVariableModes read-back (M13) ────────────────────────────────────
 
 describe('toNodeSpec — explicitVariableModes read-back (M13)', () => {

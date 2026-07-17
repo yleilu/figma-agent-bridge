@@ -1340,6 +1340,22 @@ export const createMockPlugin = (
         break
       }
 
+      // group_nodes: echo a GROUP {id,name,type}; <1 node errors.
+      case 'group_nodes': {
+        const ids = (cmd.params?.nodeIds as string[]) ?? []
+        if (ids.length < 1) {
+          error =
+            'group_nodes requires at least 1 resolvable node.'
+        } else {
+          result = {
+            id: `grp:${Math.random().toString(36).slice(2, 8)}`,
+            name: 'Group',
+            type: 'GROUP',
+          }
+        }
+        break
+      }
+
       // create_component (PROMOTE-ONLY, un-overloaded per spec): promote the
       // given nodeId, echoing {id,key,name,type} + the source nodeId so the e2e
       // can assert routing. The build-from-spec overload was removed.
