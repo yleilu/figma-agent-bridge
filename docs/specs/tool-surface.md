@@ -191,7 +191,7 @@ batch({ op?, ops: [ {op?, ...params}, ... ] }) -> { results, errors[] }
   `update_node`, `delete_node`, `set_selection`, `set_focus`, `reparent_node`,
   `reorder_children`, `clone_node`, `boolean_op`, `flatten`, `apply_style`,
   `update_component`, `combine_variants`, `swap_component`, `set_instance`, `bind_variable`,
-  `create_styles`, `update_styles`, `create_variables`, `update_variables`, `delete_variables`,
+  `create_styles`, `update_styles`, `delete_styles`, `create_variables`, `update_variables`, `delete_variables`,
   `set_plugin_data`, `set_reactions`, `set_annotations`, `create_page`, `set_current_page`, `duplicate_page`.
 
 Family-specific array envelopes (`create_tree`, `get_nodes`, `create_styles`,
@@ -223,7 +223,7 @@ One grammar, two faces (T8, expression-formats.md):
 
 Format: `name(params) → returns` — purpose · principle/checklist need.
 
-**Count = 48** (auditable per group): Session 2 · Read-nodes 4 · Read-query 3 · Read-DS 4 · Read-meta 2 · Write-nodes 5 · Write-structure 8 · Write-pages 3 · Write-components 5 · Write-DS 7 · Write-meta 2 · Handoff 2 · Batch 1 = **48**.
+**Count = 49** (auditable per group): Session 2 · Read-nodes 4 · Read-query 3 · Read-DS 4 · Read-meta 2 · Write-nodes 5 · Write-structure 8 · Write-pages 3 · Write-components 5 · Write-DS 8 · Write-meta 2 · Handoff 2 · Batch 1 = **49**.
 
 **`record_feedback` — deliberate meta-tool, outside the 48 (T6/T7 exception).**
 `record_feedback({category, title, description, tool?}) → {…}` (see
@@ -231,7 +231,7 @@ Format: `name(params) → returns` — purpose · principle/checklist need.
 rule (T6/T7) requires every tool to map to a real `figma.*` capability. `record_feedback` is
 the sole exception — it captures bridge-experience friction and has no Figma API counterpart.
 It is admitted knowingly and quarantined: placed in its own conceptual `feedback` group, absent
-from `COMMANDS` and the verify-live `ALL_TOOLS` catalogue, so the 48 count is unchanged.
+from `COMMANDS` and the verify-live `ALL_TOOLS` catalogue, so the 49 count is unchanged.
 Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle commands (as is the new
 `ping` liveness probe — [[figma-bridge/docs/specs/connection-liveness|connection-liveness.md]]). See
 [[figma-bridge/docs/specs/feedback-system]].
@@ -292,9 +292,10 @@ Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle
 - `set_instance(instanceId, {properties?, overrides?}) → {id,…, warnings[]}` — the one instance-state path (set variant + BOOLEAN/TEXT/INSTANCE_SWAP via `setProperties`, plus per-node `overrides`); never auto-detaches; **read instance state via `get_node`** (NodeSpec `componentProperties`/`overrides` — the read twin); per-node `overrides` are accepted but degrade with a warning — applying them is reserved for a later phase (T7 degrade) · T6, T9; §6/§11 configure + read-overrides.
 - *(instance placement = `create_node`(INSTANCE) by key/id — no separate tool, T6.)*
 
-### Write — design system (7)
+### Write — design system (8)
 - `create_styles([{type, name, value, description?}]) → {results, errors}` — array-create paint/text/effect/grid styles from grammar atom values; partial success (`results:[{id,key,name,type,index}]`, `errors:[{index,error}]`) · T5; §12.
 - `update_styles([{id|name+type, value?, newName?, description?}]) → {results, errors}` — array-edit styles' parsed value/name/description; partial success (`results:[{id,index}]`, `errors:[{index,error}]`); round-trips get_styles · T2; §9 brand recolor.
+- `delete_styles([{id?} | {name, type}]) → {results:[{id, index}], errors:[{index, error}]}` — array-delete styles by id OR by name+type (same addressing as update_styles); partial success — one entry's failure never aborts the rest; `remove()` feature-detected per entry (T7 degrade to per-entry error if absent); no value-convert (T8 — deletes carry no grammar) · T1, T5, T7; §12 design-system teardown.
 - `apply_style(nodeId, styleId, field) → {id, warnings?}` — bind a style to a field (`field`: fill|stroke|text|effect|grid) · T9; §9/§12.
 - `create_variables({collection, modes?, variables[]}) → {collectionId, modes, variables[{id,name}], warnings?}` — create a collection (+ optional extra modes) then its variables; each variable sets per-mode values + `aliases` + `scopes` + `codeSyntax` + `hiddenFromPublishing` on create (parity with update; each gated member feature-detect + T7-degrade) · T9; §12 3-tier/modes/scales/export.
 - `update_variables({collectionId, addModes?, removeModes?, renameModes?:[{from,to}], variables?:[{id, valuesByMode?, scopes?, codeSyntax?, hiddenFromPublishing?}]}) → {collectionId, modes, warnings[]}` — **one collection**: full mode lifecycle (`addModes`/`removeModes`/`renameModes`) + per-variable value/scopes/codeSyntax/hiddenFromPublishing edits; round-trips get_variables. Returns `{…, warnings[]}` (T7 degrade), **not** `{results, errors}` — it's a single-collection op, not a heterogeneous batch · T2, T7; §9 recolor-by-token, §12 modes (restored: mode lifecycle).

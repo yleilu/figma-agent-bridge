@@ -1177,6 +1177,30 @@ const resolveParentNode = async (
   return figma.getNodeByIdAsync(parentId)
 }
 
+// resolveStyle: shared helper for update_styles and delete_styles.
+// Looks up a BaseStyle by `id` (direct async lookup) or by `name`+`type`
+// (linear scan of the matching local-style lister). Returns null when not found.
+const resolveStyle = async (entry: {
+  id?: string
+  name?: string
+  type?: 'paint' | 'text' | 'effect' | 'grid'
+}): Promise<BaseStyle | null> => {
+  if (entry.id !== undefined) {
+    return figma.getStyleByIdAsync(entry.id)
+  }
+  if (entry.name === undefined || entry.type === undefined) {
+    return null
+  }
+  const listers = {
+    paint: figma.getLocalPaintStylesAsync,
+    text: figma.getLocalTextStylesAsync,
+    effect: figma.getLocalEffectStylesAsync,
+    grid: figma.getLocalGridStylesAsync,
+  }
+  const list = await listers[entry.type]()
+  return (list as BaseStyle[]).find(s => s.name === entry.name) ?? null
+}
+
 const handleCommand = async (
   command: string,
   params: Record<string, unknown>,
@@ -4237,36 +4261,7 @@ const handleCommand = async (
       const usErrors: { index: number; error: string }[] =
         []
 
-      // Resolve a style by id, else by name + category. The name+type listers
-      // are loaded lazily (only when an entry omits its id).
-      const resolveStyle = async (entry: {
-        id?: string
-        name?: string
-        type?: 'paint' | 'text' | 'effect' | 'grid'
-      }): Promise<BaseStyle | null> => {
-        if (entry.id !== undefined) {
-          return figma.getStyleByIdAsync(entry.id)
-        }
-        if (
-          entry.name === undefined ||
-          entry.type === undefined
-        ) {
-          return null
-        }
-        const listers = {
-          paint: figma.getLocalPaintStylesAsync,
-          text: figma.getLocalTextStylesAsync,
-          effect: figma.getLocalEffectStylesAsync,
-          grid: figma.getLocalGridStylesAsync,
-        }
-        const list = await listers[entry.type]()
-        return (
-          (list as BaseStyle[]).find(
-            s => s.name === entry.name,
-          ) ?? null
-        )
-      }
-
+      // resolveStyle is the module-level shared helper (used by DELETE_STYLES too).
       for (const entry of usEntries) {
         try {
           const style = await resolveStyle(entry)
@@ -4377,6 +4372,60 @@ const handleCommand = async (
         }
       }
       return { results: usResults, errors: usErrors }
+    }
+
+    // delete_styles: array-delete styles by id OR by name+type. Uses the shared
+    // resolveStyle() helper (extracted from UPDATE_STYLES, also used here). Per
+    // entry: resolve → not found = {index,error}; else T7 feature-detect remove()
+    // → absent = {index,error}; call remove() in try/catch for per-entry error on
+    // throw. PARTIAL SUCCESS (T5): one entry's failure never aborts the rest.
+    // No value-convert (T8 — deletes carry no grammar). Returns
+    // { results:[{id,index}], errors:[{index,error}] }.
+    case COMMANDS.DELETE_STYLES: {
+      const dsEntries =
+        (params.styles as
+          | {
+              index: number
+              id?: string
+              name?: string
+              type?: 'paint' | 'text' | 'effect' | 'grid'
+            }[]
+          | undefined) ?? []
+      const dsResults: { id: string; index: number }[] = []
+      const dsErrors: { index: number; error: string }[] = []
+
+      for (const entry of dsEntries) {
+        try {
+          const style = await resolveStyle(entry)
+          if (!style) {
+            dsErrors.push({
+              index: entry.index,
+              error:
+                'Style not found: ' +
+                (entry.id ??
+                  `${entry.name} (${entry.type})`),
+            })
+            continue
+          }
+          if (typeof style.remove !== 'function') {
+            dsErrors.push({
+              index: entry.index,
+              error:
+                'remove() unavailable on style ' +
+                style.id,
+            })
+            continue
+          }
+          style.remove()
+          dsResults.push({ id: style.id, index: entry.index })
+        } catch (e) {
+          dsErrors.push({
+            index: entry.index,
+            error: String(e),
+          })
+        }
+      }
+      return { results: dsResults, errors: dsErrors }
     }
 
     // apply_style: bind a style to a node field via the matching async setter.

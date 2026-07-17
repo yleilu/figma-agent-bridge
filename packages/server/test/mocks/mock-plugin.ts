@@ -2033,6 +2033,48 @@ export const createMockPlugin = (
         break
       }
 
+      // delete_styles: PARTIAL SUCCESS over style entries. Each entry is addressed
+      // by `id` (or `name`+`type` via the mock's sId = e.id ?? e.name). Per-entry
+      // models:
+      //  - id (or name) prefixed `err:` → {index,error} not-found (does NOT abort
+      //    the rest).
+      //  - id (or name) prefixed `nofn:` → {index,error} T7 remove()-unavailable.
+      //  - else → {id,index} success.
+      // Returns { results:[{id,index}], errors:[{index,error}] }.
+      case 'delete_styles': {
+        const dsEntries =
+          (cmd.params?.styles as
+            | {
+                index: number
+                id?: string
+                name?: string
+                type?: string
+              }[]
+            | undefined) ?? []
+        const dsResults: { id: string; index: number }[] =
+          []
+        const dsErrors: { index: number; error: string }[] =
+          []
+        for (const e of dsEntries) {
+          const sId = e.id ?? e.name ?? ''
+          if (sId.startsWith('err:')) {
+            dsErrors.push({
+              index: e.index,
+              error: `Style not found: ${sId}`,
+            })
+          } else if (sId.startsWith('nofn:')) {
+            dsErrors.push({
+              index: e.index,
+              error: `remove() unavailable on style ${sId}`,
+            })
+          } else {
+            dsResults.push({ id: sId, index: e.index })
+          }
+        }
+        result = { results: dsResults, errors: dsErrors }
+        break
+      }
+
       // apply_style boundary (mirrors the real plugin):
       //  - nodeId `err:` → {error} node-not-found.
       //  - styleId `missing:` → {error} style-not-found (a GENUINE invalid, not

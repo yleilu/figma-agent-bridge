@@ -779,6 +779,47 @@ export const updateStylesParamsSchema = z.object({
 })
 
 /**
+ * One style entry for `delete_styles`: addressed by `id` OR by `name` + `type`.
+ * Mirrors the update_styles entry shape minus value/newName/description.
+ */
+export const deleteStyleSpecSchema = z.object({
+  id: z
+    .string()
+    .optional()
+    .describe(
+      'ID of the style to delete (or look it up by name + type).',
+    ),
+  name: z
+    .string()
+    .optional()
+    .describe(
+      'Style name to look up (with `type`) when no `id` is given.',
+    ),
+  type: styleTypeSchema
+    .optional()
+    .describe(
+      'Style category for name lookup: paint | text | effect | grid.',
+    ),
+})
+
+/**
+ * Params for `delete_styles`: BATCH-delete paint/text/effect/grid styles by id
+ * OR by name+type (same addressing as update_styles). Partial success (T5): one
+ * entry's failure does not abort the rest. No value-convert (T8 — deletes carry
+ * no grammar). Returns { results:[{id,index}], errors:[{index,error}] }.
+ *
+ * Per-entry validation (id OR name+type) is enforced in the handler so the schema
+ * retains .shape for registerFileTool / MCP SDK registration (avoids the ZodEffects
+ * .shape-spreading caveat hit in M1a).
+ */
+export const deleteStylesParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
+  styles: z
+    .array(deleteStyleSpecSchema)
+    .describe('The styles to delete (partial success).'),
+})
+
+/**
  * Params for `apply_style`: bind a style to a node field via
  * setFillStyleIdAsync / setStrokeStyleIdAsync / setTextStyleIdAsync /
  * setEffectStyleIdAsync / setGridStyleIdAsync. Returns { id, warnings[] }.

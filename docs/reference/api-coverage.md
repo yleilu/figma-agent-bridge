@@ -267,6 +267,7 @@ Total: 18 types for Figma Design + 1 asset pipeline.
 | Create text style | `figma.createTextStyle()` | ⏳ | Style authoring |
 | Create effect style | `figma.createEffectStyle()` | ⏳ | Style authoring |
 | Resolve style by name → ID | lookup in local styles | 🔧 M3 | Server-side resolver needed |
+| `BaseStyle.remove()` | on any style | ✅ M4 | Via `delete_styles`; T7-gated |
 
 ---
 

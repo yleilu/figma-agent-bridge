@@ -1,5 +1,5 @@
 // tools/design-system-authoring.ts — the M3-C design-system WRITE tools:
-//   create_variables · update_variables · delete_variables · create_styles · update_styles · apply_style
+//   create_variables · update_variables · delete_variables · create_styles · update_styles · delete_styles · apply_style
 //
 // One grammar, the WRITE face (T8): style and variable VALUES are atoms, and the
 // SERVER converts each atom to a Figma object before forwarding to the plugin —
@@ -401,6 +401,64 @@ export const handleUpdateStyles = async (
       ...preErrors,
       ...(reply.errors ?? []),
     ].sort((a, b) => a.index - b.index)
+
+    return textResult(
+      JSON.stringify({ results, errors }, null, 2),
+    )
+  } catch (err) {
+    return textResult(`Error: ${errorMessage(err)}`)
+  }
+}
+
+// ─── delete_styles ────────────────────────────────────────────────────────────
+
+type DeleteStyleSpec = {
+  id?: string
+  name?: string
+  type?: 'paint' | 'text' | 'effect' | 'grid'
+}
+
+/**
+ * Delete styles by id OR by name+type (same addressing as update_styles).
+ * Pure pass-through with index-tagging: each entry gets an `index` attached so
+ * the plugin can reply in index-aligned partial-success shape. No value-convert
+ * (T8 — deletes carry no grammar). Returns
+ * { results:[{id,index}], errors:[{index,error}] }.
+ */
+export const handleDeleteStyles = async (
+  { styles }: { styles: DeleteStyleSpec[] },
+  client: ScopedFigmaClient,
+): Promise<ToolResult> => {
+  // Tag every entry with its array index so the plugin can reply
+  // index-aligned (mirrors handleUpdateStyles's index-tagging).
+  const tagged = styles.map((entry, index) => ({
+    index,
+    id: entry.id,
+    name: entry.name,
+    type: entry.type,
+  }))
+
+  try {
+    const reply = (await client.sendCommand(
+      COMMANDS.DELETE_STYLES,
+      { styles: tagged },
+    )) as {
+      results?: { id: string; index: number }[]
+      errors?: { index: number; error: string }[]
+      error?: string
+    } | null
+
+    if (reply === null) {
+      return textResult('Failed to delete styles.')
+    }
+    if (reply.error !== undefined) {
+      return textResult(`Error: ${reply.error}`)
+    }
+
+    const results = reply.results ?? []
+    const errors = (reply.errors ?? []).sort(
+      (a, b) => a.index - b.index,
+    )
 
     return textResult(
       JSON.stringify({ results, errors }, null, 2),

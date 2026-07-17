@@ -1,5 +1,6 @@
 // design-system-authoring.test.ts — handleCreateVariables / handleUpdateVariables
-// / handleDeleteVariables / handleCreateStyles / handleUpdateStyles / handleApplyStyle.
+// / handleDeleteVariables / handleCreateStyles / handleUpdateStyles / handleApplyStyle
+// / handleDeleteStyles.
 //
 // These are the M3-C design-system WRITE tools. The SERVER converts each style /
 // variable VALUE atom to a Figma object via the grammar WRITE face (COLOR hex →
@@ -22,6 +23,7 @@ import {
   handleCreateStyles,
   handleUpdateStyles,
   handleApplyStyle,
+  handleDeleteStyles,
 } from '@figma-agent-bridge/server/tools/design-system-authoring'
 
 type Sent = {
@@ -501,6 +503,115 @@ describe('handleDeleteVariables', () => {
     )
     expect(result.content[0].text).toContain('Error')
     expect(result.content[0].text).toContain('At least one')
+  })
+})
+
+// ─── delete_styles ────────────────────────────────────────────────────────────
+
+describe('handleDeleteStyles', () => {
+  it('forwards COMMANDS.DELETE_STYLES with index-tagged entries', async () => {
+    const sent: Sent[] = []
+    await handleDeleteStyles(
+      {
+        styles: [
+          { id: 'S:1' },
+          { name: 'Brand/Primary', type: 'paint' },
+        ],
+      },
+      stubClient({
+        sent,
+        reply: {
+          results: [
+            { id: 'S:1', index: 0 },
+            { id: 'S:99', index: 1 },
+          ],
+          errors: [],
+        },
+      }),
+    )
+    expect(sent[0].command).toBe(COMMANDS.DELETE_STYLES)
+    const entries = (
+      sent[0].params as { styles: unknown[] }
+    ).styles
+    expect(entries).toHaveLength(2)
+    expect((entries[0] as { index: number }).index).toBe(0)
+    expect((entries[1] as { index: number }).index).toBe(1)
+  })
+
+  it('returns partial success — one valid id + one not-found → one result + one error', async () => {
+    const result = await handleDeleteStyles(
+      { styles: [{ id: 'S:1' }, { id: 'err:missing' }] },
+      stubClient({
+        reply: {
+          results: [{ id: 'S:1', index: 0 }],
+          errors: [
+            {
+              index: 1,
+              error: 'Style not found: err:missing',
+            },
+          ],
+        },
+      }),
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      results: { id: string; index: number }[]
+      errors: { index: number; error: string }[]
+    }
+    expect(out.results).toHaveLength(1)
+    expect(out.results[0].id).toBe('S:1')
+    expect(out.errors).toHaveLength(1)
+    expect(out.errors[0].index).toBe(1)
+  })
+
+  it('returns partial success — name+type resolve + not-found', async () => {
+    const result = await handleDeleteStyles(
+      {
+        styles: [
+          { name: 'Brand/Primary', type: 'paint' },
+          { name: 'err:missing', type: 'text' },
+        ],
+      },
+      stubClient({
+        reply: {
+          results: [{ id: 'S:paint-0', index: 0 }],
+          errors: [
+            {
+              index: 1,
+              error: 'Style not found: err:missing (text)',
+            },
+          ],
+        },
+      }),
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      results: { id: string; index: number }[]
+      errors: { index: number; error: string }[]
+    }
+    expect(out.results).toHaveLength(1)
+    expect(out.results[0].index).toBe(0)
+    expect(out.errors).toHaveLength(1)
+    expect(out.errors[0].index).toBe(1)
+  })
+
+  it('surfaces a plugin-side {error} as error text (entire call failed)', async () => {
+    const result = await handleDeleteStyles(
+      { styles: [{ id: 'S:1' }] },
+      stubClient({
+        reply: { error: 'Styles API unavailable' },
+      }),
+    )
+    expect(result.content[0].text).toContain('Error')
+    expect(result.content[0].text).toContain('unavailable')
+  })
+
+  it('returns failure text on a null reply', async () => {
+    const result = await handleDeleteStyles(
+      { styles: [{ id: 'S:1' }] },
+      stubClient({ reply: null }),
+    )
+    expect(result.content[0].text).toBe(
+      'Failed to delete styles.',
+    )
   })
 })
 
