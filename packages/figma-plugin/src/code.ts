@@ -843,10 +843,10 @@ const createSingleNode = async (
     case 'SLOT': {
       // SLOT in create_node context: create a FRAME placeholder and WARN (T7) —
       // the agent asked for a SLOT and is getting a FRAME, so it must be told.
-      // Actual SLOT promotion happens in create_component via component.createSlot().
+      // Actual SLOT promotion happens in update_component via component.createSlot().
       node = figma.createFrame()
       warnings?.push(
-        'SLOT requested via create_node was created as a FRAME placeholder; real SLOT promotion happens in create_component via component.createSlot()',
+        'SLOT requested via create_node was created as a FRAME placeholder; real SLOT promotion happens in update_component via slots param',
       )
       break
     }
@@ -2110,6 +2110,54 @@ const handleCommand = async (
           }
         }
       }
+      // slots: create new empty SLOT nodes (T7-gated).
+      // createSlot() takes NO argument — it creates a brand-new empty SLOT node
+      // inside the component and returns it (auto-named "Slot"); we name it via
+      // the returned node's .name. No pre-existing child needed.
+      // createSlot is absent from typings ≤1.123.0 — cast + feature-detect.
+      // Guard: createSlot is per-component; skip + warn if comp is a COMPONENT_SET.
+      const slotNames = params.slots as string[] | undefined
+      const slotsCreated: string[] = []
+      const slotsSkipped: string[] = []
+      if (slotNames && slotNames.length > 0) {
+        if (comp.type === 'COMPONENT_SET') {
+          for (const name of slotNames) {
+            slotsSkipped.push(name)
+          }
+          ucWarnings.push(
+            'createSlot is per-component, not available on COMPONENT_SET; slot(s) skipped: ' +
+              slotNames.join(', '),
+          )
+        } else {
+          const compWithSlot = comp as ComponentNode & {
+            createSlot?: () => { name: string } | undefined
+          }
+          if (!compWithSlot.createSlot) {
+            for (const name of slotNames) {
+              slotsSkipped.push(name)
+            }
+            ucWarnings.push(
+              'createSlot unavailable in this Figma version; slot(s) not created',
+            )
+          } else {
+            for (const name of slotNames) {
+              try {
+                const slot = compWithSlot.createSlot!()
+                if (slot && name) slot.name = name
+                slotsCreated.push(name)
+              } catch (e) {
+                slotsSkipped.push(name)
+                ucWarnings.push(
+                  'Failed to create slot "' +
+                    name +
+                    '": ' +
+                    String(e),
+                )
+              }
+            }
+          }
+        }
+      }
       // update_component's `properties` projection (WRITE) — shares
       // projectComponentDefs with get_components (READ) so each added property's
       // id is carried in the SAME shape and round-trips get_components by
@@ -2119,6 +2167,8 @@ const handleCommand = async (
       return {
         id: comp.id,
         properties: ucProperties,
+        slotsCreated,
+        slotsSkipped,
         warnings: ucWarnings,
       }
     }

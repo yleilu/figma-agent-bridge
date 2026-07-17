@@ -1052,6 +1052,12 @@ export const updateComponentParamsSchema = z.object({
     .describe(
       'Nested instance node IDs to expose (T7-gated: degrades with a warning if unsupported).',
     ),
+  slots: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Names of slots to CREATE inside this component. Each becomes a new empty SLOT node (named accordingly) that instances fill per-screen. T7-gated: degrades with a warning if createSlot is unavailable.',
+    ),
 })
 
 /** Params for `combine_variants`: combine ≥2 components into a variant set. */

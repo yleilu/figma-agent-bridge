@@ -74,6 +74,7 @@ export const handleUpdateComponent = async (
     delete: del,
     description,
     expose,
+    slots,
   }: {
     componentId: string
     add?: {
@@ -89,6 +90,7 @@ export const handleUpdateComponent = async (
     delete?: string[]
     description?: string
     expose?: string[]
+    slots?: string[]
   },
   client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
@@ -102,6 +104,7 @@ export const handleUpdateComponent = async (
         delete: del,
         description,
         expose,
+        slots,
       },
     )) as { error?: string } | null
     return formatMutationResult(
