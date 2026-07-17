@@ -862,8 +862,21 @@ const createSingleNode = async (
     await applyTextProperties(node as TextNode, spec)
   }
 
-  // Append to parent
-  parent.appendChild(node)
+  // Append to parent — T7: Figma blocks appendChild into non-SLOT instance
+  // descendants at runtime. Catch the raw throw and re-raise as a clear
+  // structured message that callers convert to { error }.
+  try {
+    parent.appendChild(node)
+  } catch {
+    // node was created but can't be placed — remove it to avoid orphan.
+    node.remove()
+    throw new Error(
+      'Cannot append into this parent: only a component SLOT accepts ' +
+        'children inside an instance (got ' +
+        parent.type +
+        '). To fill a slot, target the slot node.',
+    )
+  }
 
   // Apply post-append properties (FILL sizing, ABSOLUTE positioning)
   applyPostAppendProperties(node, spec)
@@ -917,7 +930,18 @@ const createTreeNode = async (
       const instance = (
         existing as ComponentNode
       ).createInstance()
-      parent.appendChild(instance)
+      // T7: same instance-lock guard as createSingleNode — wrap and re-raise.
+      try {
+        parent.appendChild(instance)
+      } catch {
+        instance.remove()
+        throw new Error(
+          'Cannot append into this parent: only a component SLOT accepts ' +
+            'children inside an instance (got ' +
+            parent.type +
+            '). To fill a slot, target the slot node.',
+        )
+      }
       return instance
     }
     if (existing.type === 'INSTANCE') {
@@ -926,13 +950,33 @@ const createTreeNode = async (
         .mainComponent
       if (mainComp) {
         const instance = mainComp.createInstance()
-        parent.appendChild(instance)
+        try {
+          parent.appendChild(instance)
+        } catch {
+          instance.remove()
+          throw new Error(
+            'Cannot append into this parent: only a component SLOT accepts ' +
+              'children inside an instance (got ' +
+              parent.type +
+              '). To fill a slot, target the slot node.',
+          )
+        }
         return instance
       }
     }
     // Default: clone
     const cloned = (existing as SceneNode).clone()
-    parent.appendChild(cloned)
+    try {
+      parent.appendChild(cloned)
+    } catch {
+      cloned.remove()
+      throw new Error(
+        'Cannot append into this parent: only a component SLOT accepts ' +
+          'children inside an instance (got ' +
+          parent.type +
+          '). To fill a slot, target the slot node.',
+      )
+    }
     return cloned
   }
 
@@ -1105,6 +1149,32 @@ const applyVariableMeta = async (
       )
     }
   }
+}
+
+// Resolve a parentId for create_node / create_tree. Plain scene-node ids go
+// through getNodeByIdAsync. A COMPOUND instance-child id ("I<inst>;<child>",
+// e.g. a SLOT inside an instance) is NOT resolvable by getNodeByIdAsync — it
+// hangs (live-verified 2026-07-17). Resolve those by traversing the instance:
+// getNodeByIdAsync the leading instance id, then findOne by the full compound
+// id. Keeps the create_node / create_tree `parentId` interface unchanged (T6).
+const resolveParentNode = async (
+  parentId: string,
+): Promise<BaseNode | null> => {
+  const sep = parentId.indexOf(';')
+  if (parentId.startsWith('I') && sep > 1) {
+    // "I<instanceId>;<...>" — instance id is between 'I' and the first ';'.
+    const instanceId = parentId.slice(1, sep)
+    const instance = await figma.getNodeByIdAsync(instanceId)
+    if (instance && 'findOne' in instance) {
+      return (
+        (instance as InstanceNode).findOne(
+          (n) => n.id === parentId,
+        ) ?? null
+      )
+    }
+    return null
+  }
+  return figma.getNodeByIdAsync(parentId)
 }
 
 const handleCommand = async (
@@ -1859,7 +1929,7 @@ const handleCommand = async (
     case COMMANDS.CREATE_NODE: {
       const parentNode =
         params.parentId !== undefined
-          ? await figma.getNodeByIdAsync(
+          ? await resolveParentNode(
               params.parentId as string,
             )
           : figma.currentPage
@@ -1882,16 +1952,27 @@ const handleCommand = async (
           'children ignored — create_node creates a single node; use create_tree (M3) for nested creation',
         )
       }
-      const created = await createSingleNode(
-        spec,
-        parent,
-        warnings,
-      )
-      return {
-        id: created.id,
-        name: created.name,
-        type: created.type,
-        warnings,
+      try {
+        const created = await createSingleNode(
+          spec,
+          parent,
+          warnings,
+        )
+        return {
+          id: created.id,
+          name: created.name,
+          type: created.type,
+          warnings,
+        }
+      } catch (err) {
+        // T7: a blocked append (e.g. into a non-SLOT instance descendant)
+        // returns a clear structured error, not a raw uncaught exception.
+        // createSingleNode re-raises the clear slot-fill message (see the
+        // appendChild wrap above); surface it directly as { error }.
+        return {
+          error:
+            err instanceof Error ? err.message : String(err),
+        }
       }
     }
 
@@ -1904,7 +1985,7 @@ const handleCommand = async (
     case COMMANDS.CREATE_TREE: {
       const treeParentNode =
         params.parentId !== undefined
-          ? await figma.getNodeByIdAsync(
+          ? await resolveParentNode(
               params.parentId as string,
             )
           : figma.currentPage
@@ -1926,15 +2007,24 @@ const handleCommand = async (
       const treeRefs = params.refs as
         | Record<string, Record<string, unknown>>
         | undefined
-      const treeResult = await createTreeNode(
-        treeSpec,
-        treeParent,
-        treeRefs,
-      )
-      return {
-        id: treeResult.id,
-        name: treeResult.name,
-        type: treeResult.type,
+      try {
+        const treeResult = await createTreeNode(
+          treeSpec,
+          treeParent,
+          treeRefs,
+        )
+        return {
+          id: treeResult.id,
+          name: treeResult.name,
+          type: treeResult.type,
+        }
+      } catch (err) {
+        // T7: a blocked append (e.g. into a non-SLOT instance descendant)
+        // returns a clear structured error, not a raw uncaught exception.
+        return {
+          error:
+            err instanceof Error ? err.message : String(err),
+        }
       }
     }
 

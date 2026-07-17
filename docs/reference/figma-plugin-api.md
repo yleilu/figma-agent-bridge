@@ -200,7 +200,7 @@ or `node.fillStyleId = id`, `node.strokeStyleId = id`, `node.effectStyleId = id`
 
 | Method / Property | Notes |
 |-------------------|-------|
-| `figma.getNodeByIdAsync(id)` | Node lookup (async; `getNodeById` is the sync legacy form) |
+| `figma.getNodeByIdAsync(id)` | Node lookup (async; `getNodeById` is the sync legacy form). **⚠️ Does NOT resolve compound instance-child ids (`I<inst>;<child>`, e.g. a SLOT inside an instance) — it hangs. Traverse the instance instead: `(instance as InstanceNode).findOne(n => n.id === compoundId)`. (live-verified 2026-07-17)** |
 | `figma.currentPage` | Current page (settable) |
 | `figma.currentPage.selection` | Current selection |
 | `figma.root` | DocumentNode; `figma.root.children` = all pages |
