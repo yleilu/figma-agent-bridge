@@ -850,7 +850,10 @@ const buildNode = (
   if (raw.visible === false) {
     out.visible = false
   }
-  if (raw.clipsContent === true) {
+  // clipsContent is a FRAME/COMPONENT/INSTANCE property only; GROUP nodes
+  // do not have independent clipping — guard against stale export data.
+  const nodeType = str(raw.type) ?? ''
+  if (raw.clipsContent === true && nodeType !== 'GROUP') {
     out.clipsContent = true
   }
 

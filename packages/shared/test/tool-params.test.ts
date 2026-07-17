@@ -23,6 +23,7 @@ import {
   searchComponentsParamsSchema,
   reindexParamsSchema,
   recordFeedbackParamsSchema,
+  groupNodesParamsSchema,
 } from '@figma-agent-bridge/shared/tool-params'
 
 // ---------------------------------------------------------------------------
@@ -877,6 +878,42 @@ describe('fileTargetParamsSchema (per-call fileKey — B3)', () => {
 })
 
 // ---------------------------------------------------------------------------
+// groupNodesParamsSchema (M10b)
+// ---------------------------------------------------------------------------
+describe('groupNodesParamsSchema', () => {
+  it('accepts valid nodeIds with fileKey', () => {
+    const parsed = groupNodesParamsSchema.parse({
+      fileKey: 'fk-abc',
+      nodeIds: ['1:1', '1:2'],
+    })
+    expect(parsed.nodeIds).toEqual(['1:1', '1:2'])
+  })
+
+  it('accepts optional parentId', () => {
+    const parsed = groupNodesParamsSchema.parse({
+      fileKey: 'fk-abc',
+      nodeIds: ['1:1'],
+      parentId: '1:0',
+    })
+    expect(parsed.parentId).toBe('1:0')
+  })
+
+  it('rejects empty nodeIds array (min 1)', () => {
+    expect(() =>
+      groupNodesParamsSchema.parse({
+        fileKey: 'fk-abc',
+        nodeIds: [],
+      }),
+    ).toThrow()
+  })
+
+  it('rejects when nodeIds is absent', () => {
+    expect(() =>
+      groupNodesParamsSchema.parse({ fileKey: 'fk-abc' }),
+    ).toThrow()
+  })
+})
+
 // recordFeedbackParamsSchema
 // ---------------------------------------------------------------------------
 describe('recordFeedbackParamsSchema', () => {

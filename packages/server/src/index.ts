@@ -44,6 +44,7 @@ import {
   reorderChildrenParamsSchema,
   booleanOpParamsSchema,
   flattenParamsSchema,
+  groupNodesParamsSchema,
   createComponentParamsSchema,
   updateComponentParamsSchema,
   combineVariantsParamsSchema,
@@ -112,6 +113,7 @@ import {
   handleReorderChildren,
   handleBooleanOp,
   handleFlatten,
+  handleGroupNodes,
 } from './tools/structure'
 import {
   handleCreatePage,
@@ -436,6 +438,13 @@ if (process.argv.includes('--relay')) {
     'flatten',
     flattenParamsSchema,
     handleFlatten,
+  )
+  registerFileTool(
+    server,
+    client,
+    'group_nodes',
+    groupNodesParamsSchema,
+    handleGroupNodes,
   )
   registerFileTool(
     server,

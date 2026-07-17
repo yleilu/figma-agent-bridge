@@ -28,6 +28,8 @@
 //   Plugin figma.union/subtract/intersect/exclude → BooleanOperationNode.
 // flatten: COMMANDS.FLATTEN with {nodeIds[],parentId?} → {id,…}. Plugin
 //   figma.flatten.
+// group_nodes: COMMANDS.GROUP_NODES with {nodeIds[],parentId?} → {id,name,type}.
+//   Plugin figma.group → GroupNode. parentId omitted → first node's parent.
 //
 // All route through formatMutationResult: null → failure text, {error} → an
 // error, otherwise JSON.stringify of the plugin reply.
@@ -193,6 +195,27 @@ export const handleFlatten = async (
     return formatMutationResult(
       result,
       'Failed to flatten nodes.',
+    )
+  } catch (err) {
+    return textResult(`Error: ${errorMessage(err)}`)
+  }
+}
+
+export const handleGroupNodes = async (
+  {
+    nodeIds,
+    parentId,
+  }: { nodeIds: string[]; parentId?: string },
+  client: ScopedFigmaClient,
+): Promise<ToolResult> => {
+  try {
+    const result = (await client.sendCommand(
+      COMMANDS.GROUP_NODES,
+      { nodeIds, parentId },
+    )) as { error?: string } | null
+    return formatMutationResult(
+      result,
+      'Failed to group nodes.',
     )
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)

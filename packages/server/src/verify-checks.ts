@@ -68,6 +68,7 @@ import {
   handleReorderChildren,
   handleBooleanOp,
   handleFlatten,
+  handleGroupNodes,
 } from './tools/structure'
 import {
   handleCreatePage,
@@ -1395,10 +1396,11 @@ const tier3: Check[] = [
       'reorder_children',
       'boolean_op',
       'flatten',
+      'group_nodes',
       'set_selection',
       'set_focus',
     ],
-    name: 'structure smoke: clone/reparent/reorder/boolean_op/flatten/set_selection/set_focus',
+    name: 'structure smoke: clone/reparent/reorder/boolean_op/flatten/group_nodes/set_selection/set_focus',
     run: async client => {
       const created: string[] = []
       // Build a small parent with two shapes to operate on.
@@ -1565,8 +1567,36 @@ const tier3: Check[] = [
           }
         }
       }
+      // group_nodes (M10b): clone the root once more and group the pair.
+      const cloneForGroup = await handleCloneNode(
+        { nodeId: rootId ?? childA, count: 1 },
+        client,
+      )
+      if (!isError(cloneForGroup)) {
+        const cloneForGroupArr = JSON.parse(
+          text(cloneForGroup),
+        ) as { id?: string }[]
+        const grpSourceId = cloneForGroupArr[0]?.id
+        if (grpSourceId !== undefined) {
+          created.push(grpSourceId)
+          const grp = await handleGroupNodes(
+            { nodeIds: [grpSourceId] },
+            client,
+          )
+          if (isError(grp)) {
+            return {
+              ...fail(`group_nodes: ${text(grp)}`),
+              nodeIds: created,
+            }
+          }
+          const grpId = createdId(asJson(grp))
+          if (grpId !== undefined) {
+            created.push(grpId)
+          }
+        }
+      }
       return pass(
-        `clone/focus/select/reorder/boolean_op/flatten/reparent all returned without error`,
+        `clone/focus/select/reorder/boolean_op/flatten/group_nodes/reparent all returned without error`,
         { nodeIds: created, exportNodeId: rootId },
       )
     },
@@ -1975,7 +2005,7 @@ export const CHECK_LIST: Check[] = [
   ...tier3,
 ]
 
-/** All 49 registered tool names — the coverage denominator. */
+/** All 50 registered tool names — the coverage denominator. */
 export const ALL_TOOLS: string[] = [
   'connect',
   'status',
@@ -2006,6 +2036,7 @@ export const ALL_TOOLS: string[] = [
   'set_focus',
   'boolean_op',
   'flatten',
+  'group_nodes',
   'create_page',
   'set_current_page',
   'duplicate_page',

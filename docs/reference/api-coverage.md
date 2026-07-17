@@ -50,7 +50,7 @@ Total: 18 types for Figma Design + 1 asset pipeline.
 | INSTANCE | `component.createInstance()` | 🔧 M3 | Via `componentKey` + `setProperties()` for overrides. Note: INSTANCE round-trip is currently blocked until `get_node` emits `component.key` (per tool-surface Resolved decision #3) |
 | COMPONENT | `figma.createComponentFromNode()` | 🔧 M3 | Via `create_component` tool — supports SLOT, BOOLEAN, TEXT, INSTANCE_SWAP properties |
 | COMPONENT_SET | `figma.combineAsVariants()` | 🔧 M3 | Groups components into variant set |
-| GROUP | `figma.group(nodes, parent)` | 🔧 M3 | Create children first, then group — transparent to agent in `create_tree` |
+| GROUP | `figma.group(nodes, parent)` | ✅ M10 | `group_nodes` tool (direct, M10b); also via `create_tree` (M3, transparent to agent) |
 | BOOLEAN_OPERATION | `figma.union/subtract/intersect/exclude()` | 🔧 M3 | Create children first, then combine — agent specifies UNION/SUBTRACT/INTERSECT/EXCLUDE |
 | SECTION | `figma.createSection()` | 🔧 M3 | Canvas organization, unique: `sectionContentsHidden` |
 | SLICE | `figma.createSlice()` | 🔧 M3 | Export regions |
@@ -311,7 +311,7 @@ Methods that operate on existing nodes to create new node types. Used internally
 
 | Method | Figma API | Status | Notes |
 |--------|-----------|--------|-------|
-| `figma.group(nodes, parent)` | → GroupNode | 🔧 M3 | Used by `create_tree` when `type: "GROUP"` — creates children first, then groups |
+| `figma.group(nodes, parent)` | → GroupNode | ✅ M10 | `group_nodes` tool (direct); also used by `create_tree` when `type: "GROUP"` |
 | `figma.union(nodes, parent)` | → BooleanOperationNode | 🔧 M3 | Used by `create_tree` when `type: "BOOLEAN_OPERATION"` with `booleanOperation: "UNION"` |
 | `figma.subtract(nodes, parent)` | → BooleanOperationNode | 🔧 M3 | `booleanOperation: "SUBTRACT"` |
 | `figma.intersect(nodes, parent)` | → BooleanOperationNode | 🔧 M3 | `booleanOperation: "INTERSECT"` |
@@ -416,7 +416,7 @@ section of [[figma-bridge/docs/specs/tool-surface]].
 - [ ] COMPONENT_SET — `combineAsVariants()` — variant grouping
 
 **Inline in create_tree (create children, then transform):**
-- [ ] GROUP — `figma.group(nodes, parent)`
+- [x] GROUP — `figma.group(nodes, parent)` — covered by `group_nodes` (M10b)
 - [ ] BOOLEAN_OPERATION — `figma.union/subtract/intersect/exclude()`
 - [ ] TRANSFORM_GROUP — `figma.transformGroup()`
 

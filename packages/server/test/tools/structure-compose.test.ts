@@ -1,5 +1,6 @@
 // structure-compose.test.ts — the M3 chunk A composable-edit structure tools:
 // clone_node, reparent_node, reorder_children, boolean_op, flatten.
+// M10b adds: group_nodes.
 //
 // Each is a mutation handler routed through formatMutationResult: a null reply
 // → failure text, a {error} reply → an error, otherwise JSON.stringify. Asserts
@@ -14,6 +15,7 @@ import {
   handleReorderChildren,
   handleBooleanOp,
   handleFlatten,
+  handleGroupNodes,
 } from '@figma-agent-bridge/server/tools/structure'
 
 type Sent = {
@@ -337,5 +339,67 @@ describe('handleFlatten', () => {
       }),
     )
     expect(result.content[0].text).toContain('Error')
+  })
+})
+
+describe('handleGroupNodes', () => {
+  it('forwards COMMANDS.GROUP_NODES with {nodeIds,parentId}', async () => {
+    const sent: Sent[] = []
+    await handleGroupNodes(
+      { nodeIds: ['1:1', '1:2'], parentId: '1:9' },
+      stubClient({
+        sent,
+        reply: {
+          id: 'grp:1',
+          name: 'Group',
+          type: 'GROUP',
+        },
+      }),
+    )
+    expect(sent[0].command).toBe(COMMANDS.GROUP_NODES)
+    expect(sent[0].params).toEqual({
+      nodeIds: ['1:1', '1:2'],
+      parentId: '1:9',
+    })
+  })
+
+  it('emits the GROUP {id,name,type}', async () => {
+    const result = await handleGroupNodes(
+      { nodeIds: ['1:1'] },
+      stubClient({
+        reply: {
+          id: 'grp:1',
+          name: 'Group',
+          type: 'GROUP',
+        },
+      }),
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      type: string
+    }
+    expect(out.type).toBe('GROUP')
+  })
+
+  it('surfaces a plugin-side {error} as an error', async () => {
+    const result = await handleGroupNodes(
+      { nodeIds: [] },
+      stubClient({
+        reply: {
+          error:
+            'group_nodes requires at least 1 resolvable node.',
+        },
+      }),
+    )
+    expect(result.content[0].text).toContain('Error')
+  })
+
+  it('returns failure text on a null reply', async () => {
+    const result = await handleGroupNodes(
+      { nodeIds: ['1:1'] },
+      stubClient({ reply: null }),
+    )
+    expect(result.content[0].text).toBe(
+      'Failed to group nodes.',
+    )
   })
 })
