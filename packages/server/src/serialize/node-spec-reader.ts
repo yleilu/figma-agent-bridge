@@ -27,6 +27,7 @@ import {
   effectToAtom,
   fontToAtom,
   strokeToAtom,
+  pathToAtom,
   type FigmaPaint,
   type FigmaEffect,
   type FigmaFontName,
@@ -763,6 +764,40 @@ const buildNode = (
   const radius = radiusAtom(raw)
   if (radius !== undefined) {
     out.radius = radius
+  }
+
+  // vectorPaths — VECTOR nodes only; enriched by the plugin's exportNodeDocument.
+  const vp = raw.vectorPaths
+  if (Array.isArray(vp)) {
+    out.vectorPaths = vp.map((p: unknown) => {
+      const path = p as {
+        windingRule: string
+        data: string
+      }
+      return pathToAtom({
+        windingRule: path.windingRule as
+          | 'NONZERO'
+          | 'EVENODD'
+          | 'NONE',
+        data: path.data,
+      })
+    })
+  }
+
+  // node-type-specific shape fields — plain pass-through (no grammar atom)
+  // pointCount — POLYGON/STAR: number of points/sides
+  const pointCount = num(raw.pointCount)
+  if (pointCount !== undefined) {
+    out.pointCount = pointCount
+  }
+  // innerRadius — STAR only: inner radius ratio 0..1
+  const innerRadius = num(raw.innerRadius)
+  if (innerRadius !== undefined) {
+    out.innerRadius = innerRadius
+  }
+  // sectionContentsHidden — SECTION only: whether contents are collapsed
+  if (typeof raw.sectionContentsHidden === 'boolean') {
+    out.sectionContentsHidden = raw.sectionContentsHidden
   }
 
   const opacity = num(raw.opacity)

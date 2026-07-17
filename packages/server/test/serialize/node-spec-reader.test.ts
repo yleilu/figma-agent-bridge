@@ -373,3 +373,167 @@ describe('toNodeSpec — context read-back', () => {
     ).toBe(big)
   })
 })
+
+// ─── vectorPaths read-back (raw.vectorPaths → NodeSpec.vectorPaths atoms) ───────
+
+describe('toNodeSpec — vectorPaths read-back', () => {
+  it('converts a raw vectorPaths array to path atoms', () => {
+    const spec = toNodeSpec(
+      {
+        id: '9:1',
+        type: 'VECTOR',
+        vectorPaths: [
+          {
+            windingRule: 'EVENODD',
+            data: 'M 0 0 L 10.5 0 Z',
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.vectorPaths).toEqual([
+      'path(EVENODD,"M 0 0 L 10.5 0 Z")',
+    ])
+  })
+
+  it('converts multiple vector paths', () => {
+    const spec = toNodeSpec(
+      {
+        id: '9:1',
+        type: 'VECTOR',
+        vectorPaths: [
+          { windingRule: 'NONZERO', data: 'M0 0 L10 0 Z' },
+          { windingRule: 'EVENODD', data: 'M0 0 L5 8 Z' },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.vectorPaths).toEqual([
+      'path(NONZERO,"M0 0 L10 0 Z")',
+      'path(EVENODD,"M0 0 L5 8 Z")',
+    ])
+  })
+
+  it('omits vectorPaths when absent from raw node', () => {
+    const spec = toNodeSpec(
+      { id: '9:1', type: 'VECTOR' } as never,
+      { depth: 0 },
+    )
+    expect(spec.vectorPaths).toBeUndefined()
+  })
+
+  it('round-trips: raw vectorPaths → atom → FigmaVectorPath', () => {
+    // Reader converts raw Figma VectorPath objects to path atoms.
+    // Then writer converts atoms back to FigmaVectorPath objects.
+    const vectorRaw = {
+      id: '9:1',
+      type: 'VECTOR',
+      vectorPaths: [
+        {
+          windingRule: 'EVENODD',
+          data: 'M 0 0 L 10.5 0 Z',
+        },
+      ],
+    }
+    const spec = toNodeSpec(vectorRaw as never, {
+      depth: 0,
+    })
+    const written = specToFigma({
+      vectorPaths: spec.vectorPaths,
+    })
+    const vp = written.vectorPaths as {
+      windingRule: string
+      data: string
+    }[]
+    expect(vp[0].windingRule).toBe('EVENODD')
+    expect(vp[0].data).toBe('M 0 0 L 10.5 0 Z')
+  })
+})
+
+// ─── pointCount / innerRadius / sectionContentsHidden read-back ──────────────
+
+describe('toNodeSpec — pointCount read-back', () => {
+  it('reads pointCount from a POLYGON raw node', () => {
+    const spec = toNodeSpec(
+      {
+        id: '1:1',
+        type: 'POLYGON',
+        pointCount: 6,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.pointCount).toBe(6)
+  })
+
+  it('reads pointCount from a STAR raw node', () => {
+    const spec = toNodeSpec(
+      { id: '1:2', type: 'STAR', pointCount: 5 } as never,
+      { depth: 0 },
+    )
+    expect(spec.pointCount).toBe(5)
+  })
+
+  it('omits pointCount when absent from raw node', () => {
+    const spec = toNodeSpec(
+      { id: '1:3', type: 'POLYGON' } as never,
+      { depth: 0 },
+    )
+    expect(spec.pointCount).toBeUndefined()
+  })
+})
+
+describe('toNodeSpec — innerRadius read-back', () => {
+  it('reads innerRadius from a STAR raw node', () => {
+    const spec = toNodeSpec(
+      {
+        id: '1:4',
+        type: 'STAR',
+        innerRadius: 0.4,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.innerRadius).toBe(0.4)
+  })
+
+  it('omits innerRadius when absent from raw node', () => {
+    const spec = toNodeSpec(
+      { id: '1:5', type: 'STAR' } as never,
+      { depth: 0 },
+    )
+    expect(spec.innerRadius).toBeUndefined()
+  })
+})
+
+describe('toNodeSpec — sectionContentsHidden read-back', () => {
+  it('reads sectionContentsHidden=true from a SECTION raw node', () => {
+    const spec = toNodeSpec(
+      {
+        id: '1:6',
+        type: 'SECTION',
+        sectionContentsHidden: true,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.sectionContentsHidden).toBe(true)
+  })
+
+  it('reads sectionContentsHidden=false from a SECTION raw node', () => {
+    const spec = toNodeSpec(
+      {
+        id: '1:7',
+        type: 'SECTION',
+        sectionContentsHidden: false,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.sectionContentsHidden).toBe(false)
+  })
+
+  it('omits sectionContentsHidden when absent from raw node', () => {
+    const spec = toNodeSpec(
+      { id: '1:8', type: 'SECTION' } as never,
+      { depth: 0 },
+    )
+    expect(spec.sectionContentsHidden).toBeUndefined()
+  })
+})

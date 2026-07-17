@@ -197,7 +197,16 @@ dropped: paint `op`/`blend`/`vis`, image `scale`/`rot`/`filter`, shadow `spread`
 `video()`/`pattern()` paints. Two struct-level additions:
 
 - **node layout grids** — `grids: ["columns(12,32,auto){align=STRETCH, offset=16, color=#FF000010}", "rows(...)"]` (the grid head + the same `{…}` channel).
+- **vector paths** — `vectorPaths: ["path(NONZERO,\"M0 0 L100 0 L100 100 Z\")", "path(EVENODD,\"M...\")"]` (VECTOR nodes only; read back from `node.vectorPaths`).
 - **text per-range runs** — `runs: [{ at:[0,4], font: font(Inter,Bold,16), color: #FF0000 }]`; each run is the same atoms scoped by `at:[start,end]`; base `text.*` is the default, runs override.
+
+## path(windingRule, "data")
+
+SVG-path atom for VECTOR nodes. `windingRule` is one of `NONZERO | EVENODD | NONE`; `data` is the SVG path data string (spaces as coordinate separators — commas are normalized to spaces on write).
+
+Example: `path(NONZERO,"M0 0 L100 0 L100 100 Z")`
+
+Read back on the `vectorPaths` field of a VECTOR node. Write: supply in `create_node`/`update_node` spec as `vectorPaths: [path(...), ...]`.
 
 Unknown `{…}` keys are ignored on read and only emitted when non-default (T4).
 

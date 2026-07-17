@@ -458,3 +458,90 @@ describe('specToFigmaForCreate', () => {
     expect(fills[0].type).toBe('SOLID')
   })
 })
+
+// ─── vectorPaths ─────────────────────────────────────────────────────────────
+
+describe('specToFigma — vectorPaths', () => {
+  it('converts path atoms to FigmaVectorPath objects', () => {
+    const result = specToFigma({
+      vectorPaths: ['path(EVENODD,"M0 0 L10 0 Z")'],
+    })
+    expect(result).toHaveProperty('vectorPaths')
+    const vp = result.vectorPaths as {
+      windingRule: string
+      data: string
+    }[]
+    expect(vp[0].windingRule).toBe('EVENODD')
+    expect(vp[0].data).toBe('M0 0 L10 0 Z')
+  })
+
+  it('converts multiple path atoms', () => {
+    const result = specToFigma({
+      vectorPaths: [
+        'path(NONZERO,"M0 0 L10 0 Z")',
+        'path(EVENODD,"M0 0 L5 8 Z")',
+      ],
+    })
+    const vp = result.vectorPaths as {
+      windingRule: string
+      data: string
+    }[]
+    expect(vp).toHaveLength(2)
+    expect(vp[0].windingRule).toBe('NONZERO')
+    expect(vp[1].windingRule).toBe('EVENODD')
+  })
+
+  it('omits vectorPaths when absent from spec', () => {
+    const result = specToFigma({ type: 'VECTOR' } as never)
+    expect(result.vectorPaths).toBeUndefined()
+  })
+})
+
+// ─── pointCount / innerRadius / sectionContentsHidden (plain pass-through) ───
+
+describe('specToFigma — pointCount', () => {
+  it('emits pointCount as-is when set', () => {
+    const result = specToFigma({ pointCount: 6 } as never)
+    expect(result.pointCount).toBe(6)
+  })
+
+  it('omits pointCount when absent from spec', () => {
+    const result = specToFigma({ type: 'POLYGON' } as never)
+    expect(result.pointCount).toBeUndefined()
+  })
+})
+
+describe('specToFigma — innerRadius', () => {
+  it('emits innerRadius as-is when set', () => {
+    const result = specToFigma({
+      innerRadius: 0.4,
+    } as never)
+    expect(result.innerRadius).toBe(0.4)
+  })
+
+  it('omits innerRadius when absent from spec', () => {
+    const result = specToFigma({ type: 'STAR' } as never)
+    expect(result.innerRadius).toBeUndefined()
+  })
+})
+
+describe('specToFigma — sectionContentsHidden', () => {
+  it('emits sectionContentsHidden as-is when set to true', () => {
+    const result = specToFigma({
+      sectionContentsHidden: true,
+    } as never)
+    expect(result.sectionContentsHidden).toBe(true)
+  })
+
+  it('emits sectionContentsHidden=false when set to false', () => {
+    const result = specToFigma({
+      sectionContentsHidden: false,
+    } as never)
+    expect(result.sectionContentsHidden).toBe(false)
+  })
+
+  it('omits sectionContentsHidden when absent from spec', () => {
+    const result = specToFigma({ type: 'SECTION' } as never)
+    expect(result.sectionContentsHidden).toBeUndefined()
+  })
+})

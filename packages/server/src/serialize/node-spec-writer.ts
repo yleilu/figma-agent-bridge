@@ -50,6 +50,7 @@ import {
   atomToFont,
   atomToStroke,
   atomToGrid,
+  atomToPath,
 } from '../grammar'
 
 export type FigmaWritePayload = Record<string, unknown>
@@ -261,6 +262,20 @@ export const specToFigma = (
   }
   if (spec.grids !== undefined) {
     out.grids = spec.grids.map(atomToGrid)
+  }
+  if (spec.vectorPaths !== undefined) {
+    out.vectorPaths = spec.vectorPaths.map(atomToPath)
+  }
+
+  // node-type-specific shape fields — plain pass-through (no grammar atom)
+  if (spec.pointCount !== undefined) {
+    out.pointCount = spec.pointCount
+  }
+  if (spec.innerRadius !== undefined) {
+    out.innerRadius = spec.innerRadius
+  }
+  if (spec.sectionContentsHidden !== undefined) {
+    out.sectionContentsHidden = spec.sectionContentsHidden
   }
 
   // ── text ─────────────────────────────────────────────────────────────────

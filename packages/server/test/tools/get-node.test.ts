@@ -119,4 +119,36 @@ describe('handleGetNode (rebuilt — NodeSpec)', () => {
       'Error: plugin exploded',
     )
   })
+
+  it('emits vectorPaths as path atoms for a VECTOR node (enriched by plugin)', async () => {
+    // The plugin enriches the exportAsync result with node.vectorPaths before
+    // returning it to the server. The reader converts those objects to path atoms.
+    const vectorFixture = {
+      id: '5:1',
+      name: 'Arrow',
+      type: 'VECTOR',
+      absoluteBoundingBox: {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 100,
+      },
+      // vectorPaths is injected by the plugin (not from exportAsync JSON_REST_V1)
+      vectorPaths: [
+        { windingRule: 'NONZERO', data: 'M0 0 L10 0 Z' },
+      ],
+    }
+    const result = await handleGetNode(
+      { nodeId: '5:1', depth: 0 },
+      stubClient({ reply: vectorFixture }),
+    )
+    const spec = YAML.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(spec.type).toBe('VECTOR')
+    // vectorPaths should be read back as path atoms
+    const vp = spec.vectorPaths as string[]
+    expect(Array.isArray(vp)).toBe(true)
+    expect(vp[0]).toBe('path(NONZERO,"M0 0 L10 0 Z")')
+  })
 })

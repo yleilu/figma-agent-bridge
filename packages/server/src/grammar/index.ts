@@ -56,3 +56,6 @@ export type {
 
 export { atomToGrid, gridToAtom } from './heads/grid'
 export type { FigmaLayoutGrid } from './heads/grid'
+
+export { atomToPath, pathToAtom } from './heads/path'
+export type { FigmaVectorPath } from './heads/path'
