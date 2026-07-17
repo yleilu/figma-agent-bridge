@@ -117,6 +117,12 @@ const nodeSpecBase = {
   innerRadius: z.number().min(0).max(1).optional(),
   /** Collapse section contents — SECTION nodes only. */
   sectionContentsHidden: z.boolean().optional(),
+  /** True when this node clips siblings below it in the same parent (mask). */
+  isMask: z.boolean().optional(),
+  /** Mask mode — only meaningful when isMask is true. */
+  maskType: z
+    .enum(['ALPHA', 'VECTOR', 'LUMINANCE'])
+    .optional(),
 
   /**
    * M13 — Per-collection explicit variable mode pins (READ-ONLY map).

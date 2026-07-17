@@ -156,6 +156,8 @@ const REPRESENTATIVE_VALUES: Record<string, unknown> = {
   pointCount: 6,
   innerRadius: 0.4,
   sectionContentsHidden: false,
+  isMask: true,
+  maskType: 'ALPHA' as const,
 }
 
 // ─── PLUGIN_READ_FIELDS ───────────────────────────────────────────────────────
@@ -206,6 +208,8 @@ const PLUGIN_READ_FIELDS: readonly string[] = [
   // applyPostAppendProperties reads:
   'sizing', // layoutSizingHorizontal/Vertical (line ~1050)
   'layoutPositioning', // line ~1060
+  'isMask', // mask clipping (line ~1065)
+  'maskType', // mask mode (line ~1075)
 ]
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

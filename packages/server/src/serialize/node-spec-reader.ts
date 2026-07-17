@@ -799,6 +799,18 @@ const buildNode = (
   if (typeof raw.sectionContentsHidden === 'boolean') {
     out.sectionContentsHidden = raw.sectionContentsHidden
   }
+  // isMask / maskType — enriched by the plugin's exportNodeDocument (may not
+  // be in JSON_REST_V1). Emit only when isMask is true to keep unmasked nodes
+  // clean; maskType is only meaningful when isMask is true.
+  if (raw.isMask === true) {
+    out.isMask = true
+    if (typeof raw.maskType === 'string') {
+      out.maskType = raw.maskType as
+        | 'ALPHA'
+        | 'VECTOR'
+        | 'LUMINANCE'
+    }
+  }
   // explicitVariableModes (M13) — per-collection mode pins; enriched by the
   // plugin's exportNodeDocument (feature-detected; not in JSON_REST_V1).
   // Omit when absent or empty to avoid bloating the NodeSpec.
