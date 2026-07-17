@@ -381,6 +381,117 @@ export const groupNodesParamsSchema = z.object({
 })
 
 // ---------------------------------------------------------------------------
+// transform_group modifier shapes (LinearRepeatModifier / RadialRepeatModifier)
+//
+// figma.transformGroup() is typed in @figma/plugin-typings 1.130.0 (repo pins
+// 1.123.0 — types not present). Modifier shapes confirmed via live probe
+// against real Figma. T8: discriminator + structural fields are plain
+// enum/struct (not grammar-routed); numeric scalars are plain z.number()
+// (structural op, not an appearance atom).
+//
+// Confirmed live LINEAR modifier that worked:
+//   { type: 'REPEAT', repeatType: 'LINEAR', count: 3, unitType: 'PIXELS', offset: 100, axis: 'HORIZONTAL' }
+// ---------------------------------------------------------------------------
+
+const linearRepeatModifierSchema = z
+  .object({
+    type: z.literal('REPEAT'),
+    repeatType: z
+      .literal('LINEAR')
+      .describe(
+        'Linear repeat: replicate nodes in a straight line.',
+      ),
+    count: z
+      .number()
+      .int()
+      .min(1)
+      .describe(
+        'Number of repeated copies (including the source).',
+      ),
+    unitType: z
+      .string()
+      .describe(
+        "Unit for the offset distance (e.g. 'PIXELS').",
+      ),
+    offset: z
+      .number()
+      .describe(
+        'Distance between repeated instances, in unitType units.',
+      ),
+    axis: z
+      .enum(['HORIZONTAL', 'VERTICAL'])
+      .describe('Direction of repetition.'),
+  })
+  .passthrough()
+
+const radialRepeatModifierSchema = z
+  .object({
+    type: z.literal('REPEAT'),
+    repeatType: z
+      .literal('RADIAL')
+      .describe(
+        'Radial repeat: replicate nodes around a centre point.',
+      ),
+    count: z
+      .number()
+      .int()
+      .min(1)
+      .describe(
+        'Number of repeated copies (including the source).',
+      ),
+  })
+  .passthrough()
+  .describe(
+    'RADIAL modifier shape not live-confirmed; required fields beyond type/repeatType/count pass through to Figma unvalidated.',
+  )
+
+/**
+ * Discriminated union of supported TransformModifier shapes.
+ * Both variants share type:'REPEAT'; discriminated on repeatType.
+ *
+ * Confirmed live LINEAR example:
+ *   { type: 'REPEAT', repeatType: 'LINEAR', count: 3, unitType: 'PIXELS', offset: 100, axis: 'HORIZONTAL' }
+ */
+export const transformModifierSchema = z.discriminatedUnion(
+  'repeatType',
+  [linearRepeatModifierSchema, radialRepeatModifierSchema],
+)
+
+/**
+ * Params for `transform_group`: apply a repeat-pattern transform to ≥1 existing
+ * nodes via `figma.transformGroup()` → TransformGroupNode.
+ *
+ * Ship-gated: the controller must live-verify that `figma.transformGroup` exists
+ * in the runtime before shipping this tool. If absent, the tool row is reverted
+ * and the count returns to 50. The plugin handler feature-detects (T7) and
+ * returns a clear error if the function is unavailable.
+ *
+ * Batch op-set member — same operation-over-existing-ids shape as
+ * `boolean_op`, `flatten`, and `group_nodes`.
+ */
+export const transformGroupParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
+  nodeIds: z
+    .array(z.string())
+    .min(1)
+    .describe(
+      'Node IDs to include in the transform group (at least 1).',
+    ),
+  parentId: z
+    .string()
+    .optional()
+    .describe(
+      "Parent for the result. Omit to use the first node's parent.",
+    ),
+  modifiers: z
+    .array(transformModifierSchema)
+    .min(1)
+    .describe(
+      "One or more repeat-pattern modifiers. Each has type:'REPEAT' and repeatType:'LINEAR'|'RADIAL'. Confirmed LINEAR shape: {type:'REPEAT',repeatType:'LINEAR',count,unitType:'PIXELS',offset,axis:'HORIZONTAL'|'VERTICAL'}.",
+    ),
+})
+
+// ---------------------------------------------------------------------------
 // Write tools — pages
 // ---------------------------------------------------------------------------
 
@@ -1275,6 +1386,7 @@ export const batchOpSchema = z.enum([
   'boolean_op',
   'flatten',
   'group_nodes',
+  'transform_group',
   'apply_style',
   'update_component',
   'combine_variants',

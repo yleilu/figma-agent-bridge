@@ -221,3 +221,45 @@ export const handleGroupNodes = async (
     return textResult(`Error: ${errorMessage(err)}`)
   }
 }
+
+export const handleTransformGroup = async (
+  {
+    nodeIds,
+    parentId,
+    modifiers,
+  }: {
+    nodeIds: string[]
+    parentId?: string
+    modifiers: (
+      | {
+          type: 'REPEAT'
+          repeatType: 'LINEAR'
+          count: number
+          unitType: string
+          offset: number
+          axis: 'HORIZONTAL' | 'VERTICAL'
+          [key: string]: unknown
+        }
+      | {
+          type: 'REPEAT'
+          repeatType: 'RADIAL'
+          count: number
+          [key: string]: unknown
+        }
+    )[]
+  },
+  client: ScopedFigmaClient,
+): Promise<ToolResult> => {
+  try {
+    const result = (await client.sendCommand(
+      COMMANDS.TRANSFORM_GROUP,
+      { nodeIds, parentId, modifiers },
+    )) as { error?: string } | null
+    return formatMutationResult(
+      result,
+      'Failed to transform group nodes.',
+    )
+  } catch (err) {
+    return textResult(`Error: ${errorMessage(err)}`)
+  }
+}

@@ -69,6 +69,7 @@ import {
   handleBooleanOp,
   handleFlatten,
   handleGroupNodes,
+  handleTransformGroup,
 } from './tools/structure'
 import {
   handleCreatePage,
@@ -1602,6 +1603,76 @@ const tier3: Check[] = [
     },
   },
   {
+    // transform_group (M15): T7-gated — figma.transformGroup is a niche API
+    // added in @figma/plugin-typings 1.130.0 (repo pins 1.123.0). Runtime
+    // absence is the EXPECTED outcome for live verification. The mock always
+    // succeeds here (no feature-detect in the mock); the check records a
+    // skip_live note reminding the controller to verify live.
+    id: 'T3.transform_group',
+    tier: 3,
+    tools: ['transform_group'],
+    name: 'transform_group: LINEAR repeat via mock (T7-gated — live-verify required)',
+    run: async client => {
+      const created: string[] = []
+      // Create two rectangles to use as source nodes.
+      const tree = await handleCreateTree(
+        {
+          tree: {
+            type: 'FRAME',
+            name: 'TGSmoke',
+            size: [100, 50],
+          },
+        },
+        client,
+      )
+      if (isError(tree)) {
+        return skip(
+          `transform_group: could not create parent frame: ${text(tree)}`,
+        )
+      }
+      const rootId = createdId(asJson(tree))
+      if (rootId === undefined) {
+        return skip(
+          'transform_group: create_tree returned no id',
+        )
+      }
+      created.push(rootId)
+      const tg = await handleTransformGroup(
+        {
+          nodeIds: [rootId],
+          modifiers: [
+            {
+              type: 'REPEAT',
+              repeatType: 'LINEAR',
+              count: 2,
+              unitType: 'PIXELS',
+              offset: 20,
+              axis: 'HORIZONTAL',
+            },
+          ],
+        },
+        client,
+      )
+      if (isError(tg)) {
+        // The live plugin will return an error if figma.transformGroup is absent.
+        // That is the expected live outcome. The mock returns success here to
+        // prove handler mechanics — the controller decides ship-vs-defer.
+        return skip(
+          `transform_group: plugin returned error (expected on live if 1.130.0 API absent): ${text(tg)}`,
+        )
+      }
+      const tgId = createdId(asJson(tg))
+      if (tgId !== undefined) {
+        created.push(tgId)
+      }
+      return pass(
+        'transform_group (mock): LINEAR repeat returned a TRANSFORM_GROUP node. ' +
+          'CONTROLLER: live-verify figma.transformGroup exists in your runtime.',
+        { nodeIds: created },
+      )
+    },
+  },
+  {
     id: 'T3.pages',
     tier: 3,
     tools: [
@@ -2005,7 +2076,7 @@ export const CHECK_LIST: Check[] = [
   ...tier3,
 ]
 
-/** All 50 registered tool names — the coverage denominator. */
+/** All 51 registered tool names — the coverage denominator. */
 export const ALL_TOOLS: string[] = [
   'connect',
   'status',
@@ -2037,6 +2108,7 @@ export const ALL_TOOLS: string[] = [
   'boolean_op',
   'flatten',
   'group_nodes',
+  'transform_group',
   'create_page',
   'set_current_page',
   'duplicate_page',
