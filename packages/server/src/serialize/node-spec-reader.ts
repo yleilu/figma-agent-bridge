@@ -784,6 +784,22 @@ const buildNode = (
     })
   }
 
+  // node-type-specific shape fields — plain pass-through (no grammar atom)
+  // pointCount — POLYGON/STAR: number of points/sides
+  const pointCount = num(raw.pointCount)
+  if (pointCount !== undefined) {
+    out.pointCount = pointCount
+  }
+  // innerRadius — STAR only: inner radius ratio 0..1
+  const innerRadius = num(raw.innerRadius)
+  if (innerRadius !== undefined) {
+    out.innerRadius = innerRadius
+  }
+  // sectionContentsHidden — SECTION only: whether contents are collapsed
+  if (typeof raw.sectionContentsHidden === 'boolean') {
+    out.sectionContentsHidden = raw.sectionContentsHidden
+  }
+
   const opacity = num(raw.opacity)
   if (opacity !== undefined && opacity < 1) {
     out.opacity = opacity

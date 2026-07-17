@@ -159,6 +159,21 @@ const exportNodeDocument = async (
     if (node.type === 'VECTOR' && 'vectorPaths' in node) {
       doc.vectorPaths = (node as VectorNode).vectorPaths
     }
+    // pointCount (POLYGON + STAR) and innerRadius (STAR-only) are NOT carried by
+    // JSON_REST_V1 — enrich like vectorPaths so they round-trip via get_node
+    // (live-verified 2026-07-17). Feature-detect by PROPERTY (only POLYGON/STAR
+    // have pointCount, only STAR has innerRadius) — robust to the POLYGON vs
+    // REGULAR_POLYGON export-type-name difference.
+    if ('pointCount' in node) {
+      doc.pointCount = (
+        node as unknown as { pointCount: number }
+      ).pointCount
+    }
+    if ('innerRadius' in node) {
+      doc.innerRadius = (
+        node as unknown as { innerRadius: number }
+      ).innerRadius
+    }
     return doc
   }
   throw new Error(
@@ -255,6 +270,29 @@ const applyCommonProperties = async (
     const [x, y] = spec.position as [number, number]
     node.x = x
     node.y = y
+  }
+
+  // Type-specific geometry props: pointCount (POLYGON/STAR), innerRadius (STAR),
+  // sectionContentsHidden (SECTION). Applied here (guarded by `'X' in node`) so
+  // they take effect on BOTH create AND update — createSingleNode's type cases
+  // set them on create too; without this branch update_node silently no-ops them
+  // (the sectionContentsHidden:false bug found live 2026-07-17). `!== undefined`
+  // so a `false` is honored, not dropped.
+  if (spec.pointCount !== undefined && 'pointCount' in node) {
+    ;(node as unknown as { pointCount: number }).pointCount =
+      spec.pointCount as number
+  }
+  if (spec.innerRadius !== undefined && 'innerRadius' in node) {
+    ;(node as unknown as { innerRadius: number }).innerRadius =
+      spec.innerRadius as number
+  }
+  if (
+    spec.sectionContentsHidden !== undefined &&
+    'sectionContentsHidden' in node
+  ) {
+    ;(
+      node as unknown as { sectionContentsHidden: boolean }
+    ).sectionContentsHidden = spec.sectionContentsHidden as boolean
   }
 
   // Fills (already parsed to paint objects by server)
@@ -2629,6 +2667,9 @@ const handleCommand = async (
         ['opacity', 'opacity'],
         ['cornerRadius', 'radius'],
         ['clipsContent', 'clipsContent'],
+        ['pointCount', 'pointCount'],
+        ['innerRadius', 'innerRadius'],
+        ['sectionContentsHidden', 'sectionContentsHidden'],
       ]
       for (const [cap, key] of capabilityChecks) {
         if (spec[key] !== undefined && !(cap in node)) {

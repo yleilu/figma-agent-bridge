@@ -129,6 +129,14 @@ export type NodeSpec = {
   /** Vector path atoms (path(windingRule,"data")) — VECTOR nodes only. */
   vectorPaths?: Atom[]
 
+  // node-type-specific shape fields (plain pass-through — no atom grammar)
+  /** Number of points/sides — POLYGON and STAR nodes. */
+  pointCount?: number
+  /** Inner radius ratio 0..1 — STAR nodes only. */
+  innerRadius?: number
+  /** Collapse section contents — SECTION nodes only. */
+  sectionContentsHidden?: boolean
+
   // text
   text?: TextSpec
 

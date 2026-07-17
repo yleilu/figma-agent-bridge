@@ -267,6 +267,17 @@ export const specToFigma = (
     out.vectorPaths = spec.vectorPaths.map(atomToPath)
   }
 
+  // node-type-specific shape fields — plain pass-through (no grammar atom)
+  if (spec.pointCount !== undefined) {
+    out.pointCount = spec.pointCount
+  }
+  if (spec.innerRadius !== undefined) {
+    out.innerRadius = spec.innerRadius
+  }
+  if (spec.sectionContentsHidden !== undefined) {
+    out.sectionContentsHidden = spec.sectionContentsHidden
+  }
+
   // ── text ─────────────────────────────────────────────────────────────────
   if (spec.text !== undefined) {
     const t = spec.text

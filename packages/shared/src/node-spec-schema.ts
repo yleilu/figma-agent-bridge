@@ -110,6 +110,14 @@ const nodeSpecBase = {
   grids: z.array(atomSchema).optional(),
   vectorPaths: z.array(atomSchema).optional(),
 
+  // node-type-specific shape fields (plain pass-through — no atom grammar)
+  /** Number of points/sides — POLYGON and STAR nodes. */
+  pointCount: z.number().int().min(3).optional(),
+  /** Inner radius ratio 0..1 — STAR nodes only. */
+  innerRadius: z.number().min(0).max(1).optional(),
+  /** Collapse section contents — SECTION nodes only. */
+  sectionContentsHidden: z.boolean().optional(),
+
   // text
   text: textSpecSchema.optional(),
 

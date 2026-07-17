@@ -496,3 +496,52 @@ describe('specToFigma — vectorPaths', () => {
     expect(result.vectorPaths).toBeUndefined()
   })
 })
+
+// ─── pointCount / innerRadius / sectionContentsHidden (plain pass-through) ───
+
+describe('specToFigma — pointCount', () => {
+  it('emits pointCount as-is when set', () => {
+    const result = specToFigma({ pointCount: 6 } as never)
+    expect(result.pointCount).toBe(6)
+  })
+
+  it('omits pointCount when absent from spec', () => {
+    const result = specToFigma({ type: 'POLYGON' } as never)
+    expect(result.pointCount).toBeUndefined()
+  })
+})
+
+describe('specToFigma — innerRadius', () => {
+  it('emits innerRadius as-is when set', () => {
+    const result = specToFigma({
+      innerRadius: 0.4,
+    } as never)
+    expect(result.innerRadius).toBe(0.4)
+  })
+
+  it('omits innerRadius when absent from spec', () => {
+    const result = specToFigma({ type: 'STAR' } as never)
+    expect(result.innerRadius).toBeUndefined()
+  })
+})
+
+describe('specToFigma — sectionContentsHidden', () => {
+  it('emits sectionContentsHidden as-is when set to true', () => {
+    const result = specToFigma({
+      sectionContentsHidden: true,
+    } as never)
+    expect(result.sectionContentsHidden).toBe(true)
+  })
+
+  it('emits sectionContentsHidden=false when set to false', () => {
+    const result = specToFigma({
+      sectionContentsHidden: false,
+    } as never)
+    expect(result.sectionContentsHidden).toBe(false)
+  })
+
+  it('omits sectionContentsHidden when absent from spec', () => {
+    const result = specToFigma({ type: 'SECTION' } as never)
+    expect(result.sectionContentsHidden).toBeUndefined()
+  })
+})
