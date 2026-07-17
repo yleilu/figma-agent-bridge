@@ -108,6 +108,7 @@ const nodeSpecBase = {
   visible: z.boolean().optional(),
   clipsContent: z.boolean().optional(),
   grids: z.array(atomSchema).optional(),
+  vectorPaths: z.array(atomSchema).optional(),
 
   // text
   text: textSpecSchema.optional(),

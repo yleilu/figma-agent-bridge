@@ -27,6 +27,7 @@ import {
   effectToAtom,
   fontToAtom,
   strokeToAtom,
+  pathToAtom,
   type FigmaPaint,
   type FigmaEffect,
   type FigmaFontName,
@@ -763,6 +764,24 @@ const buildNode = (
   const radius = radiusAtom(raw)
   if (radius !== undefined) {
     out.radius = radius
+  }
+
+  // vectorPaths — VECTOR nodes only; enriched by the plugin's exportNodeDocument.
+  const vp = raw.vectorPaths
+  if (Array.isArray(vp)) {
+    out.vectorPaths = vp.map((p: unknown) => {
+      const path = p as {
+        windingRule: string
+        data: string
+      }
+      return pathToAtom({
+        windingRule: path.windingRule as
+          | 'NONZERO'
+          | 'EVENODD'
+          | 'NONE',
+        data: path.data,
+      })
+    })
   }
 
   const opacity = num(raw.opacity)

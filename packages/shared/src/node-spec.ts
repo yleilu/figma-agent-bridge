@@ -126,6 +126,8 @@ export type NodeSpec = {
   clipsContent?: boolean
   /** Layout-grid atoms (columns()/rows()). */
   grids?: Atom[]
+  /** Vector path atoms (path(windingRule,"data")) — VECTOR nodes only. */
+  vectorPaths?: Atom[]
 
   // text
   text?: TextSpec

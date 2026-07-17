@@ -151,12 +151,15 @@ const exportNodeDocument = async (
     exported !== null &&
     (exported as Record<string, unknown>).document
   ) {
+    const doc = (exported as Record<string, unknown>).document as Record<string, unknown>
     const ctx = readContext(node)
     if (ctx !== undefined) {
-      const doc = (exported as Record<string, unknown>).document as Record<string, unknown>
       doc.context = ctx
     }
-    return (exported as Record<string, unknown>).document
+    if (node.type === 'VECTOR' && 'vectorPaths' in node) {
+      doc.vectorPaths = (node as VectorNode).vectorPaths
+    }
+    return doc
   }
   throw new Error(
     'exportAsync returned unexpected type: ' +
@@ -746,9 +749,14 @@ const createSingleNode = async (
     }
     case 'VECTOR': {
       const vector = figma.createVector()
-      if (spec.vectorPaths !== undefined) {
-        vector.vectorPaths =
-          spec.vectorPaths as VectorPath[]
+      if ('vectorPaths' in vector && spec.vectorPaths !== undefined) {
+        try {
+          vector.vectorPaths = spec.vectorPaths as VectorPath[]
+        } catch (e) {
+          warnings?.push(
+            'vectorPaths rejected by Figma (invalid path data): ' + String(e),
+          )
+        }
       }
       node = vector
       break

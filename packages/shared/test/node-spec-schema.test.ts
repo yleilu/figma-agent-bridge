@@ -321,3 +321,39 @@ describe('sub-schemas', () => {
     ).toBe(false)
   })
 })
+
+describe('nodeSpecSchema — vectorPaths field', () => {
+  it('accepts a VECTOR spec with vectorPaths as string atoms', () => {
+    const r = nodeSpecSchema.safeParse({
+      type: 'VECTOR',
+      vectorPaths: ['path(NONZERO,"M0 0 L10 0 Z")'],
+    })
+    expect(r.success).toBe(true)
+  })
+
+  it('the vectorPaths field survives schema parse unchanged (T2)', () => {
+    const spec = {
+      type: 'VECTOR',
+      vectorPaths: ['path(NONZERO,"M0 0 L10 0 Z")'],
+    }
+    const parsed = nodeSpecSchema.parse(spec)
+    expect(parsed.vectorPaths).toEqual([
+      'path(NONZERO,"M0 0 L10 0 Z")',
+    ])
+  })
+
+  it('accepts FRAME spec with vectorPaths omitted (optional field)', () => {
+    const r = nodeSpecSchema.safeParse({ type: 'FRAME' })
+    expect(r.success).toBe(true)
+  })
+
+  it('rejects vectorPaths where elements are not strings', () => {
+    const r = nodeSpecSchema.safeParse({
+      type: 'VECTOR',
+      vectorPaths: [
+        { windingRule: 'NONZERO', data: 'M0 0' },
+      ],
+    })
+    expect(r.success).toBe(false)
+  })
+})

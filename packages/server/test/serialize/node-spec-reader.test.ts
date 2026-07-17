@@ -373,3 +373,79 @@ describe('toNodeSpec — context read-back', () => {
     ).toBe(big)
   })
 })
+
+// ─── vectorPaths read-back (raw.vectorPaths → NodeSpec.vectorPaths atoms) ───────
+
+describe('toNodeSpec — vectorPaths read-back', () => {
+  it('converts a raw vectorPaths array to path atoms', () => {
+    const spec = toNodeSpec(
+      {
+        id: '9:1',
+        type: 'VECTOR',
+        vectorPaths: [
+          {
+            windingRule: 'EVENODD',
+            data: 'M 0 0 L 10.5 0 Z',
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.vectorPaths).toEqual([
+      'path(EVENODD,"M 0 0 L 10.5 0 Z")',
+    ])
+  })
+
+  it('converts multiple vector paths', () => {
+    const spec = toNodeSpec(
+      {
+        id: '9:1',
+        type: 'VECTOR',
+        vectorPaths: [
+          { windingRule: 'NONZERO', data: 'M0 0 L10 0 Z' },
+          { windingRule: 'EVENODD', data: 'M0 0 L5 8 Z' },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.vectorPaths).toEqual([
+      'path(NONZERO,"M0 0 L10 0 Z")',
+      'path(EVENODD,"M0 0 L5 8 Z")',
+    ])
+  })
+
+  it('omits vectorPaths when absent from raw node', () => {
+    const spec = toNodeSpec(
+      { id: '9:1', type: 'VECTOR' } as never,
+      { depth: 0 },
+    )
+    expect(spec.vectorPaths).toBeUndefined()
+  })
+
+  it('round-trips: raw vectorPaths → atom → FigmaVectorPath', () => {
+    // Reader converts raw Figma VectorPath objects to path atoms.
+    // Then writer converts atoms back to FigmaVectorPath objects.
+    const vectorRaw = {
+      id: '9:1',
+      type: 'VECTOR',
+      vectorPaths: [
+        {
+          windingRule: 'EVENODD',
+          data: 'M 0 0 L 10.5 0 Z',
+        },
+      ],
+    }
+    const spec = toNodeSpec(vectorRaw as never, {
+      depth: 0,
+    })
+    const written = specToFigma({
+      vectorPaths: spec.vectorPaths,
+    })
+    const vp = written.vectorPaths as {
+      windingRule: string
+      data: string
+    }[]
+    expect(vp[0].windingRule).toBe('EVENODD')
+    expect(vp[0].data).toBe('M 0 0 L 10.5 0 Z')
+  })
+})

@@ -50,6 +50,7 @@ import {
   atomToFont,
   atomToStroke,
   atomToGrid,
+  atomToPath,
 } from '../grammar'
 
 export type FigmaWritePayload = Record<string, unknown>
@@ -261,6 +262,9 @@ export const specToFigma = (
   }
   if (spec.grids !== undefined) {
     out.grids = spec.grids.map(atomToGrid)
+  }
+  if (spec.vectorPaths !== undefined) {
+    out.vectorPaths = spec.vectorPaths.map(atomToPath)
   }
 
   // ── text ─────────────────────────────────────────────────────────────────
