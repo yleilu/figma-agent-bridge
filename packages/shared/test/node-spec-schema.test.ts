@@ -296,6 +296,51 @@ describe('sub-schemas', () => {
     ).toBe(true)
   })
 
+  it('layoutSpecSchema validates GRID mode with all grid keys', () => {
+    expect(
+      layoutSpecSchema.safeParse({
+        mode: 'GRID',
+        rows: 2,
+        cols: 3,
+        rowGap: 8,
+        colGap: 12,
+      }).success,
+    ).toBe(true)
+  })
+
+  it('layoutSpecSchema validates GRID mode with no grid keys (bare grid)', () => {
+    expect(
+      layoutSpecSchema.safeParse({ mode: 'GRID' }).success,
+    ).toBe(true)
+  })
+
+  it('layoutSpecSchema rejects negative rowGap (nonnegative constraint)', () => {
+    expect(
+      layoutSpecSchema.safeParse({
+        mode: 'GRID',
+        rowGap: -1,
+      }).success,
+    ).toBe(false)
+  })
+
+  it('layoutSpecSchema rejects non-integer rows (int constraint)', () => {
+    expect(
+      layoutSpecSchema.safeParse({
+        mode: 'GRID',
+        rows: 1.5,
+      }).success,
+    ).toBe(false)
+  })
+
+  it('layoutSpecSchema rejects zero rows (positive constraint)', () => {
+    expect(
+      layoutSpecSchema.safeParse({
+        mode: 'GRID',
+        rows: 0,
+      }).success,
+    ).toBe(false)
+  })
+
   it('textSpecSchema requires content + font', () => {
     expect(
       textSpecSchema.safeParse({

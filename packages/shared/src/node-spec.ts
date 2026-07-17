@@ -19,17 +19,31 @@
  */
 export type Atom = string
 
-/** Auto-layout configuration. `mode: 'NONE'` turns auto-layout off. */
+/**
+ * Auto-layout configuration. `mode: 'NONE'` turns auto-layout off.
+ *
+ * GRID mode uses the four independent grid keys (`rows`, `cols`, `rowGap`,
+ * `colGap`). The scalar `gap` key is H/V-only and stays unused for GRID.
+ * T8: grid keys ride the existing layout struct — no separate grammar.
+ */
 export type LayoutSpec = {
-  mode: 'H' | 'V' | 'NONE'
-  /** Item spacing in px (grammar `gap`). */
+  mode: 'H' | 'V' | 'NONE' | 'GRID'
+  /** Item spacing in px (H/V only; not used for GRID). */
   gap?: number
   /** [top, right, bottom, left] in px (grammar `pad`). */
   pad?: [number, number, number, number]
   /** [primaryAxisAlign, counterAxisAlign]. */
   align?: [string, string]
-  /** Enable WRAP layout. */
+  /** Enable WRAP layout (H/V only). */
   wrap?: boolean
+  /** Grid row count (GRID mode only). Maps to `gridRowCount` on FrameNode. */
+  rows?: number
+  /** Grid column count (GRID mode only). Maps to `gridColumnCount` on FrameNode. */
+  cols?: number
+  /** Grid row gap in px (GRID mode only). Maps to `gridRowGap` on FrameNode. */
+  rowGap?: number
+  /** Grid column gap in px (GRID mode only). Maps to `gridColumnGap` on FrameNode. */
+  colGap?: number
 }
 
 /** A per-range text override; same atoms scoped by `at:[start,end]`. */

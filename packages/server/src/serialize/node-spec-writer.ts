@@ -109,6 +109,7 @@ const parseRadius = (
 /** Map a LayoutSpec to the flat layout object the plugin expects. */
 const convertLayout = (
   layout: LayoutSpec,
+  warnings?: string[],
 ): Record<string, unknown> => {
   const out: Record<string, unknown> = { mode: layout.mode }
   if (layout.gap !== undefined) {
@@ -122,6 +123,31 @@ const convertLayout = (
   }
   if (layout.wrap !== undefined) {
     out.wrap = layout.wrap
+  }
+  // GRID-mode keys (M12). Emit only when present (pure-emit contract).
+  // T7 handler-side validation: warn when grid keys appear on a non-GRID mode
+  // (they are a silent no-op on H/V/NONE).
+  const hasGridKeys =
+    layout.rows !== undefined ||
+    layout.cols !== undefined ||
+    layout.rowGap !== undefined ||
+    layout.colGap !== undefined
+  if (hasGridKeys && layout.mode !== 'GRID' && warnings) {
+    warnings.push(
+      `layout: rows/cols/rowGap/colGap keys are GRID-only but mode is '${layout.mode}' — keys ignored`,
+    )
+  }
+  if (layout.rows !== undefined) {
+    out.rows = layout.rows
+  }
+  if (layout.cols !== undefined) {
+    out.cols = layout.cols
+  }
+  if (layout.rowGap !== undefined) {
+    out.rowGap = layout.rowGap
+  }
+  if (layout.colGap !== undefined) {
+    out.colGap = layout.colGap
   }
   return out
 }
@@ -164,7 +190,7 @@ export const specToFigma = (
 
   // ── layout ───────────────────────────────────────────────────────────────
   if (spec.layout !== undefined) {
-    out.layout = convertLayout(spec.layout)
+    out.layout = convertLayout(spec.layout, warnings)
   }
   if (spec.sizing !== undefined) {
     out.sizing = spec.sizing

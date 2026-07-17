@@ -391,9 +391,36 @@ const layoutSpec = (
   raw: RawNode,
 ): LayoutSpec | undefined => {
   const mode = str(raw.layoutMode)
-  if (mode !== 'HORIZONTAL' && mode !== 'VERTICAL') {
+  if (
+    mode !== 'HORIZONTAL' &&
+    mode !== 'VERTICAL' &&
+    mode !== 'GRID'
+  ) {
     return undefined
   }
+
+  // GRID branch (M12): two independent gaps, separate row/col counts.
+  if (mode === 'GRID') {
+    const out: LayoutSpec = { mode: 'GRID' }
+    const rows = num(raw.gridRowCount)
+    if (rows !== undefined) {
+      out.rows = rows
+    }
+    const cols = num(raw.gridColumnCount)
+    if (cols !== undefined) {
+      out.cols = cols
+    }
+    const rowGap = num(raw.gridRowGap)
+    if (rowGap !== undefined) {
+      out.rowGap = rowGap
+    }
+    const colGap = num(raw.gridColumnGap)
+    if (colGap !== undefined) {
+      out.colGap = colGap
+    }
+    return out
+  }
+
   const out: LayoutSpec = {
     mode: mode === 'HORIZONTAL' ? 'H' : 'V',
   }

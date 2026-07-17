@@ -15,18 +15,23 @@
 
 /** The exact layout shape the server's `convertLayout` emits. */
 export type AppliedLayout = {
-  mode: 'H' | 'V' | 'NONE'
+  mode: 'H' | 'V' | 'NONE' | 'GRID'
   spacing?: number
   padding?: [number, number, number, number]
   align?: [string, string]
   wrap?: boolean
+  /** Grid row count (GRID mode only). */
+  rows?: number
+  /** Grid column count (GRID mode only). */
+  cols?: number
+  /** Grid row gap in px (GRID mode only). */
+  rowGap?: number
+  /** Grid column gap in px (GRID mode only). */
+  colGap?: number
 }
 
 /** Structural subset of FrameNode this applier writes to. */
 export type LayoutTarget = {
-  // Widened to match figma's FrameNode.layoutMode (which includes 'GRID') so
-  // a real FrameNode is structurally assignable here; we only ever WRITE
-  // 'NONE'/'HORIZONTAL'/'VERTICAL'.
   layoutMode: 'NONE' | 'HORIZONTAL' | 'VERTICAL' | 'GRID'
   itemSpacing: number
   paddingTop: number
@@ -44,24 +49,39 @@ export type LayoutTarget = {
     | 'CENTER'
     | 'BASELINE'
   layoutWrap: 'NO_WRAP' | 'WRAP'
+  // GRID fields (M12) — optional in the structural type so that runtimes
+  // without GRID support remain structurally assignable. Presence is checked
+  // at runtime via `'gridRowCount' in frame` (T7 feature-detect).
+  gridRowCount?: number
+  gridColumnCount?: number
+  gridRowGap?: number
+  gridColumnGap?: number
 }
 
 /**
  * Apply a (possibly partial) layout to a frame.
  *
  * `mode` is always set: 'NONE' disables auto-layout (it is NOT 'V'); 'H'/'V'
- * map to HORIZONTAL/VERTICAL. Every other field is set ONLY when present.
+ * map to HORIZONTAL/VERTICAL; 'GRID' maps to GRID.
+ * Every other field is set ONLY when present (pure-emit contract mirror).
+ *
+ * T7 feature-detect for GRID: each grid field is guarded with `'field' in frame`.
+ * On a runtime that does not expose gridRowCount etc., the assign is skipped and
+ * a warning is pushed onto the optional `warnings` sink (never throw).
  */
 export const applyLayout = (
   frame: LayoutTarget,
   layout: AppliedLayout,
+  warnings?: string[],
 ): void => {
   frame.layoutMode =
     layout.mode === 'NONE'
       ? 'NONE'
       : layout.mode === 'H'
         ? 'HORIZONTAL'
-        : 'VERTICAL'
+        : layout.mode === 'GRID'
+          ? 'GRID'
+          : 'VERTICAL'
 
   if (layout.spacing !== undefined) {
     frame.itemSpacing = layout.spacing
@@ -89,5 +109,44 @@ export const applyLayout = (
 
   if (layout.wrap) {
     frame.layoutWrap = 'WRAP'
+  }
+
+  // GRID-mode fields (M12). Feature-detect each property (T7): the runtime
+  // may not expose gridRowCount etc. on older Plugin API versions. If none
+  // of the grid properties exist on the frame and the caller supplied grid
+  // keys, push a warning onto the sink (never throw).
+  if (layout.mode === 'GRID') {
+    const gridSupported = 'gridRowCount' in frame
+    if (!gridSupported) {
+      const hasGridKeys =
+        layout.rows !== undefined ||
+        layout.cols !== undefined ||
+        layout.rowGap !== undefined ||
+        layout.colGap !== undefined
+      if (hasGridKeys && warnings) {
+        warnings.push(
+          'applyLayout: GRID mode grid fields (gridRowCount/gridColumnCount/gridRowGap/gridColumnGap) are not available in this runtime — keys ignored',
+        )
+      }
+    } else {
+      if (layout.rows !== undefined && 'gridRowCount' in frame) {
+        frame.gridRowCount = layout.rows
+      }
+      if (
+        layout.cols !== undefined &&
+        'gridColumnCount' in frame
+      ) {
+        frame.gridColumnCount = layout.cols
+      }
+      if (layout.rowGap !== undefined && 'gridRowGap' in frame) {
+        frame.gridRowGap = layout.rowGap
+      }
+      if (
+        layout.colGap !== undefined &&
+        'gridColumnGap' in frame
+      ) {
+        frame.gridColumnGap = layout.colGap
+      }
+    }
   }
 }
