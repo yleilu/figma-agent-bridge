@@ -659,6 +659,30 @@ export const updateVariablesParamsSchema = z.object({
     .describe('Per-variable edits.'),
 })
 
+/**
+ * Params for `delete_variables`: remove variables AND/OR collections by id.
+ * Collections are processed first (removing a collection cascades its variables).
+ * Partial success (T5): one bad id never sinks the rest. Returns
+ * { results:[{id, kind:'variable'|'collection'}], errors:[{id, error}] }.
+ *
+ * Note: the "at least one of variables/collections must be non-empty" constraint
+ * is enforced in the handler (INVALID_PARAM) rather than via .refine() so the
+ * schema retains .shape for registerFileTool / MCP SDK registration.
+ */
+export const deleteVariablesParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
+  variables: z
+    .array(z.string())
+    .optional()
+    .describe('IDs of variables to remove.'),
+  collections: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'IDs of variable collections to remove (cascades their variables).',
+    ),
+})
+
 // ---------------------------------------------------------------------------
 // Write tools — styles
 // ---------------------------------------------------------------------------
@@ -752,6 +776,47 @@ export const updateStylesParamsSchema = z.object({
   styles: z
     .array(updateStyleSpecSchema)
     .describe('The styles to edit (partial success).'),
+})
+
+/**
+ * One style entry for `delete_styles`: addressed by `id` OR by `name` + `type`.
+ * Mirrors the update_styles entry shape minus value/newName/description.
+ */
+export const deleteStyleSpecSchema = z.object({
+  id: z
+    .string()
+    .optional()
+    .describe(
+      'ID of the style to delete (or look it up by name + type).',
+    ),
+  name: z
+    .string()
+    .optional()
+    .describe(
+      'Style name to look up (with `type`) when no `id` is given.',
+    ),
+  type: styleTypeSchema
+    .optional()
+    .describe(
+      'Style category for name lookup: paint | text | effect | grid.',
+    ),
+})
+
+/**
+ * Params for `delete_styles`: BATCH-delete paint/text/effect/grid styles by id
+ * OR by name+type (same addressing as update_styles). Partial success (T5): one
+ * entry's failure does not abort the rest. No value-convert (T8 — deletes carry
+ * no grammar). Returns { results:[{id,index}], errors:[{index,error}] }.
+ *
+ * Per-entry validation (id OR name+type) is enforced in the handler so the schema
+ * retains .shape for registerFileTool / MCP SDK registration (avoids the ZodEffects
+ * .shape-spreading caveat hit in M1a).
+ */
+export const deleteStylesParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
+  styles: z
+    .array(deleteStyleSpecSchema)
+    .describe('The styles to delete (partial success).'),
 })
 
 /**
@@ -1172,6 +1237,7 @@ export const batchOpSchema = z.enum([
   'update_styles',
   'create_variables',
   'update_variables',
+  'delete_variables',
   'set_plugin_data',
   'set_reactions',
   'set_annotations',

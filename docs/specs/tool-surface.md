@@ -16,7 +16,7 @@ related:
 
 # figma-agent-bridge — Tool Surface
 
-> **Spec of record.** This is the **47-tool** facade surface — the contract of record
+> **Spec of record.** This is the **48-tool** facade surface — the contract of record
 > for the MCP tool layer. Governed by `docs/principles.md` (T1–T10, B1, P1).
 >
 > The **component index** feature layers two further MCP tools —
@@ -25,8 +25,8 @@ related:
 > meta-tools** (outside the `figma.*` facade count), like `record_feedback`.
 >
 > **Count is a formula, not a hand-summed aggregate (stops silent rot).** The one
-> hand-maintained number is the **facade group-sum = 47**. The exposed MCP surface is
-> then **`47 facade + K non-facade meta-tools`**, where the non-facade meta-tools are
+> hand-maintained number is the **facade group-sum = 48**. The exposed MCP surface is
+> then **`48 facade + K non-facade meta-tools`**, where the non-facade meta-tools are
 > `record_feedback`, `search_components`, `reindex`, `pull_changes` (change-feed.md),
 > and the three registry tools `register_library` / `unregister_library` /
 > `list_libraries` (team-library-registry.md). Do not restate a hardcoded total (a bare
@@ -191,8 +191,8 @@ batch({ op?, ops: [ {op?, ...params}, ... ] }) -> { results, errors[] }
   `update_node`, `delete_node`, `set_selection`, `set_focus`, `reparent_node`,
   `reorder_children`, `clone_node`, `boolean_op`, `flatten`, `apply_style`,
   `update_component`, `combine_variants`, `swap_component`, `set_instance`, `bind_variable`,
-  `create_styles`, `update_styles`, `create_variables`, `update_variables`, `set_plugin_data`,
-  `set_reactions`, `set_annotations`, `create_page`, `set_current_page`, `duplicate_page`.
+  `create_styles`, `update_styles`, `delete_styles`, `create_variables`, `update_variables`, `delete_variables`,
+  `set_plugin_data`, `set_reactions`, `set_annotations`, `create_page`, `set_current_page`, `duplicate_page`.
 
 Family-specific array envelopes (`create_tree`, `get_nodes`, `create_styles`,
 `create_variables`) create a coherent unit and stay distinct from the generic `batch`
@@ -223,15 +223,15 @@ One grammar, two faces (T8, expression-formats.md):
 
 Format: `name(params) → returns` — purpose · principle/checklist need.
 
-**Count = 47** (auditable per group): Session 2 · Read-nodes 4 · Read-query 3 · Read-DS 4 · Read-meta 2 · Write-nodes 5 · Write-structure 8 · Write-pages 3 · Write-components 5 · Write-DS 6 · Write-meta 2 · Handoff 2 · Batch 1 = **47**.
+**Count = 49** (auditable per group): Session 2 · Read-nodes 4 · Read-query 3 · Read-DS 4 · Read-meta 2 · Write-nodes 5 · Write-structure 8 · Write-pages 3 · Write-components 5 · Write-DS 8 · Write-meta 2 · Handoff 2 · Batch 1 = **49**.
 
-**`record_feedback` — deliberate meta-tool, outside the 47 (T6/T7 exception).**
+**`record_feedback` — deliberate meta-tool, outside the 48 (T6/T7 exception).**
 `record_feedback({category, title, description, tool?}) → {…}` (see
 [[figma-bridge/docs/specs/feedback-system]]). The facade
 rule (T6/T7) requires every tool to map to a real `figma.*` capability. `record_feedback` is
 the sole exception — it captures bridge-experience friction and has no Figma API counterpart.
 It is admitted knowingly and quarantined: placed in its own conceptual `feedback` group, absent
-from `COMMANDS` and the verify-live `ALL_TOOLS` catalogue, so the 47 count is unchanged.
+from `COMMANDS` and the verify-live `ALL_TOOLS` catalogue, so the 49 count is unchanged.
 Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle commands (as is the new
 `ping` liveness probe — [[figma-bridge/docs/specs/connection-liveness|connection-liveness.md]]). See
 [[figma-bridge/docs/specs/feedback-system]].
@@ -271,7 +271,7 @@ Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle
 
 ### Write — structure (8)
 - `clone_node(nodeId, {parentId?, index?, count?}) → [{id,…}]` — raw duplication (one entry per clone) · T6; §10 duplicate, §8 grid.
-- `delete_node(nodeId) → {id,name,type}` — page-aware remove (captures node info before removal) · §9 cleanup.
+- `delete_node(nodeId) → {id,name,type[,currentPageId]}` — page-aware remove (info captured before removal). **PAGE semantics:** deleting the last remaining page → `{error}` (Figma forbids a pageless document); deleting the current page → auto-switch to adjacent sibling (rule: previous sibling, else next; `pages[idx-1] ?? pages[idx+1]`), then remove — reply includes `currentPageId` (machine-visible). `setCurrentPageAsync` absent → degrade: warn + skip remove, never throw. Non-PAGE nodes: unchanged path · T1/T6/T7; §9 cleanup.
 - `reparent_node(nodeId, parentId, {index?}) → {id,…,parentId}` — the one reparent path; an **auto-layout** parent governs position (re-flows into the layout), a **non-auto-layout** parent **preserves the node's visual position** (its absolute spot is kept, not its raw relative x/y) · §10 move-into-frame.
 - `reorder_children(parentId, nodeIds[]) → {parentId, order, warnings[]}` — set-equality validated; warns on mismatch (never throws) · T7; §10 reorder.
 - `set_selection(nodeIds[]) → {selectedCount}` — twin of `get_selection`; **selection only** (does NOT scroll the canvas — pair with `set_focus`); empty array clears the selection · T2; §2.
@@ -292,12 +292,14 @@ Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle
 - `set_instance(instanceId, {properties?, overrides?}) → {id,…, warnings[]}` — the one instance-state path (set variant + BOOLEAN/TEXT/INSTANCE_SWAP via `setProperties`, plus per-node `overrides`); never auto-detaches; **read instance state via `get_node`** (NodeSpec `componentProperties`/`overrides` — the read twin); per-node `overrides` are accepted but degrade with a warning — applying them is reserved for a later phase (T7 degrade) · T6, T9; §6/§11 configure + read-overrides.
 - *(instance placement = `create_node`(INSTANCE) by key/id — no separate tool, T6.)*
 
-### Write — design system (6)
+### Write — design system (8)
 - `create_styles([{type, name, value, description?}]) → {results, errors}` — array-create paint/text/effect/grid styles from grammar atom values; partial success (`results:[{id,key,name,type,index}]`, `errors:[{index,error}]`) · T5; §12.
 - `update_styles([{id|name+type, value?, newName?, description?}]) → {results, errors}` — array-edit styles' parsed value/name/description; partial success (`results:[{id,index}]`, `errors:[{index,error}]`); round-trips get_styles · T2; §9 brand recolor.
+- `delete_styles([{id?} | {name, type}]) → {results:[{id, index}], errors:[{index, error}]}` — array-delete styles by id OR by name+type (same addressing as update_styles); partial success — one entry's failure never aborts the rest; `remove()` feature-detected per entry (T7 degrade to per-entry error if absent); no value-convert (T8 — deletes carry no grammar) · T1, T5, T7; §12 design-system teardown.
 - `apply_style(nodeId, styleId, field) → {id, warnings?}` — bind a style to a field (`field`: fill|stroke|text|effect|grid) · T9; §9/§12.
 - `create_variables({collection, modes?, variables[]}) → {collectionId, modes, variables[{id,name}], warnings?}` — create a collection (+ optional extra modes) then its variables; each variable sets per-mode values + `aliases` + `scopes` + `codeSyntax` + `hiddenFromPublishing` on create (parity with update; each gated member feature-detect + T7-degrade) · T9; §12 3-tier/modes/scales/export.
 - `update_variables({collectionId, addModes?, removeModes?, renameModes?:[{from,to}], variables?:[{id, valuesByMode?, scopes?, codeSyntax?, hiddenFromPublishing?}]}) → {collectionId, modes, warnings[]}` — **one collection**: full mode lifecycle (`addModes`/`removeModes`/`renameModes`) + per-variable value/scopes/codeSyntax/hiddenFromPublishing edits; round-trips get_variables. Returns `{…, warnings[]}` (T7 degrade), **not** `{results, errors}` — it's a single-collection op, not a heterogeneous batch · T2, T7; §9 recolor-by-token, §12 modes (restored: mode lifecycle).
+- `delete_variables({variables?:id[], collections?:id[]}) → {results:[{id, kind:'variable'|'collection'}], errors:[{id, error}]}` — remove variables AND/OR collections by id; collections processed first (cascade removes their variables); partial success — one bad id never sinks the rest; `remove()` feature-detected per entry (T7 degrade to per-id error if absent); at least one of `variables`/`collections` must be non-empty (INVALID_PARAM) · T1, T5, T7; §12 design-system teardown.
 - `bind_variable(nodeId, variableId, field) → {id,…,warnings[]}` — bind a variable to a field (scalar proven, paint feature-detected) + frame mode via `setExplicitVariableModeForCollection` · T7, T8; §9 token-fill, §12 bind + switch-frame-to-mode.
 
 ### Write — node metadata & prototype (2 · restored)

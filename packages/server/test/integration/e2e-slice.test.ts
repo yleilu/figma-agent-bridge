@@ -49,8 +49,10 @@ import {
 import {
   handleCreateVariables,
   handleUpdateVariables,
+  handleDeleteVariables,
   handleCreateStyles,
   handleUpdateStyles,
+  handleDeleteStyles,
   handleApplyStyle,
 } from '@figma-agent-bridge/server/tools/design-system-authoring'
 import { handleExport } from '@figma-agent-bridge/server/tools/export'
@@ -1471,6 +1473,83 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(
       out.warnings.some(w => w.includes('renameMode')),
     ).toBe(true)
+  })
+
+  // 27e — delete_variables: partial success over the relay — one valid collection
+  // id + one bogus id → one result + one error; kind='collection' on success.
+  it('delete_variables partial success: one found + one not-found over the relay', async () => {
+    const result = await handleDeleteVariables(
+      { collections: ['col:1', 'err:missing'] },
+      scoped,
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      results: { id: string; kind: string }[]
+      errors: { id: string; error: string }[]
+    }
+    expect(out.results).toHaveLength(1)
+    expect(out.results[0].id).toBe('col:1')
+    expect(out.results[0].kind).toBe('collection')
+    expect(out.errors).toHaveLength(1)
+    expect(out.errors[0].id).toBe('err:missing')
+  })
+
+  // 27f — delete_variables: mix variables + collections with partial success.
+  it('delete_variables partial success: variables + collections mixed over the relay', async () => {
+    const result = await handleDeleteVariables(
+      {
+        variables: ['var:1', 'err:gone'],
+        collections: ['col:2'],
+      },
+      scoped,
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      results: { id: string; kind: string }[]
+      errors: { id: string; error: string }[]
+    }
+    // col:2 comes first (collections processed first in mock), then var:1
+    const resultIds = out.results.map(r => r.id)
+    expect(resultIds).toContain('col:2')
+    expect(resultIds).toContain('var:1')
+    expect(out.errors).toHaveLength(1)
+    expect(out.errors[0].id).toBe('err:gone')
+  })
+
+  // 27g — delete_styles: id-addressed partial success over the relay.
+  it('delete_styles partial success: id-resolve found + id-resolve not-found', async () => {
+    const result = await handleDeleteStyles(
+      { styles: [{ id: 'S:1' }, { id: 'err:missing' }] },
+      scoped,
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      results: { id: string; index: number }[]
+      errors: { index: number; error: string }[]
+    }
+    expect(out.results).toHaveLength(1)
+    expect(out.results[0].id).toBe('S:1')
+    expect(out.results[0].index).toBe(0)
+    expect(out.errors).toHaveLength(1)
+    expect(out.errors[0].index).toBe(1)
+  })
+
+  // 27h — delete_styles: name+type addressed partial success over the relay.
+  it('delete_styles partial success: name+type resolve + not-found in mixed batch', async () => {
+    const result = await handleDeleteStyles(
+      {
+        styles: [
+          { name: 'Brand/Primary', type: 'paint' },
+          { name: 'err:gone', type: 'text' },
+        ],
+      },
+      scoped,
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      results: { id: string; index: number }[]
+      errors: { index: number; error: string }[]
+    }
+    expect(out.results).toHaveLength(1)
+    expect(out.results[0].index).toBe(0)
+    expect(out.errors).toHaveLength(1)
+    expect(out.errors[0].index).toBe(1)
   })
 
   // 28 — create_styles: a paint atom is parsed server-side to a SOLID Paint

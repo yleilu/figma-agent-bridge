@@ -51,8 +51,10 @@ import {
   setInstanceParamsSchema,
   createVariablesParamsSchema,
   updateVariablesParamsSchema,
+  deleteVariablesParamsSchema,
   createStylesParamsSchema,
   updateStylesParamsSchema,
+  deleteStylesParamsSchema,
   applyStyleParamsSchema,
   batchParamsSchema,
   statusParamsSchema,
@@ -88,8 +90,10 @@ import {
 import {
   handleCreateVariables,
   handleUpdateVariables,
+  handleDeleteVariables,
   handleCreateStyles,
   handleUpdateStyles,
+  handleDeleteStyles,
   handleApplyStyle,
 } from './tools/design-system-authoring'
 import {
@@ -499,6 +503,13 @@ if (process.argv.includes('--relay')) {
   registerFileTool(
     server,
     client,
+    'delete_variables',
+    deleteVariablesParamsSchema,
+    handleDeleteVariables,
+  )
+  registerFileTool(
+    server,
+    client,
     'create_styles',
     createStylesParamsSchema,
     handleCreateStyles,
@@ -509,6 +520,13 @@ if (process.argv.includes('--relay')) {
     'update_styles',
     updateStylesParamsSchema,
     handleUpdateStyles,
+  )
+  registerFileTool(
+    server,
+    client,
+    'delete_styles',
+    deleteStylesParamsSchema,
+    handleDeleteStyles,
   )
   registerFileTool(
     server,

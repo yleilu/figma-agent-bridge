@@ -1597,14 +1597,67 @@ export const createMockPlugin = (
         break
       }
 
-      // delete_node: echo the deleted {id,name,type} (captured before removal).
-      case 'delete_node':
+      // delete_node: echo {id,name,type} (captured before removal).
+      // PAGE branch — backed by a small in-mock page array:
+      //   page:only   → last-page {error} (T7)
+      //   page:current → switch-then-remove; returns currentPageId
+      //   page:noncurrent → remove non-current page; returns currentPageId
+      //   page:noapi   → setCurrentPageAsync absent degrade (warns, skips remove)
+      //   anything else → ordinary FRAME reply (default mock node)
+      case 'delete_node': {
+        const dnNodeId = cmd.params?.nodeId as string
+        // Mock page registry: two pages, page:current is active.
+        const mockPages = [
+          { id: 'page:current', name: 'Page 1' },
+          { id: 'page:other', name: 'Page 2' },
+        ]
+        if (dnNodeId === 'page:only') {
+          result = {
+            error:
+              'Cannot delete the last remaining page: ' +
+              dnNodeId,
+          }
+          break
+        }
+        if (dnNodeId === 'page:noapi') {
+          result = {
+            id: 'page:noapi',
+            name: 'Page 1',
+            type: 'PAGE',
+            warnings: [
+              'setCurrentPageAsync unavailable; current page not switched — remove skipped',
+            ],
+          }
+          break
+        }
+        if (
+          dnNodeId === 'page:current' ||
+          dnNodeId === 'page:noncurrent'
+        ) {
+          const deletedPage = mockPages.find(
+            p => p.id === dnNodeId,
+          )
+          // After removing page:current, current switches to page:other.
+          // After removing page:noncurrent (page:other), current stays page:current.
+          const newCurrentId =
+            dnNodeId === 'page:current'
+              ? 'page:other'
+              : 'page:current'
+          result = {
+            id: dnNodeId,
+            name: deletedPage?.name ?? 'Page',
+            type: 'PAGE',
+            currentPageId: newCurrentId,
+          }
+          break
+        }
         result = {
-          id: cmd.params?.nodeId as string,
+          id: dnNodeId,
           name: 'Card',
           type: 'FRAME',
         }
         break
+      }
 
       // set_focus: CANVAS only — echo a viewport snapshot. Models the real
       // plugin's resolution + T7 honesty: an id that does not resolve to a scene
@@ -1891,6 +1944,56 @@ export const createMockPlugin = (
         break
       }
 
+      // delete_variables: PARTIAL SUCCESS over variable ids and collection ids.
+      // Collections first (real cascade order). An id prefixed `err:` models
+      // not-found (per-id error, never aborts the rest). An id prefixed
+      // `nofn:` models the T7 feature-detect path (remove() absent → per-id
+      // error). All others → success result with kind='variable'|'collection'.
+      // Returns { results:[{id, kind}], errors:[{id, error}] }.
+      case 'delete_variables': {
+        const dvResults: { id: string; kind: string }[] = []
+        const dvErrors: { id: string; error: string }[] = []
+        for (const colId of (cmd.params?.collections as
+          | string[]
+          | undefined) ?? []) {
+          if (colId.startsWith('err:')) {
+            dvErrors.push({
+              id: colId,
+              error: `Collection not found: ${colId}`,
+            })
+          } else if (colId.startsWith('nofn:')) {
+            dvErrors.push({
+              id: colId,
+              error: `remove() unavailable on collection ${colId}`,
+            })
+          } else {
+            dvResults.push({
+              id: colId,
+              kind: 'collection',
+            })
+          }
+        }
+        for (const varId of (cmd.params?.variables as
+          | string[]
+          | undefined) ?? []) {
+          if (varId.startsWith('err:')) {
+            dvErrors.push({
+              id: varId,
+              error: `Variable not found: ${varId}`,
+            })
+          } else if (varId.startsWith('nofn:')) {
+            dvErrors.push({
+              id: varId,
+              error: `remove() unavailable on variable ${varId}`,
+            })
+          } else {
+            dvResults.push({ id: varId, kind: 'variable' })
+          }
+        }
+        result = { results: dvResults, errors: dvErrors }
+        break
+      }
+
       // create_styles: array-create with PARTIAL SUCCESS. The server has
       // CONVERTED each entry's value atom (paint→Paint, text→FontName,
       // effect→Effect, grid→LayoutGrid). Loop, mirroring the real plugin's
@@ -1980,6 +2083,48 @@ export const createMockPlugin = (
           }
         }
         result = { results: usResults, errors: usErrors }
+        break
+      }
+
+      // delete_styles: PARTIAL SUCCESS over style entries. Each entry is addressed
+      // by `id` (or `name`+`type` via the mock's sId = e.id ?? e.name). Per-entry
+      // models:
+      //  - id (or name) prefixed `err:` → {index,error} not-found (does NOT abort
+      //    the rest).
+      //  - id (or name) prefixed `nofn:` → {index,error} T7 remove()-unavailable.
+      //  - else → {id,index} success.
+      // Returns { results:[{id,index}], errors:[{index,error}] }.
+      case 'delete_styles': {
+        const dsEntries =
+          (cmd.params?.styles as
+            | {
+                index: number
+                id?: string
+                name?: string
+                type?: string
+              }[]
+            | undefined) ?? []
+        const dsResults: { id: string; index: number }[] =
+          []
+        const dsErrors: { index: number; error: string }[] =
+          []
+        for (const e of dsEntries) {
+          const sId = e.id ?? e.name ?? ''
+          if (sId.startsWith('err:')) {
+            dsErrors.push({
+              index: e.index,
+              error: `Style not found: ${sId}`,
+            })
+          } else if (sId.startsWith('nofn:')) {
+            dsErrors.push({
+              index: e.index,
+              error: `remove() unavailable on style ${sId}`,
+            })
+          } else {
+            dsResults.push({ id: sId, index: e.index })
+          }
+        }
+        result = { results: dsResults, errors: dsErrors }
         break
       }
 

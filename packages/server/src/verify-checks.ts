@@ -50,6 +50,7 @@ import {
 import {
   handleCreateStyles,
   handleUpdateStyles,
+  handleDeleteStyles,
   handleApplyStyle,
   handleCreateVariables,
   handleUpdateVariables,
@@ -1676,8 +1677,9 @@ const tier3: Check[] = [
       'create_styles',
       'apply_style',
       'update_styles',
+      'delete_styles',
     ],
-    name: 'styles smoke: create_styles → apply_style → update_styles',
+    name: 'styles smoke: create_styles → apply_style → update_styles → delete_styles',
     run: async client => {
       const created: string[] = []
       const frame = await makeFrame(client, 'StyleSmoke')
@@ -1755,8 +1757,30 @@ const tier3: Check[] = [
           nodeIds: created,
         }
       }
+
+      // delete_styles: remove the style we just created (T1 teardown).
+      const del = await handleDeleteStyles(
+        { styles: [{ id: styleId }] },
+        client,
+      )
+      if (isError(del)) {
+        return {
+          ...fail(`delete_styles: ${text(del)}`),
+          nodeIds: created,
+        }
+      }
+      const delErrors = (asJson(del).errors ??
+        []) as unknown[]
+      if (delErrors.length > 0) {
+        return {
+          ...fail(
+            `delete_styles errors: ${JSON.stringify(delErrors)}`,
+          ),
+          nodeIds: created,
+        }
+      }
       return pass(
-        `created paint style ${styleId}, applied it, updated its value`,
+        `created paint style ${styleId}, applied it, updated its value, deleted it`,
         { nodeIds: created, exportNodeId: frame.id },
       )
     },
@@ -1951,7 +1975,7 @@ export const CHECK_LIST: Check[] = [
   ...tier3,
 ]
 
-/** All 47 registered tool names — the coverage denominator. */
+/** All 49 registered tool names — the coverage denominator. */
 export const ALL_TOOLS: string[] = [
   'connect',
   'status',
@@ -1992,9 +2016,11 @@ export const ALL_TOOLS: string[] = [
   'set_instance',
   'create_styles',
   'update_styles',
+  'delete_styles',
   'apply_style',
   'create_variables',
   'update_variables',
+  'delete_variables',
   'bind_variable',
   'set_plugin_data',
   'set_reactions',

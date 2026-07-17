@@ -1177,6 +1177,30 @@ const resolveParentNode = async (
   return figma.getNodeByIdAsync(parentId)
 }
 
+// resolveStyle: shared helper for update_styles and delete_styles.
+// Looks up a BaseStyle by `id` (direct async lookup) or by `name`+`type`
+// (linear scan of the matching local-style lister). Returns null when not found.
+const resolveStyle = async (entry: {
+  id?: string
+  name?: string
+  type?: 'paint' | 'text' | 'effect' | 'grid'
+}): Promise<BaseStyle | null> => {
+  if (entry.id !== undefined) {
+    return figma.getStyleByIdAsync(entry.id)
+  }
+  if (entry.name === undefined || entry.type === undefined) {
+    return null
+  }
+  const listers = {
+    paint: figma.getLocalPaintStylesAsync,
+    text: figma.getLocalTextStylesAsync,
+    effect: figma.getLocalEffectStylesAsync,
+    grid: figma.getLocalGridStylesAsync,
+  }
+  const list = await listers[entry.type]()
+  return (list as BaseStyle[]).find(s => s.name === entry.name) ?? null
+}
+
 const handleCommand = async (
   command: string,
   params: Record<string, unknown>,
@@ -2974,6 +2998,17 @@ const handleCommand = async (
 
     // delete_node: capture {id,name,type} BEFORE removing so the reply still
     // describes the now-gone node. Missing node → {error}.
+    //
+    // PAGE branch (T7 / T1 symmetry):
+    //   • Last remaining page → hard {error} — Figma forbids a pageless doc.
+    //   • Deleting the current page → auto-switch THEN remove (pure capability;
+    //     the switch is required for page.remove() to not throw). Switch rule
+    //     (T6/P1 — documented mechanical choice): previous sibling, else next
+    //     (pages[idx-1] ?? pages[idx+1]). Feature-detect setCurrentPageAsync:
+    //     absent on older runtimes → degrade (warn, skip remove) rather than
+    //     letting page.remove() throw.
+    //   • Returns {id,name,type,currentPageId} so the new active page is
+    //     machine-visible in the reply.
     case COMMANDS.DELETE_NODE: {
       const nodeId = params.nodeId as string
       const node = await figma.getNodeByIdAsync(nodeId)
@@ -2984,6 +3019,29 @@ const handleCommand = async (
         id: node.id,
         name: node.name,
         type: node.type,
+      }
+      if (node.type === 'PAGE') {
+        const pages = figma.root.children
+        if (pages.length <= 1) {
+          return {
+            error: 'Cannot delete the last remaining page: ' + node.id,
+          }
+        }
+        if (node.id === figma.currentPage.id) {
+          if (typeof figma.setCurrentPageAsync !== 'function') {
+            return {
+              ...info,
+              warnings: [
+                'setCurrentPageAsync unavailable; current page not switched — remove skipped',
+              ],
+            }
+          }
+          const idx = pages.findIndex(p => p.id === node.id)
+          const next = pages[idx - 1] ?? pages[idx + 1]
+          await figma.setCurrentPageAsync(next as PageNode)
+        }
+        node.remove()
+        return { ...info, currentPageId: figma.currentPage.id }
       }
       node.remove()
       return info
@@ -4006,6 +4064,85 @@ const handleCommand = async (
       }
     }
 
+    // delete_variables: remove variables AND collections by id. Collections are
+    // processed first (removing a collection cascades its variables in the Figma
+    // runtime). PARTIAL SUCCESS (T5): one bad id never sinks the rest. T7:
+    // feature-detect remove() before calling — absent → per-id error, not a
+    // throw. A variable already removed by its collection's cascade resolves null
+    // → a clean per-id "not found" error (not a crash). Returns
+    // { results:[{id, kind:'variable'|'collection'}], errors:[{id, error}] }.
+    case COMMANDS.DELETE_VARIABLES: {
+      const dvResults: { id: string; kind: string }[] = []
+      const dvErrors: { id: string; error: string }[] = []
+
+      // Collections first — cascade removes their variables.
+      for (const colId of (params.collections as
+        | string[]
+        | undefined) ?? []) {
+        const collection =
+          await figma.variables.getVariableCollectionByIdAsync(
+            colId,
+          )
+        if (!collection) {
+          dvErrors.push({
+            id: colId,
+            error: 'Collection not found: ' + colId,
+          })
+          continue
+        }
+        if (typeof collection.remove !== 'function') {
+          dvErrors.push({
+            id: colId,
+            error:
+              'remove() unavailable on collection ' + colId,
+          })
+          continue
+        }
+        try {
+          collection.remove()
+          dvResults.push({ id: colId, kind: 'collection' })
+        } catch (e) {
+          dvErrors.push({
+            id: colId,
+            error: 'remove() failed on collection ' + colId + ': ' + String(e),
+          })
+        }
+      }
+
+      // Variables: a variable already removed by cascade resolves null → "not found".
+      for (const varId of (params.variables as
+        | string[]
+        | undefined) ?? []) {
+        const variable =
+          await figma.variables.getVariableByIdAsync(varId)
+        if (!variable) {
+          dvErrors.push({
+            id: varId,
+            error: 'Variable not found: ' + varId,
+          })
+          continue
+        }
+        if (typeof variable.remove !== 'function') {
+          dvErrors.push({
+            id: varId,
+            error: 'remove() unavailable on variable ' + varId,
+          })
+          continue
+        }
+        try {
+          variable.remove()
+          dvResults.push({ id: varId, kind: 'variable' })
+        } catch (e) {
+          dvErrors.push({
+            id: varId,
+            error: 'remove() failed on variable ' + varId + ': ' + String(e),
+          })
+        }
+      }
+
+      return { results: dvResults, errors: dvErrors }
+    }
+
     // create_styles: create one paint/text/effect/grid style from the
     // server-CONVERTED value (paint→Paint, text→FontName, effect→Effect,
     // grid→LayoutGrid). loadFontAsync first for text styles. T7: feature-detect
@@ -4158,36 +4295,7 @@ const handleCommand = async (
       const usErrors: { index: number; error: string }[] =
         []
 
-      // Resolve a style by id, else by name + category. The name+type listers
-      // are loaded lazily (only when an entry omits its id).
-      const resolveStyle = async (entry: {
-        id?: string
-        name?: string
-        type?: 'paint' | 'text' | 'effect' | 'grid'
-      }): Promise<BaseStyle | null> => {
-        if (entry.id !== undefined) {
-          return figma.getStyleByIdAsync(entry.id)
-        }
-        if (
-          entry.name === undefined ||
-          entry.type === undefined
-        ) {
-          return null
-        }
-        const listers = {
-          paint: figma.getLocalPaintStylesAsync,
-          text: figma.getLocalTextStylesAsync,
-          effect: figma.getLocalEffectStylesAsync,
-          grid: figma.getLocalGridStylesAsync,
-        }
-        const list = await listers[entry.type]()
-        return (
-          (list as BaseStyle[]).find(
-            s => s.name === entry.name,
-          ) ?? null
-        )
-      }
-
+      // resolveStyle is the module-level shared helper (used by DELETE_STYLES too).
       for (const entry of usEntries) {
         try {
           const style = await resolveStyle(entry)
@@ -4298,6 +4406,60 @@ const handleCommand = async (
         }
       }
       return { results: usResults, errors: usErrors }
+    }
+
+    // delete_styles: array-delete styles by id OR by name+type. Uses the shared
+    // resolveStyle() helper (extracted from UPDATE_STYLES, also used here). Per
+    // entry: resolve → not found = {index,error}; else T7 feature-detect remove()
+    // → absent = {index,error}; call remove() in try/catch for per-entry error on
+    // throw. PARTIAL SUCCESS (T5): one entry's failure never aborts the rest.
+    // No value-convert (T8 — deletes carry no grammar). Returns
+    // { results:[{id,index}], errors:[{index,error}] }.
+    case COMMANDS.DELETE_STYLES: {
+      const dsEntries =
+        (params.styles as
+          | {
+              index: number
+              id?: string
+              name?: string
+              type?: 'paint' | 'text' | 'effect' | 'grid'
+            }[]
+          | undefined) ?? []
+      const dsResults: { id: string; index: number }[] = []
+      const dsErrors: { index: number; error: string }[] = []
+
+      for (const entry of dsEntries) {
+        try {
+          const style = await resolveStyle(entry)
+          if (!style) {
+            dsErrors.push({
+              index: entry.index,
+              error:
+                'Style not found: ' +
+                (entry.id ??
+                  `${entry.name} (${entry.type})`),
+            })
+            continue
+          }
+          if (typeof style.remove !== 'function') {
+            dsErrors.push({
+              index: entry.index,
+              error:
+                'remove() unavailable on style ' +
+                style.id,
+            })
+            continue
+          }
+          style.remove()
+          dsResults.push({ id: style.id, index: entry.index })
+        } catch (e) {
+          dsErrors.push({
+            index: entry.index,
+            error: String(e),
+          })
+        }
+      }
+      return { results: dsResults, errors: dsErrors }
     }
 
     // apply_style: bind a style to a node field via the matching async setter.
