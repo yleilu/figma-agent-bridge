@@ -2855,16 +2855,26 @@ const handleCommand = async (
                 if (!v) {
                   return null
                 }
-                // aliases: scan valuesByMode for VARIABLE_ALIAS refs.
-                const aliases = Object.values(
+                // B2: aliases — emit a mode-keyed map {modeId: targetId} so
+                // the server can translate to {modeName: targetId}, matching
+                // the write shape consumed by create/update_variables (T2).
+                const aliases: Record<string, string> = {}
+                for (const [modeId, val] of Object.entries(
                   v.valuesByMode,
-                ).filter(
-                  val =>
+                )) {
+                  if (
                     typeof val === 'object' &&
                     val !== null &&
                     (val as { type?: string }).type ===
-                      'VARIABLE_ALIAS',
-                )
+                      'VARIABLE_ALIAS' &&
+                    typeof (val as { id?: unknown }).id ===
+                      'string'
+                  ) {
+                    aliases[modeId] = (
+                      val as { id: string }
+                    ).id
+                  }
+                }
                 return {
                   id: v.id,
                   name: v.name,
@@ -3991,6 +4001,7 @@ const handleCommand = async (
         | {
             id: string
             valuesByMode?: Record<string, unknown>
+            aliases?: Record<string, string>
             scopes?: string[]
             codeSyntax?: Record<string, string>
             hiddenFromPublishing?: boolean
@@ -4103,6 +4114,17 @@ const handleCommand = async (
                 String(e),
             )
           }
+        }
+        // B2: aliases — reuse the shared applyVariableMeta helper (extract-
+        // don't-duplicate) so the alias-apply logic lives in exactly one place,
+        // called by both create_variables and update_variables (T2 parity).
+        if (edit.aliases !== undefined) {
+          await applyVariableMeta(
+            variable,
+            { name: edit.id, aliases: edit.aliases },
+            modeByName,
+            warnings,
+          )
         }
       }
 

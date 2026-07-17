@@ -601,6 +601,12 @@ export const updateVariableSpecSchema = z.object({
     .describe(
       'Map of mode NAME → new value (COLOR = hex atom; else literal).',
     ),
+  aliases: z
+    .record(z.string())
+    .optional()
+    .describe(
+      'Map of mode NAME → target variable ID — sets that mode to a VARIABLE_ALIAS of the target (feature-detected + T7-degraded). Mirrors createVariableSpecSchema for round-trip parity (T2).',
+    ),
   scopes: z
     .array(z.string())
     .optional()

@@ -461,11 +461,48 @@ type RawVariable = {
   hiddenFromPublishing?: unknown
 }
 
+type RawMode = { modeId: string; name: string }
+
 type VariableCollection = {
   id: string
   name: string
   modes?: unknown
   variables?: RawVariable[]
+}
+
+/**
+ * Translate a plugin-side mode-keyed alias map {modeId: targetId} to the
+ * agent-facing shape {modeName: targetId} — the SAME shape create/update_variables
+ * consume — using the collection's modes array (T2 read-shape == write-shape).
+ * An empty or missing map returns undefined (omitted from output).
+ */
+const translateAliases = (
+  rawAliases: unknown,
+  modes: RawMode[],
+): Record<string, string> | undefined => {
+  if (
+    rawAliases === null ||
+    rawAliases === undefined ||
+    typeof rawAliases !== 'object' ||
+    Array.isArray(rawAliases)
+  ) {
+    return undefined
+  }
+  const aliasMap = rawAliases as Record<string, string>
+  const modeIdToName: Record<string, string> = {}
+  for (const m of modes) {
+    modeIdToName[m.modeId] = m.name
+  }
+  const out: Record<string, string> = {}
+  for (const [modeId, targetId] of Object.entries(
+    aliasMap,
+  )) {
+    const modeName = modeIdToName[modeId]
+    if (modeName !== undefined) {
+      out[modeName] = targetId
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 // A raw COLOR value is { r,g,b } numeric (optional a). An alias is
@@ -534,21 +571,37 @@ export const handleGetVariables = async (
     }
 
     const collections = raw.results ?? []
-    const results = collections.map(c => ({
-      id: c.id,
-      name: c.name,
-      modes: c.modes,
-      variables: (c.variables ?? []).map(v => ({
-        id: v.id,
-        name: v.name,
-        type: v.resolvedType,
-        valuesByMode: renderVariableValues(v.valuesByMode),
-        aliases: v.aliases,
-        scopes: v.scopes,
-        codeSyntax: v.codeSyntax,
-        hiddenFromPublishing: v.hiddenFromPublishing,
-      })),
-    }))
+    const results = collections.map(c => {
+      // Build modeId→name lookup from the collection's modes array.
+      const modes = Array.isArray(c.modes)
+        ? (c.modes as RawMode[])
+        : []
+      return {
+        id: c.id,
+        name: c.name,
+        modes: c.modes,
+        variables: (c.variables ?? []).map(v => {
+          // B2: translate plugin's mode-keyed {modeId:targetId} → {modeName:targetId}
+          // so the read shape matches the write shape consumed by create/update_variables.
+          const aliases = translateAliases(v.aliases, modes)
+          const entry: Record<string, unknown> = {
+            id: v.id,
+            name: v.name,
+            type: v.resolvedType,
+            valuesByMode: renderVariableValues(
+              v.valuesByMode,
+            ),
+            scopes: v.scopes,
+            codeSyntax: v.codeSyntax,
+            hiddenFromPublishing: v.hiddenFromPublishing,
+          }
+          if (aliases !== undefined) {
+            entry.aliases = aliases
+          }
+          return entry
+        }),
+      }
+    })
 
     // T10 — bound the AGENT-CONTEXT: page the top-level collections list.
     let bounded
