@@ -414,10 +414,18 @@ export const handleListFonts = async (
   }
 }
 
-// ─── bind_variable (M2 slice — design-system write, T7) ───────────────────────
+// ─── bind_variable (M2 slice — design-system write, T7; M13 — mode param) ────
+
+/** Mode entry shape for the `mode` param. */
+type ModeEntry = {
+  modeId?: string
+  modeName?: string
+  clearMode?: boolean
+}
 
 /**
- * Bind a variable to a node field.
+ * Bind a variable to a node field and/or pin a frame to a variable-collection
+ * mode (M13 — setExplicitVariableModeForCollection).
  *
  * Routed through formatMutationResult: figma-client.sendCommand ONLY rejects on
  * the WS-level error field, so a plugin-side {error} resolves successfully and
@@ -425,23 +433,56 @@ export const handleListFonts = async (
  * — {id, warnings:[...]} with NO error (e.g. setBoundVariable unavailable, or a
  * non-bindable field) — is reported as success-with-warning, never a throw and
  * never a silent no-op (T7 feature-detect/warn honesty contract).
+ *
+ * Empty call guard: at least one of {field+variableId, mode} must be present.
+ * Enforced here (not in schema .refine()) because .refine() returns ZodEffects
+ * which lacks .shape — breaking registerFileTool's spread.
  */
 export const handleBindVariable = async (
   {
     nodeId,
     variableId,
     field,
-  }: { nodeId: string; variableId: string; field: string },
+    mode,
+  }: {
+    nodeId: string
+    variableId?: string
+    field?: string
+    mode?: Record<string, ModeEntry>
+  },
   client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
+  // Empty-call guard: must have a field binding or a mode map.
+  const hasFieldBinding =
+    variableId !== undefined && field !== undefined
+  const hasModeMap =
+    mode !== undefined && Object.keys(mode).length > 0
+  if (!hasFieldBinding && !hasModeMap) {
+    return textResult(
+      'Error: INVALID_PARAM — bind_variable requires at least one of: (variableId + field) for a field binding, or mode for a mode pin.',
+    )
+  }
+
   try {
+    // Build the command params: include field binding keys only when present.
+    const params: Record<string, unknown> = { nodeId }
+    if (variableId !== undefined) {
+      params.variableId = variableId
+    }
+    if (field !== undefined) {
+      params.field = field
+    }
+    if (mode !== undefined) {
+      params.mode = mode
+    }
+
     const result = (await client.sendCommand(
       COMMANDS.BIND_VARIABLE,
-      { nodeId, variableId, field },
+      params,
     )) as { error?: string } | null
     return formatMutationResult(
       result,
-      `Failed to bind variable ${variableId} to ${field}`,
+      `Failed to bind variable${variableId ? ` ${variableId} to ${field ?? ''}` : ''} / mode on node ${nodeId}`,
     )
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
@@ -461,11 +502,48 @@ type RawVariable = {
   hiddenFromPublishing?: unknown
 }
 
+type RawMode = { modeId: string; name: string }
+
 type VariableCollection = {
   id: string
   name: string
   modes?: unknown
   variables?: RawVariable[]
+}
+
+/**
+ * Translate a plugin-side mode-keyed alias map {modeId: targetId} to the
+ * agent-facing shape {modeName: targetId} — the SAME shape create/update_variables
+ * consume — using the collection's modes array (T2 read-shape == write-shape).
+ * An empty or missing map returns undefined (omitted from output).
+ */
+const translateAliases = (
+  rawAliases: unknown,
+  modes: RawMode[],
+): Record<string, string> | undefined => {
+  if (
+    rawAliases === null ||
+    rawAliases === undefined ||
+    typeof rawAliases !== 'object' ||
+    Array.isArray(rawAliases)
+  ) {
+    return undefined
+  }
+  const aliasMap = rawAliases as Record<string, string>
+  const modeIdToName: Record<string, string> = {}
+  for (const m of modes) {
+    modeIdToName[m.modeId] = m.name
+  }
+  const out: Record<string, string> = {}
+  for (const [modeId, targetId] of Object.entries(
+    aliasMap,
+  )) {
+    const modeName = modeIdToName[modeId]
+    if (modeName !== undefined) {
+      out[modeName] = targetId
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 // A raw COLOR value is { r,g,b } numeric (optional a). An alias is
@@ -534,21 +612,37 @@ export const handleGetVariables = async (
     }
 
     const collections = raw.results ?? []
-    const results = collections.map(c => ({
-      id: c.id,
-      name: c.name,
-      modes: c.modes,
-      variables: (c.variables ?? []).map(v => ({
-        id: v.id,
-        name: v.name,
-        type: v.resolvedType,
-        valuesByMode: renderVariableValues(v.valuesByMode),
-        aliases: v.aliases,
-        scopes: v.scopes,
-        codeSyntax: v.codeSyntax,
-        hiddenFromPublishing: v.hiddenFromPublishing,
-      })),
-    }))
+    const results = collections.map(c => {
+      // Build modeId→name lookup from the collection's modes array.
+      const modes = Array.isArray(c.modes)
+        ? (c.modes as RawMode[])
+        : []
+      return {
+        id: c.id,
+        name: c.name,
+        modes: c.modes,
+        variables: (c.variables ?? []).map(v => {
+          // B2: translate plugin's mode-keyed {modeId:targetId} → {modeName:targetId}
+          // so the read shape matches the write shape consumed by create/update_variables.
+          const aliases = translateAliases(v.aliases, modes)
+          const entry: Record<string, unknown> = {
+            id: v.id,
+            name: v.name,
+            type: v.resolvedType,
+            valuesByMode: renderVariableValues(
+              v.valuesByMode,
+            ),
+            scopes: v.scopes,
+            codeSyntax: v.codeSyntax,
+            hiddenFromPublishing: v.hiddenFromPublishing,
+          }
+          if (aliases !== undefined) {
+            entry.aliases = aliases
+          }
+          return entry
+        }),
+      }
+    })
 
     // T10 — bound the AGENT-CONTEXT: page the top-level collections list.
     let bounded

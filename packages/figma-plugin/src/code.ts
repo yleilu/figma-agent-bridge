@@ -174,6 +174,32 @@ const exportNodeDocument = async (
         node as unknown as { innerRadius: number }
       ).innerRadius
     }
+    // explicitVariableModes (M13) — per-collection mode pins are NOT carried
+    // by JSON_REST_V1; enrich from the node's own property (feature-detected
+    // by property presence, not by API version check — consistent with
+    // pointCount/innerRadius enrichment above).
+    if (
+      'explicitVariableModes' in node &&
+      typeof (
+        node as unknown as {
+          explicitVariableModes: unknown
+        }
+      ).explicitVariableModes === 'object' &&
+      (
+        node as unknown as {
+          explicitVariableModes: Record<string, string> | null
+        }
+      ).explicitVariableModes !== null
+    ) {
+      const evm = (
+        node as unknown as {
+          explicitVariableModes: Record<string, string>
+        }
+      ).explicitVariableModes
+      if (Object.keys(evm).length > 0) {
+        doc.explicitVariableModes = evm
+      }
+    }
     return doc
   }
   throw new Error(
@@ -2712,6 +2738,143 @@ const handleCommand = async (
       if (!node) {
         return { error: 'Node not found: ' + params.nodeId }
       }
+      const warnings: string[] = []
+
+      // ── M13: per-collection explicit mode-set ────────────────────────────
+      // Process the mode map BEFORE the field-binding branch so a pure mode-set
+      // call (no variableId/field) returns immediately after processing.
+      const modeMap = params.mode as
+        | Record<
+            string,
+            {
+              modeId?: string
+              modeName?: string
+              clearMode?: boolean
+            }
+          >
+        | undefined
+
+      if (modeMap !== undefined) {
+        const modeHost = node as SceneNode & {
+          setExplicitVariableModeForCollection?: (
+            collection: VariableCollection,
+            modeId: string,
+          ) => void
+          clearExplicitVariableModeForCollection?: (
+            collection: VariableCollection,
+          ) => void
+        }
+
+        for (const [collectionId, entry] of Object.entries(
+          modeMap,
+        )) {
+          try {
+            // Resolve the collection OBJECT (not string-id overload which is
+            // @deprecated and throws under documentAccess:'dynamic-page').
+            const collection =
+              await figma.variables.getVariableCollectionByIdAsync(
+                collectionId,
+              )
+            if (!collection) {
+              warnings.push(
+                'collection not found: ' +
+                  collectionId +
+                  '; mode pin skipped',
+              )
+              continue
+            }
+
+            if (entry.clearMode === true) {
+              // clear-mode path
+              if (
+                typeof modeHost.clearExplicitVariableModeForCollection !==
+                'function'
+              ) {
+                warnings.push(
+                  'clearExplicitVariableModeForCollection unavailable in this Figma version; mode clear skipped for collection ' +
+                    collectionId,
+                )
+                continue
+              }
+              modeHost.clearExplicitVariableModeForCollection(
+                collection,
+              )
+              continue
+            }
+
+            // Resolve modeId from modeId or modeName
+            let resolvedModeId: string | undefined = entry.modeId
+            if (
+              resolvedModeId === undefined &&
+              entry.modeName !== undefined
+            ) {
+              const found = (
+                collection.modes as {
+                  modeId: string
+                  name: string
+                }[]
+              ).find(m => m.name === entry.modeName)
+              if (!found) {
+                warnings.push(
+                  'unknown mode "' +
+                    entry.modeName +
+                    '" in collection ' +
+                    collectionId +
+                    '; mode pin skipped',
+                )
+                continue
+              }
+              resolvedModeId = found.modeId
+            }
+
+            if (resolvedModeId === undefined) {
+              warnings.push(
+                'mode entry for collection ' +
+                  collectionId +
+                  ' must specify modeId, modeName, or clearMode; skipped',
+              )
+              continue
+            }
+
+            // Feature-detect (T7): warn+skip if API absent.
+            if (
+              typeof modeHost.setExplicitVariableModeForCollection !==
+              'function'
+            ) {
+              warnings.push(
+                'setExplicitVariableModeForCollection unavailable in this Figma version; mode pin skipped for collection ' +
+                  collectionId,
+              )
+              continue
+            }
+
+            // Use the OBJECT overload (not the deprecated string-id overload
+            // which throws under documentAccess:'dynamic-page').
+            modeHost.setExplicitVariableModeForCollection(
+              collection,
+              resolvedModeId,
+            )
+          } catch (e) {
+            // Per-entry try/catch: one bad entry never sinks the rest (T7).
+            warnings.push(
+              'mode pin failed for collection ' +
+                collectionId +
+                ': ' +
+                String(e),
+            )
+          }
+        }
+      }
+
+      // If this is a pure mode-set call (no variableId/field), return now.
+      if (
+        params.variableId === undefined &&
+        params.field === undefined
+      ) {
+        return { id: node.id, warnings }
+      }
+
+      // ── Field binding (original path) ─────────────────────────────────────
       const variable =
         await figma.variables.getVariableByIdAsync(
           params.variableId as string,
@@ -2722,7 +2885,6 @@ const handleCommand = async (
         }
       }
       const field = params.field as string
-      const warnings: string[] = []
 
       // Paint fields (fills/strokes) are NOT members of VariableBindableNodeField,
       // so node.setBoundVariable('fills', v) would throw. They bind per-paint via
@@ -2855,16 +3017,26 @@ const handleCommand = async (
                 if (!v) {
                   return null
                 }
-                // aliases: scan valuesByMode for VARIABLE_ALIAS refs.
-                const aliases = Object.values(
+                // B2: aliases — emit a mode-keyed map {modeId: targetId} so
+                // the server can translate to {modeName: targetId}, matching
+                // the write shape consumed by create/update_variables (T2).
+                const aliases: Record<string, string> = {}
+                for (const [modeId, val] of Object.entries(
                   v.valuesByMode,
-                ).filter(
-                  val =>
+                )) {
+                  if (
                     typeof val === 'object' &&
                     val !== null &&
                     (val as { type?: string }).type ===
-                      'VARIABLE_ALIAS',
-                )
+                      'VARIABLE_ALIAS' &&
+                    typeof (val as { id?: unknown }).id ===
+                      'string'
+                  ) {
+                    aliases[modeId] = (
+                      val as { id: string }
+                    ).id
+                  }
+                }
                 return {
                   id: v.id,
                   name: v.name,
@@ -3991,6 +4163,7 @@ const handleCommand = async (
         | {
             id: string
             valuesByMode?: Record<string, unknown>
+            aliases?: Record<string, string>
             scopes?: string[]
             codeSyntax?: Record<string, string>
             hiddenFromPublishing?: boolean
@@ -4103,6 +4276,17 @@ const handleCommand = async (
                 String(e),
             )
           }
+        }
+        // B2: aliases — reuse the shared applyVariableMeta helper (extract-
+        // don't-duplicate) so the alias-apply logic lives in exactly one place,
+        // called by both create_variables and update_variables (T2 parity).
+        if (edit.aliases !== undefined) {
+          await applyVariableMeta(
+            variable,
+            { name: edit.id, aliases: edit.aliases },
+            modeByName,
+            warnings,
+          )
         }
       }
 

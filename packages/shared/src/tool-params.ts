@@ -486,7 +486,7 @@ export const createImageParamsSchema = z.object({
 // Variable tools
 // ---------------------------------------------------------------------------
 
-/** Params for `bind_variable`: bind a variable to a node field. */
+/** Params for `bind_variable`: bind a variable to a node field and/or pin a frame to a variable-collection mode. */
 export const bindVariableParamsSchema = z.object({
   ...fileTargetParamsSchema.shape,
   nodeId: z
@@ -494,11 +494,37 @@ export const bindVariableParamsSchema = z.object({
     .describe('ID of the node to bind the variable to.'),
   variableId: z
     .string()
-    .describe('ID of the variable to bind.'),
+    .optional()
+    .describe(
+      'ID of the variable to bind. Required when `field` is present.',
+    ),
   field: z
     .string()
+    .optional()
     .describe(
-      'Node field to bind (e.g. "fills", "opacity", "itemSpacing").',
+      'Node field to bind (e.g. "fills", "opacity", "itemSpacing"). Required when `variableId` is present.',
+    ),
+  /**
+   * M13 — per-collection explicit mode pin. Keys are collection IDs; values
+   * specify which mode to pin by `modeId` (raw id) or `modeName` (resolved
+   * plugin-side against the collection's modes list), or `clearMode: true` to
+   * clear the pin. The read-back shape (`explicitVariableModes` on NodeSpec)
+   * is a `{collectionId: modeId}` map; to re-apply it pass each entry here.
+   *
+   * Must supply at least one of: `field`+`variableId` OR `mode` (enforced in
+   * the handler because .refine() breaks .shape access).
+   */
+  mode: z
+    .record(
+      z.object({
+        modeId: z.string().optional(),
+        modeName: z.string().optional(),
+        clearMode: z.boolean().optional(),
+      }),
+    )
+    .optional()
+    .describe(
+      'Map of collectionId → mode entry. Each entry pins the node to render that collection in the given mode.',
     ),
 })
 
@@ -600,6 +626,12 @@ export const updateVariableSpecSchema = z.object({
     .optional()
     .describe(
       'Map of mode NAME → new value (COLOR = hex atom; else literal).',
+    ),
+  aliases: z
+    .record(z.string())
+    .optional()
+    .describe(
+      'Map of mode NAME → target variable ID — sets that mode to a VARIABLE_ALIAS of the target (feature-detected + T7-degraded). Mirrors createVariableSpecSchema for round-trip parity (T2).',
     ),
   scopes: z
     .array(z.string())

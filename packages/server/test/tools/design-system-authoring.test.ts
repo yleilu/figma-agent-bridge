@@ -393,6 +393,41 @@ describe('handleUpdateVariables', () => {
       'Failed to update variables.',
     )
   })
+
+  // B2 — aliases round-trip: update_variables must accept aliases so a
+  // read-back alias map (from get_variables) can be re-applied via this tool.
+  it('forwards aliases per variable edit to the plugin (B2)', async () => {
+    const sent: Sent[] = []
+    await handleUpdateVariables(
+      {
+        collectionId: 'col:1',
+        variables: [
+          {
+            id: 'var:1',
+            aliases: { Dark: 'var:primary' },
+          },
+        ],
+      },
+      stubClient({
+        sent,
+        reply: {
+          collectionId: 'col:1',
+          modes: [{ modeId: 'm1', name: 'Light' }],
+          warnings: [],
+        },
+      }),
+    )
+    expect(sent[0].command).toBe(COMMANDS.UPDATE_VARIABLES)
+    const params = sent[0].params as {
+      variables?: {
+        id: string
+        aliases?: Record<string, string>
+      }[]
+    }
+    expect(params.variables?.[0].aliases).toEqual({
+      Dark: 'var:primary',
+    })
+  })
 })
 
 // ─── delete_variables ─────────────────────────────────────────────────────────

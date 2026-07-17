@@ -405,6 +405,69 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(spec.fills[0]).toMatch(/^var\(/)
   })
 
+  // ── M13 — bind_variable mode param (pure mode-set) ────────────────────────
+
+  // 6a — mode-set happy path: the mode param is forwarded; no field binding.
+  it('bind_variable mode-set happy path: pins a frame to a collection mode', async () => {
+    const result = await handleBindVariable(
+      {
+        nodeId: '1:42',
+        mode: { 'col:1': { modeId: 'm:1' } },
+      },
+      scoped,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+  })
+
+  // 6b — mode-set with modeName: the mock resolves modeName → modeId.
+  it('bind_variable mode-set with modeName: resolves name to id (no warning on known name)', async () => {
+    const result = await handleBindVariable(
+      {
+        nodeId: '1:42',
+        mode: { 'col:1': { modeName: 'Light' } },
+      },
+      scoped,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+  })
+
+  // 6c — mode-set with clearMode: clears the collection pin (no warning).
+  it('bind_variable mode-set clearMode: clears the explicit pin with no warning', async () => {
+    const result = await handleBindVariable(
+      {
+        nodeId: '1:42',
+        mode: { 'col:1': { clearMode: true } },
+      },
+      scoped,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+  })
+
+  // 6d — mode-set degrade: unknown modeName → warning (not error).
+  it('bind_variable mode-set unknown modeName: degrade with warning (not error)', async () => {
+    const result = await handleBindVariable(
+      {
+        nodeId: '1:42',
+        mode: { 'col:1': { modeName: 'degrade:mode' } },
+      },
+      scoped,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    expect(result.content[0].text).toContain('degrade:mode')
+  })
+
+  // 6e — empty call (no variableId/field, no mode): INVALID_PARAM error.
+  it('bind_variable with neither field+variableId nor mode returns INVALID_PARAM', async () => {
+    const result = await handleBindVariable(
+      { nodeId: '1:42' },
+      scoped,
+    )
+    expect(result.content[0].text).toContain('Error')
+    expect(result.content[0].text).toContain(
+      'INVALID_PARAM',
+    )
+  })
+
   // ── chunk B — core reads + single-node create + navigation ────────────────
 
   // 7 — create_node round-trip: server converts the atom fill → SOLID paint,

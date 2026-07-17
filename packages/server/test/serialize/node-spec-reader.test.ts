@@ -537,3 +537,45 @@ describe('toNodeSpec — sectionContentsHidden read-back', () => {
     expect(spec.sectionContentsHidden).toBeUndefined()
   })
 })
+
+// ─── explicitVariableModes read-back (M13) ────────────────────────────────────
+
+describe('toNodeSpec — explicitVariableModes read-back (M13)', () => {
+  it('reads explicitVariableModes from a raw node carrying the map', () => {
+    const spec = toNodeSpec(
+      {
+        id: '1:9',
+        type: 'FRAME',
+        explicitVariableModes: {
+          'col:1': 'm:1',
+          'col:2': 'm:2',
+        },
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.explicitVariableModes).toEqual({
+      'col:1': 'm:1',
+      'col:2': 'm:2',
+    })
+  })
+
+  it('omits explicitVariableModes when absent from raw node', () => {
+    const spec = toNodeSpec(
+      { id: '1:10', type: 'FRAME' } as never,
+      { depth: 0 },
+    )
+    expect(spec.explicitVariableModes).toBeUndefined()
+  })
+
+  it('omits explicitVariableModes when the map is empty', () => {
+    const spec = toNodeSpec(
+      {
+        id: '1:11',
+        type: 'FRAME',
+        explicitVariableModes: {},
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.explicitVariableModes).toBeUndefined()
+  })
+})

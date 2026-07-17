@@ -544,24 +544,29 @@ describe('bindVariableParamsSchema', () => {
     ).toBe(true)
   })
 
-  it('rejects missing field', () => {
+  it('accepts variableId without field (partial field-binding; handler validates the pairing)', () => {
+    // After M13: both variableId and field are optional at schema level to
+    // allow the mode-only call path. The handler enforces that when variableId
+    // is present, field must also be present (or vice versa) — but that's a
+    // semantic constraint, not a Zod shape constraint.
     expect(
       bindVariableParamsSchema.safeParse({
         fileKey: 'fk',
         nodeId: '1:2',
         variableId: 'VariableID:1',
       }).success,
-    ).toBe(false)
+    ).toBe(true)
   })
 
-  it('rejects missing variableId', () => {
+  it('accepts field without variableId (partial field-binding; handler validates the pairing)', () => {
+    // Same reasoning as the test above: schema permits partial; handler validates.
     expect(
       bindVariableParamsSchema.safeParse({
         fileKey: 'fk',
         nodeId: '1:2',
         field: 'fills',
       }).success,
-    ).toBe(false)
+    ).toBe(true)
   })
 
   it('rejects missing nodeId', () => {
@@ -572,6 +577,63 @@ describe('bindVariableParamsSchema', () => {
         field: 'fills',
       }).success,
     ).toBe(false)
+  })
+
+  // M13 — mode param
+  it('accepts mode-only payload (no variableId/field) for pure mode-set', () => {
+    expect(
+      bindVariableParamsSchema.safeParse({
+        fileKey: 'fk',
+        nodeId: '1:2',
+        mode: { 'col:1': { modeId: 'm:1' } },
+      }).success,
+    ).toBe(true)
+  })
+
+  it('accepts a combined mode + variableId + field payload', () => {
+    expect(
+      bindVariableParamsSchema.safeParse({
+        fileKey: 'fk',
+        nodeId: '1:2',
+        variableId: 'v:9',
+        field: 'fills',
+        mode: { 'col:1': { modeId: 'm:1' } },
+      }).success,
+    ).toBe(true)
+  })
+
+  it('accepts mode entry with modeName instead of modeId', () => {
+    expect(
+      bindVariableParamsSchema.safeParse({
+        fileKey: 'fk',
+        nodeId: '1:2',
+        mode: { 'col:1': { modeName: 'Dark' } },
+      }).success,
+    ).toBe(true)
+  })
+
+  it('accepts mode entry with clearMode:true', () => {
+    expect(
+      bindVariableParamsSchema.safeParse({
+        fileKey: 'fk',
+        nodeId: '1:2',
+        mode: { 'col:1': { clearMode: true } },
+      }).success,
+    ).toBe(true)
+  })
+
+  it('accepts a nodeId-only payload (schema-level; handler rejects empty calls)', () => {
+    // After M13: variableId/field are optional (mode may provide the binding).
+    // The "at least one of {field+variableId, mode}" constraint lives in the
+    // handler (not schema), because .refine() breaks the .shape access that
+    // registerFileTool needs. This test documents that the schema permits a
+    // nodeId-only call so we know the handler guard is what catches it.
+    expect(
+      bindVariableParamsSchema.safeParse({
+        fileKey: 'fk',
+        nodeId: '1:2',
+      }).success,
+    ).toBe(true)
   })
 })
 

@@ -102,6 +102,7 @@ export const handleCreateVariables = async (
 type UpdateVariableSpec = {
   id: string
   valuesByMode?: Record<string, string | number | boolean>
+  aliases?: Record<string, string>
   scopes?: string[]
   codeSyntax?: Record<string, string>
   hiddenFromPublishing?: boolean

@@ -891,29 +891,77 @@ export const createMockPlugin = (
       // via setBoundVariableForPaint, scalar fields via setBoundVariable. The two
       // routes degrade with DIFFERENT messages, so the mock must branch on the
       // field the same way the plugin does — not echo a field-agnostic success.
+      //
+      // M13 — MODE MAP: when params.mode is present, iterate entries and model
+      // the plugin's per-entry degrade paths:
+      //   - modeName prefixed 'degrade:' → unknown-mode warning (not error)
+      //   - clearMode:true → success (mock supports it)
+      //   - modeId/modeName without degrade prefix → success (no warning)
+      // The mode map is processed independently of variableId/field.
       case 'bind_variable': {
-        const variableId = cmd.params?.variableId as string
-        const bvField = cmd.params?.field as string
-        const isPaintField =
-          bvField === 'fills' || bvField === 'strokes'
-        if (variableId.startsWith('err:')) {
-          error = `Variable not found: ${variableId}`
-        } else if (variableId.startsWith('degrade:')) {
-          result = {
-            id: cmd.params?.nodeId as string,
-            warnings: [
+        const bvMode = cmd.params?.mode as
+          | Record<
+              string,
+              {
+                modeId?: string
+                modeName?: string
+                clearMode?: boolean
+              }
+            >
+          | undefined
+        const variableId = cmd.params?.variableId as
+          | string
+          | undefined
+        const bvField = cmd.params?.field as
+          | string
+          | undefined
+        const bvWarnings: string[] = []
+
+        // Process mode map (M13): feature-detect + per-entry degrade.
+        if (bvMode !== undefined) {
+          for (const [
+            collectionId,
+            entry,
+          ] of Object.entries(bvMode)) {
+            if (entry.clearMode === true) {
+              // clear-mode path: success, no warning
+            } else if (
+              entry.modeName !== undefined &&
+              entry.modeName.startsWith('degrade:')
+            ) {
+              // unknown-mode degrade: warn (not error), per T7
+              bvWarnings.push(
+                'unknown mode "' +
+                  entry.modeName +
+                  '" in collection ' +
+                  collectionId +
+                  '; mode pin skipped',
+              )
+            }
+            // else: modeId or non-degrade modeName → success, no warning
+          }
+        }
+
+        // Process field binding (original path).
+        if (variableId !== undefined) {
+          const isPaintField =
+            bvField === 'fills' || bvField === 'strokes'
+          if (variableId.startsWith('err:')) {
+            error = `Variable not found: ${variableId}`
+            break
+          } else if (variableId.startsWith('degrade:')) {
+            bvWarnings.push(
               isPaintField
                 ? 'setBoundVariableForPaint unavailable in this Figma version; paint binding skipped'
                 : 'setBoundVariable unavailable in this Figma version; binding skipped',
-            ],
+            )
           }
-        } else {
-          // Happy path: a paint field binds via setBoundVariableForPaint and a
-          // scalar field via setBoundVariable — both succeed with no warning.
-          result = {
-            id: cmd.params?.nodeId as string,
-            warnings: [],
-          }
+          // else: happy path, no additional warning
+        }
+
+        result = {
+          id: cmd.params?.nodeId as string,
+          warnings: bvWarnings,
         }
         break
       }

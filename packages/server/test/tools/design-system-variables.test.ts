@@ -81,6 +81,126 @@ describe('handleBindVariable', () => {
   })
 })
 
+// ─── M13 — bind_variable mode param ──────────────────────────────────────────
+
+describe('handleBindVariable — mode param (M13)', () => {
+  it('forwards mode map to COMMANDS.BIND_VARIABLE when variableId/field omitted (pure mode-set)', async () => {
+    const sent: Sent[] = []
+    await handleBindVariable(
+      {
+        nodeId: '1:42',
+        mode: { 'col:1': { modeId: 'm:1' } },
+      },
+      stubClient({ sent }),
+    )
+    expect(sent[0].command).toBe(COMMANDS.BIND_VARIABLE)
+    expect(sent[0].params?.nodeId).toBe('1:42')
+    expect(sent[0].params?.mode).toEqual({
+      'col:1': { modeId: 'm:1' },
+    })
+    // variableId and field must NOT be in params when omitted
+    expect(sent[0].params?.variableId).toBeUndefined()
+    expect(sent[0].params?.field).toBeUndefined()
+  })
+
+  it('forwards both mode AND variableId/field when all are provided', async () => {
+    const sent: Sent[] = []
+    await handleBindVariable(
+      {
+        nodeId: '1:42',
+        variableId: 'v:9',
+        field: 'fills',
+        mode: { 'col:1': { modeId: 'm:1' } },
+      },
+      stubClient({ sent }),
+    )
+    expect(sent[0].params?.mode).toEqual({
+      'col:1': { modeId: 'm:1' },
+    })
+    expect(sent[0].params?.variableId).toBe('v:9')
+    expect(sent[0].params?.field).toBe('fills')
+  })
+
+  it('forwards modeName-based entries through to the plugin', async () => {
+    const sent: Sent[] = []
+    await handleBindVariable(
+      {
+        nodeId: '1:42',
+        mode: { 'col:1': { modeName: 'Dark' } },
+      },
+      stubClient({ sent }),
+    )
+    expect(sent[0].params?.mode).toEqual({
+      'col:1': { modeName: 'Dark' },
+    })
+  })
+
+  it('forwards clearMode:true entries through to the plugin', async () => {
+    const sent: Sent[] = []
+    await handleBindVariable(
+      {
+        nodeId: '1:42',
+        mode: { 'col:1': { clearMode: true } },
+      },
+      stubClient({ sent }),
+    )
+    expect(sent[0].params?.mode).toEqual({
+      'col:1': { clearMode: true },
+    })
+  })
+
+  it('returns INVALID_PARAM error when neither variableId/field nor mode is provided', async () => {
+    const result = await handleBindVariable(
+      { nodeId: '1:42' },
+      stubClient({}),
+    )
+    expect(result.content[0].text).toContain('Error')
+    expect(result.content[0].text).toContain(
+      'INVALID_PARAM',
+    )
+  })
+
+  it('returns warning (not error) when plugin reports unknown-mode degrade', async () => {
+    const result = await handleBindVariable(
+      {
+        nodeId: '1:42',
+        mode: { 'col:1': { modeName: 'Nonexistent' } },
+      },
+      stubClient({
+        reply: {
+          id: '1:42',
+          warnings: [
+            'unknown mode "Nonexistent" in collection col:1; mode pin skipped',
+          ],
+        },
+      }),
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    expect(result.content[0].text).toContain('unknown mode')
+  })
+
+  it('returns warning (not error) when plugin reports unavailable-API degrade', async () => {
+    const result = await handleBindVariable(
+      {
+        nodeId: '1:42',
+        mode: { 'col:1': { modeId: 'm:1' } },
+      },
+      stubClient({
+        reply: {
+          id: '1:42',
+          warnings: [
+            'setExplicitVariableModeForCollection unavailable in this Figma version; mode pin skipped',
+          ],
+        },
+      }),
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    expect(result.content[0].text).toContain(
+      'setExplicitVariableModeForCollection unavailable',
+    )
+  })
+})
+
 describe('handleGetVariables', () => {
   it('forwards COMMANDS.GET_VARIABLES with {collectionId}', async () => {
     const sent: Sent[] = []
@@ -261,6 +381,98 @@ describe('handleGetVariables', () => {
     expect(text).toContain('16')
     // alias ref preserved (not rendered to a hex atom).
     expect(text).toContain('VARIABLE_ALIAS')
+  })
+
+  // B2 — aliases round-trip: plugin sends mode-keyed Record<modeId, targetId>;
+  // server maps modeId → modeName so the read shape matches the write shape
+  // (Record<modeName, targetVarId>) that create/update_variables consume.
+  it('maps plugin mode-keyed aliases (modeId→targetId) to modeName→targetVarId (B2)', async () => {
+    const result = await handleGetVariables(
+      {},
+      stubClient({
+        reply: {
+          results: [
+            {
+              id: 'col:1',
+              name: 'Brand',
+              modes: [
+                { modeId: 'm1', name: 'Light' },
+                { modeId: 'm2', name: 'Dark' },
+              ],
+              variables: [
+                {
+                  id: 'var:10',
+                  name: 'Brand/Secondary',
+                  resolvedType: 'COLOR',
+                  valuesByMode: {
+                    m1: { r: 1, g: 0, b: 0, a: 1 },
+                    m2: {
+                      type: 'VARIABLE_ALIAS',
+                      id: 'var:primary',
+                    },
+                  },
+                  // Plugin now sends mode-keyed map (modeId → targetId)
+                  aliases: { m2: 'var:primary' },
+                  scopes: [],
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: {
+        variables: {
+          aliases?: Record<string, string>
+        }[]
+      }[]
+    }
+    const { aliases } = out.results[0].variables[0]
+    // After translation: key is modeName ('Dark'), not modeId ('m2')
+    expect(aliases).toBeDefined()
+    expect(aliases?.Dark).toBe('var:primary')
+    // modeId key must NOT appear in the output
+    expect(aliases?.m2).toBeUndefined()
+  })
+
+  it('omits aliases key when no alias entries exist (B2)', async () => {
+    const result = await handleGetVariables(
+      {},
+      stubClient({
+        reply: {
+          results: [
+            {
+              id: 'col:1',
+              name: 'Brand',
+              modes: [{ modeId: 'm1', name: 'Light' }],
+              variables: [
+                {
+                  id: 'var:10',
+                  name: 'Brand/Primary',
+                  resolvedType: 'COLOR',
+                  valuesByMode: {
+                    m1: { r: 1, g: 0, b: 0, a: 1 },
+                  },
+                  aliases: {},
+                  scopes: [],
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { variables: { aliases?: unknown }[] }[]
+    }
+    const { aliases } = out.results[0].variables[0]
+    // Empty alias map should not bloat the output
+    expect(
+      aliases === null ||
+        aliases === undefined ||
+        Object.keys(aliases as object).length === 0,
+    ).toBe(true)
   })
 
   // T10 — server-side pagination over the top-level COLLECTIONS list. The plugin
