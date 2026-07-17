@@ -4,13 +4,13 @@
 // The plugin handler dispatches on the string; the server emits it inside
 // the immutable WS envelope ({ id, command, params }). Renaming or
 // dropping an entry fails commands.test.ts (the "never drop API items"
-// guard) — the 47-tool catalogue in docs/scratch/tool-surface-design.md
+// guard) — the 48-tool catalogue in docs/specs/tool-surface.md
 // is the source of truth.
 //
-// Count = 47:
+// Count = 48:
 //   Session 2 · Read-nodes 4 · Read-query 3 · Read-DS 4 · Read-meta 2 ·
 //   Write-nodes 5 · Write-structure 8 · Write-pages 3 ·
-//   Write-components 5 · Write-DS 6 · Write-meta 2 · Handoff 2 · Batch 1
+//   Write-components 5 · Write-DS 7 · Write-meta 2 · Handoff 2 · Batch 1
 
 export const COMMANDS = {
   // --- session (2) — transport is KEPT; only payloads change ---
@@ -71,12 +71,13 @@ export const COMMANDS = {
   SWAP_COMPONENT: 'swap_component',
   SET_INSTANCE: 'set_instance',
 
-  // --- write — design system (6) ---
+  // --- write — design system (7) ---
   CREATE_STYLES: 'create_styles',
   UPDATE_STYLES: 'update_styles',
   APPLY_STYLE: 'apply_style',
   CREATE_VARIABLES: 'create_variables',
   UPDATE_VARIABLES: 'update_variables',
+  DELETE_VARIABLES: 'delete_variables',
   BIND_VARIABLE: 'bind_variable',
 
   // --- write — node metadata & prototype (2) ---

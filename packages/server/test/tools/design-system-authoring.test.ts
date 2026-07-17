@@ -1,5 +1,5 @@
 // design-system-authoring.test.ts — handleCreateVariables / handleUpdateVariables
-// / handleCreateStyles / handleUpdateStyles / handleApplyStyle.
+// / handleDeleteVariables / handleCreateStyles / handleUpdateStyles / handleApplyStyle.
 //
 // These are the M3-C design-system WRITE tools. The SERVER converts each style /
 // variable VALUE atom to a Figma object via the grammar WRITE face (COLOR hex →
@@ -18,6 +18,7 @@ import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
 import {
   handleCreateVariables,
   handleUpdateVariables,
+  handleDeleteVariables,
   handleCreateStyles,
   handleUpdateStyles,
   handleApplyStyle,
@@ -389,6 +390,117 @@ describe('handleUpdateVariables', () => {
     expect(result.content[0].text).toBe(
       'Failed to update variables.',
     )
+  })
+})
+
+// ─── delete_variables ─────────────────────────────────────────────────────────
+
+describe('handleDeleteVariables', () => {
+  it('forwards COMMANDS.DELETE_VARIABLES with variables and collections', async () => {
+    const sent: Sent[] = []
+    await handleDeleteVariables(
+      {
+        variables: ['var:1', 'var:2'],
+        collections: ['col:1'],
+      },
+      stubClient({
+        sent,
+        reply: {
+          results: [
+            { id: 'col:1', kind: 'collection' },
+            { id: 'var:1', kind: 'variable' },
+            { id: 'var:2', kind: 'variable' },
+          ],
+          errors: [],
+        },
+      }),
+    )
+    expect(sent[0].command).toBe(COMMANDS.DELETE_VARIABLES)
+    const params = sent[0].params as {
+      variables?: string[]
+      collections?: string[]
+    }
+    expect(params.variables).toEqual(['var:1', 'var:2'])
+    expect(params.collections).toEqual(['col:1'])
+  })
+
+  it('returns partial success — one valid id + one bogus id → one result + one error', async () => {
+    const result = await handleDeleteVariables(
+      { variables: ['var:1', 'err:missing'] },
+      stubClient({
+        reply: {
+          results: [{ id: 'var:1', kind: 'variable' }],
+          errors: [
+            {
+              id: 'err:missing',
+              error: 'Variable not found: err:missing',
+            },
+          ],
+        },
+      }),
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      results: { id: string; kind: string }[]
+      errors: { id: string; error: string }[]
+    }
+    expect(out.results).toHaveLength(1)
+    expect(out.results[0].id).toBe('var:1')
+    expect(out.results[0].kind).toBe('variable')
+    expect(out.errors).toHaveLength(1)
+    expect(out.errors[0].id).toBe('err:missing')
+  })
+
+  it('returns partial success — collection id with cascade shape', async () => {
+    const result = await handleDeleteVariables(
+      { collections: ['col:1', 'err:bad'] },
+      stubClient({
+        reply: {
+          results: [{ id: 'col:1', kind: 'collection' }],
+          errors: [
+            {
+              id: 'err:bad',
+              error: 'Collection not found: err:bad',
+            },
+          ],
+        },
+      }),
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      results: { id: string; kind: string }[]
+      errors: { id: string; error: string }[]
+    }
+    expect(out.results[0].kind).toBe('collection')
+    expect(out.errors[0].id).toBe('err:bad')
+  })
+
+  it('surfaces a plugin-side {error} as an error (entire call failed)', async () => {
+    const result = await handleDeleteVariables(
+      { variables: ['var:1'] },
+      stubClient({
+        reply: { error: 'Variables API unavailable' },
+      }),
+    )
+    expect(result.content[0].text).toContain('Error')
+    expect(result.content[0].text).toContain('unavailable')
+  })
+
+  it('returns failure text on a null reply', async () => {
+    const result = await handleDeleteVariables(
+      { collections: ['col:1'] },
+      stubClient({ reply: null }),
+    )
+    expect(result.content[0].text).toBe(
+      'Failed to delete variables.',
+    )
+  })
+
+  it('returns INVALID_PARAM error when both variables and collections are empty/absent', async () => {
+    const result = await handleDeleteVariables(
+      {},
+      stubClient({ reply: null }),
+    )
+    expect(result.content[0].text).toContain('Error')
+    expect(result.content[0].text).toContain('At least one')
   })
 })
 

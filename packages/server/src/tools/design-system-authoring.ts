@@ -1,5 +1,5 @@
 // tools/design-system-authoring.ts — the M3-C design-system WRITE tools:
-//   create_variables · update_variables · create_styles · update_styles · apply_style
+//   create_variables · update_variables · delete_variables · create_styles · update_styles · apply_style
 //
 // One grammar, the WRITE face (T8): style and variable VALUES are atoms, and the
 // SERVER converts each atom to a Figma object before forwarding to the plugin —
@@ -171,6 +171,48 @@ export const handleUpdateVariables = async (
     return formatMutationResult(
       result,
       'Failed to update variables.',
+    )
+  } catch (err) {
+    return textResult(`Error: ${errorMessage(err)}`)
+  }
+}
+
+// ─── delete_variables ─────────────────────────────────────────────────────────
+
+/**
+ * Delete variables and/or collections by id. Collections are processed first
+ * (removing a collection cascades its variables). Partial success (T5): one bad
+ * id never sinks the rest. No value-convert touch (T8 — deletes carry no grammar).
+ * Returns { results:[{id, kind:'variable'|'collection'}], errors:[{id, error}] }.
+ */
+export const handleDeleteVariables = async (
+  {
+    variables,
+    collections,
+  }: {
+    variables?: string[]
+    collections?: string[]
+  },
+  client: ScopedFigmaClient,
+): Promise<ToolResult> => {
+  // "At least one non-empty" guard — INVALID_PARAM, not a silent no-op.
+  const hasVariables =
+    variables !== undefined && variables.length > 0
+  const hasCollections =
+    collections !== undefined && collections.length > 0
+  if (!hasVariables && !hasCollections) {
+    return textResult(
+      'Error: At least one of `variables` or `collections` must be a non-empty array.',
+    )
+  }
+  try {
+    const result = (await client.sendCommand(
+      COMMANDS.DELETE_VARIABLES,
+      { variables, collections },
+    )) as { error?: string } | null
+    return formatMutationResult(
+      result,
+      'Failed to delete variables.',
     )
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)

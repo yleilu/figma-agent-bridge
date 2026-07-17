@@ -51,6 +51,7 @@ import {
   setInstanceParamsSchema,
   createVariablesParamsSchema,
   updateVariablesParamsSchema,
+  deleteVariablesParamsSchema,
   createStylesParamsSchema,
   updateStylesParamsSchema,
   applyStyleParamsSchema,
@@ -88,6 +89,7 @@ import {
 import {
   handleCreateVariables,
   handleUpdateVariables,
+  handleDeleteVariables,
   handleCreateStyles,
   handleUpdateStyles,
   handleApplyStyle,
@@ -495,6 +497,13 @@ if (process.argv.includes('--relay')) {
     'update_variables',
     updateVariablesParamsSchema,
     handleUpdateVariables,
+  )
+  registerFileTool(
+    server,
+    client,
+    'delete_variables',
+    deleteVariablesParamsSchema,
+    handleDeleteVariables,
   )
   registerFileTool(
     server,

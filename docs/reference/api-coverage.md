@@ -277,6 +277,8 @@ Total: 18 types for Figma Design + 1 asset pipeline.
 | `setBoundVariable(field, variable)` | on any node | ⏳ M4 | Variable binding |
 | `boundVariables` | readonly | ✅ M2 | Read via inspect |
 | `figma.variables.*` | Variables API | ⏳ M4 | Full variable system |
+| `Variable.remove()` | on Variable | ✅ M4 | Via `delete_variables`; T7-gated |
+| `VariableCollection.remove()` | on VariableCollection | ✅ M4 | Via `delete_variables`; T7-gated; cascade-removes collection's variables |
 
 ---
 

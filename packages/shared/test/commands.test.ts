@@ -6,8 +6,8 @@ import {
   type Command,
 } from '@figma-agent-bridge/shared/commands'
 
-// The frozen tool catalogue (docs/specs/tool-surface.md → the 49-tool
-// surface: the 47 base tools + the 2 component-index tools). Hard-coded
+// The frozen tool catalogue (docs/specs/tool-surface.md → the 50-tool
+// surface: the 48 base tools + the 2 component-index tools). Hard-coded
 // here so a dropped or renamed command fails CI — honoring the "never
 // drop API items" rule. document_changed and ping are internal
 // protocol commands (not MCP tools) and are tracked separately in
@@ -64,13 +64,14 @@ const EXPECTED: Record<string, readonly string[]> = {
     'swap_component',
     'set_instance',
   ],
-  // Write — design system (6)
+  // Write — design system (7)
   writeDesignSystem: [
     'create_styles',
     'update_styles',
     'apply_style',
     'create_variables',
     'update_variables',
+    'delete_variables',
     'bind_variable',
   ],
   // Write — node metadata & prototype (2)
@@ -101,7 +102,7 @@ const EXPECTED_GROUP_COUNTS: Record<string, number> = {
   writeStructure: 8,
   writePages: 3,
   writeComponents: 5,
-  writeDesignSystem: 6,
+  writeDesignSystem: 7,
   writeMeta: 2,
   handoff: 2,
   batch: 1,
@@ -114,9 +115,9 @@ const EXPECTED_COMMANDS: readonly string[] = [
 ]
 
 describe('COMMANDS registry', () => {
-  it('has exactly 51 entries (49 tools + 2 internal)', () => {
-    expect(Object.keys(COMMANDS).length).toBe(51)
-    expect(EXPECTED_COMMANDS.length).toBe(51)
+  it('has exactly 52 entries (50 tools + 2 internal)', () => {
+    expect(Object.keys(COMMANDS).length).toBe(52)
+    expect(EXPECTED_COMMANDS.length).toBe(52)
   })
 
   it('per-group counts match the catalogue', () => {
@@ -126,7 +127,7 @@ describe('COMMANDS registry', () => {
     const total = Object.values(
       EXPECTED_GROUP_COUNTS,
     ).reduce((a, b) => a + b, 0)
-    expect(total).toBe(49)
+    expect(total).toBe(50)
   })
 
   it('command string values are exactly the expected set', () => {

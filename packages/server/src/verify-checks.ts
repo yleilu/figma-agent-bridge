@@ -1995,6 +1995,7 @@ export const ALL_TOOLS: string[] = [
   'apply_style',
   'create_variables',
   'update_variables',
+  'delete_variables',
   'bind_variable',
   'set_plugin_data',
   'set_reactions',

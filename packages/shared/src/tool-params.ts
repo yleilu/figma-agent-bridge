@@ -659,6 +659,30 @@ export const updateVariablesParamsSchema = z.object({
     .describe('Per-variable edits.'),
 })
 
+/**
+ * Params for `delete_variables`: remove variables AND/OR collections by id.
+ * Collections are processed first (removing a collection cascades its variables).
+ * Partial success (T5): one bad id never sinks the rest. Returns
+ * { results:[{id, kind:'variable'|'collection'}], errors:[{id, error}] }.
+ *
+ * Note: the "at least one of variables/collections must be non-empty" constraint
+ * is enforced in the handler (INVALID_PARAM) rather than via .refine() so the
+ * schema retains .shape for registerFileTool / MCP SDK registration.
+ */
+export const deleteVariablesParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
+  variables: z
+    .array(z.string())
+    .optional()
+    .describe('IDs of variables to remove.'),
+  collections: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'IDs of variable collections to remove (cascades their variables).',
+    ),
+})
+
 // ---------------------------------------------------------------------------
 // Write tools — styles
 // ---------------------------------------------------------------------------
@@ -1172,6 +1196,7 @@ export const batchOpSchema = z.enum([
   'update_styles',
   'create_variables',
   'update_variables',
+  'delete_variables',
   'set_plugin_data',
   'set_reactions',
   'set_annotations',

@@ -1891,6 +1891,56 @@ export const createMockPlugin = (
         break
       }
 
+      // delete_variables: PARTIAL SUCCESS over variable ids and collection ids.
+      // Collections first (real cascade order). An id prefixed `err:` models
+      // not-found (per-id error, never aborts the rest). An id prefixed
+      // `nofn:` models the T7 feature-detect path (remove() absent → per-id
+      // error). All others → success result with kind='variable'|'collection'.
+      // Returns { results:[{id, kind}], errors:[{id, error}] }.
+      case 'delete_variables': {
+        const dvResults: { id: string; kind: string }[] = []
+        const dvErrors: { id: string; error: string }[] = []
+        for (const colId of (cmd.params?.collections as
+          | string[]
+          | undefined) ?? []) {
+          if (colId.startsWith('err:')) {
+            dvErrors.push({
+              id: colId,
+              error: `Collection not found: ${colId}`,
+            })
+          } else if (colId.startsWith('nofn:')) {
+            dvErrors.push({
+              id: colId,
+              error: `remove() unavailable on collection ${colId}`,
+            })
+          } else {
+            dvResults.push({
+              id: colId,
+              kind: 'collection',
+            })
+          }
+        }
+        for (const varId of (cmd.params?.variables as
+          | string[]
+          | undefined) ?? []) {
+          if (varId.startsWith('err:')) {
+            dvErrors.push({
+              id: varId,
+              error: `Variable not found: ${varId}`,
+            })
+          } else if (varId.startsWith('nofn:')) {
+            dvErrors.push({
+              id: varId,
+              error: `remove() unavailable on variable ${varId}`,
+            })
+          } else {
+            dvResults.push({ id: varId, kind: 'variable' })
+          }
+        }
+        result = { results: dvResults, errors: dvErrors }
+        break
+      }
+
       // create_styles: array-create with PARTIAL SUCCESS. The server has
       // CONVERTED each entry's value atom (paint→Paint, text→FontName,
       // effect→Effect, grid→LayoutGrid). Loop, mirroring the real plugin's

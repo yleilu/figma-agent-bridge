@@ -4006,6 +4006,85 @@ const handleCommand = async (
       }
     }
 
+    // delete_variables: remove variables AND collections by id. Collections are
+    // processed first (removing a collection cascades its variables in the Figma
+    // runtime). PARTIAL SUCCESS (T5): one bad id never sinks the rest. T7:
+    // feature-detect remove() before calling — absent → per-id error, not a
+    // throw. A variable already removed by its collection's cascade resolves null
+    // → a clean per-id "not found" error (not a crash). Returns
+    // { results:[{id, kind:'variable'|'collection'}], errors:[{id, error}] }.
+    case COMMANDS.DELETE_VARIABLES: {
+      const dvResults: { id: string; kind: string }[] = []
+      const dvErrors: { id: string; error: string }[] = []
+
+      // Collections first — cascade removes their variables.
+      for (const colId of (params.collections as
+        | string[]
+        | undefined) ?? []) {
+        const collection =
+          await figma.variables.getVariableCollectionByIdAsync(
+            colId,
+          )
+        if (!collection) {
+          dvErrors.push({
+            id: colId,
+            error: 'Collection not found: ' + colId,
+          })
+          continue
+        }
+        if (typeof collection.remove !== 'function') {
+          dvErrors.push({
+            id: colId,
+            error:
+              'remove() unavailable on collection ' + colId,
+          })
+          continue
+        }
+        try {
+          collection.remove()
+          dvResults.push({ id: colId, kind: 'collection' })
+        } catch (e) {
+          dvErrors.push({
+            id: colId,
+            error: 'remove() failed on collection ' + colId + ': ' + String(e),
+          })
+        }
+      }
+
+      // Variables: a variable already removed by cascade resolves null → "not found".
+      for (const varId of (params.variables as
+        | string[]
+        | undefined) ?? []) {
+        const variable =
+          await figma.variables.getVariableByIdAsync(varId)
+        if (!variable) {
+          dvErrors.push({
+            id: varId,
+            error: 'Variable not found: ' + varId,
+          })
+          continue
+        }
+        if (typeof variable.remove !== 'function') {
+          dvErrors.push({
+            id: varId,
+            error: 'remove() unavailable on variable ' + varId,
+          })
+          continue
+        }
+        try {
+          variable.remove()
+          dvResults.push({ id: varId, kind: 'variable' })
+        } catch (e) {
+          dvErrors.push({
+            id: varId,
+            error: 'remove() failed on variable ' + varId + ': ' + String(e),
+          })
+        }
+      }
+
+      return { results: dvResults, errors: dvErrors }
+    }
+
     // create_styles: create one paint/text/effect/grid style from the
     // server-CONVERTED value (paint→Paint, text→FontName, effect→Effect,
     // grid→LayoutGrid). loadFontAsync first for text styles. T7: feature-detect
