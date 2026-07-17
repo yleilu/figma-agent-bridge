@@ -197,7 +197,7 @@ batch({ op?, ops: [ {op?, ...params}, ... ] }) -> { results, errors[] }
   `create_tree`, `create_from_svg`, `create_image`, `create_component`) is deliberately
   **excluded** — chaining new nodes stays `create_tree`'s job (ref-pool). The fan-out op set:
   `update_node`, `delete_node`, `set_selection`, `set_focus`, `reparent_node`,
-  `reorder_children`, `clone_node`, `boolean_op`, `flatten`, `group_nodes`, `apply_style`,
+  `reorder_children`, `clone_node`, `boolean_op`, `flatten`, `group_nodes`, `transform_group`, `apply_style`,
   `update_component`, `combine_variants`, `swap_component`, `set_instance`, `bind_variable`,
   `create_styles`, `update_styles`, `delete_styles`, `create_variables`, `update_variables`, `delete_variables`,
   `set_plugin_data`, `set_reactions`, `set_annotations`, `create_page`, `set_current_page`, `duplicate_page`.
@@ -231,7 +231,7 @@ One grammar, two faces (T8, expression-formats.md):
 
 Format: `name(params) → returns` — purpose · principle/checklist need.
 
-**Count = 50** (auditable per group): Session 2 · Read-nodes 4 · Read-query 3 · Read-DS 4 · Read-meta 2 · Write-nodes 5 · Write-structure 9 · Write-pages 3 · Write-components 5 · Write-DS 8 · Write-meta 2 · Handoff 2 · Batch 1 = **50**.
+**Count = 51** (ship-gated: `transform_group` row gated on runtime availability — controller may revert to 50 if `figma.transformGroup` is absent live) (auditable per group): Session 2 · Read-nodes 4 · Read-query 3 · Read-DS 4 · Read-meta 2 · Write-nodes 5 · Write-structure 10 · Write-pages 3 · Write-components 5 · Write-DS 8 · Write-meta 2 · Handoff 2 · Batch 1 = **51**.
 
 **`record_feedback` — deliberate meta-tool, outside the 48 (T6/T7 exception).**
 `record_feedback({category, title, description, tool?}) → {…}` (see
@@ -277,7 +277,7 @@ Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle
 - `create_image({url|bytes}) → {hash}` — the **only** path for raw bytes + pre-creating a reusable hash; its hash feeds an `image(hash)` paint (inline `image(url)` is sugar for the URL case); supply exactly one of `url`/`bytes` · T9; §8/§9 image fill.
 - `update_node(nodeId, patch) → {id,…,warnings[]}` — the single mutation; `patch` is a partial NodeSpec (supplied field replaces wholesale, omitted untouched; supplied empty/whitespace `context` clears it, `context` size-capped — see *Create / update*); warns on no-op · T1/T6, T7; §9 all restyle/bulk-edit, §8 ABSOLUTE/constraints, basic props (name/lock/visible/opacity/blend/rotation).
 
-### Write — structure (9)
+### Write — structure (10)
 - `clone_node(nodeId, {parentId?, index?, count?}) → [{id,…}]` — raw duplication (one entry per clone) · T6; §10 duplicate, §8 grid.
 - `delete_node(nodeId) → {id,name,type[,currentPageId]}` — page-aware remove (info captured before removal). **PAGE semantics:** deleting the last remaining page → `{error}` (Figma forbids a pageless document); deleting the current page → auto-switch to adjacent sibling (rule: previous sibling, else next; `pages[idx-1] ?? pages[idx+1]`), then remove — reply includes `currentPageId` (machine-visible). `setCurrentPageAsync` absent → degrade: warn + skip remove, never throw. Non-PAGE nodes: unchanged path · T1/T6/T7; §9 cleanup.
 - `reparent_node(nodeId, parentId, {index?}) → {id,…,parentId}` — the one reparent path; an **auto-layout** parent governs position (re-flows into the layout), a **non-auto-layout** parent **preserves the node's visual position** (its absolute spot is kept, not its raw relative x/y) · §10 move-into-frame.
@@ -287,6 +287,7 @@ Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle
 - `boolean_op(op, nodeIds[], {parentId?}) → {id,…}` — union/subtract/intersect/exclude → BooleanOperationNode (`op`: UNION|SUBTRACT|INTERSECT|EXCLUDE; ≥2 nodes; `parentId` defaults to the first node's parent) · T6; §10 combine-shapes (restored).
 - `flatten(nodeIds[], {parentId?}) → {id,…}` — flatten to one vector (≥1 node; `parentId` defaults to the first node's parent) · T6; §10 flatten/icon-prep (restored).
 - `group_nodes(nodeIds[], {parentId?}) → {id,name,type}` — group ≥1 existing nodes into a GROUP via `figma.group()` (`parentId` defaults to the first node's parent; T7-gated: feature-detects `figma.group` availability); the GROUP reads back via `get_node` (T1/T2 round-trip with M10a). **Batch op-set member** — same shape as `boolean_op`/`flatten` (operation over existing ids) · T1, T2, T6, T7, T9; §10 group-for-layout.
+- `transform_group(nodeIds[], modifiers[], {parentId?}) → {id,name,type}` — apply a **repeat-pattern** transform to ≥1 existing nodes via `figma.transformGroup()` → TransformGroupNode (a REPEAT feature — linear/radial repeat — **NOT** general grouping; that is `group_nodes`). `modifiers` is a discriminated union on `repeatType`: `{ type: 'REPEAT', repeatType: 'LINEAR', count, unitType, offset, axis: 'HORIZONTAL'|'VERTICAL' }` or `{ type: 'REPEAT', repeatType: 'RADIAL', count, …passthrough }` — **confirmed live LINEAR shape**: `{type:'REPEAT',repeatType:'LINEAR',count:3,unitType:'PIXELS',offset:100,axis:'HORIZONTAL'}`; `parentId` defaults to the first node's parent. **T7-gated**: feature-detects `figma.transformGroup` availability — absent → `{error}` (clear, not a throw). **Ship-gated**: `figma.transformGroup` is a niche API added in @figma/plugin-typings 1.130.0; runtime absence is expected (repo pins 1.123.0). The controller must live-verify before shipping; if absent, this row reverts and the count returns to 50. **Batch op-set member** — same operation-over-existing-ids shape as `boolean_op`/`flatten`/`group_nodes`. **T8**: discriminator + structural fields are plain enum/struct (not grammar-routed); numeric scalars are plain numbers (structural op, not an appearance atom) · T1, T2, T6, T7, T8, T9; §10 repeat-pattern.
 
 ### Write — pages (3 · restored)
 - `create_page(name) → {id,name}` — new page; write twin of `list_pages` · §2 create-page.

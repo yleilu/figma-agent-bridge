@@ -1408,6 +1408,27 @@ export const createMockPlugin = (
         break
       }
 
+      // transform_group: echo a TRANSFORM_GROUP {id,name,type}; <1 node errors.
+      // NOTE: the mock does NOT model figma.transformGroup runtime availability —
+      // the feature-detect lives in the real plugin (code.ts). The mock proves
+      // handler MECHANICS and schema routing only. The controller must live-verify
+      // that figma.transformGroup actually exists in the Figma runtime.
+      case 'transform_group': {
+        const tgIds =
+          (cmd.params?.nodeIds as string[]) ?? []
+        if (tgIds.length < 1) {
+          error =
+            'transform_group requires at least 1 resolvable node.'
+        } else {
+          result = {
+            id: `tg:${Math.random().toString(36).slice(2, 8)}`,
+            name: 'Transform Group',
+            type: 'TRANSFORM_GROUP',
+          }
+        }
+        break
+      }
+
       // create_component (PROMOTE-ONLY, un-overloaded per spec): promote the
       // given nodeId, echoing {id,key,name,type} + the source nodeId so the e2e
       // can assert routing. The build-from-spec overload was removed.

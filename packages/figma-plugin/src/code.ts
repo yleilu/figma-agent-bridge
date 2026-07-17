@@ -3821,6 +3821,93 @@ const handleCommand = async (
       }
     }
 
+    // transform_group: apply a repeat-pattern transform to ≥1 existing nodes
+    // via figma.transformGroup() → TransformGroupNode (a REPEAT-pattern feature:
+    // linear/radial repeat — NOT general grouping; that is group_nodes / M10b).
+    //
+    // T7: feature-detect figma.transformGroup before calling. This is a niche
+    // API added in @figma/plugin-typings 1.130.0; the repo pins 1.123.0 so
+    // runtime absence is the EXPECTED outcome. If absent → clear error (the
+    // controller decides ship-vs-defer).
+    case COMMANDS.TRANSFORM_GROUP: {
+      // T7 — feature guard first.
+      if (
+        typeof (figma as unknown as Record<string, unknown>)
+          .transformGroup !== 'function'
+      ) {
+        figma.notify(
+          'transform_group: figma.transformGroup API is unavailable in this runtime.',
+          { error: true },
+        )
+        return {
+          error:
+            'transform_group: figma.transformGroup is unavailable in this Figma runtime.',
+        }
+      }
+      const tgIds = (params.nodeIds as string[]) ?? []
+      const tgNodes: SceneNode[] = []
+      for (const id of tgIds) {
+        const n = await figma.getNodeByIdAsync(id)
+        if (n && 'type' in n) {
+          tgNodes.push(n as SceneNode)
+        }
+      }
+      if (tgNodes.length < 1) {
+        return {
+          error:
+            'transform_group requires at least 1 resolvable node.',
+        }
+      }
+      let tgParent: ParentNode | null
+      if (params.parentId !== undefined) {
+        const p = await figma.getNodeByIdAsync(
+          params.parentId as string,
+        )
+        if (!p || !('appendChild' in p)) {
+          return {
+            error:
+              'Parent not found or cannot have children: ' +
+              params.parentId,
+          }
+        }
+        tgParent = p as ParentNode
+      } else {
+        tgParent = tgNodes[0].parent as ParentNode | null
+      }
+      if (!tgParent) {
+        return {
+          error: 'No parent for the transform group result.',
+        }
+      }
+      try {
+        const tgIndex = tgParent.children
+          ? tgParent.children.length
+          : 0
+        const modifiers = (params.modifiers ?? []) as unknown[]
+        // Cast: figma.transformGroup not in typings 1.123.0 — safe cast.
+        const transformGroupFn = (
+          figma as unknown as Record<string, Function>
+        ).transformGroup
+        const tgNode = transformGroupFn(
+          tgNodes,
+          tgParent,
+          tgIndex,
+          modifiers,
+        )
+        return {
+          id: tgNode.id,
+          name: tgNode.name,
+          type: tgNode.type,
+        }
+      } catch (err) {
+        return {
+          error:
+            'transform_group failed: ' +
+            (err instanceof Error ? err.message : String(err)),
+        }
+      }
+    }
+
     // create_page: add a new page and name it.
     case COMMANDS.CREATE_PAGE: {
       const page = figma.createPage()

@@ -45,6 +45,7 @@ import {
   booleanOpParamsSchema,
   flattenParamsSchema,
   groupNodesParamsSchema,
+  transformGroupParamsSchema,
   createComponentParamsSchema,
   updateComponentParamsSchema,
   combineVariantsParamsSchema,
@@ -114,6 +115,7 @@ import {
   handleBooleanOp,
   handleFlatten,
   handleGroupNodes,
+  handleTransformGroup,
 } from './tools/structure'
 import {
   handleCreatePage,
@@ -445,6 +447,13 @@ if (process.argv.includes('--relay')) {
     'group_nodes',
     groupNodesParamsSchema,
     handleGroupNodes,
+  )
+  registerFileTool(
+    server,
+    client,
+    'transform_group',
+    transformGroupParamsSchema,
+    handleTransformGroup,
   )
   registerFileTool(
     server,

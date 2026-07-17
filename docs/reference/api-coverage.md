@@ -55,7 +55,7 @@ Total: 18 types for Figma Design + 1 asset pipeline.
 | SECTION | `figma.createSection()` | 🔧 M3 | Canvas organization, unique: `sectionContentsHidden` |
 | SLICE | `figma.createSlice()` | 🔧 M3 | Export regions |
 | TEXT_PATH | `figma.createTextPath(node, seg, pos)` | ⏳ | **Deferred / not creatable** (issue #3) — real API but `vectorNodeId`/`startSegment`/`startPosition` were never specced/wired; removed from `CREATABLE_TYPES`, so `create_node`/`create_tree` honest-reject it. See `docs/deferred-capabilities.md` |
-| TRANSFORM_GROUP | `figma.transformGroup(nodes, parent, idx, modifiers)` | 🔧 M3 | Transform wrapper for existing nodes |
+| TRANSFORM_GROUP | `figma.transformGroup(nodes, parent, idx, modifiers)` | 🟡 M15 (gated) | `transform_group` tool (ship-gated: controller must live-verify `figma.transformGroup` exists; T7-gated) |
 | SLOT | `component.createSlot(childName)` | 🔧 M3 | **Undocumented** — real node type found via runtime introspection. Created inside components via `create_component` |
 | SVG → FrameNode | `figma.createNodeFromSvg(svgString)` | 🔧 M3 | Icons, decorative shapes — `create_from_svg` tool |
 | Image Pipeline | `figma.createImage() / createImageAsync()` | 🔧 M3 | Not a node type — produces Image object for ImagePaint fills |
@@ -316,7 +316,7 @@ Methods that operate on existing nodes to create new node types. Used internally
 | `figma.subtract(nodes, parent)` | → BooleanOperationNode | 🔧 M3 | `booleanOperation: "SUBTRACT"` |
 | `figma.intersect(nodes, parent)` | → BooleanOperationNode | 🔧 M3 | `booleanOperation: "INTERSECT"` |
 | `figma.exclude(nodes, parent)` | → BooleanOperationNode | 🔧 M3 | `booleanOperation: "EXCLUDE"` |
-| `figma.transformGroup(nodes, parent, idx, modifiers)` | → TransformGroupNode | 🔧 M3 | Transform wrapper |
+| `figma.transformGroup(nodes, parent, idx, modifiers)` | → TransformGroupNode | 🟡 M15 (gated) | `transform_group` tool (ship-gated: runtime availability unverified — niche 1.130.0 API; T7-feature-detected) |
 | `figma.combineAsVariants(nodes, parent)` | → ComponentSetNode | 🔧 M3 | Used by `create_component` for variant grouping |
 | `figma.flatten(nodes)` | → VectorNode | 📌 M5 | Flatten to vectors (destructive) |
 | `figma.ungroup(node)` | → SceneNode[] | 📌 M5 | Ungroup (destructive) |
@@ -418,7 +418,7 @@ section of [[figma-bridge/docs/specs/tool-surface]].
 **Inline in create_tree (create children, then transform):**
 - [x] GROUP — `figma.group(nodes, parent)` — covered by `group_nodes` (M10b)
 - [ ] BOOLEAN_OPERATION — `figma.union/subtract/intersect/exclude()`
-- [ ] TRANSFORM_GROUP — `figma.transformGroup()`
+- [~] TRANSFORM_GROUP — `figma.transformGroup()` — `transform_group` tool wired (M15, ship-gated: controller must live-verify runtime availability)
 
 ### Expression format fixes needed (for round-trip)
 

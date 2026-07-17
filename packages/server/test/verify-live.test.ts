@@ -144,7 +144,7 @@ describe('verify-live harness against the mock plugin', () => {
     )
   })
 
-  it('the registry denominator stays at 50', () => {
-    expect(ALL_TOOLS.length).toBe(50)
+  it('the registry denominator stays at 51', () => {
+    expect(ALL_TOOLS.length).toBe(51)
   })
 })
