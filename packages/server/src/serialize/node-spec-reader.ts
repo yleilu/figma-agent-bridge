@@ -617,9 +617,14 @@ const componentMeta = (
   // componentId and `{ key }` from componentKey when present, so a locally-
   // created instance round-trips through get_node → create_node (T2). Only
   // INSTANCE nodes carry a main-component reference.
+  // M14: also emit `{ remote: true }` from componentRemote when the plugin's
+  // isRoot enrichment populated it — signals a published-library main so the
+  // write path prefers importComponentByKeyAsync(key) over the doomed local id.
   if (str(raw.type) === 'INSTANCE') {
     const componentId = str(raw.componentId)
     const componentKey = str(raw.componentKey)
+    const componentRemote =
+      raw.componentRemote === true ? true : undefined
     if (
       componentId !== undefined ||
       componentKey !== undefined
@@ -631,6 +636,9 @@ const componentMeta = (
       }
       if (componentKey !== undefined) {
         component.key = componentKey
+      }
+      if (componentRemote !== undefined) {
+        component.remote = componentRemote
       }
       out.component = component
     }

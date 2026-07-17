@@ -160,6 +160,15 @@ export type NodeSpec = {
     key?: string
     id?: string
     properties?: Record<string, string | boolean>
+    /**
+     * Read-emitted hint (M14): true when the main component is from a
+     * published library (remote). The write path prefers
+     * importComponentByKeyAsync(key) when remote===true; id-first is
+     * unchanged for local (non-remote) instances. Root-only: only the
+     * node directly requested by get_node/get_nodes/inspect carries this
+     * flag — descendant instances keep their id-only projection (T10).
+     */
+    remote?: boolean
   }
   /** Current instance property values. */
   componentProperties?: Record<string, string | boolean>

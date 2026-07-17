@@ -146,6 +146,9 @@ const nodeSpecBase = {
       properties: z
         .record(z.union([z.string(), z.boolean()]))
         .optional(),
+      // M14: read-emitted hint; true when the main component is from a
+      // published library. Write path prefers key when remote===true.
+      remote: z.boolean().optional(),
     })
     .optional(),
   componentProperties: z

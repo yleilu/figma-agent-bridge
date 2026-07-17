@@ -291,14 +291,44 @@ export const createMockPlugin = (
         break
       }
 
-      case 'get_node':
-        result = {
-          ...cardFixture,
-          ...(sharedContext.get(cardFixture.id)
-            ? { context: sharedContext.get(cardFixture.id) }
-            : {}),
+      case 'get_node': {
+        // M14: the sentinel nodeId 'remote-inst:1' serves a remote-INSTANCE
+        // raw export (componentId + componentKey + componentRemote:true) so the
+        // reader's M14 projection and the e2e round-trip are testable headlessly.
+        const gnNodeId = cmd.params?.nodeId as
+          | string
+          | undefined
+        if (gnNodeId === 'remote-inst:1') {
+          result = {
+            id: 'remote-inst:1',
+            name: 'LibraryButton',
+            type: 'INSTANCE',
+            absoluteBoundingBox: {
+              x: 0,
+              y: 0,
+              width: 120,
+              height: 40,
+            },
+            fills: [],
+            children: [],
+            componentId: 'C:remote-lib-123',
+            componentKey: 'lib-btn-key-456',
+            componentRemote: true,
+          }
+        } else {
+          result = {
+            ...cardFixture,
+            ...(sharedContext.get(cardFixture.id)
+              ? {
+                  context: sharedContext.get(
+                    cardFixture.id,
+                  ),
+                }
+              : {}),
+          }
         }
         break
+      }
 
       // inspect serializes the same raw export get_node consumes; the server's
       // read model (truncate-tree + budget) decides what survives. With no
@@ -1047,11 +1077,15 @@ export const createMockPlugin = (
         // id models a node that is not a COMPONENT/COMPONENT_SET (same prefix
         // convention update_component uses), so the by-id error boundary is
         // assertable without a live Figma document.
+        // M14: compRef.remote===true + key → key-first (mirrors real plugin).
+        let instanceResolvedBy: 'key' | 'id' | undefined =
+          undefined
         if (nodeType === 'INSTANCE') {
           const compRef = nodeSpec?.component as
             | {
                 id?: string
                 key?: string
+                remote?: boolean
                 properties?: Record<
                   string,
                   string | boolean
@@ -1086,6 +1120,19 @@ export const createMockPlugin = (
               compRef.id
             break
           }
+          // M14: mirror the real plugin's remote-first resolution path.
+          // remote===true + key present → resolved by key (importComponentByKeyAsync);
+          // otherwise resolved by id (getNodeByIdAsync), falling back to key-only.
+          if (
+            compRef.remote === true &&
+            compRef.key !== undefined
+          ) {
+            instanceResolvedBy = 'key'
+          } else if (compRef.id !== undefined) {
+            instanceResolvedBy = 'id'
+          } else {
+            instanceResolvedBy = 'key'
+          }
           // Mirror the real plugin's #11 name → exact-key resolution for the
           // create_node INSTANCE path: friendly names that can't be resolved
           // warn (and are skipped) the same way set_instance does.
@@ -1115,6 +1162,11 @@ export const createMockPlugin = (
           type: createdType,
           parentId,
           warnings: cnWarnings,
+          // M14: echo resolvedBy for the INSTANCE create path so tests can
+          // assert key-first (remote) vs id-first (local) behavior.
+          ...(instanceResolvedBy !== undefined
+            ? { resolvedBy: instanceResolvedBy }
+            : {}),
         }
         break
       }
