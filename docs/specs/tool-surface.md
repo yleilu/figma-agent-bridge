@@ -174,6 +174,8 @@ Not every read has a same-named write twin — and that is deliberate, not silen
 - **`pointCount` field (POLYGON + STAR nodes):** plain integer `NodeSpec` field (no atom grammar). Write: include in `create_node`/`update_node` spec to control the number of polygon sides or star points. Read: `get_node` returns it from the raw export when present. Not a new tool.
 - **`innerRadius` field (STAR nodes):** plain number `NodeSpec` field, range 0..1, no atom grammar. Write: include in `create_node`/`update_node` to set the star's inner radius ratio. Read: `get_node` returns it from the raw export when present. Not a new tool.
 - **`sectionContentsHidden` field (SECTION nodes):** plain boolean `NodeSpec` field, no atom grammar. Write: include in `create_node`/`update_node` to control whether section contents are collapsed. Read: `get_node` returns it from the raw export when present. Not a new tool.
+- **`isMask` field:** plain boolean `NodeSpec` field (no atom grammar). When `true`, the node clips siblings below it in the same parent. Write: include in `create_node`/`update_node`; applied post-append so the sibling context is resolved. Read: `get_node` returns it when enriched by plugin export (not in `JSON_REST_V1`). Not a new tool.
+- **`maskType` field:** plain string enum `NodeSpec` field — `'ALPHA' | 'VECTOR' | 'LUMINANCE'`; only meaningful when `isMask` is `true`. Same write/read pattern as `isMask`. Not a new tool.
 
 ### The one generic batch (D3 — both shapes, one tool, T5)
 

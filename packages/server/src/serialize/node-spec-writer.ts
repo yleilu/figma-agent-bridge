@@ -277,6 +277,12 @@ export const specToFigma = (
   if (spec.sectionContentsHidden !== undefined) {
     out.sectionContentsHidden = spec.sectionContentsHidden
   }
+  if (spec.isMask !== undefined) {
+    out.isMask = spec.isMask
+  }
+  if (spec.maskType !== undefined) {
+    out.maskType = spec.maskType
+  }
 
   // ── text ─────────────────────────────────────────────────────────────────
   if (spec.text !== undefined) {

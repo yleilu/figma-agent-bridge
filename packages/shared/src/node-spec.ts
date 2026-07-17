@@ -136,6 +136,10 @@ export type NodeSpec = {
   innerRadius?: number
   /** Collapse section contents — SECTION nodes only. */
   sectionContentsHidden?: boolean
+  /** True when this node clips siblings below it in the same parent (mask). */
+  isMask?: boolean
+  /** Mask mode — only meaningful when isMask is true. */
+  maskType?: 'ALPHA' | 'VECTOR' | 'LUMINANCE'
 
   // text
   text?: TextSpec

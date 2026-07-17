@@ -174,6 +174,21 @@ const exportNodeDocument = async (
         node as unknown as { innerRadius: number }
       ).innerRadius
     }
+    // isMask / maskType — NOT carried by JSON_REST_V1; enrich from the node's
+    // own property (feature-detected by property presence, consistent with
+    // pointCount/innerRadius enrichment above). Only enriched when isMask is
+    // true to keep unmasked nodes clean.
+    if (
+      'isMask' in node &&
+      (node as unknown as { isMask: boolean }).isMask === true
+    ) {
+      doc.isMask = true
+      if ('maskType' in node) {
+        doc.maskType = (
+          node as unknown as { maskType: string }
+        ).maskType
+      }
+    }
     // explicitVariableModes (M13) — per-collection mode pins are NOT carried
     // by JSON_REST_V1; enrich from the node's own property (feature-detected
     // by property presence, not by API version check — consistent with
@@ -609,6 +624,36 @@ const applyPostAppendProperties = (
           node.type +
           '): ' +
           String(e),
+      )
+    }
+  }
+
+  // isMask / maskType — applied POST-append (mask clips siblings; node must be
+  // parented first so Figma resolves the sibling context correctly).
+  // Feature-detect with 'isMask' in node (not all nodes support masking).
+  if (spec.isMask !== undefined) {
+    if ('isMask' in node) {
+      try {
+        ;(node as SceneNode & { isMask: boolean }).isMask =
+          spec.isMask as boolean
+      } catch (e) {
+        warnings?.push('isMask could not be set: ' + String(e))
+      }
+    }
+  }
+  if (spec.maskType !== undefined) {
+    if ('maskType' in node) {
+      try {
+        ;(node as SceneNode & { maskType: string }).maskType =
+          spec.maskType as string
+      } catch (e) {
+        warnings?.push('maskType could not be set: ' + String(e))
+      }
+    } else {
+      warnings?.push(
+        'maskType not supported on this node type (' +
+          node.type +
+          ')',
       )
     }
   }
