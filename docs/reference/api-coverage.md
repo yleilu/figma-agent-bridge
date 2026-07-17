@@ -331,6 +331,8 @@ Methods that operate on existing nodes to create new node types. Used internally
 | Resize node | `node.resize(w, h)` | 📌 M5 | |
 | Reparent node | `parent.appendChild(node)` | 📌 M5 | |
 | Delete node | `node.remove()` | 📌 M5 | |
+| Delete page | `page.remove()` | ✅ M4 | Via `delete_node` PAGE branch; T7-guarded (last-page → error, not throw) |
+| Switch current page | `figma.setCurrentPageAsync(page)` | ✅ M4 | Via `delete_node` PAGE branch (current-page auto-switch before remove); feature-detected (absent → degrade) |
 | Clone node | `node.clone()` | 📌 M5 | |
 | Reorder children | `parent.insertChild(index, node)` | 📌 M5 | |
 | Update fills | `node.fills = [...]` | 📌 M5 | M5 is for post-creation mutation; setting fills at creation time is M3 (via create_node/create_tree) |

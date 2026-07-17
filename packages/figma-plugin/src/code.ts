@@ -2998,6 +2998,17 @@ const handleCommand = async (
 
     // delete_node: capture {id,name,type} BEFORE removing so the reply still
     // describes the now-gone node. Missing node → {error}.
+    //
+    // PAGE branch (T7 / T1 symmetry):
+    //   • Last remaining page → hard {error} — Figma forbids a pageless doc.
+    //   • Deleting the current page → auto-switch THEN remove (pure capability;
+    //     the switch is required for page.remove() to not throw). Switch rule
+    //     (T6/P1 — documented mechanical choice): previous sibling, else next
+    //     (pages[idx-1] ?? pages[idx+1]). Feature-detect setCurrentPageAsync:
+    //     absent on older runtimes → degrade (warn, skip remove) rather than
+    //     letting page.remove() throw.
+    //   • Returns {id,name,type,currentPageId} so the new active page is
+    //     machine-visible in the reply.
     case COMMANDS.DELETE_NODE: {
       const nodeId = params.nodeId as string
       const node = await figma.getNodeByIdAsync(nodeId)
@@ -3008,6 +3019,29 @@ const handleCommand = async (
         id: node.id,
         name: node.name,
         type: node.type,
+      }
+      if (node.type === 'PAGE') {
+        const pages = figma.root.children
+        if (pages.length <= 1) {
+          return {
+            error: 'Cannot delete the last remaining page: ' + node.id,
+          }
+        }
+        if (node.id === figma.currentPage.id) {
+          if (typeof figma.setCurrentPageAsync !== 'function') {
+            return {
+              ...info,
+              warnings: [
+                'setCurrentPageAsync unavailable; current page not switched — remove skipped',
+              ],
+            }
+          }
+          const idx = pages.findIndex(p => p.id === node.id)
+          const next = pages[idx - 1] ?? pages[idx + 1]
+          await figma.setCurrentPageAsync(next as PageNode)
+        }
+        node.remove()
+        return { ...info, currentPageId: figma.currentPage.id }
       }
       node.remove()
       return info

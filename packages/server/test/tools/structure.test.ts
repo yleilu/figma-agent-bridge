@@ -208,3 +208,107 @@ describe('delete_node routing through the scoped client', () => {
     )
   })
 })
+
+// PAGE branch of DELETE_NODE (M4 — delete_page guard).
+// The mock routes page: prefix nodeIds to PAGE semantics; all assertions here
+// drive the mock-backed contract — live Figma verification is deferred to the
+// controller (create 2 pages, delete the current, confirm switch + remove;
+// delete the sole remaining page, confirm clean {error}).
+describe('delete_node PAGE branch (M4 guard)', () => {
+  const TEST_PORT = 3118
+  const RELAY_URL = `ws://localhost:${TEST_PORT}`
+  const TEST_CHANNEL = 'page-delete'
+  const FK = 'fk-page-delete'
+  let server: Server<{ id: string }>
+  let client: FigmaClient
+  let plugin: ReturnType<typeof createMockPlugin> | null =
+    null
+
+  beforeEach(async () => {
+    server = startRelay(TEST_PORT)
+    client = createFigmaClient(RELAY_URL)
+    plugin = createMockPlugin({
+      relayUrl: RELAY_URL,
+      channel: TEST_CHANNEL,
+      fileKey: FK,
+    })
+    await plugin.start()
+    await client.joinChannel(TEST_CHANNEL, FK)
+  })
+
+  afterEach(() => {
+    if (plugin !== null) {
+      plugin.stop()
+      plugin = null
+    }
+    client.disconnect()
+    stopRelay(server)
+  })
+
+  it('last-page: returns error text containing "last remaining page"', async () => {
+    const scoped = client.forFile(FK)
+    const res = await handleDeleteNode(
+      { nodeId: 'page:only' },
+      scoped,
+    )
+    // formatMutationResult surfaces a plugin {error} as "Error: <msg>" text.
+    expect(res.content[0].text).toContain('Error')
+    expect(res.content[0].text).toContain(
+      'last remaining page',
+    )
+  })
+
+  it('current-page: returns currentPageId in reply (switch occurred)', async () => {
+    const scoped = client.forFile(FK)
+    const res = await handleDeleteNode(
+      { nodeId: 'page:current' },
+      scoped,
+    )
+    const out = JSON.parse(res.content[0].text) as {
+      id: string
+      name: string
+      type: string
+      currentPageId: string
+    }
+    expect(out.id).toBe('page:current')
+    expect(out.type).toBe('PAGE')
+    // switched to the adjacent page (page:other in the mock)
+    expect(out.currentPageId).toBe('page:other')
+  })
+
+  it('non-current page: removes and returns currentPageId (unchanged)', async () => {
+    const scoped = client.forFile(FK)
+    const res = await handleDeleteNode(
+      { nodeId: 'page:noncurrent' },
+      scoped,
+    )
+    const out = JSON.parse(res.content[0].text) as {
+      id: string
+      type: string
+      currentPageId: string
+    }
+    expect(out.id).toBe('page:noncurrent')
+    expect(out.type).toBe('PAGE')
+    expect(out.currentPageId).toBe('page:current')
+  })
+
+  it('setCurrentPageAsync absent: degrade warns and skips remove (no error)', async () => {
+    const scoped = client.forFile(FK)
+    const res = await handleDeleteNode(
+      { nodeId: 'page:noapi' },
+      scoped,
+    )
+    // A degrade reply has no {error} key — formatMutationResult emits JSON, not "Error: …".
+    expect(res.content[0].text).not.toContain('"error"')
+    const out = JSON.parse(res.content[0].text) as {
+      id: string
+      type: string
+      warnings: string[]
+    }
+    expect(out.id).toBe('page:noapi')
+    expect(out.type).toBe('PAGE')
+    expect(out.warnings[0]).toContain(
+      'setCurrentPageAsync unavailable',
+    )
+  })
+})

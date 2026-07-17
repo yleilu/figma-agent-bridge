@@ -1,7 +1,16 @@
 // tools/structure.ts — write-structure tools.
 //
-// delete_node: COMMANDS.DELETE_NODE with {nodeId} → {id,name,type} (captured
-//   before removal). A node-not-found plugin {error} surfaces as an error.
+// delete_node: COMMANDS.DELETE_NODE with {nodeId} → {id,name,type[,currentPageId]}
+//   (info captured before removal). A node-not-found plugin {error} surfaces as
+//   an error. PAGE semantics (handled entirely in the plugin):
+//     • Deleting the last remaining page → {error:'Cannot delete the last
+//       remaining page: <id>'}  (Figma forbids a pageless document — T7 reject).
+//     • Deleting the current page → auto-switch to the adjacent sibling (rule:
+//       previous sibling, else next; pages[idx-1] ?? pages[idx+1]), THEN remove.
+//       Reply includes `currentPageId` so the new active page is machine-visible.
+//     • setCurrentPageAsync absent on older runtimes → degrade: warn + skip
+//       remove, NEVER throw.
+//     • Non-PAGE nodes: unchanged path (node.remove(); returns {id,name,type}).
 // set_focus: COMMANDS.SET_FOCUS with {nodeIds} → {viewport}. The viewport
 //   WRITER — the viewport is READ via `status` (which now returns the live
 //   viewport). This moves the CANVAS only (scroll + zoom) — it does NOT change

@@ -1597,14 +1597,67 @@ export const createMockPlugin = (
         break
       }
 
-      // delete_node: echo the deleted {id,name,type} (captured before removal).
-      case 'delete_node':
+      // delete_node: echo {id,name,type} (captured before removal).
+      // PAGE branch — backed by a small in-mock page array:
+      //   page:only   → last-page {error} (T7)
+      //   page:current → switch-then-remove; returns currentPageId
+      //   page:noncurrent → remove non-current page; returns currentPageId
+      //   page:noapi   → setCurrentPageAsync absent degrade (warns, skips remove)
+      //   anything else → ordinary FRAME reply (default mock node)
+      case 'delete_node': {
+        const dnNodeId = cmd.params?.nodeId as string
+        // Mock page registry: two pages, page:current is active.
+        const mockPages = [
+          { id: 'page:current', name: 'Page 1' },
+          { id: 'page:other', name: 'Page 2' },
+        ]
+        if (dnNodeId === 'page:only') {
+          result = {
+            error:
+              'Cannot delete the last remaining page: ' +
+              dnNodeId,
+          }
+          break
+        }
+        if (dnNodeId === 'page:noapi') {
+          result = {
+            id: 'page:noapi',
+            name: 'Page 1',
+            type: 'PAGE',
+            warnings: [
+              'setCurrentPageAsync unavailable; current page not switched — remove skipped',
+            ],
+          }
+          break
+        }
+        if (
+          dnNodeId === 'page:current' ||
+          dnNodeId === 'page:noncurrent'
+        ) {
+          const deletedPage = mockPages.find(
+            p => p.id === dnNodeId,
+          )
+          // After removing page:current, current switches to page:other.
+          // After removing page:noncurrent (page:other), current stays page:current.
+          const newCurrentId =
+            dnNodeId === 'page:current'
+              ? 'page:other'
+              : 'page:current'
+          result = {
+            id: dnNodeId,
+            name: deletedPage?.name ?? 'Page',
+            type: 'PAGE',
+            currentPageId: newCurrentId,
+          }
+          break
+        }
         result = {
-          id: cmd.params?.nodeId as string,
+          id: dnNodeId,
           name: 'Card',
           type: 'FRAME',
         }
         break
+      }
 
       // set_focus: CANVAS only — echo a viewport snapshot. Models the real
       // plugin's resolution + T7 honesty: an id that does not resolve to a scene
