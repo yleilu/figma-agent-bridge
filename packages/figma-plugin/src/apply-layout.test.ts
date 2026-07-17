@@ -145,3 +145,84 @@ test('wrap:false does not set WRAP', () => {
   applyLayout(frame, { mode: 'H', wrap: false })
   expect(frame.layoutWrap).toBe('NO_WRAP')
 })
+
+// ─── GRID mode (M12) ──────────────────────────────────────────────────────────
+
+// A grid-capable fake frame: same as makeFrame() but with the GRID-only fields
+// present so 'gridRowCount' in frame is true (feature-detect passes).
+const makeGridFrame = (): LayoutTarget & {
+  gridRowCount: number
+  gridColumnCount: number
+  gridRowGap: number
+  gridColumnGap: number
+} => ({
+  ...makeFrame(),
+  gridRowCount: 0,
+  gridColumnCount: 0,
+  gridRowGap: 0,
+  gridColumnGap: 0,
+})
+
+test('mode GRID sets layoutMode to GRID', () => {
+  const frame = makeGridFrame()
+  applyLayout(frame, { mode: 'GRID' })
+  expect(frame.layoutMode).toBe('GRID')
+})
+
+test('mode GRID with all grid keys sets counts and gaps', () => {
+  const frame = makeGridFrame()
+  applyLayout(frame, {
+    mode: 'GRID',
+    rows: 2,
+    cols: 3,
+    rowGap: 8,
+    colGap: 12,
+  })
+  expect(frame.layoutMode).toBe('GRID')
+  expect(frame.gridRowCount).toBe(2)
+  expect(frame.gridColumnCount).toBe(3)
+  expect(frame.gridRowGap).toBe(8)
+  expect(frame.gridColumnGap).toBe(12)
+})
+
+test('partial GRID (rows only) sets only rows; other grid fields untouched', () => {
+  const frame = makeGridFrame()
+  // seed sentinel on the grid fields so we can assert untouched
+  frame.gridRowCount = -1
+  frame.gridColumnCount = -1
+  frame.gridRowGap = -1
+  frame.gridColumnGap = -1
+  applyLayout(frame, { mode: 'GRID', rows: 4 })
+  expect(frame.gridRowCount).toBe(4)
+  expect(frame.gridColumnCount).toBe(-1)
+  expect(frame.gridRowGap).toBe(-1)
+  expect(frame.gridColumnGap).toBe(-1)
+})
+
+test('GRID feature-detect: absent gridRowCount property → no throw, no assignment', () => {
+  // Simulate a runtime that does NOT support gridRowCount (T7 degrade).
+  // makeFrame() has no gridRowCount so 'gridRowCount' in frame is false.
+  const frame = makeFrame()
+  expect(() =>
+    applyLayout(frame, {
+      mode: 'GRID',
+      rows: 2,
+      cols: 3,
+      rowGap: 8,
+      colGap: 12,
+    }),
+  ).not.toThrow()
+  // The fields should not have been set (they don't exist on the object).
+  expect('gridRowCount' in frame).toBe(false)
+  expect('gridColumnCount' in frame).toBe(false)
+})
+
+test('GRID feature-detect degrade pushes a warning when grid fields absent', () => {
+  // makeFrame() has no gridRowCount → feature-detect fails → warning.
+  const frame = makeFrame()
+  const warnings: string[] = []
+  applyLayout(frame, { mode: 'GRID', rows: 2, cols: 3 }, warnings)
+  // Should warn that grid fields are unsupported at runtime.
+  expect(warnings.length).toBeGreaterThan(0)
+  expect(warnings[0]).toMatch(/GRID/i)
+})

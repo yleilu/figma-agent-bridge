@@ -178,6 +178,51 @@ describe('specToFigma — layout', () => {
     const layout = result.layout as Record<string, unknown>
     expect(layout.wrap).toBe(true)
   })
+
+  it('GRID mode passes mode through', () => {
+    const result = specToFigma({ layout: { mode: 'GRID' } })
+    const layout = result.layout as Record<string, unknown>
+    expect(layout.mode).toBe('GRID')
+  })
+
+  it('GRID mode with all grid keys emits rows/cols/rowGap/colGap', () => {
+    const result = specToFigma({
+      layout: {
+        mode: 'GRID',
+        rows: 2,
+        cols: 3,
+        rowGap: 8,
+        colGap: 12,
+      },
+    })
+    const layout = result.layout as Record<string, unknown>
+    expect(layout.mode).toBe('GRID')
+    expect(layout.rows).toBe(2)
+    expect(layout.cols).toBe(3)
+    expect(layout.rowGap).toBe(8)
+    expect(layout.colGap).toBe(12)
+  })
+
+  it('partial GRID (rows+rowGap only) emits only present keys', () => {
+    const result = specToFigma({
+      layout: { mode: 'GRID', rows: 4, rowGap: 16 },
+    })
+    const layout = result.layout as Record<string, unknown>
+    expect(layout.rows).toBe(4)
+    expect(layout.rowGap).toBe(16)
+    expect('cols' in layout).toBe(false)
+    expect('colGap' in layout).toBe(false)
+  })
+
+  it('non-GRID mode with grid keys emits a warning', () => {
+    const warnings: string[] = []
+    specToFigma(
+      { layout: { mode: 'H', rows: 2 } as never },
+      warnings,
+    )
+    expect(warnings.length).toBeGreaterThan(0)
+    expect(warnings[0]).toMatch(/rows|GRID/i)
+  })
 })
 
 describe('specToFigma — text', () => {

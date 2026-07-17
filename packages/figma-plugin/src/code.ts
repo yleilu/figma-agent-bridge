@@ -216,6 +216,24 @@ const exportNodeDocument = async (
         doc.explicitVariableModes = evm
       }
     }
+    // M12 — GRID layout enrichment. JSON_REST_V1 may not carry gridRowCount/
+    // gridColumnCount/gridRowGap/gridColumnGap for GRID-mode frames. Enrich
+    // directly from the node so the reader can round-trip GRID layouts (T2).
+    // Feature-detected: guard on 'gridRowCount' in node (T7). Always enrich
+    // by default (Theme B) — the controller runs a step-0 live gate to confirm
+    // whether REST already carries these.
+    if ('gridRowCount' in node) {
+      const gridNode = node as unknown as {
+        gridRowCount: number
+        gridColumnCount: number
+        gridRowGap: number
+        gridColumnGap: number
+      }
+      doc.gridRowCount = gridNode.gridRowCount
+      doc.gridColumnCount = gridNode.gridColumnCount
+      doc.gridRowGap = gridNode.gridRowGap
+      doc.gridColumnGap = gridNode.gridColumnGap
+    }
     // M14 — component.key + component.remote enrichment for INSTANCE nodes.
     // ROOT-ONLY (isRoot===true) so we stay O(targets) not O(document) — a
     // descendant instance inside a deep inspect keeps its cheap componentId-only

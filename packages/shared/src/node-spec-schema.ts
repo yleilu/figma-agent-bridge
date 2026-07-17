@@ -17,13 +17,18 @@ import type {
 const atomSchema = z.string()
 
 export const layoutSpecSchema = z.object({
-  mode: z.enum(['H', 'V', 'NONE']),
+  mode: z.enum(['H', 'V', 'NONE', 'GRID']),
   gap: z.number().optional(),
   pad: z
     .tuple([z.number(), z.number(), z.number(), z.number()])
     .optional(),
   align: z.tuple([z.string(), z.string()]).optional(),
   wrap: z.boolean().optional(),
+  // GRID-mode keys (M12): two independent gaps, separate row/col counts.
+  rows: z.number().int().positive().optional(),
+  cols: z.number().int().positive().optional(),
+  rowGap: z.number().nonnegative().optional(),
+  colGap: z.number().nonnegative().optional(),
 })
 
 export const textRunSchema = z.object({

@@ -123,6 +123,97 @@ describe('toNodeSpec — atom-grammar leaves', () => {
   })
 })
 
+// ─── GRID layout read-back (M12) ─────────────────────────────────────────────
+
+describe('toNodeSpec — GRID layout read-back', () => {
+  it('reads a GRID frame with all four grid keys', () => {
+    const gridRaw: Record<string, unknown> = {
+      id: '10:1',
+      name: 'Grid Frame',
+      type: 'FRAME',
+      layoutMode: 'GRID',
+      gridRowCount: 2,
+      gridColumnCount: 3,
+      gridRowGap: 8,
+      gridColumnGap: 12,
+    }
+    const spec = toNodeSpec(gridRaw, { depth: -1 })
+    expect(spec.layout?.mode).toBe('GRID')
+    expect(spec.layout?.rows).toBe(2)
+    expect(spec.layout?.cols).toBe(3)
+    expect(spec.layout?.rowGap).toBe(8)
+    expect(spec.layout?.colGap).toBe(12)
+  })
+
+  it('GRID with zero gap reads rowGap and colGap as 0', () => {
+    const gridRaw: Record<string, unknown> = {
+      id: '10:2',
+      name: 'Grid Zero Gap',
+      type: 'FRAME',
+      layoutMode: 'GRID',
+      gridRowCount: 1,
+      gridColumnCount: 1,
+      gridRowGap: 0,
+      gridColumnGap: 0,
+    }
+    const spec = toNodeSpec(gridRaw, { depth: -1 })
+    expect(spec.layout?.mode).toBe('GRID')
+    expect(spec.layout?.rowGap).toBe(0)
+    expect(spec.layout?.colGap).toBe(0)
+  })
+
+  it('GRID frame missing grid count/gap fields produces GRID mode with no counts/gaps', () => {
+    const gridRaw: Record<string, unknown> = {
+      id: '10:3',
+      name: 'Bare Grid',
+      type: 'FRAME',
+      layoutMode: 'GRID',
+    }
+    const spec = toNodeSpec(gridRaw, { depth: -1 })
+    expect(spec.layout?.mode).toBe('GRID')
+    expect(spec.layout?.rows).toBeUndefined()
+    expect(spec.layout?.cols).toBeUndefined()
+    expect(spec.layout?.rowGap).toBeUndefined()
+    expect(spec.layout?.colGap).toBeUndefined()
+  })
+
+  it('non-GRID layout (HORIZONTAL) is unaffected — no rows/cols emitted', () => {
+    const hRaw: Record<string, unknown> = {
+      id: '10:4',
+      name: 'H Frame',
+      type: 'FRAME',
+      layoutMode: 'HORIZONTAL',
+      itemSpacing: 8,
+    }
+    const spec = toNodeSpec(hRaw, { depth: -1 })
+    expect(spec.layout?.mode).toBe('H')
+    expect(spec.layout).not.toHaveProperty('rows')
+    expect(spec.layout).not.toHaveProperty('cols')
+  })
+
+  it('round-trip: GRID spec → specToFigma writer → layout object contains grid keys', () => {
+    const gridRaw: Record<string, unknown> = {
+      id: '10:5',
+      name: 'Grid RT',
+      type: 'FRAME',
+      layoutMode: 'GRID',
+      gridRowCount: 4,
+      gridColumnCount: 6,
+      gridRowGap: 16,
+      gridColumnGap: 24,
+    }
+    const spec = toNodeSpec(gridRaw, { depth: -1 })
+    // write back via specToFigma (already imported at top of file)
+    const payload = specToFigma(spec)
+    const layout = payload.layout as Record<string, unknown>
+    expect(layout.mode).toBe('GRID')
+    expect(layout.rows).toBe(4)
+    expect(layout.cols).toBe(6)
+    expect(layout.rowGap).toBe(16)
+    expect(layout.colGap).toBe(24)
+  })
+})
+
 // ─── var() binding read-back (no boundVariables field on NodeSpec) ─────────────
 
 describe('toNodeSpec — var() binding read-back', () => {
