@@ -75,7 +75,7 @@ flagged `UNDOCUMENTED` — treat them as feature-detect-only (degrade gracefully
 | `figma.exclude(nodes, parent, index?)` | BooleanOperationNode | Boolean exclude |
 | `figma.flatten(nodes, parent?, index?)` | VectorNode | Flatten to single vector |
 | `figma.ungroup(node)` | SceneNode[] | Ungroup |
-| `figma.transformGroup(nodes, parent, index, modifiers)` | TransformGroupNode | Transform group |
+| `figma.transformGroup(nodes, parent, index, modifiers: TransformModifier[])` | TransformGroupNode | **A repeat-pattern feature** (linear/radial repeat), NOT general grouping. `type TransformModifier = LinearRepeatModifier \| RadialRepeatModifier`. Typed in 1.130.0. |
 
 ## Components
 
@@ -96,7 +96,7 @@ flagged `UNDOCUMENTED` — treat them as feature-detect-only (degrade gracefully
 | `component.addComponentProperty(name, type, default)` | string | Add `BOOLEAN` / `TEXT` / `INSTANCE_SWAP` / `SLOT` property |
 | `component.editComponentProperty(name, options)` | void | Modify property |
 | `component.deleteComponentProperty(name)` | void | Remove property |
-| `component.createSlot(childName)` | Node | **UNDOCUMENTED** — create slot from child frame; feature-detect before use |
+| `component.createSlot()` | SlotNode | **NEW in 1.130.0**, runtime-available in our sandbox but **absent from the pinned 1.123.0 typings** — feature-detect + cast before use (or bump `@figma/plugin-typings` toward 1.130.0). `interface SlotNode extends DefaultFrameMixin` → a SLOT **is an appendable frame-container** (`appendChild`/`children`), which is what makes slot-fill feasible. |
 | `component.getInstancesAsync()` | Promise\<InstanceNode[]\> | All instances |
 | `component.getPublishStatusAsync()` | Promise\<string\> | Publish status |
 | `component.instances` | InstanceNode[] (read-only) | **DEPRECATED** — use `getInstancesAsync()` |
@@ -176,6 +176,9 @@ or `node.fillStyleId = id`, `node.strokeStyleId = id`, `node.effectStyleId = id`
 | `getSubscribedVariables()` | Subscribed variables |
 | `setBoundVariableForPaint` / `setBoundVariableForEffect` / `setBoundVariableForLayoutGrid` | Bind variable into a paint / effect / grid object |
 | `collection.addMode(name)` / `removeMode(modeId)` / `renameMode(modeId, name)` | Mode lifecycle on a collection (+ `collection.modes`, `defaultModeId`) † |
+| `node.setExplicitVariableModeForCollection(collection, mode)` | Pin a node/frame to render a collection in a chosen mode. **Prefer the `VariableCollection` OBJECT overload.** A deprecated `(collectionId: string, modeId: string)` string overload also exists but is `@deprecated` and **throws under `documentAccess:'dynamic-page'`** — do not use it. Present since 1.123.0 ‡ |
+| `node.explicitVariableModes` | `{[collectionId: string]: modeId}` (read) — the node's OWN explicit mode pins as a MAP keyed by collection id. Distinct from the inheritance-resolved read-only `resolvedVariableModes` below. Present since 1.123.0 ‡ |
+| `node.clearExplicitVariableModeForCollection(collection)` | Unpin — clear the node's explicit mode for a collection (prefer the `VariableCollection` OBJECT overload, as above). Present since 1.123.0 ‡ |
 | `variable.scopes` | `Array<VariableScope>` read-write (GAP, CORNER_RADIUS, WIDTH_HEIGHT, …) † |
 | `variable.codeSyntax` / `setVariableCodeSyntax(platform, value)` / `removeVariableCodeSyntax(platform)` | Per-platform code-syntax (WEB / ANDROID / iOS); read-write † |
 | `variable.hiddenFromPublishing` | Boolean read-write — hide a variable when publishing the file as a library † |
@@ -185,6 +188,13 @@ or `node.fillStyleId = id`, `node.strokeStyleId = id`, `node.effectStyleId = id`
 > under-captured `Variable` / `VariableCollection` instance members). These are
 > long-stable APIs, so present in our sandbox; flagged for an introspection
 > re-capture to reach 100% runtime-verified.
+>
+> ‡ Confirmed present in `@figma/plugin-typings` since **1.123.0** (the version the
+> plugin currently pins) — directly buildable, no version bump needed. The read shape
+> `explicitVariableModes` is a `{collectionId: modeId}` **map** while the write verbs act
+> on **one collection per call**: this read/write shape asymmetry is deliberate and must
+> be handled explicitly (a mode-write verb accepts the map, or the N-call asymmetry is
+> documented), not silently.
 
 ## Read / Query
 
@@ -202,7 +212,7 @@ or `node.fillStyleId = id`, `node.strokeStyleId = id`, `node.effectStyleId = id`
 | `figma.util.normalizeMarkdown(str)` | Markdown normalization |
 | `figma.loadFontAsync(fontName)` | Load a font before text edits |
 | `figma.listAvailableFontsAsync()` | Available fonts — fork/runtime-confirmed |
-| `figma.annotations.*` | `addAnnotationCategoryAsync`, `getAnnotationCategoriesAsync`, `getAnnotationCategoryByIdAsync`. Plus `node.annotations` (read/write) for per-node annotations — fork/runtime-confirmed (the working fork implements it) |
+| `figma.annotations.*` | `addAnnotationCategoryAsync`, `getAnnotationCategoriesAsync`, `getAnnotationCategoryByIdAsync`. Plus `node.annotations` (read/write) for per-node annotations — fork/runtime-confirmed (the working fork implements it). **⚠️ Dev Mode only:** annotations require `editorType==='dev'` — unavailable in the default Design editor, so `get_annotations`/`set_annotations` feature-detect (`'annotations' in node`) and **degrade with a warning** (T7). A Figma editor gate, not a tool gap. |
 
 Other global properties: `figma.currentUser`, `figma.activeUsers`, `figma.editorType`
 (`'figma' | 'figjam' | 'dev' | 'slides'`), `figma.apiVersion`, `figma.fileKey`,
@@ -227,7 +237,7 @@ state, so the tool layer must enforce order.
 | FILL sizing | Set `layoutSizing*` to FILL **after** `appendChild` to an auto-layout parent |
 | `layoutPositioning: ABSOLUTE` | Set **after** `appendChild` |
 | `loadFontAsync()` | Must resolve **before** setting any text property |
-| `createSlot(childName)` | Child must be appended to the component **first** |
+| `component.createSlot()` | The child frame to promote must be appended to the component **first**, then `createSlot()` promotes it into a real SLOT node |
 | `textAutoResize` | Set **before** `resize()` on TEXT nodes |
 
 ---
@@ -251,7 +261,9 @@ count of properties unique to that node type.
 
 **Read-only:** `id`, `type`, `parent`, `removed`, `width`, `height` (use `resize()`),
 `absoluteTransform`, `absoluteBoundingBox`, `absoluteRenderBounds`, `fillGeometry`,
-`strokeGeometry`, `boundVariables`, `resolvedVariableModes`, `inferredVariables`,
+`strokeGeometry`, `boundVariables`, `resolvedVariableModes` (inheritance-resolved; the
+node's OWN explicit pins are the read-write `explicitVariableModes` map — see
+[Variables](#variables-figmavariables)), `inferredVariables`,
 `stuckNodes`, `attachedConnectors`, `isAsset`, `detachedInfo`.
 
 **Methods:** `clone()`, `remove()`, `resize(w,h)`, `resizeWithoutConstraints(w,h)`,
@@ -413,4 +425,4 @@ Captured 2026-03-22 from the live plugin sandbox.
 
 - **Total `figma.*` keys:** 109 (107 relevant; 2 irrelevant: `devResources`, `relatedLinks`). `getHTMLString` is relevant but untested — it exists, untested, so it counts toward the 107 relevant keys.
 - **Prototype property counts:** FrameNode 170 · TextNode 192 (80+ unique) · ComponentNode 185 (15 unique) · InstanceNode 184 (13 unique) · EllipseNode 113 (1: `arcData`) · LineNode 107 (0 unique) · VectorNode 116 (4: `vectorPaths`, `vectorNetwork`, `handleMirroring`, `setVectorNetworkAsync`) · PolygonNode 113 (1: `pointCount`) · StarNode 114 (2: `pointCount`, `innerRadius`) · SectionNode 73 (1: `sectionContentsHidden`).
-- **Undocumented APIs confirmed at runtime:** `SLOT` component-property type and `component.createSlot()` — both work but are absent from Figma's public docs; feature-detect and degrade per [[figma-bridge/docs/principles#T7 — Honest capability|T7]].
+- **Undocumented APIs confirmed at runtime:** the `SLOT` component-property type — works but absent from Figma's public docs; feature-detect and degrade per [[figma-bridge/docs/principles#T7 — Honest capability|T7]]. `component.createSlot()` / `SlotNode` are **new in 1.130.0** (typed there; absent from the pinned 1.123.0 typings but runtime-available) — feature-detect + cast, or bump the typings.
