@@ -252,6 +252,130 @@ describe('handleUpdateComponent', () => {
       'exposeNestedInstances',
     )
   })
+
+  it('forwards slots param in COMMANDS.UPDATE_COMPONENT', async () => {
+    const sent: Sent[] = []
+    await handleUpdateComponent(
+      {
+        componentId: 'c:1',
+        slots: ['content', 'footer'],
+      },
+      stubClient({
+        sent,
+        reply: {
+          id: 'c:1',
+          properties: [],
+          slotsCreated: ['content', 'footer'],
+          slotsSkipped: [],
+          warnings: [],
+        },
+      }),
+    )
+    expect(sent[0].command).toBe(COMMANDS.UPDATE_COMPONENT)
+    expect(sent[0].params?.slots).toEqual([
+      'content',
+      'footer',
+    ])
+  })
+
+  it('emits {slotsCreated, slotsSkipped} from the reply', async () => {
+    const result = await handleUpdateComponent(
+      { componentId: 'c:1', slots: ['content'] },
+      stubClient({
+        reply: {
+          id: 'c:1',
+          properties: [],
+          slotsCreated: ['content'],
+          slotsSkipped: [],
+          warnings: [],
+        },
+      }),
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      slotsCreated: string[]
+      slotsSkipped: string[]
+    }
+    expect(out.slotsCreated).toEqual(['content'])
+    expect(out.slotsSkipped).toEqual([])
+  })
+
+  it('T7: slots degrade gracefully when createSlot unavailable (mock echo)', async () => {
+    const result = await handleUpdateComponent(
+      { componentId: 'c:1', slots: ['content'] },
+      stubClient({
+        reply: {
+          id: 'c:1',
+          properties: [],
+          slotsCreated: [],
+          slotsSkipped: ['content'],
+          warnings: [
+            'createSlot unavailable in this Figma version; slot(s) not created',
+          ],
+        },
+      }),
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const out = JSON.parse(result.content[0].text) as {
+      slotsCreated: string[]
+      slotsSkipped: string[]
+      warnings: string[]
+    }
+    expect(out.slotsCreated).toEqual([])
+    expect(out.slotsSkipped).toEqual(['content'])
+    expect(out.warnings[0]).toContain('createSlot')
+  })
+
+  it('returns default slotsCreated:[]/slotsSkipped:[] shape when slots param is absent', async () => {
+    // Agents must be able to rely on the shape unconditionally — no `slots` param
+    // should still produce the two arrays in the reply.
+    const result = await handleUpdateComponent(
+      { componentId: 'c:1' },
+      stubClient({
+        reply: {
+          id: 'c:1',
+          properties: [],
+          slotsCreated: [],
+          slotsSkipped: [],
+          warnings: [],
+        },
+      }),
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const out = JSON.parse(result.content[0].text) as {
+      slotsCreated: string[]
+      slotsSkipped: string[]
+    }
+    expect(out.slotsCreated).toEqual([])
+    expect(out.slotsSkipped).toEqual([])
+  })
+
+  it('T7: COMPONENT_SET degrade — all slots skipped with a warning', async () => {
+    // createSlot is per-component, not available on COMPONENT_SET. The plugin
+    // skips all names and emits a warning; the handler must surface it without error.
+    const result = await handleUpdateComponent(
+      { componentId: 'cs:1', slots: ['header', 'body'] },
+      stubClient({
+        reply: {
+          id: 'cs:1',
+          properties: [],
+          slotsCreated: [],
+          slotsSkipped: ['header', 'body'],
+          warnings: [
+            'createSlot is per-component, not available on COMPONENT_SET; slot(s) skipped: header, body',
+          ],
+        },
+      }),
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const out = JSON.parse(result.content[0].text) as {
+      slotsCreated: string[]
+      slotsSkipped: string[]
+      warnings: string[]
+    }
+    expect(out.slotsCreated).toEqual([])
+    expect(out.slotsSkipped).toEqual(['header', 'body'])
+    expect(out.warnings[0]).toContain('COMPONENT_SET')
+  })
 })
 
 describe('handleCombineVariants', () => {

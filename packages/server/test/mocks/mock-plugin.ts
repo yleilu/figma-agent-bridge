@@ -953,6 +953,12 @@ export const createMockPlugin = (
       // Accept either key so both create paths round-trip, echo the converted
       // spec back for serialization assertions, and mirror the real plugin's
       // {id,name,type,warnings} reply.
+      //
+      // M2b T7 instance-lock wrap: a parentId prefixed `badparent:` models a
+      // non-SLOT instance descendant whose appendChild Figma blocks at runtime.
+      // The real plugin wraps that throw in a try/catch and returns the SAME
+      // structured error shape (result.error). The mock mirrors that so the e2e
+      // can assert the error-shape contract without a live Figma document.
       case 'create_node': {
         const nodeSpec = (cmd.params?.spec ??
           cmd.params?.node) as
@@ -961,6 +967,15 @@ export const createMockPlugin = (
         const parentId = cmd.params?.parentId as
           | string
           | undefined
+        if (parentId?.startsWith('badparent:')) {
+          // Mirror the real plugin's T7 structured error: the type reported is
+          // the simulated parent type (INSTANCE for a non-slot descendant).
+          result = {
+            error:
+              'Cannot append into this parent: only a component SLOT accepts children inside an instance (got INSTANCE). To fill a slot, target the slot node.',
+          }
+          break
+        }
         const nodeType = nodeSpec?.type as string
         const echo: Record<string, unknown> = {
           ...(nodeSpec ?? {}),
@@ -1063,12 +1078,23 @@ export const createMockPlugin = (
       // treating `{ id }` clones as a single node, and echoes the converted
       // tree + refs back so e2e/round-trip tests can assert the nested
       // structure (and ref/clone resolution) reached the plugin intact.
+      //
+      // M2b T7 instance-lock wrap: a parentId prefixed `badparent:` models a
+      // non-SLOT instance descendant; mirrors the real plugin's T7 try/catch
+      // returning result.error (same shape as create_node).
       case 'create_tree': {
-        const treeSpec = cmd.params?.tree as
-          | Record<string, unknown>
-          | undefined
         const treeParentId = cmd.params?.parentId as
           | string
+          | undefined
+        if (treeParentId?.startsWith('badparent:')) {
+          result = {
+            error:
+              'Cannot append into this parent: only a component SLOT accepts children inside an instance (got INSTANCE). To fill a slot, target the slot node.',
+          }
+          break
+        }
+        const treeSpec = cmd.params?.tree as
+          | Record<string, unknown>
           | undefined
         const treeRefs = cmd.params?.refs as
           | Record<string, Record<string, unknown>>
@@ -1287,10 +1313,12 @@ export const createMockPlugin = (
         break
       }
 
-      // update_component: echo {id, properties, warnings}. `properties` is the
-      // catalogue ARRAY of {id,name,type,defaultValue,variantOptions?}. An
-      // `expose` list degrades (warn, never error) — exposeNestedInstances is
-      // gated. addComponentProperty returns a CANONICAL id (`<name>#<suffix>`)
+      // update_component: echo {id, properties, slotsCreated, slotsSkipped,
+      // warnings}. `properties` is the catalogue ARRAY of
+      // {id,name,type,defaultValue,variantOptions?}. An `expose` list degrades
+      // (warn, never error) — exposeNestedInstances is gated. A `slots` list
+      // also degrades (createSlot is runtime-only; mock echoes slotsSkipped).
+      // addComponentProperty returns a CANONICAL id (`<name>#<suffix>`)
       // that agents need for later setProperties, so the mock mirrors the real
       // plugin by carrying it inside each `properties` entry's `id` field.
       // Genuine {error} boundaries (mirroring the real plugin):
@@ -1317,6 +1345,9 @@ export const createMockPlugin = (
         const ucExpose = cmd.params?.expose as
           | string[]
           | undefined
+        const ucSlots = cmd.params?.slots as
+          | string[]
+          | undefined
         const ucWarnings: string[] = []
         const properties: {
           id: string
@@ -1339,9 +1370,24 @@ export const createMockPlugin = (
             'exposeNestedInstances unavailable in this Figma version; expose skipped',
           )
         }
+        // slots: mock degrades (T7) — createSlot is runtime-only and unavailable
+        // in the headless mock. Echo slotsCreated:[] / slotsSkipped:[...names] with
+        // the degrade warning, matching the real plugin's T7 degrade path.
+        const slotsCreated: string[] = []
+        const slotsSkipped: string[] = []
+        if (ucSlots && ucSlots.length > 0) {
+          for (const name of ucSlots) {
+            slotsSkipped.push(name)
+          }
+          ucWarnings.push(
+            'createSlot unavailable in this Figma version; slot(s) not created',
+          )
+        }
         result = {
           id: ucId,
           properties,
+          slotsCreated,
+          slotsSkipped,
           warnings: ucWarnings,
         }
         break

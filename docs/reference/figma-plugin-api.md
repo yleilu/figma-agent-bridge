@@ -96,7 +96,7 @@ flagged `UNDOCUMENTED` — treat them as feature-detect-only (degrade gracefully
 | `component.addComponentProperty(name, type, default)` | string | Add `BOOLEAN` / `TEXT` / `INSTANCE_SWAP` / `SLOT` property |
 | `component.editComponentProperty(name, options)` | void | Modify property |
 | `component.deleteComponentProperty(name)` | void | Remove property |
-| `component.createSlot()` | SlotNode | **NEW in 1.130.0**, runtime-available in our sandbox but **absent from the pinned 1.123.0 typings** — feature-detect + cast before use (or bump `@figma/plugin-typings` toward 1.130.0). `interface SlotNode extends DefaultFrameMixin` → a SLOT **is an appendable frame-container** (`appendChild`/`children`), which is what makes slot-fill feasible. |
+| `component.createSlot()` | SlotNode | **NEW in 1.130.0**, runtime-available in our sandbox but **absent from the pinned 1.123.0 typings** — feature-detect + cast before use (or bump `@figma/plugin-typings` toward 1.130.0). Takes **NO argument** — creates a brand-new empty SLOT node inside the component and returns it (auto-named "Slot"); name it via the returned node's `.name` property. Does NOT promote any existing child frame. (live-verified 2026-07-17). `interface SlotNode extends DefaultFrameMixin` → a SLOT **is an appendable frame-container** (`appendChild`/`children`), which is what makes slot-fill feasible. |
 | `component.getInstancesAsync()` | Promise\<InstanceNode[]\> | All instances |
 | `component.getPublishStatusAsync()` | Promise\<string\> | Publish status |
 | `component.instances` | InstanceNode[] (read-only) | **DEPRECATED** — use `getInstancesAsync()` |
@@ -200,7 +200,7 @@ or `node.fillStyleId = id`, `node.strokeStyleId = id`, `node.effectStyleId = id`
 
 | Method / Property | Notes |
 |-------------------|-------|
-| `figma.getNodeByIdAsync(id)` | Node lookup (async; `getNodeById` is the sync legacy form) |
+| `figma.getNodeByIdAsync(id)` | Node lookup (async; `getNodeById` is the sync legacy form). **⚠️ Does NOT resolve compound instance-child ids (`I<inst>;<child>`, e.g. a SLOT inside an instance) — it hangs. Traverse the instance instead: `(instance as InstanceNode).findOne(n => n.id === compoundId)`. (live-verified 2026-07-17)** |
 | `figma.currentPage` | Current page (settable) |
 | `figma.currentPage.selection` | Current selection |
 | `figma.root` | DocumentNode; `figma.root.children` = all pages |
@@ -237,7 +237,7 @@ state, so the tool layer must enforce order.
 | FILL sizing | Set `layoutSizing*` to FILL **after** `appendChild` to an auto-layout parent |
 | `layoutPositioning: ABSOLUTE` | Set **after** `appendChild` |
 | `loadFontAsync()` | Must resolve **before** setting any text property |
-| `component.createSlot()` | The child frame to promote must be appended to the component **first**, then `createSlot()` promotes it into a real SLOT node |
+| `component.createSlot()` | Takes **no argument**; creates a new empty SLOT node and **returns** it (auto-named "Slot"). Name the slot via the returned node's `.name`. No pre-existing child required. (live-verified 2026-07-17) |
 | `textAutoResize` | Set **before** `resize()` on TEXT nodes |
 
 ---
