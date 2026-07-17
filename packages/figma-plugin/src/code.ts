@@ -133,6 +133,7 @@ const readContext = (n: BaseNode): string | undefined => {
 
 const exportNodeDocument = async (
   node: BaseNode,
+  isRoot: boolean,
 ): Promise<unknown> => {
   if (node.type === 'DOCUMENT' || node.type === 'PAGE') {
     return {
@@ -213,6 +214,26 @@ const exportNodeDocument = async (
       ).explicitVariableModes
       if (Object.keys(evm).length > 0) {
         doc.explicitVariableModes = evm
+      }
+    }
+    // M14 — component.key + component.remote enrichment for INSTANCE nodes.
+    // ROOT-ONLY (isRoot===true) so we stay O(targets) not O(document) — a
+    // descendant instance inside a deep inspect keeps its cheap componentId-only
+    // projection (T10). Feature-detect getMainComponentAsync (T7): absent on
+    // older Plugin API versions; failures degrade silently (local componentId
+    // still round-trips locally).
+    if (
+      isRoot &&
+      node.type === 'INSTANCE' &&
+      typeof (node as unknown as { getMainComponentAsync?: unknown })
+        .getMainComponentAsync === 'function'
+    ) {
+      const main = await (node as InstanceNode)
+        .getMainComponentAsync()
+        .catch(() => null)
+      if (main !== null && main !== undefined) {
+        doc.componentKey = main.key
+        doc.componentRemote = main.remote
       }
     }
     return doc
@@ -887,14 +908,55 @@ const createSingleNode = async (
         | {
             key?: string
             id?: string
+            remote?: boolean
             properties?: Record<string, string | boolean>
           }
         | undefined
-      // Resolve the main component either by LOCAL node id or by published
-      // KEY. A COMPONENT_SET resolves to its defaultVariant (you instance a
+      // Resolve the main component. Two paths:
+      //   1. REMOTE (compRef.remote===true AND key present): prefer
+      //      importComponentByKeyAsync(key) first — the local id is a
+      //      foreign-file node id that won't resolve in a different file
+      //      (M14, T2). Fall back to id if the import fails (T7).
+      //   2. LOCAL (no remote hint): id-first (unchanged behavior) → key.
+      // A COMPONENT_SET resolves to its defaultVariant (you instance a
       // variant, not the set itself).
       let component: ComponentNode | undefined
-      if (compRef?.id !== undefined) {
+      if (
+        compRef?.remote === true &&
+        compRef.key !== undefined
+      ) {
+        // Remote/published: key-first with id fallback (T7).
+        try {
+          component = await figma.importComponentByKeyAsync(
+            compRef.key,
+          )
+        } catch {
+          warnings?.push(
+            'remote component key ' +
+              compRef.key +
+              ' failed to import; falling back to local id',
+          )
+          if (compRef.id !== undefined) {
+            const found = await figma.getNodeByIdAsync(
+              compRef.id,
+            )
+            if (found !== null && found.type === 'COMPONENT') {
+              component = found
+            } else if (
+              found !== null &&
+              found.type === 'COMPONENT_SET'
+            ) {
+              component = found.defaultVariant ?? undefined
+            }
+          }
+          if (component === undefined) {
+            throw new Error(
+              'INSTANCE remote component key failed to import and no valid local id fallback: ' +
+                compRef.key,
+            )
+          }
+        }
+      } else if (compRef?.id !== undefined) {
         const found = await figma.getNodeByIdAsync(
           compRef.id,
         )
@@ -1438,7 +1500,11 @@ const handleCommand = async (
       if (!node) {
         return { error: 'Node not found: ' + params.nodeId }
       }
-      return exportNodeDocument(node)
+      // isRoot=true: the node is the direct target of get_node — eligible for
+      // M14 INSTANCE enrichment (componentKey + componentRemote) without the
+      // O(document) cost. Descendants are never passed through exportNodeDocument
+      // individually here; JSON_REST_V1 returns their subtree inline.
+      return exportNodeDocument(node, true)
     }
 
     // inspect returns the SAME raw export the reader consumes; the server's
@@ -1463,8 +1529,9 @@ const handleCommand = async (
         if (sel.length > 1) {
           // Multi-selection → forest of all selected nodes. Resolve every
           // export before returning (each exportNodeDocument is async).
+          // isRoot=true: each selected node is a subtree root, not a descendant.
           return Promise.all(
-            sel.map(node => exportNodeDocument(node)),
+            sel.map(node => exportNodeDocument(node, true)),
           )
         }
         target =
@@ -1477,7 +1544,8 @@ const handleCommand = async (
             ((params.nodeId ?? params.pageId) as string),
         }
       }
-      return exportNodeDocument(target)
+      // isRoot=true: the inspect target is the root of the export.
+      return exportNodeDocument(target, true)
     }
 
     // get_nodes: one entry per id — a raw export (the same shape get_node /
@@ -1491,7 +1559,8 @@ const handleCommand = async (
           if (!node) {
             return { id: nodeId, error: 'Node not found' }
           }
-          return exportNodeDocument(node)
+          // isRoot=true: each explicitly-requested id is a root target.
+          return exportNodeDocument(node, true)
         }),
       )
     }

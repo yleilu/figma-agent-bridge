@@ -169,6 +169,37 @@ describe('toNodeSpec — INSTANCE component read-back', () => {
     })
   })
 
+  // M14: componentRemote=true from plugin enrichment → component.remote:true
+  it('includes component.remote:true when the export carries componentRemote:true (M14 root-only enrichment)', () => {
+    const instanceRaw: Record<string, unknown> = {
+      id: '5:8',
+      name: 'LibraryButton',
+      type: 'INSTANCE',
+      componentId: '2:12',
+      componentKey: 'lib-btn-key',
+      componentRemote: true,
+    }
+    const spec = toNodeSpec(instanceRaw, { depth: -1 })
+    expect(spec.component).toEqual({
+      id: '2:12',
+      key: 'lib-btn-key',
+      remote: true,
+    })
+  })
+
+  // M14: componentRemote absent → component.remote should NOT appear
+  it('omits component.remote when componentRemote is absent (local instance not marked remote)', () => {
+    const instanceRaw: Record<string, unknown> = {
+      id: '5:9',
+      name: 'LocalButton',
+      type: 'INSTANCE',
+      componentId: '2:13',
+    }
+    const spec = toNodeSpec(instanceRaw, { depth: -1 })
+    expect(spec.component).toEqual({ id: '2:13' })
+    expect(spec.component).not.toHaveProperty('remote')
+  })
+
   it('omits component on non-INSTANCE nodes (FRAME carries no main-component ref)', () => {
     const spec = toNodeSpec(raw, { depth: -1 })
     expect(spec.type).toBe('FRAME')

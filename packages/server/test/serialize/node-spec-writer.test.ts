@@ -415,6 +415,26 @@ describe('specToFigma — pass-through fields', () => {
     })
   })
 
+  // M14: component.remote is a read-emitted hint that must pass through the
+  // writer so the plugin's INSTANCE create path can prefer key-import when remote.
+  it('component.remote:true passes through the writer (M14 remote hint)', () => {
+    expect(
+      specToFigma({
+        component: {
+          id: '2:12',
+          key: 'lib-btn-key',
+          remote: true,
+        },
+      }),
+    ).toEqual({
+      component: {
+        id: '2:12',
+        key: 'lib-btn-key',
+        remote: true,
+      },
+    })
+  })
+
   it('passes context through unchanged (round-trip)', () => {
     expect(
       specToFigma({

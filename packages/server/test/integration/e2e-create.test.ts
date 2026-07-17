@@ -5,6 +5,7 @@ import {
   expect,
   it,
 } from 'bun:test'
+import YAML from 'yaml'
 import type { Server } from 'bun'
 import {
   startRelay,
@@ -16,6 +17,7 @@ import type {
   ScopedFigmaClient,
 } from '@figma-agent-bridge/server/figma-client'
 import { transformToAngle } from '@figma-agent-bridge/server/grammar'
+import { handleGetNode } from '@figma-agent-bridge/server/tools/read'
 // create_node and create_component were rebuilt on NodeSpec (M3 chunks A/B);
 // their handlers live in tools/create-node.ts and tools/components.ts and are
 // covered by create-node.test.ts / e2e-slice.test.ts and components.test.ts /
@@ -552,5 +554,131 @@ describe('M2 chunk D writes e2e', () => {
     }
     expect(data.warnings).toHaveLength(1)
     expect(result.content[0].text).not.toContain('Error:')
+  })
+})
+
+// M14 — library-instance round-trip:
+// get_node on a remote instance emits component.{id,key,remote:true};
+// create_node with remote:true prefers importComponentByKeyAsync (key-first).
+const M14_PORT = 3108
+const M14_RELAY_URL = `ws://localhost:${M14_PORT}`
+const M14_CHANNEL = 'e2e-m14-test'
+const M14_FK = 'fk-m14'
+
+// Sentinel nodeId the mock uses to serve a remote-INSTANCE fixture.
+// The mock's get_node handler checks cmd.params?.nodeId and returns the
+// remote-instance raw export when it matches this sentinel.
+const REMOTE_INSTANCE_NODE_ID = 'remote-inst:1'
+
+describe('M14 — library-instance round-trip e2e', () => {
+  let server: Server<{ id: string }>
+  let client: FigmaClient
+  let scoped: ScopedFigmaClient
+  let plugin: ReturnType<typeof createMockPlugin> | null =
+    null
+
+  beforeEach(async () => {
+    server = startRelay(M14_PORT)
+    client = createFigmaClient(M14_RELAY_URL)
+
+    plugin = createMockPlugin({
+      relayUrl: M14_RELAY_URL,
+      channel: M14_CHANNEL,
+      documentName: 'M14 Test Doc',
+      pageName: 'Page 1',
+      fileKey: M14_FK,
+    })
+
+    await plugin.start()
+    await client.joinChannel(M14_CHANNEL, M14_FK)
+    scoped = client.forFile(M14_FK)
+  })
+
+  afterEach(() => {
+    if (plugin !== null) {
+      plugin.stop()
+      plugin = null
+    }
+    client.disconnect()
+    stopRelay(server)
+  })
+
+  // M14 READ: get_node on a remote instance emits component.{id,key,remote:true}
+  // The mock serves componentId+componentKey+componentRemote:true for the sentinel nodeId.
+  it('get_node on a remote instance emits component.key and component.remote:true (M14 root enrichment)', async () => {
+    const result = await handleGetNode(
+      { nodeId: REMOTE_INSTANCE_NODE_ID, depth: 0 },
+      scoped,
+    )
+    expect(result.content[0].type).toBe('text')
+    const parsed = YAML.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(parsed.type).toBe('INSTANCE')
+    const component = parsed.component as
+      | Record<string, unknown>
+      | undefined
+    expect(component).toBeDefined()
+    expect(component?.id).toBeDefined()
+    expect(component?.key).toBe('lib-btn-key-456')
+    expect(component?.remote).toBe(true)
+  })
+
+  // M14 WRITE: create_node with component.remote:true and a key resolves by KEY
+  // (importComponentByKeyAsync), not by id. The mock must prefer key when remote===true.
+  it('create_node(INSTANCE) with component.remote:true prefers key over id', async () => {
+    const result = await handleCreateNode(
+      {
+        parentId: '0:1',
+        spec: {
+          type: 'INSTANCE',
+          name: 'RemoteButton',
+          component: {
+            id: '2:99',
+            key: 'lib-btn-key-456',
+            remote: true,
+          },
+        },
+      },
+      scoped,
+    )
+    const parsed = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    // Should succeed (not an error)
+    expect(result.content[0].text).not.toStartWith('Error')
+    expect(parsed.type).toBe('INSTANCE')
+    // The component ref should be echoed with the key (mock mirrors key-first path)
+    const component = parsed.component as Record<
+      string,
+      unknown
+    >
+    expect(component?.key).toBe('lib-btn-key-456')
+    // And the mock must record that it resolved by KEY (not id) when remote:true
+    expect(parsed.resolvedBy).toBe('key')
+  })
+
+  // M14 WRITE: local instance (no remote) still resolves by id-first (UNCHANGED)
+  it('create_node(INSTANCE) without remote flag still resolves by id (local unchanged)', async () => {
+    const result = await handleCreateNode(
+      {
+        parentId: '0:1',
+        spec: {
+          type: 'INSTANCE',
+          name: 'LocalButton',
+          component: {
+            id: '2:10',
+            key: 'local-btn-key',
+          },
+        },
+      },
+      scoped,
+    )
+    const parsed = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(result.content[0].text).not.toStartWith('Error')
+    // The mock must record that it resolved by id (not key) when no remote flag
+    expect(parsed.resolvedBy).toBe('id')
   })
 })
