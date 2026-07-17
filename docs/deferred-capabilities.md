@@ -48,6 +48,7 @@ Two real DX gaps hit while building a full dashboard end-to-end through the tool
 
 - **Rotated-node size/position read-back.** `JSON_REST_V1` carries only `absoluteBoundingBox` (no `relativeTransform`), so for a ROTATED node the reader returns the axis-aligned bounding box, not the unrotated geometry — e.g. a 60×60 rect rotated 30° reads back size ≈ `[81.96, 81.96]` at a shifted origin. The 2026-06-28 transform-family pass fixed `rotation` units (radians→degrees) and ABSOLUTE-child positioning, but the rotated bbox itself can't be un-rotated without the transform. Durable fix: have the plugin attach `relativeTransform` (or the unrotated width/height + x/y) to the read export, like the parent-relative position approach. Same root cause as the C5 position limitation.
 - **`get_node` `profile` crashes on an unrecognized value.** An invalid `profile` arg throws `"undefined is not an object (evaluating 'keys')"` instead of a clean error; valid values (`minimal`/`layout`/`style`/`text`/`full`) work. T7 robustness — validate the enum and return a clear message (or fall back to `full`).
+- **`get_node` gradient angle read-back is lossy — every gradient reads back as `linear(0)`.** A linear gradient written at any angle RENDERS correctly (verified 2026-07-16: `linear(135)` exports a true diagonal, and Figma stores correct `gradientHandlePositions`), but `get_node`/`get_nodes`/`inspect` project it back as `linear(0)`. Root cause: `serialize/node-spec-reader.ts:~234` recovers the gradient direction from `p.gradientTransform`, but the plugin's read serializes the direction as `gradientHandlePositions` and sends **no** `gradientTransform`, so the reader takes the identity-matrix fallback (`[[1,0,0],[0,1,0]]` = 0°) and ignores the handle positions. NOT a write/render bug and NOT a Figma-runtime normalization (earlier fixture/spec notes mischaracterized it). Durable fix: derive the transform from `gradientHandlePositions` when `gradientTransform` is absent (they're interconvertible), or have the plugin include `gradientTransform` in the read. High-leverage — the false read-back makes an agent distrust correct output and downgrade (e.g. choosing a radial banner to dodge a non-existent problem).
 
 ## Tooling / workflow
 
@@ -73,6 +74,29 @@ The dev-ops workflow is **built + merged to dev** (CI gate, Bun binary matrix, `
 - **P2 / P3 (non-code):** cloud CI turns on the moment `dev`/branches are pushed (`ci.yml` already triggers); PR-gated merges are a GitHub branch-protection toggle on `dev`/`main` requiring the `ci` check.
 
 First-release recipe: bump root `package.json` → `bun run release:stamp` → `bun run build:bundle` → commit → tag `vX.Y.Z` → push.
+
+## Skill guidance (figma-design) — deferred improvements (surfaced 2026-07-16 — skill-in-loop QA)
+
+Improvements to the **shipped `plugin/skills/figma-design/SKILL.md`** (the design methodology
+agents run), not the tools. Both verified live on a skill-in-loop Northwind build.
+
+- **Component-first must extend to CONTAINERS / SHELLS, not just repeated atoms.** The
+  current rule — *"repeated elements become components"* — drives agents to componentize leaf
+  atoms (nav item, KPI card, chip) and shared chrome (top-bar, logo) but leaves layout
+  containers (`sidebar`, `menu`, `app-shell`) as one-off FRAMEs. Those repeat **across
+  screens**, so a multi-screen build duplicates the sidebar/shell N times. Verified: the
+  skill-in-loop Overview had 22 components, yet `shell/sidebar`, `NavMenu`, and `shell/app`
+  were all frames. Fix: add an explicit rule — *a container or shell that repeats across
+  screens (sidebar, app-shell, page header/footer) is itself a component: build it once and
+  instance it per screen.*
+
+- **Prevent component-master collision — don't pile masters at `[0,0]`.** Agents create
+  component masters with no position, so `create` defaults them to the page origin; they stack
+  on each other and over the canvas content. Verified: 22 masters + orphan `Spark`/`GasChip`
+  frames piled at `[0,0]` over the Overview. Fix: the skill should mandate a deliberate home
+  for masters — a dedicated **`Components` page**, or an off-canvas laid-out grid with spacing
+  — placed explicitly, never relying on the `[0,0]` default. (Complements the tool-side
+  collision-aware auto-placement idea, but the skill should not depend on a tool fix landing.)
 
 ## See also
 
