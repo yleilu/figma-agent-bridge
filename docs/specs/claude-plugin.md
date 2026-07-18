@@ -129,6 +129,27 @@ availability and pending user edits (passive plugin/file awareness) — which us
 [[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]] (folding in the change-feed count,
 [[figma-bridge/docs/specs/change-feed|change-feed.md]]).
 
+**Dev-mode fallback.** The plugin-distributed `PreToolUse` hook is scoped to the
+plugin-install tool namespace, so it is inert on the dev/manual (`.mcp.json`) route, where the
+server is named `figma-bridge` instead. A developer on that route who wants identity
+attribution opts in by adding the equivalent hook to their project or user `settings.json`;
+if they don't, the reserved `sessionId`/`agentId`/`agentType` fields simply stay absent:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__figma-bridge__.*",
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PROJECT_DIR}/plugin/hooks/identity\"" }
+        ]
+      }
+    ]
+  }
+}
+```
+
 ## 5. The MCP server — JS bundle for the developer route
 
 **Claude Code (developer route).** The plugin ships a **committed Bun JS bundle**
