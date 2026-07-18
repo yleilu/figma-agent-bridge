@@ -1,5 +1,14 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
-import type { FeedbackItem, Meta } from '@figma-agent-bridge/shared'
+import {
+  useState,
+  useCallback,
+  useRef,
+  useEffect,
+} from 'react'
+import type {
+  FeedbackItem,
+  Meta,
+  StatusRecord,
+} from '@figma-agent-bridge/shared'
 import {
   APP_VERSION,
   COMMANDS,
@@ -48,12 +57,47 @@ export const useRelay = () => {
   const feedbackPending = useRef(
     new Map<
       string,
-      { resolve: (v: unknown) => void; reject: (e: unknown) => void }
+      {
+        resolve: (v: unknown) => void
+        reject: (e: unknown) => void
+      }
     >(),
   )
   const upsert = useCallback((item: FeedbackItem) => {
-    setFeedbackItems(prev => ({ ...prev, [item.path]: item }))
+    setFeedbackItems(prev => ({
+      ...prev,
+      [item.path]: item,
+    }))
   }, [])
+
+  // Agent status monitor (status-monitor.md): live per-agent rows fed by
+  // the relay's agent-status broadcasts, keyed by StatusRecord.key.
+  const [agentStatus, setAgentStatus] = useState<
+    Record<string, StatusRecord>
+  >({})
+  const upsertStatus = useCallback((r: StatusRecord) => {
+    setAgentStatus(prev => ({ ...prev, [r.key]: r }))
+  }, [])
+  const removeStatus = useCallback(
+    (sessionId: string, agentId?: string, key?: string) => {
+      setAgentStatus(prev => {
+        const next: Record<string, StatusRecord> = {}
+        for (const [k, r] of Object.entries(prev)) {
+          // key-scoped remove (TTL sweep) is row-precise; otherwise match
+          // by session/agent
+          const match =
+            key !== undefined
+              ? k === key
+              : r.sessionId === sessionId &&
+                (agentId === undefined ||
+                  r.agentId === agentId)
+          if (!match) next[k] = r
+        }
+        return next
+      })
+    },
+    [],
+  )
 
   // Plugin Presence (Task 8): best-effort clean-close signal. Sends a
   // `leave` frame so the relay drops the channel immediately instead of
@@ -62,19 +106,29 @@ export const useRelay = () => {
   // below) and from disconnect().
   const sendLeave = useCallback(() => {
     const ws = wsRef.current
-    if (ws?.readyState === WebSocket.OPEN && channelRef.current) {
+    if (
+      ws?.readyState === WebSocket.OPEN &&
+      channelRef.current
+    ) {
       ws.send(
-        JSON.stringify({ type: 'leave', channel: channelRef.current }),
+        JSON.stringify({
+          type: 'leave',
+          channel: channelRef.current,
+        }),
       )
     }
   }, [])
 
   // Send a correlated request over the relay and resolve on its reply.
   const request = useCallback(
-    (command: string, params: Record<string, unknown>): Promise<unknown> => {
+    (
+      command: string,
+      params: Record<string, unknown>,
+    ): Promise<unknown> => {
       const socket = wsRef.current
       const ch = channelRef.current
-      if (!socket || !ch) return Promise.reject(new Error('Not connected'))
+      if (!socket || !ch)
+        return Promise.reject(new Error('Not connected'))
       const id = genId('req')
       return new Promise((resolve, reject) => {
         feedbackPending.current.set(id, { resolve, reject })
@@ -82,7 +136,11 @@ export const useRelay = () => {
           JSON.stringify({
             type: 'message',
             channel: ch,
-            message: { command, params, meta: { requestId: id } },
+            message: {
+              command,
+              params,
+              meta: { requestId: id },
+            },
           }),
         )
       })
@@ -96,10 +154,15 @@ export const useRelay = () => {
   )
 
   const syncFeedback = useCallback(async () => {
-    const { items } = (await request('feedback-sync', {})) as {
+    const { items } = (await request(
+      'feedback-sync',
+      {},
+    )) as {
       items: FeedbackItem[]
     }
-    setFeedbackItems(Object.fromEntries(items.map(i => [i.path, i])))
+    setFeedbackItems(
+      Object.fromEntries(items.map(i => [i.path, i])),
+    )
   }, [request])
 
   // Listen for command results and file name from plugin code
@@ -113,7 +176,9 @@ export const useRelay = () => {
         fileNameRef.current = msg.fileName ?? null
         currentPageRef.current = msg.currentPage ?? null
         selectedRef.current =
-          typeof msg.selected === 'number' ? msg.selected : null
+          typeof msg.selected === 'number'
+            ? msg.selected
+            : null
         return
       }
 
@@ -126,7 +191,9 @@ export const useRelay = () => {
       if (msg.type === 'presence') {
         currentPageRef.current = msg.currentPage ?? null
         selectedRef.current =
-          typeof msg.selected === 'number' ? msg.selected : null
+          typeof msg.selected === 'number'
+            ? msg.selected
+            : null
         const presenceWs = wsRef.current
         const presenceChannel = channelRef.current
         if (presenceWs && presenceChannel) {
@@ -222,7 +289,9 @@ export const useRelay = () => {
             fileNameRef.current = m.fileName ?? null
             currentPageRef.current = m.currentPage ?? null
             selectedRef.current =
-              typeof m.selected === 'number' ? m.selected : null
+              typeof m.selected === 'number'
+                ? m.selected
+                : null
             finish()
           }
         }
@@ -292,7 +361,8 @@ export const useRelay = () => {
                 fileKey: fileKeyRef.current,
                 fileName: fileNameRef.current,
                 version: APP_VERSION,
-                currentPage: currentPageRef.current ?? undefined,
+                currentPage:
+                  currentPageRef.current ?? undefined,
                 selected: selectedRef.current ?? undefined,
               }),
             )
@@ -304,6 +374,39 @@ export const useRelay = () => {
             })
 
             void syncFeedback().catch(() => {})
+            ws.send(
+              JSON.stringify({
+                type: 'status-sync',
+                channel,
+              }),
+            )
+            return
+          }
+
+          if (data.type === 'agent-status' && data.record) {
+            upsertStatus(data.record as StatusRecord)
+            return
+          }
+          if (data.type === 'agent-status-remove') {
+            removeStatus(
+              String(data.sessionId),
+              data.agentId as string | undefined,
+              data.key as string | undefined,
+            )
+            return
+          }
+          if (
+            data.type === 'agent-status-sync' &&
+            Array.isArray(data.records)
+          ) {
+            setAgentStatus(
+              Object.fromEntries(
+                (data.records as StatusRecord[]).map(r => [
+                  r.key,
+                  r,
+                ]),
+              ),
+            )
             return
           }
 
@@ -422,6 +525,10 @@ export const useRelay = () => {
           )
           feedbackPending.current.clear()
 
+          // A dropped socket means the rows are stale -> fall to the
+          // connection fallback (the invariant "agent shown => connected").
+          setAgentStatus({})
+
           setState({
             status: 'disconnected',
             channel: null,
@@ -431,7 +538,13 @@ export const useRelay = () => {
         }
       })
     },
-    [requestIdentity, syncFeedback, upsert],
+    [
+      requestIdentity,
+      syncFeedback,
+      upsert,
+      upsertStatus,
+      removeStatus,
+    ],
   )
 
   const disconnect = useCallback(() => {
@@ -460,5 +573,6 @@ export const useRelay = () => {
     feedbackItems,
     sendFeedback,
     syncFeedback,
+    agentStatus,
   }
 }
