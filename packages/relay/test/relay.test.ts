@@ -1081,6 +1081,98 @@ describe('relay', () => {
       await closeWs(server)
       await closeWs(plugin)
     })
+
+    it("POST /agent-status/settle flips a session's rows to idle and broadcasts", async () => {
+      const server = await connect()
+      const sQ = createMessageQueue(server)
+      server.send(
+        JSON.stringify({ type: 'join', channel: 'c4' }),
+      )
+      await sQ()
+      server.send(
+        JSON.stringify({
+          type: 'agent-status',
+          channel: 'c4',
+          record: {
+            key: 'a4',
+            sessionId: 's4',
+            level: 'normal',
+            text: 'X',
+            activity: 'busy',
+            updatedAt: 1,
+          },
+        }),
+      )
+      const plugin = await connect()
+      const pQ = createMessageQueue(plugin)
+      plugin.send(
+        JSON.stringify({ type: 'join', channel: 'c4' }),
+      )
+      await pQ()
+      const res = await fetch(
+        `${HTTP_URL}/agent-status/settle`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ sessionId: 's4' }),
+        },
+      )
+      expect(res.status).toBe(200)
+      const got = await pQ()
+      expect(got).toMatchObject({
+        type: 'agent-status',
+        record: { key: 'a4', activity: 'idle' },
+      })
+      await closeWs(server)
+      await closeWs(plugin)
+    })
+
+    it('POST /agent-status/remove drops matching rows and broadcasts a remove', async () => {
+      const server = await connect()
+      const sQ = createMessageQueue(server)
+      server.send(
+        JSON.stringify({ type: 'join', channel: 'c5' }),
+      )
+      await sQ()
+      server.send(
+        JSON.stringify({
+          type: 'agent-status',
+          channel: 'c5',
+          record: {
+            key: 'ag5',
+            sessionId: 's5',
+            agentId: 'ag5',
+            level: 'normal',
+            text: 'X',
+            activity: 'busy',
+            updatedAt: 1,
+          },
+        }),
+      )
+      const plugin = await connect()
+      const pQ = createMessageQueue(plugin)
+      plugin.send(
+        JSON.stringify({ type: 'join', channel: 'c5' }),
+      )
+      await pQ()
+      const res = await fetch(
+        `${HTTP_URL}/agent-status/remove`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            sessionId: 's5',
+            agentId: 'ag5',
+          }),
+        },
+      )
+      expect(res.status).toBe(200)
+      expect(await pQ()).toEqual({
+        type: 'agent-status-remove',
+        sessionId: 's5',
+        agentId: 'ag5',
+      })
+      await closeWs(server)
+      await closeWs(plugin)
+    })
   })
 })
 

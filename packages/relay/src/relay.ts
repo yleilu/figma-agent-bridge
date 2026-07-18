@@ -338,6 +338,61 @@ const handleStatusSync = (
   send(ws, { type: 'agent-status-sync', records })
 }
 
+const broadcastToChannel = (
+  ctx: RelayContext,
+  channel: string,
+  msg: RelayOutgoing,
+) => {
+  const members = ctx.channels.get(channel)
+  if (members === undefined) return
+  const payload = JSON.stringify(msg)
+  members.forEach(client => client.send(payload))
+}
+
+const settleSession = (
+  ctx: RelayContext,
+  sessionId: string,
+) => {
+  for (const [channel, byKey] of ctx.agentStatus) {
+    for (const rec of byKey.values()) {
+      if (
+        rec.sessionId === sessionId &&
+        rec.activity !== 'idle'
+      ) {
+        const idle = { ...rec, activity: 'idle' as const }
+        byKey.set(rec.key, idle)
+        broadcastToChannel(ctx, channel, {
+          type: 'agent-status',
+          record: idle,
+        })
+      }
+    }
+  }
+}
+
+const removeAgent = (
+  ctx: RelayContext,
+  sessionId: string,
+  agentId?: string,
+) => {
+  for (const [channel, byKey] of ctx.agentStatus) {
+    for (const rec of [...byKey.values()]) {
+      const match =
+        rec.sessionId === sessionId &&
+        (agentId === undefined || rec.agentId === agentId)
+      if (match) {
+        byKey.delete(rec.key)
+        broadcastToChannel(ctx, channel, {
+          type: 'agent-status-remove',
+          sessionId,
+          agentId,
+        })
+      }
+    }
+    if (byKey.size === 0) ctx.agentStatus.delete(channel)
+  }
+}
+
 export type StartRelayOptions = {
   hostname?: string
   heartbeatInterval?: number
@@ -366,7 +421,7 @@ export const startRelay = (
   const server = Bun.serve<WsData>({
     port,
     hostname,
-    fetch: (req, srv) => {
+    fetch: async (req, srv) => {
       if (
         req.headers.get('upgrade')?.toLowerCase() ===
         'websocket'
@@ -387,6 +442,42 @@ export const startRelay = (
         return Response.json(
           Array.from(ctx.channelRegistry.values()),
         )
+      }
+
+      if (
+        req.method === 'POST' &&
+        url.pathname === '/agent-status/settle'
+      ) {
+        const body = (await req
+          .json()
+          .catch(() => null)) as {
+          sessionId?: string
+        } | null
+        if (!body?.sessionId) {
+          return new Response('bad request', {
+            status: 400,
+          })
+        }
+        settleSession(ctx, body.sessionId)
+        return new Response('ok')
+      }
+      if (
+        req.method === 'POST' &&
+        url.pathname === '/agent-status/remove'
+      ) {
+        const body = (await req
+          .json()
+          .catch(() => null)) as {
+          sessionId?: string
+          agentId?: string
+        } | null
+        if (!body?.sessionId) {
+          return new Response('bad request', {
+            status: 400,
+          })
+        }
+        removeAgent(ctx, body.sessionId, body.agentId)
+        return new Response('ok')
       }
 
       return new Response('WebSocket only', {
