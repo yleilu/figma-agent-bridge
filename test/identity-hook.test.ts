@@ -15,6 +15,19 @@ const run = async (payload: unknown) => {
   return { out, code, json: JSON.parse(out) }
 }
 
+const runRaw = async (raw: string) => {
+  const proc = Bun.spawn(['bash', SCRIPT], {
+    stdin: 'pipe',
+    stdout: 'pipe',
+    stderr: 'ignore',
+  })
+  proc.stdin.write(raw)
+  await proc.stdin.end()
+  const out = await new Response(proc.stdout).text()
+  const code = await proc.exited
+  return { out, code }
+}
+
 test('subagent call: injects sessionId + agentId + agentType, preserving args', async () => {
   const { json, code } = await run({
     session_id: 'sess-1',
@@ -92,4 +105,19 @@ test('security: top-level spoof of agentId/agentType is STRIPPED, not passed thr
   expect('agentId' in ui).toBe(false) // spoof deleted and NOT re-added (no real agent_id)
   expect('agentType' in ui).toBe(false)
   expect(ui.fileKey).toBe('fk') // non-identity args preserved
+})
+
+test('fail-open: malformed/empty stdin exits 0 with no output (never blocks a tool call)', async () => {
+  // A PreToolUse hook must never BLOCK a real call because of its own failure.
+  // None of these are reachable from real CC (always a valid JSON object payload),
+  // but the hook degrades to "no injection" rather than a blocking non-zero exit.
+  for (const raw of [
+    '',
+    'not json{',
+    '{"session_id":"S","tool_input":"oops"}',
+  ]) {
+    const { out, code } = await runRaw(raw)
+    expect(code).toBe(0) // never a blocking non-zero exit
+    expect(out.trim()).toBe('') // no updatedInput → CC proceeds with original input
+  }
 })
