@@ -124,14 +124,21 @@ const restConstraintToPlugin = (value: string): string => {
 }
 
 const sizeOf = (raw: RawNode): [number, number] => {
+  // Prefer raw.width/height (enriched by plugin — unrotated geometry) over
+  // absoluteBoundingBox (axis-aligned bbox, inflated when node is rotated).
+  // B7: a rotated node's bbox ≠ its actual dimensions; the plugin enrichment
+  // adds width/height via node.width/node.height which are always unrotated.
+  const w = num(raw.width)
+  const h = num(raw.height)
+  if (w !== undefined && h !== undefined) {
+    return [w, h]
+  }
   const bbox = raw.absoluteBoundingBox as
     | { width: number; height: number }
     | undefined
   if (bbox !== undefined && bbox !== null) {
     return [bbox.width, bbox.height]
   }
-  const w = num(raw.width)
-  const h = num(raw.height)
   return [w ?? 0, h ?? 0]
 }
 

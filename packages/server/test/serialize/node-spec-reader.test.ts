@@ -914,3 +914,51 @@ describe('toNodeSpec — gradient angle from gradientHandlePositions (B1)', () =
     expect(parseAngle((spec.fills as string[])[0])).toBe(45)
   })
 })
+
+// ─── B7: rotated node size — prefer raw.width/height over absoluteBoundingBox ──
+// JSON_REST_V1 omits unrotated width/height; the plugin enrichment adds them.
+// sizeOf must prefer the enriched raw.width/height (unrotated geometry) over
+// absoluteBoundingBox (axis-aligned bbox, inflated when node is rotated).
+
+describe('toNodeSpec — B7 rotated node size (prefer enriched width/height over bbox)', () => {
+  it('returns enriched raw.width/height when both width and absoluteBoundingBox are present', () => {
+    // Simulates a 60×60 node rotated 30° — bbox becomes ~81.96×81.96.
+    // Plugin enrichment adds raw.width=60, raw.height=60.
+    const spec = toNodeSpec(
+      {
+        id: '7:1',
+        name: 'RotatedRect',
+        type: 'RECTANGLE',
+        width: 60,
+        height: 60,
+        absoluteBoundingBox: {
+          x: 0,
+          y: 0,
+          width: 81.96,
+          height: 81.96,
+        },
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.size).toEqual([60, 60])
+  })
+
+  it('falls back to absoluteBoundingBox when raw.width/height are absent', () => {
+    // Non-enriched export (JSON_REST_V1 without plugin enrichment).
+    const spec = toNodeSpec(
+      {
+        id: '7:2',
+        name: 'NonEnrichedRect',
+        type: 'RECTANGLE',
+        absoluteBoundingBox: {
+          x: 0,
+          y: 0,
+          width: 100,
+          height: 50,
+        },
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.size).toEqual([100, 50])
+  })
+})

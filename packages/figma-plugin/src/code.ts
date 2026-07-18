@@ -160,6 +160,16 @@ const exportNodeDocument = async (
     if (node.type === 'VECTOR' && 'vectorPaths' in node) {
       doc.vectorPaths = (node as VectorNode).vectorPaths
     }
+    // width / height — JSON_REST_V1 omits unrotated width/height, emitting only
+    // absoluteBoundingBox which is the AXIS-ALIGNED bbox (inflated when rotated).
+    // B7: enrich with node.width/node.height (Plugin API, always unrotated) so
+    // the reader can prefer them over the bbox. Feature-detected: guard on
+    // 'width' in node — consistent with pointCount/grid enrichment above. O(1)
+    // per node; applies to ALL SceneNode types (no POLYGON/STAR-style gating).
+    if ('width' in node) {
+      doc.width = (node as unknown as { width: number }).width
+      doc.height = (node as unknown as { height: number }).height
+    }
     // pointCount (POLYGON + STAR) and innerRadius (STAR-only) are NOT carried by
     // JSON_REST_V1 — enrich like vectorPaths so they round-trip via get_node
     // (live-verified 2026-07-17). Feature-detect by PROPERTY (only POLYGON/STAR
