@@ -335,7 +335,7 @@ const handleAgentStatus = (
   })
 }
 
-const handleStatusSync = (
+const handleStatusReplay = (
   ctx: RelayContext,
   ws: ServerWebSocket<WsData>,
   channel: string,
@@ -351,7 +351,9 @@ const broadcastToChannel = (
   msg: RelayOutgoing,
 ) => {
   const members = ctx.channels.get(channel)
-  if (members === undefined) return
+  if (members === undefined) {
+    return
+  }
   const payload = JSON.stringify(msg)
   members.forEach(client => client.send(payload))
 }
@@ -396,7 +398,9 @@ const removeAgent = (
         })
       }
     }
-    if (byKey.size === 0) ctx.agentStatus.delete(channel)
+    if (byKey.size === 0) {
+      ctx.agentStatus.delete(channel)
+    }
   }
 }
 
@@ -570,7 +574,7 @@ export const startRelay = (
             frame.record,
           )
         } else if (frame.type === 'status-sync') {
-          handleStatusSync(ctx, ws, frame.channel)
+          handleStatusReplay(ctx, ws, frame.channel)
         }
       },
       pong: ws => {
@@ -625,7 +629,9 @@ export const startRelay = (
           })
         }
       }
-      if (byKey.size === 0) ctx.agentStatus.delete(channel)
+      if (byKey.size === 0) {
+        ctx.agentStatus.delete(channel)
+      }
     }
   }, heartbeatInterval)
 

@@ -404,6 +404,27 @@ export const createFigmaClient = (
     return p
   }
 
+  // A channel-scoped send for frames that are NOT ChannelMessage commands
+  // (e.g. the server → relay agent-status push, status-monitor.md). Unlike
+  // sendFrame (which fans a CommandMessage out to every joined channel),
+  // this targets exactly one channel — the caller already knows which.
+  const sendToChannel = (
+    channel: string,
+    frame: RelayIncoming,
+  ): void => {
+    const socket = ws
+    if (
+      socket === null ||
+      socket.readyState !== WebSocket.OPEN
+    ) {
+      return
+    }
+    socket.send(JSON.stringify(frame))
+  }
+
+  const channelFor = (fileKey: string): string | null =>
+    joined.get(fileKey) ?? null
+
   // The one request sender. Stamps meta { fileKey, requestId[, sessionId] } and
   // routes on the file's joined channel; the pending map is keyed by requestId.
   const dispatch = (
@@ -625,24 +646,6 @@ export const createFigmaClient = (
     }
   }
 
-  // A channel-scoped send for frames that are NOT ChannelMessage commands
-  // (e.g. the server → relay agent-status push, status-monitor.md). Unlike
-  // sendFrame (which fans a CommandMessage out to every joined channel),
-  // this targets exactly one channel — the caller already knows which.
-  const sendToChannel = (
-    channel: string,
-    frame: RelayIncoming,
-  ): void => {
-    const socket = ws
-    if (
-      socket === null ||
-      socket.readyState !== WebSocket.OPEN
-    ) {
-      return
-    }
-    socket.send(JSON.stringify(frame))
-  }
-
   const notify = (
     command: string,
     params: Record<string, unknown>,
@@ -688,9 +691,6 @@ export const createFigmaClient = (
 
   const joinedFiles = (): string[] =>
     Array.from(joined.keys())
-
-  const channelFor = (fileKey: string): string | null =>
-    joined.get(fileKey) ?? null
 
   const discover = (): Promise<ChannelInfo[]> =>
     discoverChannels(relayHttpUrl)

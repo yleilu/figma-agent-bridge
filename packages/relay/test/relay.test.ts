@@ -945,11 +945,11 @@ describe('relay', () => {
 
   describe('agent-status store', () => {
     it('stores an agent-status frame and broadcasts it to other channel members', async () => {
-      const server = await connect() // the "MCP server" socket
+      const server2 = await connect() // the "MCP server" socket
       const plugin = await connect() // the "plugin" socket
-      const sQ = createMessageQueue(server)
+      const sQ = createMessageQueue(server2)
       const pQ = createMessageQueue(plugin)
-      server.send(
+      server2.send(
         JSON.stringify({ type: 'join', channel: 'c1' }),
       )
       await sQ()
@@ -965,7 +965,7 @@ describe('relay', () => {
         activity: 'busy',
         updatedAt: 1,
       }
-      server.send(
+      server2.send(
         JSON.stringify({
           type: 'agent-status',
           channel: 'c1',
@@ -974,14 +974,14 @@ describe('relay', () => {
       )
       const got = await pQ()
       expect(got).toEqual({ type: 'agent-status', record })
-      await closeWs(server)
+      await closeWs(server2)
       await closeWs(plugin)
     })
 
     it('replays current records on status-sync', async () => {
-      const server = await connect()
-      const sQ = createMessageQueue(server)
-      server.send(
+      const server2 = await connect()
+      const sQ = createMessageQueue(server2)
+      server2.send(
         JSON.stringify({ type: 'join', channel: 'c2' }),
       )
       await sQ()
@@ -993,7 +993,7 @@ describe('relay', () => {
         activity: 'busy',
         updatedAt: 2,
       }
-      server.send(
+      server2.send(
         JSON.stringify({
           type: 'agent-status',
           channel: 'c2',
@@ -1017,18 +1017,18 @@ describe('relay', () => {
         type: 'agent-status-sync',
         records: [record],
       })
-      await closeWs(server)
+      await closeWs(server2)
       await closeWs(plugin)
     })
 
     it('merges by key (a later skeleton keeps an earlier label)', async () => {
-      const server = await connect()
-      const sQ = createMessageQueue(server)
-      server.send(
+      const server2 = await connect()
+      const sQ = createMessageQueue(server2)
+      server2.send(
         JSON.stringify({ type: 'join', channel: 'c3' }),
       )
       await sQ()
-      server.send(
+      server2.send(
         JSON.stringify({
           type: 'agent-status',
           channel: 'c3',
@@ -1043,7 +1043,7 @@ describe('relay', () => {
           },
         }),
       )
-      server.send(
+      server2.send(
         JSON.stringify({
           type: 'agent-status',
           channel: 'c3',
@@ -1070,7 +1070,7 @@ describe('relay', () => {
         }),
       )
       const sync = (await pQ()) as {
-        records: Array<Record<string, unknown>>
+        records: Record<string, unknown>[]
       }
       expect(sync.records[0]).toMatchObject({
         key: 'a3',
@@ -1078,18 +1078,18 @@ describe('relay', () => {
         text: null,
         updatedAt: 2,
       })
-      await closeWs(server)
+      await closeWs(server2)
       await closeWs(plugin)
     })
 
     it("POST /agent-status/settle flips a session's rows to idle and broadcasts", async () => {
-      const server = await connect()
-      const sQ = createMessageQueue(server)
-      server.send(
+      const server2 = await connect()
+      const sQ = createMessageQueue(server2)
+      server2.send(
         JSON.stringify({ type: 'join', channel: 'c4' }),
       )
       await sQ()
-      server.send(
+      server2.send(
         JSON.stringify({
           type: 'agent-status',
           channel: 'c4',
@@ -1122,18 +1122,18 @@ describe('relay', () => {
         type: 'agent-status',
         record: { key: 'a4', activity: 'idle' },
       })
-      await closeWs(server)
+      await closeWs(server2)
       await closeWs(plugin)
     })
 
     it('POST /agent-status/remove drops matching rows and broadcasts a remove', async () => {
-      const server = await connect()
-      const sQ = createMessageQueue(server)
-      server.send(
+      const server2 = await connect()
+      const sQ = createMessageQueue(server2)
+      server2.send(
         JSON.stringify({ type: 'join', channel: 'c5' }),
       )
       await sQ()
-      server.send(
+      server2.send(
         JSON.stringify({
           type: 'agent-status',
           channel: 'c5',
@@ -1170,7 +1170,7 @@ describe('relay', () => {
         sessionId: 's5',
         agentId: 'ag5',
       })
-      await closeWs(server)
+      await closeWs(server2)
       await closeWs(plugin)
     })
 
@@ -1266,11 +1266,11 @@ describe('relay', () => {
         })
 
       try {
-        const server = await connectBurst() // the "MCP server" socket
+        const server2 = await connectBurst() // the "MCP server" socket
         const plugin = await connectBurst() // the "plugin" socket
-        const sQ = createMessageQueue(server)
+        const sQ = createMessageQueue(server2)
         const pQ = createMessageQueue(plugin)
-        server.send(
+        server2.send(
           JSON.stringify({
             type: 'join',
             channel: 'burst-ch',
@@ -1299,7 +1299,7 @@ describe('relay', () => {
         for (let i = 0; i < N; i++) {
           // Mirrors dispatch(): skeleton immediately followed by the real
           // command, on the same server socket.
-          server.send(
+          server2.send(
             JSON.stringify({
               type: 'agent-status',
               channel: 'burst-ch',
@@ -1313,7 +1313,7 @@ describe('relay', () => {
               },
             }),
           )
-          server.send(
+          server2.send(
             JSON.stringify({
               type: 'message',
               channel: 'burst-ch',
@@ -1329,7 +1329,7 @@ describe('relay', () => {
         await Bun.sleep(150)
         expect(commandFrames.length).toBe(N)
 
-        await closeWs(server)
+        await closeWs(server2)
         await closeWs(plugin)
       } finally {
         stopRelay(burstServer)

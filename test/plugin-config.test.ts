@@ -68,7 +68,7 @@ describe('plugin config', () => {
 
   it('registers the Stop/SubagentStop/SessionEnd lifecycle hooks', async () => {
     const hooks = await read('plugin/hooks/hooks.json')
-    const cases: Array<[string, string]> = [
+    const cases: [string, string][] = [
       ['Stop', 'hooks/stop'],
       ['SubagentStop', 'hooks/subagent-stop'],
       ['SessionEnd', 'hooks/session-end'],
