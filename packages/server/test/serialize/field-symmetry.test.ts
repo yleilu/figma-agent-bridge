@@ -114,6 +114,13 @@ const ALLOW_LIST: Record<string, string> = {
   // of the appearance grammar; write is via bind_variable, not node-spec).
   explicitVariableModes:
     'read-only map populated by plugin export enrichment; write is via bind_variable mode param (documented read-map/write-one asymmetry, T8)',
+
+  // `componentPropertyReferences` is a READ-ONLY projection populated by the
+  // plugin's exportNodeDocument enrichment. It maps component property name →
+  // the field on this node that the property controls. The WRITE path is
+  // update_component's targetNodeId/field binding — not a node-spec field.
+  componentPropertyReferences:
+    'read-only projection; WRITE path is update_component targetNodeId/field binding',
 }
 
 // ─── Representative write values for each nodeSpecBase key ───────────────────

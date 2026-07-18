@@ -388,7 +388,77 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
     expect(label).toBeDefined()
     expect(label.id).toContain('Label#')
     expect(label.type).toBe('TEXT')
-    expect((data.warnings as unknown[]).length).toBe(1)
+    // B3: 2 warnings now: the expose degrade + the unbound-property warning
+    // (no targetNodeId given for Label). The unbound warning is the T7 fix
+    // that turns the silent trap into an honest signal.
+    const warnings = data.warnings as string[]
+    expect(warnings.length).toBe(2)
+    expect(
+      warnings.some(w =>
+        w.includes('exposeNestedInstances'),
+      ),
+    ).toBe(true)
+    expect(warnings.some(w => w.includes('unbound'))).toBe(
+      true,
+    )
+  })
+
+  // B3: the unbound-targetNodeId warning surfaces on SUCCESS when targetNodeId
+  // is absent, turning the old silent trap into an honest T7 warning.
+  it('B3: add without targetNodeId emits honest unbound warning (T7)', async () => {
+    const result = await handleUpdateComponent(
+      {
+        componentId: 'c:1',
+        add: [
+          {
+            name: 'Label',
+            type: 'TEXT',
+            defaultValue: 'Hi',
+          },
+        ],
+      },
+      scoped,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const data = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    const warnings = data.warnings as string[]
+    expect(warnings.length).toBeGreaterThanOrEqual(1)
+    expect(
+      warnings.some(
+        w =>
+          w.includes('unbound') &&
+          w.includes('set_instance will be inert'),
+      ),
+    ).toBe(true)
+  })
+
+  // B3: add WITH targetNodeId+field does NOT emit the unbound warning.
+  it('B3: add with targetNodeId+field does not emit the unbound warning', async () => {
+    const result = await handleUpdateComponent(
+      {
+        componentId: 'c:1',
+        add: [
+          {
+            name: 'Label',
+            type: 'TEXT',
+            defaultValue: 'Hi',
+            targetNodeId: '2:5',
+            field: 'characters',
+          },
+        ],
+      },
+      scoped,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const data = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    const warnings = data.warnings as string[]
+    expect(warnings.some(w => w.includes('unbound'))).toBe(
+      false,
+    )
   })
 
   // Genuine T7 {error} boundary #1: an unresolvable componentId is a not-found

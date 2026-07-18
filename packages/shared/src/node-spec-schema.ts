@@ -137,6 +137,15 @@ const nodeSpecBase = {
    */
   explicitVariableModes: z.record(z.string()).optional(),
 
+  /**
+   * Read-only projection. Maps component property name → the field on this
+   * node that the property controls. Write via update_component's
+   * targetNodeId/field binding.
+   */
+  componentPropertyReferences: z
+    .record(z.string())
+    .optional(),
+
   // text
   text: textSpecSchema.optional(),
 

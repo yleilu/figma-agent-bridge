@@ -24,6 +24,8 @@ import {
   reindexParamsSchema,
   recordFeedbackParamsSchema,
   groupNodesParamsSchema,
+  componentPropertyDefSchema,
+  updateComponentParamsSchema,
 } from '@figma-agent-bridge/shared/tool-params'
 
 // ---------------------------------------------------------------------------
@@ -942,5 +944,111 @@ describe('recordFeedbackParamsSchema', () => {
       description: 'd',
     })
     expect(parsed.tool).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// B3: componentPropertyDefSchema — targetNodeId + field binding fields
+// ---------------------------------------------------------------------------
+describe('componentPropertyDefSchema (B3 binding fields)', () => {
+  it('accepts a minimal entry without targetNodeId or field', () => {
+    const parsed = componentPropertyDefSchema.parse({
+      name: 'Label',
+      type: 'TEXT',
+      defaultValue: 'Hi',
+    })
+    expect(parsed.name).toBe('Label')
+    expect(parsed.targetNodeId).toBeUndefined()
+    expect(parsed.field).toBeUndefined()
+  })
+
+  it('accepts targetNodeId and explicit field', () => {
+    const parsed = componentPropertyDefSchema.parse({
+      name: 'Label',
+      type: 'TEXT',
+      defaultValue: '',
+      targetNodeId: '2:5',
+      field: 'characters',
+    })
+    expect(parsed.targetNodeId).toBe('2:5')
+    expect(parsed.field).toBe('characters')
+  })
+
+  it('accepts targetNodeId without field (field inferred from type in plugin)', () => {
+    const parsed = componentPropertyDefSchema.parse({
+      name: 'Visible',
+      type: 'BOOLEAN',
+      defaultValue: true,
+      targetNodeId: '3:2',
+    })
+    expect(parsed.targetNodeId).toBe('3:2')
+    expect(parsed.field).toBeUndefined()
+  })
+
+  it('rejects invalid field values', () => {
+    expect(() =>
+      componentPropertyDefSchema.parse({
+        name: 'Icon',
+        type: 'INSTANCE_SWAP',
+        defaultValue: '',
+        targetNodeId: '4:1',
+        field: 'bogusField',
+      }),
+    ).toThrow()
+  })
+
+  it('accepts all three valid field values', () => {
+    for (const field of [
+      'characters',
+      'visible',
+      'mainComponent',
+    ] as const) {
+      const parsed = componentPropertyDefSchema.parse({
+        name: 'Prop',
+        type: 'TEXT',
+        defaultValue: '',
+        targetNodeId: '1:1',
+        field,
+      })
+      expect(parsed.field).toBe(field)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// B3: updateComponentParamsSchema — add entries carry targetNodeId/field
+// ---------------------------------------------------------------------------
+describe('updateComponentParamsSchema (B3 add binding)', () => {
+  it('accepts add entries with targetNodeId and field', () => {
+    const parsed = updateComponentParamsSchema.parse({
+      fileKey: 'fk',
+      componentId: 'c:1',
+      add: [
+        {
+          name: 'Label',
+          type: 'TEXT',
+          defaultValue: 'Hi',
+          targetNodeId: '2:5',
+          field: 'characters',
+        },
+      ],
+    })
+    expect(parsed.add![0].targetNodeId).toBe('2:5')
+    expect(parsed.add![0].field).toBe('characters')
+  })
+
+  it('accepts add entries without targetNodeId (unbound, will warn in plugin)', () => {
+    const parsed = updateComponentParamsSchema.parse({
+      fileKey: 'fk',
+      componentId: 'c:1',
+      add: [
+        {
+          name: 'Label',
+          type: 'TEXT',
+          defaultValue: 'Hi',
+        },
+      ],
+    })
+    expect(parsed.add![0].targetNodeId).toBeUndefined()
   })
 })

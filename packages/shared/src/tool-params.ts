@@ -1223,6 +1223,19 @@ export const componentPropertyDefSchema = z.object({
     .describe(
       'Default value (boolean for BOOLEAN, string for TEXT, component key for INSTANCE_SWAP, "" for SLOT).',
     ),
+  targetNodeId: z
+    .string()
+    .optional()
+    .describe(
+      'Descendant node to bind this property to via componentPropertyReferences. ' +
+        'Omitting it adds the property but leaves it unbound — set_instance will be inert (a warning is emitted).',
+    ),
+  field: z
+    .enum(['characters', 'visible', 'mainComponent'])
+    .optional()
+    .describe(
+      "Which field on the target node to drive. Inferred from type when omitted: TEXT→'characters', BOOLEAN→'visible', INSTANCE_SWAP→'mainComponent'.",
+    ),
 })
 
 /** A single component-property edit (rename / change default). */

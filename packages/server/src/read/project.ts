@@ -94,13 +94,18 @@ export const projectNode = (
   // An empty `fields` array is not a meaningful projection (it would select
   // nothing). Guard with `.length` so it falls through to the profile, then
   // to identity — rather than returning `{}`.
-  const keys: readonly string[] = sel.fields?.length
+  const keys: readonly string[] | undefined = sel.fields
+    ?.length
     ? sel.fields
     : sel.profile !== undefined
       ? PROFILES[sel.profile]
-      : null!
+      : undefined
 
-  if (keys === null) {
+  // Catch the no-selection case AND an unknown profile (B4): PROFILES[bogus]
+  // is `undefined`, not `null`, so the old `=== null` guard missed it and a
+  // non-SDK caller with an out-of-enum profile hit "undefined is not an object"
+  // in the loop below. `!keys` returns the node unchanged instead of throwing.
+  if (!keys) {
     return n
   }
 

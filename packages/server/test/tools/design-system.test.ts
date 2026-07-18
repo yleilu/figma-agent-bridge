@@ -738,6 +738,128 @@ describe('handleGetComponents', () => {
       'Failed to get components from plugin.',
     )
   })
+
+  // B8 — get_components(includeRemote:true) scan-budget + truncation warning.
+  //
+  // The remote-discovery path in the plugin walks EVERY instance in the document
+  // (findAllWithCriteria(['INSTANCE'])) and resolves mainComponent for each one.
+  // On a real UI-kit document this exceeds the 30 s command timeout. The fix:
+  // the plugin honours a scan budget (MAX_INSTANCES) and returns
+  // `truncated: true` when the budget was hit; the server surfaces a WARNING on
+  // the success envelope naming the budget and advising the caller to narrow
+  // or raise maxInstances.
+  //
+  // The server-side truncation flag (bounded.truncated from paginateList) is
+  // DIFFERENT from the plugin-side scan-truncation flag (raw.truncated). We use
+  // `scanTruncated` as the field name on the plugin reply to avoid ambiguity.
+
+  it('B8: when the plugin replies with scanTruncated:true, the server surfaces a truncation warning', async () => {
+    // Simulate a plugin reply that hit the instance-scan budget: returns a
+    // partial remote list AND sets `scanTruncated: true`.
+    const truncatedReply = {
+      local: [
+        {
+          id: '1:1',
+          name: 'Button',
+          key: 'btn',
+          type: 'COMPONENT_SET',
+        },
+      ],
+      remote: [
+        {
+          key: 'r1',
+          name: 'Icon',
+          library: 'Lib',
+          instancesCount: 50,
+        },
+      ],
+      scanTruncated: true,
+      scanned: 2000,
+      found: 1,
+    }
+    const result = await handleGetComponents(
+      { includeRemote: true },
+      stubClient({ reply: truncatedReply }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { name: string }[]
+      truncated: boolean
+      warnings?: string[]
+    }
+    // Good results still returned (partial success).
+    expect(out.results).toHaveLength(2)
+    // A warning must be present naming the budget and advising the caller.
+    expect(out.warnings).toBeDefined()
+    expect(out.warnings!.length).toBeGreaterThan(0)
+    const warning = out.warnings![out.warnings!.length - 1]
+    expect(warning).toContain('truncated')
+    expect(warning).toContain('maxInstances')
+  })
+
+  it('B8: scanTruncated warning is NOT emitted when the scan completed within budget', async () => {
+    // A normal includeRemote:true reply with no scanTruncated flag.
+    const normalReply = {
+      local: [
+        {
+          id: '1:1',
+          name: 'Button',
+          key: 'btn',
+          type: 'COMPONENT_SET',
+        },
+      ],
+      remote: [
+        {
+          key: 'r1',
+          name: 'Icon',
+          library: 'Lib',
+          instancesCount: 3,
+        },
+      ],
+    }
+    const result = await handleGetComponents(
+      { includeRemote: true },
+      stubClient({ reply: normalReply }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: unknown[]
+      warnings?: string[]
+    }
+    // No truncation warning when the scan completed normally.
+    const hasTruncationWarning =
+      out.warnings?.some(
+        w =>
+          w.includes('truncated') &&
+          w.includes('maxInstances'),
+      ) ?? false
+    expect(hasTruncationWarning).toBe(false)
+  })
+
+  it('B8: the default includeRemote:false path is unchanged — no truncation, no warning', async () => {
+    // Default path: plugin never ran the remote scan → no scanTruncated field.
+    const localOnlyReply = {
+      local: [
+        {
+          id: '1:1',
+          name: 'Button',
+          key: 'btn',
+          type: 'COMPONENT_SET',
+        },
+      ],
+      remote: [],
+    }
+    const result = await handleGetComponents(
+      {},
+      stubClient({ reply: localOnlyReply }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: unknown[]
+      truncated: boolean
+      warnings?: string[]
+    }
+    expect(out.results).toHaveLength(1)
+    expect(out.truncated).toBe(false)
+    expect(out.warnings).toBeUndefined()
+  })
 })
 
 describe('handleListFonts', () => {

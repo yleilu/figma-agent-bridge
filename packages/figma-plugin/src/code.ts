@@ -160,6 +160,16 @@ const exportNodeDocument = async (
     if (node.type === 'VECTOR' && 'vectorPaths' in node) {
       doc.vectorPaths = (node as VectorNode).vectorPaths
     }
+    // width / height — JSON_REST_V1 omits unrotated width/height, emitting only
+    // absoluteBoundingBox which is the AXIS-ALIGNED bbox (inflated when rotated).
+    // B7: enrich with node.width/node.height (Plugin API, always unrotated) so
+    // the reader can prefer them over the bbox. Feature-detected: guard on
+    // 'width' in node — consistent with pointCount/grid enrichment above. O(1)
+    // per node; applies to ALL SceneNode types (no POLYGON/STAR-style gating).
+    if ('width' in node) {
+      doc.width = (node as unknown as { width: number }).width
+      doc.height = (node as unknown as { height: number }).height
+    }
     // pointCount (POLYGON + STAR) and innerRadius (STAR-only) are NOT carried by
     // JSON_REST_V1 — enrich like vectorPaths so they round-trip via get_node
     // (live-verified 2026-07-17). Feature-detect by PROPERTY (only POLYGON/STAR
@@ -233,6 +243,23 @@ const exportNodeDocument = async (
       doc.gridColumnCount = gridNode.gridColumnCount
       doc.gridRowGap = gridNode.gridRowGap
       doc.gridColumnGap = gridNode.gridColumnGap
+    }
+    // B3 — componentPropertyReferences: binding map from a field ('characters',
+    // 'visible', 'mainComponent') to the canonical component property id. Set by
+    // update_component's add+targetNodeId binding; readable here for T2 round-trip.
+    // Present on component sublayers and instance sublayers; null or absent on
+    // everything else. Only enrich when non-null and non-empty.
+    if ('componentPropertyReferences' in node) {
+      const refs = (
+        node as unknown as {
+          componentPropertyReferences:
+            | Record<string, string>
+            | null
+        }
+      ).componentPropertyReferences
+      if (refs !== null && Object.keys(refs).length > 0) {
+        doc.componentPropertyReferences = refs
+      }
     }
     // M14 — component.key + component.remote enrichment for INSTANCE nodes.
     // ROOT-ONLY (isRoot===true) so we stay O(targets) not O(document) — a
@@ -1867,11 +1894,30 @@ const handleCommand = async (
           description?: string
         }
       > = {}
+      // B8 — scan budget (T10): bounding the O(all-instances) remote-discovery
+      // walk to avoid exceeding the 30 s command timeout on large UI-kit docs.
+      // Defaults: 2 000 instances scanned, 500 distinct remote mains. The caller
+      // may override MAX_INSTANCES via params.maxInstances (optional; no wire-
+      // version bump — the field is simply ignored by older servers).
+      const MAX_INSTANCES =
+        typeof params.maxInstances === 'number' &&
+        params.maxInstances > 0
+          ? (params.maxInstances as number)
+          : 2000
+      const MAX_REMOTE_MAINS = 500
+      let scanTruncated = false
+      let scanned = 0
+
       if (includeRemote) {
         const instances = figma.root.findAllWithCriteria({
           types: ['INSTANCE'],
         })
         for (const inst of instances) {
+          if (scanned >= MAX_INSTANCES || Object.keys(remoteMap).length >= MAX_REMOTE_MAINS) {
+            scanTruncated = true
+            break
+          }
+          scanned++
           const main = inst.mainComponent
           if (main && main.remote) {
             const mkey = main.key
@@ -1897,15 +1943,30 @@ const handleCommand = async (
       )
       const remoteAll = Object.values(remoteMap)
 
+      // Base reply: always carry local + remote (partial if scan was truncated).
+      const reply: {
+        local: typeof localAll
+        remote: typeof remoteAll
+        warnings?: string[]
+        scanTruncated?: boolean
+        scanned?: number
+        found?: number
+      } = { local: localAll, remote: remoteAll }
+
       // warnings[] rides on the success reply only when a node degraded (T7);
       // a clean read carries no `warnings` key — same shape the server expects.
-      return componentWarnings.length > 0
-        ? {
-            local: localAll,
-            remote: remoteAll,
-            warnings: componentWarnings,
-          }
-        : { local: localAll, remote: remoteAll }
+      if (componentWarnings.length > 0) {
+        reply.warnings = componentWarnings
+      }
+
+      // B8 scan-budget metadata: lets the server surface a truncation WARNING.
+      if (scanTruncated) {
+        reply.scanTruncated = true
+        reply.scanned = scanned
+        reply.found = remoteAll.length
+      }
+
+      return reply
     }
 
     // search (Rule A): the plugin SCANS the requested scope and returns the RAW
@@ -2316,21 +2377,91 @@ const handleCommand = async (
       // add. addComponentProperty returns the CANONICAL property id
       // (e.g. "Label#1:0") that agents need for later setProperties. It is
       // surfaced inside the returned `properties` array (the entry's `id`).
+      //
+      // B3 binding: if targetNodeId is provided, resolve the child and set
+      // componentPropertyReferences to bind the property to that node's field.
+      // If targetNodeId is absent, warn (T7 honesty: set_instance will be inert).
+      // field is inferred from type when omitted: TEXT→characters, BOOLEAN→visible,
+      // INSTANCE_SWAP→mainComponent. MERGE into existing refs (never clobber).
       const addProps = params.add as
         | {
             name: string
             type: string
             defaultValue: string | boolean
+            targetNodeId?: string
+            field?: 'characters' | 'visible' | 'mainComponent'
           }[]
         | undefined
       if (addProps) {
         for (const p of addProps) {
           try {
-            comp.addComponentProperty(
+            const canonicalId = comp.addComponentProperty(
               p.name,
               p.type as ComponentPropertyType,
               p.defaultValue,
             )
+            if (p.targetNodeId) {
+              // Resolve the binding after adding the property.
+              const child = await figma.getNodeByIdAsync(
+                p.targetNodeId,
+              )
+              if (child === null || child === undefined) {
+                ucWarnings.push(
+                  'targetNodeId "' +
+                    p.targetNodeId +
+                    '" not found — property "' +
+                    p.name +
+                    '" added but binding skipped',
+                )
+              } else {
+                // Infer field from property type when not specified.
+                const inferredField =
+                  p.field ??
+                  (p.type === 'TEXT'
+                    ? 'characters'
+                    : p.type === 'BOOLEAN'
+                      ? 'visible'
+                      : 'mainComponent')
+                try {
+                  const bindable = child as unknown as {
+                    componentPropertyReferences?:
+                      | Record<string, string>
+                      | null
+                  }
+                  const existing =
+                    bindable.componentPropertyReferences ?? {}
+                  ;(
+                    child as unknown as {
+                      componentPropertyReferences: Record<
+                        string,
+                        string
+                      >
+                    }
+                  ).componentPropertyReferences = {
+                    ...existing,
+                    [inferredField]: canonicalId,
+                  }
+                } catch (e) {
+                  ucWarnings.push(
+                    'Failed to bind property "' +
+                      p.name +
+                      '" to node "' +
+                      p.targetNodeId +
+                      '" field "' +
+                      inferredField +
+                      '": ' +
+                      String(e),
+                  )
+                }
+              }
+            } else {
+              // T7 honesty: no targetNodeId → property is unbound.
+              ucWarnings.push(
+                'property "' +
+                  p.name +
+                  '" added but no targetNodeId given — it is unbound and set_instance will be inert',
+              )
+            }
           } catch (e) {
             ucWarnings.push(
               'Failed to add property "' +
@@ -2838,6 +2969,17 @@ const handleCommand = async (
               ' node',
           )
         }
+      }
+
+      // warn-on-no-op (T7, B6): the document/root node's .name is read-only in
+      // the plugin API — the setter silently no-ops. Renaming the file is
+      // impossible via the plugin API, so push an honest warning and drop
+      // spec.name so applyCommonProperties skips the no-op assignment.
+      if (spec.name !== undefined && node.type === 'DOCUMENT') {
+        warnings.push(
+          'name ignored — the file/document node cannot be renamed via the Figma plugin API',
+        )
+        delete spec.name
       }
 
       await applyCommonProperties(

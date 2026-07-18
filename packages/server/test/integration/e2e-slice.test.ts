@@ -303,6 +303,37 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     )
   })
 
+  // 3e — B6 (T7 honesty): update_node on the DOCUMENT node with a name patch
+  // must warn-and-skip (not silently no-op). The document node's .name is
+  // read-only in the plugin API; the setter silently does nothing, so the
+  // honest behaviour is: push a warning and delete spec.name so the reply's
+  // `name` field carries the OLD value (unchanged), not the requested one.
+  // The mock models DOCUMENT nodes via a `doc:` nodeId prefix.
+  it('update_node on the document node warns and does not rename (B6)', async () => {
+    const result = await handleUpdateNode(
+      {
+        nodeId: 'doc:0:0',
+        patch: { name: 'My New File Name' },
+      },
+      scoped,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const reply = JSON.parse(result.content[0].text) as {
+      type: string
+      name: string
+      warnings: string[]
+    }
+    // Must be reported as a DOCUMENT node.
+    expect(reply.type).toBe('DOCUMENT')
+    // The warning must name the reason.
+    const nameWarning = reply.warnings.find(
+      w => w.includes('name') && w.includes('document'),
+    )
+    expect(nameWarning).toBeDefined()
+    // The reply must NOT echo back the requested new name — the file was NOT renamed.
+    expect(reply.name).not.toBe('My New File Name')
+  })
+
   // 4 — bind_variable PAINT degrade (success-with-warning, not error). A paint
   // field (fills/strokes) binds via setBoundVariableForPaint, so the degrade
   // message names THAT API — the field-aware mock mirrors the real plugin.

@@ -57,6 +57,8 @@ type RawPaint = {
   color?: RawColor
   gradientStops?: { position: number; color: RGBA }[]
   gradientTransform?: number[][]
+  /** JSON_REST_V1 emits handles instead of gradientTransform. */
+  gradientHandlePositions?: { x: number; y: number }[]
   imageRef?: string
   imageHash?: string
   scaleMode?: string
@@ -122,14 +124,21 @@ const restConstraintToPlugin = (value: string): string => {
 }
 
 const sizeOf = (raw: RawNode): [number, number] => {
+  // Prefer raw.width/height (enriched by plugin — unrotated geometry) over
+  // absoluteBoundingBox (axis-aligned bbox, inflated when node is rotated).
+  // B7: a rotated node's bbox ≠ its actual dimensions; the plugin enrichment
+  // adds width/height via node.width/node.height which are always unrotated.
+  const w = num(raw.width)
+  const h = num(raw.height)
+  if (w !== undefined && h !== undefined) {
+    return [w, h]
+  }
   const bbox = raw.absoluteBoundingBox as
     | { width: number; height: number }
     | undefined
   if (bbox !== undefined && bbox !== null) {
     return [bbox.width, bbox.height]
   }
-  const w = num(raw.width)
-  const h = num(raw.height)
   return [w ?? 0, h ?? 0]
 }
 
@@ -232,17 +241,54 @@ const rawToFigmaPaint = (
       p.type === 'GRADIENT_DIAMOND') &&
     p.gradientStops !== undefined
   ) {
+    // Prefer gradientHandlePositions (JSON_REST_V1 path) over gradientTransform
+    // (Plugin-API path). When REST exports a gradient it omits gradientTransform
+    // and emits gradientHandlePositions instead — falling back to the identity
+    // matrix gives linear(0) regardless of the real direction (B1 / T2).
+    //
+    // NOTE: RADIAL / ANGULAR / DIAMOND also emit gradientHandlePositions, but
+    // their geometry (center, radius, rotation) requires all three handles and
+    // the derivation is substantially more involved. They are left on the
+    // transform path for now; a follow-up should extend this logic to those
+    // types before they are exposed in production workflows.
+    const handles = p.gradientHandlePositions
     const tf = p.gradientTransform
-    const gradientTransform: Transform =
-      tf !== undefined && tf.length === 2
-        ? [
-            [tf[0][0], tf[0][1], tf[0][2]],
-            [tf[1][0], tf[1][1], tf[1][2]],
-          ]
-        : [
-            [1, 0, 0],
-            [0, 1, 0],
-          ]
+    const gradientTransform: Transform = (() => {
+      // Handle-positions path: derive transform from the start→end vector.
+      // p1 = handles[0] (gradient start), p2 = handles[1] (gradient end).
+      if (
+        p.type === 'GRADIENT_LINEAR' &&
+        handles !== undefined &&
+        handles.length >= 2
+      ) {
+        const p1 = handles[0]
+        const p2 = handles[1]
+        const dx = p2.x - p1.x
+        const dy = p2.y - p1.y
+        const len = Math.sqrt(dx * dx + dy * dy) || 1
+        const cos = dx / len
+        const sin = dy / len
+        // Build a rotation matrix consistent with angleToTransform / transformToAngle.
+        const e = 0.5 - (cos * 0.5 + sin * 0.5)
+        const f = 0.5 - (-sin * 0.5 + cos * 0.5)
+        return [
+          [cos, sin, e],
+          [-sin, cos, f],
+        ] as Transform
+      }
+      // gradientTransform path: Plugin-API / older REST export.
+      if (tf !== undefined && tf.length === 2) {
+        return [
+          [tf[0][0], tf[0][1], tf[0][2]],
+          [tf[1][0], tf[1][1], tf[1][2]],
+        ] as Transform
+      }
+      // Identity fallback (should not be reached for well-formed Figma data).
+      return [
+        [1, 0, 0],
+        [0, 1, 0],
+      ] as Transform
+    })()
     const out: FigmaPaint = {
       type: p.type,
       gradientStops: p.gradientStops,
@@ -856,6 +902,21 @@ const buildNode = (
   ) {
     out.explicitVariableModes =
       raw.explicitVariableModes as Record<string, string>
+  }
+  // componentPropertyReferences — enriched by the plugin's exportNodeDocument
+  // (feature-detected; not in JSON_REST_V1). Maps component property name →
+  // the field on this node that the property controls (e.g. { characters:
+  // 'Label#45:13' }). Read-only projection; write via update_component's
+  // targetNodeId/field binding.
+  if (
+    raw.componentPropertyReferences &&
+    typeof raw.componentPropertyReferences === 'object'
+  ) {
+    out.componentPropertyReferences =
+      raw.componentPropertyReferences as Record<
+        string,
+        string
+      >
   }
 
   const opacity = num(raw.opacity)
