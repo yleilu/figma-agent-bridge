@@ -1173,6 +1173,73 @@ describe('relay', () => {
       await closeWs(server)
       await closeWs(plugin)
     })
+
+    it('fades a busy row to idle after idleMs and removes it after ttlMs', async () => {
+      const IDLE_PORT = 3130
+      const idleServer = startRelay(IDLE_PORT, {
+        idleMs: 30,
+        ttlMs: 80,
+        heartbeatInterval: 15,
+      })
+
+      const connectIdle = (): Promise<WebSocket> =>
+        new Promise((resolve, reject) => {
+          const ws = new WebSocket(
+            `ws://localhost:${IDLE_PORT}`,
+          )
+          ws.onopen = () => resolve(ws)
+          ws.onerror = () =>
+            reject(new Error('WebSocket connection failed'))
+        })
+
+      try {
+        const s = await connectIdle()
+        const sQ = createMessageQueue(s)
+        s.send(
+          JSON.stringify({ type: 'join', channel: 'cx' }),
+        )
+        await sQ()
+        s.send(
+          JSON.stringify({
+            type: 'agent-status',
+            channel: 'cx',
+            record: {
+              key: 'k',
+              sessionId: 's',
+              level: 'normal',
+              text: 'x',
+              activity: 'busy',
+              updatedAt: Date.now(),
+            },
+          }),
+        )
+
+        const p = await connectIdle()
+        const pQ = createMessageQueue(p)
+        p.send(
+          JSON.stringify({ type: 'join', channel: 'cx' }),
+        )
+        await pQ()
+
+        const idle = await pQ()
+        expect(idle).toMatchObject({
+          type: 'agent-status',
+          record: { key: 'k', activity: 'idle' },
+        })
+
+        const removed = await pQ()
+        expect(removed).toMatchObject({
+          type: 'agent-status-remove',
+          sessionId: 's',
+          key: 'k',
+        })
+
+        await closeWs(s)
+        await closeWs(p)
+      } finally {
+        stopRelay(idleServer)
+      }
+    })
   })
 })
 

@@ -20,6 +20,8 @@ const MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
 const RATE_TOKENS_PER_SEC = 50
 const RATE_BURST = 100
 export const DEFAULT_HEARTBEAT_INTERVAL = 10_000
+export const DEFAULT_IDLE_MS = 50_000 // no activity → busy fades to idle
+export const DEFAULT_TTL_MS = 300_000 // no activity → row removed (ghost guard)
 
 type WsData = { id: string }
 type RateState = { tokens: number; last: number }
@@ -37,6 +39,9 @@ type RelayContext = {
   rateTokensPerSec: number
   /** channel → key → record (status-monitor.md) */
   agentStatus: Map<string, Map<string, StatusRecord>>
+  /** Per-relay idle-fade / backstop-TTL sizing (defaults to the module constants). */
+  idleMs: number
+  ttlMs: number
 }
 
 const contexts = new WeakMap<Server<WsData>, RelayContext>()
@@ -52,6 +57,8 @@ const createContext = (): RelayContext => ({
   rateBurst: RATE_BURST,
   rateTokensPerSec: RATE_TOKENS_PER_SEC,
   agentStatus: new Map(),
+  idleMs: DEFAULT_IDLE_MS,
+  ttlMs: DEFAULT_TTL_MS,
 })
 
 const send = (
@@ -403,6 +410,12 @@ export type StartRelayOptions = {
   rateBurst?: number
   /** Token refill rate per second (default RATE_TOKENS_PER_SEC). */
   rateTokensPerSec?: number
+  /** Idle-fade threshold in ms (default DEFAULT_IDLE_MS): a busy row with no
+   * activity for this long is broadcast as idle. */
+  idleMs?: number
+  /** Backstop-TTL in ms (default DEFAULT_TTL_MS): a row with no activity for
+   * this long is removed outright (ghost guard). */
+  ttlMs?: number
 }
 
 export const startRelay = (
@@ -413,6 +426,8 @@ export const startRelay = (
   ctx.rateBurst = opts.rateBurst ?? RATE_BURST
   ctx.rateTokensPerSec =
     opts.rateTokensPerSec ?? RATE_TOKENS_PER_SEC
+  ctx.idleMs = opts.idleMs ?? DEFAULT_IDLE_MS
+  ctx.ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS
   const hostname =
     opts.hostname ?? process.env.RELAY_BIND ?? '127.0.0.1'
   const heartbeatInterval =
@@ -570,6 +585,37 @@ export const startRelay = (
     }
     for (const ws of dead) {
       ws.close()
+    }
+
+    // agent-status idle-fade + backstop-TTL sweep (status-monitor.md)
+    const now = Date.now()
+    for (const [channel, byKey] of ctx.agentStatus) {
+      for (const rec of [...byKey.values()]) {
+        const age = now - rec.updatedAt
+        if (age >= ctx.ttlMs) {
+          byKey.delete(rec.key)
+          // KEY-scoped remove: prune exactly this one row. A bare {sessionId}
+          // would make the plugin drop the whole session (incl. still-live
+          // subagents) — see I2.
+          broadcastToChannel(ctx, channel, {
+            type: 'agent-status-remove',
+            sessionId: rec.sessionId ?? '',
+            agentId: rec.agentId,
+            key: rec.key,
+          })
+        } else if (
+          age >= ctx.idleMs &&
+          rec.activity === 'busy'
+        ) {
+          const idle = { ...rec, activity: 'idle' as const }
+          byKey.set(rec.key, idle)
+          broadcastToChannel(ctx, channel, {
+            type: 'agent-status',
+            record: idle,
+          })
+        }
+      }
+      if (byKey.size === 0) ctx.agentStatus.delete(channel)
     }
   }, heartbeatInterval)
 
