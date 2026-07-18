@@ -7,3 +7,6 @@ dist/
 daily-journal/
 docs/scratch/
 verify-output/
+
+# Visual brainstorming companion (not durable)
+.superpowers/
