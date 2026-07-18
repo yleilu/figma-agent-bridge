@@ -3,7 +3,12 @@
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/presence\"", "async": false, "timeout": 10 }
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/presence\"",
+            "async": false,
+            "timeout": 10
+          }
         ]
       }
     ],
@@ -11,7 +16,12 @@
       {
         "matcher": "mcp__(figma-bridge|plugin_figma-agent-bridge_figma-agent-bridge)__.*",
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/identity\"", "async": false, "timeout": 10 }
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/identity\"",
+            "async": false,
+            "timeout": 10
+          }
         ]
       }
     ]

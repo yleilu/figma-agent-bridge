@@ -43,13 +43,21 @@ describe('plugin config', () => {
       'mcp__(figma-bridge|plugin_figma-agent-bridge_figma-agent-bridge)__.*',
     )
     const re = new RegExp(entry.matcher)
-    expect(re.test('mcp__figma-bridge__update_node')).toBe(true)
+    expect(re.test('mcp__figma-bridge__update_node')).toBe(
+      true,
+    )
     expect(
-      re.test('mcp__plugin_figma-agent-bridge_figma-agent-bridge__update_node'),
+      re.test(
+        'mcp__plugin_figma-agent-bridge_figma-agent-bridge__update_node',
+      ),
     ).toBe(true)
     expect(re.test('mcp__figma__get_code')).toBe(false)
-    expect(re.test('mcp__FigmaDesignBuilder__create_frame')).toBe(false)
-    expect(entry.hooks[0].command).toContain('hooks/identity')
+    expect(
+      re.test('mcp__FigmaDesignBuilder__create_frame'),
+    ).toBe(false)
+    expect(entry.hooks[0].command).toContain(
+      'hooks/identity',
+    )
   })
 
   it('the identity hook script exists and is executable', async () => {

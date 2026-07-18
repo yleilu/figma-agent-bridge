@@ -22,11 +22,17 @@ test('subagent call: injects sessionId + agentId + agentType, preserving args', 
     agent_type: 'general-purpose',
     hook_event_name: 'PreToolUse',
     tool_name: 'mcp__figma-bridge__update_node',
-    tool_input: { fileKey: 'fk', nodeId: '1:2', fills: [{ color: '#fff' }] },
+    tool_input: {
+      fileKey: 'fk',
+      nodeId: '1:2',
+      fills: [{ color: '#fff' }],
+    },
   })
   expect(code).toBe(0)
   const ui = json.hookSpecificOutput.updatedInput
-  expect(json.hookSpecificOutput.hookEventName).toBe('PreToolUse')
+  expect(json.hookSpecificOutput.hookEventName).toBe(
+    'PreToolUse',
+  )
   expect(ui.sessionId).toBe('sess-1')
   expect(ui.agentId).toBe('agent-1')
   expect(ui.agentType).toBe('general-purpose')
@@ -75,7 +81,11 @@ test('security: top-level spoof of agentId/agentType is STRIPPED, not passed thr
     // no agent_id / agent_type → this is a top-level call
     hook_event_name: 'PreToolUse',
     tool_name: 'mcp__figma-bridge__inspect',
-    tool_input: { fileKey: 'fk', agentId: 'SPOOF', agentType: 'SPOOF' },
+    tool_input: {
+      fileKey: 'fk',
+      agentId: 'SPOOF',
+      agentType: 'SPOOF',
+    },
   })
   const ui = json.hookSpecificOutput.updatedInput
   expect(ui.sessionId).toBe('sess-top')

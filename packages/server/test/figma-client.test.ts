@@ -580,7 +580,9 @@ describe('figma-client', () => {
     // A raw peer joins the same channel to observe forwarded frames.
     const peer = await connectRaw()
     const next = createMessageQueue(peer) // set up BEFORE join so the ack is captured
-    peer.send(JSON.stringify({ type: 'join', channel: 'id-ch' }))
+    peer.send(
+      JSON.stringify({ type: 'join', channel: 'id-ch' }),
+    )
     await next() // consume the join system ack — peer is now a confirmed member,
     // so it will receive the broadcast (the relay only fans out to current members)
 
@@ -602,7 +604,9 @@ describe('figma-client', () => {
     expect(frame.message.meta.fileKey).toBe('fk-id')
     expect(frame.message.meta.sessionId).toBe('sess-1')
     expect(frame.message.meta.agentId).toBe('agent-1')
-    expect(frame.message.meta.agentType).toBe('general-purpose')
+    expect(frame.message.meta.agentType).toBe(
+      'general-purpose',
+    )
 
     await closeWs(peer)
     client.disconnect()
@@ -614,7 +618,9 @@ describe('figma-client', () => {
 
     const peer = await connectRaw()
     const next = createMessageQueue(peer) // set up BEFORE join so the ack is captured
-    peer.send(JSON.stringify({ type: 'join', channel: 'ntf-ch' }))
+    peer.send(
+      JSON.stringify({ type: 'join', channel: 'ntf-ch' }),
+    )
     await next() // consume the join system ack so the peer receives the broadcast
 
     client.notify('feedback_updated', { token: 'fb-1' })

@@ -66,7 +66,13 @@ export const withFile =
     if (!gate.ok) {
       return gate.result
     }
-    const { fileKey, sessionId, agentId, agentType, ...rest } = args
+    const {
+      fileKey,
+      sessionId,
+      agentId,
+      agentType,
+      ...rest
+    } = args
     const scoped = client.forFile(fileKey, {
       sessionId,
       agentId,

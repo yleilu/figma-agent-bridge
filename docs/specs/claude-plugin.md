@@ -142,7 +142,10 @@ if they don't, the reserved `sessionId`/`agentId`/`agentType` fields simply stay
       {
         "matcher": "mcp__figma-bridge__.*",
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PROJECT_DIR}/plugin/hooks/identity\"" }
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR}/plugin/hooks/identity\""
+          }
         ]
       }
     ]

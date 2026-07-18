@@ -34,7 +34,11 @@ export type FigmaClient = {
   ) => Promise<unknown>
   forFile: (
     fileKey: string,
-    opts?: { sessionId?: string; agentId?: string; agentType?: string },
+    opts?: {
+      sessionId?: string
+      agentId?: string
+      agentType?: string
+    },
   ) => ScopedFigmaClient
   notify: (
     command: string,
@@ -392,7 +396,11 @@ export const createFigmaClient = (
     command: string,
     params: Record<string, unknown> | undefined,
     timeoutMs: number,
-    identity?: { sessionId?: string; agentId?: string; agentType?: string },
+    identity?: {
+      sessionId?: string
+      agentId?: string
+      agentType?: string
+    },
   ): Promise<unknown> => {
     if (ws === null || ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error('Not connected'))
@@ -527,7 +535,11 @@ export const createFigmaClient = (
   // sessionId (reserved, forward-compat) rides meta when the wrapper supplies it.
   const forFile = (
     fileKey: string,
-    opts?: { sessionId?: string; agentId?: string; agentType?: string },
+    opts?: {
+      sessionId?: string
+      agentId?: string
+      agentType?: string
+    },
   ): ScopedFigmaClient => ({
     fileKey,
     sendCommand: (command, params, timeoutMs = 3e4) =>
