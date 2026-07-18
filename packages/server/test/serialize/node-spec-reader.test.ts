@@ -790,3 +790,127 @@ describe('toNodeSpec — explicitVariableModes read-back (M13)', () => {
     expect(spec.explicitVariableModes).toBeUndefined()
   })
 })
+
+// ─── B1: gradient angle from gradientHandlePositions (T2 round-trip) ────────────
+//
+// JSON_REST_V1 emits gradientHandlePositions instead of gradientTransform.
+// The reader must derive the angle from the handle vector; previously it fell
+// back to the identity matrix → linear(0) regardless of the real direction.
+
+describe('toNodeSpec — gradient angle from gradientHandlePositions (B1)', () => {
+  /** Build a minimal raw RECTANGLE node with a single GRADIENT_LINEAR fill. */
+  const makeGradientNode = (
+    handles: { x: number; y: number }[],
+    withTransform?: number[][],
+  ): Record<string, unknown> => ({
+    id: 'b1:1',
+    name: 'Rect',
+    type: 'RECTANGLE',
+    fills: [
+      {
+        type: 'GRADIENT_LINEAR',
+        ...(withTransform
+          ? { gradientTransform: withTransform }
+          : { gradientHandlePositions: handles }),
+        gradientStops: [
+          {
+            position: 0,
+            color: { r: 1, g: 0, b: 0, a: 1 },
+          },
+          {
+            position: 1,
+            color: { r: 0, g: 0, b: 1, a: 1 },
+          },
+        ],
+      },
+    ],
+  })
+
+  /** Extract the angle from a `linear(<angle> ...)` fill atom. */
+  const parseAngle = (atom: string): number => {
+    const m = /^linear\((-?\d+)/.exec(atom)
+    if (!m) {
+      throw new Error(
+        `Cannot parse angle from atom: ${atom}`,
+      )
+    }
+    return parseInt(m[1], 10)
+  }
+
+  it('B1 regression: handles [0,0]→[1,1] derive 45°, NOT linear(0)', () => {
+    // This test MUST FAIL before the fix (reader falls back to identity → 0°).
+    const spec = toNodeSpec(
+      makeGradientNode([
+        { x: 0, y: 0 },
+        { x: 1, y: 1 },
+      ]) as never,
+      { depth: -1 },
+    )
+    const atom = (spec.fills as string[])[0]
+    expect(atom).toMatch(/^linear\(/)
+    expect(parseAngle(atom)).toBe(45)
+  })
+
+  it('handles [0,0]→[1,0] derive 0° (east)', () => {
+    const spec = toNodeSpec(
+      makeGradientNode([
+        { x: 0, y: 0 },
+        { x: 1, y: 0 },
+      ]) as never,
+      { depth: -1 },
+    )
+    expect(parseAngle((spec.fills as string[])[0])).toBe(0)
+  })
+
+  it('handles [0,0]→[0,1] derive 90° (south)', () => {
+    const spec = toNodeSpec(
+      makeGradientNode([
+        { x: 0, y: 0 },
+        { x: 0, y: 1 },
+      ]) as never,
+      { depth: -1 },
+    )
+    expect(parseAngle((spec.fills as string[])[0])).toBe(90)
+  })
+
+  it('handles [0,0]→[-1,1] derive 135° (south-west)', () => {
+    const spec = toNodeSpec(
+      makeGradientNode([
+        { x: 0, y: 0 },
+        { x: -1, y: 1 },
+      ]) as never,
+      { depth: -1 },
+    )
+    expect(parseAngle((spec.fills as string[])[0])).toBe(
+      135,
+    )
+  })
+
+  it('gradientTransform path is still honoured when present (no regression)', () => {
+    // gradientTransform [[cos45,sin45,e],[−sin45,cos45,f]] → 45°.
+    // The real plugin always sends gradientTransform, never gradientHandlePositions.
+    const cos45 =
+      Math.round(Math.cos(Math.PI / 4) * 1000) / 1000
+    const sin45 =
+      Math.round(Math.sin(Math.PI / 4) * 1000) / 1000
+    const e =
+      Math.round(
+        (0.5 - (cos45 * 0.5 + sin45 * 0.5)) * 1000,
+      ) / 1000
+    const f =
+      Math.round(
+        (0.5 - (-sin45 * 0.5 + cos45 * 0.5)) * 1000,
+      ) / 1000
+    const spec = toNodeSpec(
+      makeGradientNode(
+        [],
+        [
+          [cos45, sin45, e],
+          [-sin45, cos45, f],
+        ],
+      ) as never,
+      { depth: -1 },
+    )
+    expect(parseAngle((spec.fills as string[])[0])).toBe(45)
+  })
+})

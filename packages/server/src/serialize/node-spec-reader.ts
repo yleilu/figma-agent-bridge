@@ -57,6 +57,8 @@ type RawPaint = {
   color?: RawColor
   gradientStops?: { position: number; color: RGBA }[]
   gradientTransform?: number[][]
+  /** JSON_REST_V1 emits handles instead of gradientTransform. */
+  gradientHandlePositions?: { x: number; y: number }[]
   imageRef?: string
   imageHash?: string
   scaleMode?: string
@@ -232,17 +234,54 @@ const rawToFigmaPaint = (
       p.type === 'GRADIENT_DIAMOND') &&
     p.gradientStops !== undefined
   ) {
+    // Prefer gradientHandlePositions (JSON_REST_V1 path) over gradientTransform
+    // (Plugin-API path). When REST exports a gradient it omits gradientTransform
+    // and emits gradientHandlePositions instead — falling back to the identity
+    // matrix gives linear(0) regardless of the real direction (B1 / T2).
+    //
+    // NOTE: RADIAL / ANGULAR / DIAMOND also emit gradientHandlePositions, but
+    // their geometry (center, radius, rotation) requires all three handles and
+    // the derivation is substantially more involved. They are left on the
+    // transform path for now; a follow-up should extend this logic to those
+    // types before they are exposed in production workflows.
+    const handles = p.gradientHandlePositions
     const tf = p.gradientTransform
-    const gradientTransform: Transform =
-      tf !== undefined && tf.length === 2
-        ? [
-            [tf[0][0], tf[0][1], tf[0][2]],
-            [tf[1][0], tf[1][1], tf[1][2]],
-          ]
-        : [
-            [1, 0, 0],
-            [0, 1, 0],
-          ]
+    const gradientTransform: Transform = (() => {
+      // Handle-positions path: derive transform from the start→end vector.
+      // p1 = handles[0] (gradient start), p2 = handles[1] (gradient end).
+      if (
+        p.type === 'GRADIENT_LINEAR' &&
+        handles !== undefined &&
+        handles.length >= 2
+      ) {
+        const p1 = handles[0]
+        const p2 = handles[1]
+        const dx = p2.x - p1.x
+        const dy = p2.y - p1.y
+        const len = Math.sqrt(dx * dx + dy * dy) || 1
+        const cos = dx / len
+        const sin = dy / len
+        // Build a rotation matrix consistent with angleToTransform / transformToAngle.
+        const e = 0.5 - (cos * 0.5 + sin * 0.5)
+        const f = 0.5 - (-sin * 0.5 + cos * 0.5)
+        return [
+          [cos, sin, e],
+          [-sin, cos, f],
+        ] as Transform
+      }
+      // gradientTransform path: Plugin-API / older REST export.
+      if (tf !== undefined && tf.length === 2) {
+        return [
+          [tf[0][0], tf[0][1], tf[0][2]],
+          [tf[1][0], tf[1][1], tf[1][2]],
+        ] as Transform
+      }
+      // Identity fallback (should not be reached for well-formed Figma data).
+      return [
+        [1, 0, 0],
+        [0, 1, 0],
+      ] as Transform
+    })()
     const out: FigmaPaint = {
       type: p.type,
       gradientStops: p.gradientStops,
