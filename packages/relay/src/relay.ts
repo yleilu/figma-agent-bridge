@@ -4,6 +4,7 @@ import type {
   ChannelInfo,
   ChannelMessage,
   RelayOutgoing,
+  StatusRecord,
   SystemMessage,
 } from '@figma-agent-bridge/shared'
 import {
@@ -34,6 +35,8 @@ type RelayContext = {
   /** Per-relay token-bucket sizing (defaults to the module constants). */
   rateBurst: number
   rateTokensPerSec: number
+  /** channel → key → record (status-monitor.md) */
+  agentStatus: Map<string, Map<string, StatusRecord>>
 }
 
 const contexts = new WeakMap<Server<WsData>, RelayContext>()
@@ -48,6 +51,7 @@ const createContext = (): RelayContext => ({
   heartbeatTimer: null,
   rateBurst: RATE_BURST,
   rateTokensPerSec: RATE_TOKENS_PER_SEC,
+  agentStatus: new Map(),
 })
 
 const send = (
@@ -109,6 +113,7 @@ const removeClient = (
         if (members.size === 0) {
           ctx.channels.delete(channel)
           ctx.channelRegistry.delete(channel)
+          ctx.agentStatus.delete(channel)
         }
       }
     })
@@ -257,6 +262,7 @@ const handleLeave = (
     if (members.size === 0) {
       ctx.channels.delete(channel)
       ctx.channelRegistry.delete(channel)
+      ctx.agentStatus.delete(channel)
     }
   }
 
@@ -288,6 +294,48 @@ const handleMessage = (
       client.send(payload)
     }
   })
+}
+
+const handleAgentStatus = (
+  ctx: RelayContext,
+  ws: ServerWebSocket<WsData>,
+  channel: string,
+  record: StatusRecord,
+) => {
+  const members = ctx.channels.get(channel)
+  if (members === undefined) {
+    return
+  }
+  let byKey = ctx.agentStatus.get(channel)
+  if (byKey === undefined) {
+    byKey = new Map()
+    ctx.agentStatus.set(channel, byKey)
+  }
+  // merge by key so a later skeleton emit preserves an earlier label/agentType
+  const merged: StatusRecord = {
+    ...byKey.get(record.key),
+    ...record,
+  }
+  byKey.set(record.key, merged)
+  const payload = JSON.stringify({
+    type: 'agent-status',
+    record: merged,
+  } satisfies RelayOutgoing)
+  members.forEach(client => {
+    if (client !== ws) {
+      client.send(payload)
+    }
+  })
+}
+
+const handleStatusSync = (
+  ctx: RelayContext,
+  ws: ServerWebSocket<WsData>,
+  channel: string,
+) => {
+  const byKey = ctx.agentStatus.get(channel)
+  const records = byKey ? Array.from(byKey.values()) : []
+  send(ws, { type: 'agent-status-sync', records })
 }
 
 export type StartRelayOptions = {
@@ -398,6 +446,15 @@ export const startRelay = (
           handleLeave(ctx, ws, frame.channel)
         } else if (frame.type === 'message') {
           handleMessage(ctx, ws, frame.channel, frame)
+        } else if (frame.type === 'agent-status') {
+          handleAgentStatus(
+            ctx,
+            ws,
+            frame.channel,
+            frame.record,
+          )
+        } else if (frame.type === 'status-sync') {
+          handleStatusSync(ctx, ws, frame.channel)
         }
       },
       pong: ws => {
@@ -440,6 +497,7 @@ export const stopRelay = (server: Server<WsData>): void => {
     ctx.clientChannels.clear()
     ctx.channelRegistry.clear()
     ctx.sockets.clear()
+    ctx.agentStatus.clear()
     contexts.delete(server)
   }
   server.stop(true)

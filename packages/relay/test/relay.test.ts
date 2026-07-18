@@ -942,6 +942,146 @@ describe('relay', () => {
 
     await closeWs(ws)
   })
+
+  describe('agent-status store', () => {
+    it('stores an agent-status frame and broadcasts it to other channel members', async () => {
+      const server = await connect() // the "MCP server" socket
+      const plugin = await connect() // the "plugin" socket
+      const sQ = createMessageQueue(server)
+      const pQ = createMessageQueue(plugin)
+      server.send(
+        JSON.stringify({ type: 'join', channel: 'c1' }),
+      )
+      await sQ()
+      plugin.send(
+        JSON.stringify({ type: 'join', channel: 'c1' }),
+      )
+      await pQ()
+      const record = {
+        key: 'a1',
+        sessionId: 's1',
+        level: 'normal',
+        text: 'Building',
+        activity: 'busy',
+        updatedAt: 1,
+      }
+      server.send(
+        JSON.stringify({
+          type: 'agent-status',
+          channel: 'c1',
+          record,
+        }),
+      )
+      const got = await pQ()
+      expect(got).toEqual({ type: 'agent-status', record })
+      await closeWs(server)
+      await closeWs(plugin)
+    })
+
+    it('replays current records on status-sync', async () => {
+      const server = await connect()
+      const sQ = createMessageQueue(server)
+      server.send(
+        JSON.stringify({ type: 'join', channel: 'c2' }),
+      )
+      await sQ()
+      const record = {
+        key: 'a2',
+        sessionId: 's2',
+        level: 'normal',
+        text: 'X',
+        activity: 'busy',
+        updatedAt: 2,
+      }
+      server.send(
+        JSON.stringify({
+          type: 'agent-status',
+          channel: 'c2',
+          record,
+        }),
+      )
+      const plugin = await connect()
+      const pQ = createMessageQueue(plugin)
+      plugin.send(
+        JSON.stringify({ type: 'join', channel: 'c2' }),
+      )
+      await pQ()
+      plugin.send(
+        JSON.stringify({
+          type: 'status-sync',
+          channel: 'c2',
+        }),
+      )
+      const sync = await pQ()
+      expect(sync).toEqual({
+        type: 'agent-status-sync',
+        records: [record],
+      })
+      await closeWs(server)
+      await closeWs(plugin)
+    })
+
+    it('merges by key (a later skeleton keeps an earlier label)', async () => {
+      const server = await connect()
+      const sQ = createMessageQueue(server)
+      server.send(
+        JSON.stringify({ type: 'join', channel: 'c3' }),
+      )
+      await sQ()
+      server.send(
+        JSON.stringify({
+          type: 'agent-status',
+          channel: 'c3',
+          record: {
+            key: 'a3',
+            sessionId: 's3',
+            label: 'Nav',
+            level: 'normal',
+            text: 'Building',
+            activity: 'busy',
+            updatedAt: 1,
+          },
+        }),
+      )
+      server.send(
+        JSON.stringify({
+          type: 'agent-status',
+          channel: 'c3',
+          record: {
+            key: 'a3',
+            sessionId: 's3',
+            level: 'normal',
+            text: null,
+            activity: 'busy',
+            updatedAt: 2,
+          },
+        }),
+      )
+      const plugin = await connect()
+      const pQ = createMessageQueue(plugin)
+      plugin.send(
+        JSON.stringify({ type: 'join', channel: 'c3' }),
+      )
+      await pQ()
+      plugin.send(
+        JSON.stringify({
+          type: 'status-sync',
+          channel: 'c3',
+        }),
+      )
+      const sync = (await pQ()) as {
+        records: Array<Record<string, unknown>>
+      }
+      expect(sync.records[0]).toMatchObject({
+        key: 'a3',
+        label: 'Nav',
+        text: null,
+        updatedAt: 2,
+      })
+      await closeWs(server)
+      await closeWs(plugin)
+    })
+  })
 })
 
 const RELAY_VERSION_PORT = 18191
