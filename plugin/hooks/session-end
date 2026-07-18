@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# SessionEnd → remove all of this session's status rows (status-monitor.md).
+set -euo pipefail
+PORT="${FIGMA_BRIDGE_RELAY_PORT:-18080}"
+payload=$(cat)
+sid=$(printf '%s' "$payload" | jq -r '.session_id // empty') || exit 0
+[ -n "$sid" ] || exit 0
+curl -fsS --max-time 3 -X POST "http://localhost:$PORT/agent-status/remove" \
+  -H 'content-type: application/json' \
+  -d "$(jq -nc --arg s "$sid" '{ sessionId: $s }')" >/dev/null 2>&1 || true
+exit 0

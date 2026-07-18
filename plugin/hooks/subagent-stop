@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# SubagentStop → remove that subagent's row (status-monitor.md).
+set -euo pipefail
+PORT="${FIGMA_BRIDGE_RELAY_PORT:-18080}"
+payload=$(cat)
+sid=$(printf '%s' "$payload" | jq -r '.session_id // empty') || exit 0
+aid=$(printf '%s' "$payload" | jq -r '.agent_id // empty') || exit 0
+[ -n "$sid" ] || exit 0
+body=$(jq -nc --arg s "$sid" --arg a "$aid" '{ sessionId: $s } + (if $a != "" then { agentId: $a } else {} end)')
+curl -fsS --max-time 3 -X POST "http://localhost:$PORT/agent-status/remove" \
+  -H 'content-type: application/json' -d "$body" >/dev/null 2>&1 || true
+exit 0
