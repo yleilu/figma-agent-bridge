@@ -744,6 +744,103 @@ describe('figma-client', () => {
     await closeWs(peer)
     client.disconnect()
   })
+
+  it('dispatch emits a busy+skeleton agent-status before an identity-bearing command', async () => {
+    const client = createFigmaClient(WS_URL)
+    await client.joinChannel('file-fkE', 'fkE')
+
+    const peer = await connectRaw()
+    const next = createMessageQueue(peer)
+    peer.send(
+      JSON.stringify({ type: 'join', channel: 'file-fkE' }),
+    )
+    await next() // join ack
+
+    void client
+      .forFile('fkE', {
+        sessionId: 's',
+        agentId: 'a',
+        agentType: 'Explore',
+      })
+      .sendCommand('inspect', { nodeId: '1:2' }, 50)
+      .catch(() => {}) // times out; we only care about the frames it emits
+
+    // The skeleton precedes the real command on the wire.
+    const first = await next()
+    expect(first).toEqual({
+      type: 'agent-status',
+      record: {
+        key: 'a',
+        sessionId: 's',
+        agentId: 'a',
+        agentType: 'Explore',
+        level: 'normal',
+        text: null,
+        activity: 'busy',
+        updatedAt: expect.any(Number),
+      },
+    })
+
+    // Drain until the real command arrives.
+    let cmd: any
+    do {
+      cmd = await next()
+    } while (cmd?.message?.command !== 'inspect')
+    expect(cmd.message.meta.agentId).toBe('a')
+
+    await closeWs(peer)
+    client.disconnect()
+  })
+
+  it('dispatch does NOT emit agent-status for a command with no identity', async () => {
+    const client = createFigmaClient(WS_URL)
+    await client.joinChannel('file-fkF', 'fkF')
+
+    const peer = await connectRaw()
+    const next = createMessageQueue(peer)
+    peer.send(
+      JSON.stringify({ type: 'join', channel: 'file-fkF' }),
+    )
+    await next() // join ack
+
+    void client
+      .forFile('fkF') // no identity opts
+      .sendCommand('inspect', { nodeId: '1:2' }, 50)
+      .catch(() => {})
+
+    // With no identity, the very next frame IS the command — no preceding
+    // agent-status skeleton.
+    const first: any = await next()
+    expect(first.type).toBe('broadcast')
+    expect(first.message?.command).toBe('inspect')
+
+    await closeWs(peer)
+    client.disconnect()
+  })
+
+  it('dispatch does NOT emit agent-status for PING even with identity present', async () => {
+    const client = createFigmaClient(WS_URL)
+    await client.joinChannel('file-fkH', 'fkH')
+
+    const peer = await connectRaw()
+    const next = createMessageQueue(peer)
+    peer.send(
+      JSON.stringify({ type: 'join', channel: 'file-fkH' }),
+    )
+    await next() // join ack
+
+    void client
+      .forFile('fkH', { sessionId: 's', agentId: 'a' })
+      .sendCommand(COMMANDS.PING, {}, 50)
+      .catch(() => {})
+
+    const first: any = await next()
+    expect(first.type).toBe('broadcast')
+    expect(first.message?.command).toBe(COMMANDS.PING)
+
+    await closeWs(peer)
+    client.disconnect()
+  })
 })
 
 describe('isInstanceDead', () => {

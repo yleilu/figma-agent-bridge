@@ -451,6 +451,36 @@ export const createFigmaClient = (
       if (identity?.agentType !== undefined) {
         meta.agentType = identity.agentType
       }
+
+      // status-monitor.md — emit a busy+skeleton agent-status frame ahead of
+      // every identity-bearing command. Guarding on identity presence (rather
+      // than a per-command name list) automatically excludes PING, status(),
+      // and connect() — they reach dispatch with no sessionId/agentId.
+      // report_status never calls dispatch (it's display-only via
+      // notifyStatus), so it needs no separate exclusion.
+      const skeletonKey =
+        identity?.agentId ?? identity?.sessionId
+      if (
+        command !== COMMANDS.PING &&
+        skeletonKey !== undefined
+      ) {
+        const skeleton: StatusRecord = {
+          key: skeletonKey,
+          sessionId: identity?.sessionId,
+          agentId: identity?.agentId,
+          agentType: identity?.agentType,
+          level: 'normal',
+          text: null,
+          activity: 'busy',
+          updatedAt: Date.now(),
+        }
+        sendToChannel(ch, {
+          type: 'agent-status',
+          channel: ch,
+          record: skeleton,
+        })
+      }
+
       const cmdMessage: CommandMessage = {
         command,
         params,
