@@ -133,4 +133,72 @@ describe('report_status → relay (file-scoped broadcast)', () => {
     await closeWs(peerA)
     await closeWs(peerB)
   })
+
+  it('proves the whole transport end-to-end: report_status broadcast → settle → idle → remove (status-monitor.md, no UI)', async () => {
+    const peerA = await connectRaw() // stands in for the mock plugin on file-a's channel
+    const qa = createMessageQueue(peerA)
+    peerA.send(
+      JSON.stringify({ type: 'join', channel: 'file-a' }),
+    )
+    await qa() // join ack
+
+    await handleReportStatus(
+      { text: 'Building', label: 'nav' },
+      client.forFile('fk-a', {
+        sessionId: 'sess-e2e',
+        agentId: 'agent-e2e',
+        agentType: 'Explore',
+      }),
+    )
+    const started = await qa()
+    expect(started).toMatchObject({
+      type: 'agent-status',
+      record: {
+        key: 'agent-e2e',
+        sessionId: 'sess-e2e',
+        agentId: 'agent-e2e',
+        text: 'Building',
+        activity: 'busy',
+      },
+    })
+
+    const settleRes = await fetch(
+      `http://localhost:${PORT}/agent-status/settle`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          sessionId: 'sess-e2e',
+        }),
+      },
+    )
+    expect(settleRes.status).toBe(200)
+    const settled = await qa()
+    expect(settled).toMatchObject({
+      type: 'agent-status',
+      record: {
+        key: 'agent-e2e',
+        activity: 'idle',
+      },
+    })
+
+    const removeRes = await fetch(
+      `http://localhost:${PORT}/agent-status/remove`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          sessionId: 'sess-e2e',
+          agentId: 'agent-e2e',
+        }),
+      },
+    )
+    expect(removeRes.status).toBe(200)
+    const removed = await qa()
+    expect(removed).toEqual({
+      type: 'agent-status-remove',
+      sessionId: 'sess-e2e',
+      agentId: 'agent-e2e',
+    })
+
+    await closeWs(peerA)
+  })
 })

@@ -510,10 +510,6 @@ export const startRelay = (
         })
       },
       message: (ws, raw) => {
-        if (!consumeToken(ctx, ws)) {
-          return
-        }
-
         let json: unknown
         try {
           json = JSON.parse(raw as string)
@@ -526,6 +522,20 @@ export const startRelay = (
           return
         }
         const frame = parsed.data
+
+        // status-monitor.md review corrections — dispatch()'s busy+skeleton
+        // emit doubles the server→relay frame rate (one agent-status frame
+        // per identity-bearing command, Task 7). agent-status frames are
+        // internal status chatter: dropping one is harmless (a later emit
+        // supersedes it, or status-sync replays current state), but dropping
+        // a paired COMMAND frame hangs the caller. Exempt agent-status from
+        // the token bucket so a command burst never gets silently dropped.
+        if (
+          frame.type !== 'agent-status' &&
+          !consumeToken(ctx, ws)
+        ) {
+          return
+        }
 
         if (frame.type === 'join') {
           handleJoin(ctx, ws, frame.channel)

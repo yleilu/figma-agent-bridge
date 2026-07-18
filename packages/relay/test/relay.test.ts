@@ -1240,6 +1240,101 @@ describe('relay', () => {
         stopRelay(idleServer)
       }
     })
+
+    it('does not drop command frames when interleaved agent-status skeletons share the token bucket (status-monitor.md review corrections)', async () => {
+      // dispatch() sends one agent-status skeleton immediately before every
+      // identity-bearing command (Task 7), doubling the server→relay frame
+      // rate on the same socket. A small, deterministic token bucket proves
+      // the point fast: N command frames alone fit the burst; N commands
+      // PLUS N skeletons (2N frames) would overflow it if agent-status still
+      // consumed a token. agent-status frames must be exempt from
+      // `consumeToken` so a burst of real commands never gets silently
+      // dropped (a dropped command frame hangs the caller forever).
+      const BURST_PORT = 3140
+      const burstServer = startRelay(BURST_PORT, {
+        rateBurst: 20,
+        rateTokensPerSec: 1,
+      })
+      const connectBurst = (): Promise<WebSocket> =>
+        new Promise((resolve, reject) => {
+          const ws = new WebSocket(
+            `ws://localhost:${BURST_PORT}`,
+          )
+          ws.onopen = () => resolve(ws)
+          ws.onerror = () =>
+            reject(new Error('WebSocket connection failed'))
+        })
+
+      try {
+        const server = await connectBurst() // the "MCP server" socket
+        const plugin = await connectBurst() // the "plugin" socket
+        const sQ = createMessageQueue(server)
+        const pQ = createMessageQueue(plugin)
+        server.send(
+          JSON.stringify({
+            type: 'join',
+            channel: 'burst-ch',
+          }),
+        )
+        await sQ()
+        plugin.send(
+          JSON.stringify({
+            type: 'join',
+            channel: 'burst-ch',
+          }),
+        )
+        await pQ()
+
+        const N = 15 // <= rateBurst(20) alone; 2*N (30) overflows it
+        const commandFrames: unknown[] = []
+        plugin.onmessage = event => {
+          const parsed = JSON.parse(
+            event.data as string,
+          ) as { type: string }
+          if (parsed.type === 'broadcast') {
+            commandFrames.push(parsed)
+          }
+        }
+
+        for (let i = 0; i < N; i++) {
+          // Mirrors dispatch(): skeleton immediately followed by the real
+          // command, on the same server socket.
+          server.send(
+            JSON.stringify({
+              type: 'agent-status',
+              channel: 'burst-ch',
+              record: {
+                key: 'a',
+                sessionId: 's',
+                level: 'normal',
+                text: null,
+                activity: 'busy',
+                updatedAt: Date.now(),
+              },
+            }),
+          )
+          server.send(
+            JSON.stringify({
+              type: 'message',
+              channel: 'burst-ch',
+              message: {
+                command: 'inspect',
+                params: {},
+                meta: { requestId: `r${i}` },
+              },
+            }),
+          )
+        }
+
+        await Bun.sleep(150)
+        expect(commandFrames.length).toBe(N)
+
+        await closeWs(server)
+        await closeWs(plugin)
+      } finally {
+        stopRelay(burstServer)
+      }
+    })
   })
 })
 
