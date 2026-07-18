@@ -2937,6 +2937,17 @@ const handleCommand = async (
         }
       }
 
+      // warn-on-no-op (T7, B6): the document/root node's .name is read-only in
+      // the plugin API — the setter silently no-ops. Renaming the file is
+      // impossible via the plugin API, so push an honest warning and drop
+      // spec.name so applyCommonProperties skips the no-op assignment.
+      if (spec.name !== undefined && node.type === 'DOCUMENT') {
+        warnings.push(
+          'name ignored — the file/document node cannot be renamed via the Figma plugin API',
+        )
+        delete spec.name
+      }
+
       await applyCommonProperties(
         node as SceneNode,
         spec,

@@ -853,7 +853,20 @@ export const createMockPlugin = (
         // than hardcoding "SLICE" / omitting opacity.
         const unWarnings: string[] = []
         const unIncompat = unId.startsWith('incompat:')
-        const unType = unIncompat ? 'SLICE' : 'FRAME'
+        const unIsDoc = unId.startsWith('doc:')
+        const unType = unIsDoc
+          ? 'DOCUMENT'
+          : unIncompat
+            ? 'SLICE'
+            : 'FRAME'
+        // B6 (T7 honesty): DOCUMENT node — name is read-only in the plugin API.
+        // Mirror the real plugin guard: warn and skip (do NOT echo spec.name).
+        if (unIsDoc && spec.name !== undefined) {
+          unWarnings.push(
+            'name ignored — the file/document node cannot be renamed via the Figma plugin API',
+          )
+          delete spec.name
+        }
         if (unIncompat) {
           // capability key → spec key, matching the plugin's capabilityChecks.
           const capChecks: [string, string][] = [
