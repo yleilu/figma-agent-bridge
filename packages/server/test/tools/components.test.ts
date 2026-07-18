@@ -376,6 +376,133 @@ describe('handleUpdateComponent', () => {
     expect(out.slotsSkipped).toEqual(['header', 'body'])
     expect(out.warnings[0]).toContain('COMPONENT_SET')
   })
+
+  // B3: targetNodeId + field binding — handler threads them to the plugin
+  it('B3: forwards targetNodeId and field in each add entry to UPDATE_COMPONENT', async () => {
+    const sent: Sent[] = []
+    await handleUpdateComponent(
+      {
+        componentId: 'c:1',
+        add: [
+          {
+            name: 'Label',
+            type: 'TEXT',
+            defaultValue: 'Hi',
+            targetNodeId: '2:5',
+            field: 'characters',
+          },
+        ],
+      },
+      stubClient({
+        sent,
+        reply: {
+          id: 'c:1',
+          properties: [
+            {
+              id: 'Label#1:0',
+              name: 'Label',
+              type: 'TEXT',
+              defaultValue: 'Hi',
+            },
+          ],
+          slotsCreated: [],
+          slotsSkipped: [],
+          warnings: [],
+        },
+      }),
+    )
+    const addEntry = (
+      sent[0].params?.add as {
+        name: string
+        targetNodeId?: string
+        field?: string
+      }[]
+    )[0]
+    expect(addEntry.targetNodeId).toBe('2:5')
+    expect(addEntry.field).toBe('characters')
+  })
+
+  it('B3: field is optional — add entry without field is still forwarded', async () => {
+    const sent: Sent[] = []
+    await handleUpdateComponent(
+      {
+        componentId: 'c:1',
+        add: [
+          {
+            name: 'Visible',
+            type: 'BOOLEAN',
+            defaultValue: true,
+            targetNodeId: '3:2',
+            // field omitted — plugin should infer 'visible' from type BOOLEAN
+          },
+        ],
+      },
+      stubClient({
+        sent,
+        reply: {
+          id: 'c:1',
+          properties: [],
+          slotsCreated: [],
+          slotsSkipped: [],
+          warnings: [],
+        },
+      }),
+    )
+    const addEntry = (
+      sent[0].params?.add as {
+        name: string
+        targetNodeId?: string
+        field?: string
+      }[]
+    )[0]
+    expect(addEntry.targetNodeId).toBe('3:2')
+    expect(addEntry.field).toBeUndefined()
+  })
+
+  it('B3: T7 unbound warning — omitting targetNodeId makes plugin emit honest warning (mock echo)', async () => {
+    // When targetNodeId is absent, the plugin adds the property but warns it is
+    // unbound so that set_instance won't silently be inert.
+    const result = await handleUpdateComponent(
+      {
+        componentId: 'c:1',
+        add: [
+          {
+            name: 'Label',
+            type: 'TEXT',
+            defaultValue: 'Hi',
+          },
+        ],
+      },
+      stubClient({
+        reply: {
+          id: 'c:1',
+          properties: [
+            {
+              id: 'Label#1:0',
+              name: 'Label',
+              type: 'TEXT',
+              defaultValue: 'Hi',
+            },
+          ],
+          slotsCreated: [],
+          slotsSkipped: [],
+          warnings: [
+            'property "Label" added but no targetNodeId given — it is unbound and set_instance will be inert',
+          ],
+        },
+      }),
+    )
+    // Must ride on SUCCESS, not Error
+    expect(result.content[0].text).not.toContain('Error:')
+    const out = JSON.parse(result.content[0].text) as {
+      warnings: string[]
+    }
+    expect(out.warnings).toHaveLength(1)
+    expect(out.warnings[0]).toContain('unbound')
+    expect(out.warnings[0]).toContain(
+      'set_instance will be inert',
+    )
+  })
 })
 
 describe('handleCombineVariants', () => {

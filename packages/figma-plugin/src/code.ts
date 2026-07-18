@@ -244,6 +244,23 @@ const exportNodeDocument = async (
       doc.gridRowGap = gridNode.gridRowGap
       doc.gridColumnGap = gridNode.gridColumnGap
     }
+    // B3 — componentPropertyReferences: binding map from a field ('characters',
+    // 'visible', 'mainComponent') to the canonical component property id. Set by
+    // update_component's add+targetNodeId binding; readable here for T2 round-trip.
+    // Present on component sublayers and instance sublayers; null or absent on
+    // everything else. Only enrich when non-null and non-empty.
+    if ('componentPropertyReferences' in node) {
+      const refs = (
+        node as unknown as {
+          componentPropertyReferences:
+            | Record<string, string>
+            | null
+        }
+      ).componentPropertyReferences
+      if (refs !== null && Object.keys(refs).length > 0) {
+        doc.componentPropertyReferences = refs
+      }
+    }
     // M14 — component.key + component.remote enrichment for INSTANCE nodes.
     // ROOT-ONLY (isRoot===true) so we stay O(targets) not O(document) — a
     // descendant instance inside a deep inspect keeps its cheap componentId-only
@@ -2326,21 +2343,91 @@ const handleCommand = async (
       // add. addComponentProperty returns the CANONICAL property id
       // (e.g. "Label#1:0") that agents need for later setProperties. It is
       // surfaced inside the returned `properties` array (the entry's `id`).
+      //
+      // B3 binding: if targetNodeId is provided, resolve the child and set
+      // componentPropertyReferences to bind the property to that node's field.
+      // If targetNodeId is absent, warn (T7 honesty: set_instance will be inert).
+      // field is inferred from type when omitted: TEXT→characters, BOOLEAN→visible,
+      // INSTANCE_SWAP→mainComponent. MERGE into existing refs (never clobber).
       const addProps = params.add as
         | {
             name: string
             type: string
             defaultValue: string | boolean
+            targetNodeId?: string
+            field?: 'characters' | 'visible' | 'mainComponent'
           }[]
         | undefined
       if (addProps) {
         for (const p of addProps) {
           try {
-            comp.addComponentProperty(
+            const canonicalId = comp.addComponentProperty(
               p.name,
               p.type as ComponentPropertyType,
               p.defaultValue,
             )
+            if (p.targetNodeId) {
+              // Resolve the binding after adding the property.
+              const child = await figma.getNodeByIdAsync(
+                p.targetNodeId,
+              )
+              if (child === null || child === undefined) {
+                ucWarnings.push(
+                  'targetNodeId "' +
+                    p.targetNodeId +
+                    '" not found — property "' +
+                    p.name +
+                    '" added but binding skipped',
+                )
+              } else {
+                // Infer field from property type when not specified.
+                const inferredField =
+                  p.field ??
+                  (p.type === 'TEXT'
+                    ? 'characters'
+                    : p.type === 'BOOLEAN'
+                      ? 'visible'
+                      : 'mainComponent')
+                try {
+                  const bindable = child as unknown as {
+                    componentPropertyReferences?:
+                      | Record<string, string>
+                      | null
+                  }
+                  const existing =
+                    bindable.componentPropertyReferences ?? {}
+                  ;(
+                    child as unknown as {
+                      componentPropertyReferences: Record<
+                        string,
+                        string
+                      >
+                    }
+                  ).componentPropertyReferences = {
+                    ...existing,
+                    [inferredField]: canonicalId,
+                  }
+                } catch (e) {
+                  ucWarnings.push(
+                    'Failed to bind property "' +
+                      p.name +
+                      '" to node "' +
+                      p.targetNodeId +
+                      '" field "' +
+                      inferredField +
+                      '": ' +
+                      String(e),
+                  )
+                }
+              }
+            } else {
+              // T7 honesty: no targetNodeId → property is unbound.
+              ucWarnings.push(
+                'property "' +
+                  p.name +
+                  '" added but no targetNodeId given — it is unbound and set_instance will be inert',
+              )
+            }
           } catch (e) {
             ucWarnings.push(
               'Failed to add property "' +

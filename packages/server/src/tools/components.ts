@@ -81,6 +81,8 @@ export const handleUpdateComponent = async (
       name: string
       type: string
       defaultValue: string | boolean
+      targetNodeId?: string
+      field?: 'characters' | 'visible' | 'mainComponent'
     }[]
     edit?: {
       name: string

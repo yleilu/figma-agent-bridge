@@ -962,3 +962,33 @@ describe('toNodeSpec — B7 rotated node size (prefer enriched width/height over
     expect(spec.size).toEqual([100, 50])
   })
 })
+
+// ─── componentPropertyReferences read-back ────────────────────────────────────
+
+describe('toNodeSpec — componentPropertyReferences read-back', () => {
+  it('lifts componentPropertyReferences from a raw node carrying the map', () => {
+    const spec = toNodeSpec(
+      {
+        id: '1:12',
+        type: 'TEXT',
+        componentPropertyReferences: {
+          characters: 'Label#45:13',
+        },
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.componentPropertyReferences).toEqual({
+      characters: 'Label#45:13',
+    })
+  })
+
+  it('omits componentPropertyReferences when absent from raw node', () => {
+    const spec = toNodeSpec(
+      { id: '1:13', type: 'TEXT' } as never,
+      { depth: 0 },
+    )
+    expect(spec).not.toHaveProperty(
+      'componentPropertyReferences',
+    )
+  })
+})

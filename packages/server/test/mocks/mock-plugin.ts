@@ -1477,6 +1477,11 @@ export const createMockPlugin = (
               name: string
               type: string
               defaultValue: string | boolean
+              targetNodeId?: string
+              field?:
+                | 'characters'
+                | 'visible'
+                | 'mainComponent'
             }[]
           | undefined
         const ucExpose = cmd.params?.expose as
@@ -1500,6 +1505,19 @@ export const createMockPlugin = (
               type: p.type,
               defaultValue: p.defaultValue,
             })
+            // B3: if no targetNodeId, the property is unbound — emit the honest
+            // warning that matches the real plugin's T7 contract.
+            if (!p.targetNodeId) {
+              ucWarnings.push(
+                'property "' +
+                  p.name +
+                  '" added but no targetNodeId given — it is unbound and set_instance will be inert',
+              )
+            }
+            // When targetNodeId IS present, the real plugin would set
+            // componentPropertyReferences on the child. The mock cannot do that
+            // (no live Figma node tree), so it simply skips — headless fidelity
+            // boundary documented in comments.
           }
         }
         if (ucExpose && ucExpose.length > 0) {

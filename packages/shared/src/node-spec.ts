@@ -203,6 +203,16 @@ export type NodeSpec = {
    */
   explicitVariableModes?: Record<string, string>
 
+  /**
+   * Read-only projection. Written through update_component's targetNodeId/field
+   * binding, not via NodeSpec.
+   *
+   * Maps component property name → the field on this node that the property
+   * controls (e.g. `{ characters: 'Label#45:13' }`). Populated by plugin
+   * export enrichment (feature-detected). Omitted when absent.
+   */
+  componentPropertyReferences?: Record<string, string>
+
   // children — reads: stubs past depth; writes: nested specs
   children?: NodeSpecOrStub[]
 }

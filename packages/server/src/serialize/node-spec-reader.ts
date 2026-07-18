@@ -903,6 +903,21 @@ const buildNode = (
     out.explicitVariableModes =
       raw.explicitVariableModes as Record<string, string>
   }
+  // componentPropertyReferences — enriched by the plugin's exportNodeDocument
+  // (feature-detected; not in JSON_REST_V1). Maps component property name →
+  // the field on this node that the property controls (e.g. { characters:
+  // 'Label#45:13' }). Read-only projection; write via update_component's
+  // targetNodeId/field binding.
+  if (
+    raw.componentPropertyReferences &&
+    typeof raw.componentPropertyReferences === 'object'
+  ) {
+    out.componentPropertyReferences =
+      raw.componentPropertyReferences as Record<
+        string,
+        string
+      >
+  }
 
   const opacity = num(raw.opacity)
   if (opacity !== undefined && opacity < 1) {
