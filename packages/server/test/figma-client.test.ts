@@ -636,6 +636,114 @@ describe('figma-client', () => {
     await closeWs(peer)
     client.disconnect()
   })
+
+  it('notifyStatus pushes an agent-status frame to only the scoped file channel', async () => {
+    const client = createFigmaClient(WS_URL)
+    await client.joinChannel('file-fkA', 'fkA')
+    await client.joinChannel('file-fkB', 'fkB')
+
+    const peerA = await connectRaw()
+    const qa = createMessageQueue(peerA)
+    peerA.send(
+      JSON.stringify({ type: 'join', channel: 'file-fkA' }),
+    )
+    await qa() // join ack
+
+    const peerB = await connectRaw()
+    const qb = createMessageQueue(peerB)
+    peerB.send(
+      JSON.stringify({ type: 'join', channel: 'file-fkB' }),
+    )
+    await qb() // join ack
+    let peerBExtra = 0
+    peerB.onmessage = () => {
+      peerBExtra++
+    }
+
+    const rec = {
+      key: 'k',
+      sessionId: 's',
+      level: 'normal' as const,
+      text: 'Hi',
+      activity: 'busy' as const,
+      updatedAt: 1,
+    }
+    client.forFile('fkA').notifyStatus(rec)
+
+    // The relay's broadcast to OTHER channel members carries only `record`
+    // (no `channel` — the receiving plugin is already scoped to that channel).
+    const got = await qa()
+    expect(got).toEqual({
+      type: 'agent-status',
+      record: rec,
+    })
+
+    // peerB (a different file's channel) must NOT receive it.
+    await Bun.sleep(50)
+    expect(peerBExtra).toBe(0)
+
+    await closeWs(peerA)
+    await closeWs(peerB)
+    client.disconnect()
+  })
+
+  it('ignores an inbound agent-status broadcast (no throw) and stays usable', async () => {
+    const client = createFigmaClient(WS_URL)
+    await client.joinChannel('file-fkG', 'fkG')
+
+    const peer = await connectRaw()
+    const qp = createMessageQueue(peer)
+    peer.send(
+      JSON.stringify({ type: 'join', channel: 'file-fkG' }),
+    )
+    await qp() // join ack
+
+    // Echo mock: reply to the 'inspect' command so sendCommand resolves below.
+    peer.onmessage = event => {
+      const msg = JSON.parse(event.data as string)
+      if (
+        msg.type === 'broadcast' &&
+        msg.message?.command === 'inspect'
+      ) {
+        peer.send(
+          JSON.stringify({
+            type: 'message',
+            channel: 'file-fkG',
+            message: {
+              meta: msg.message.meta,
+              result: 'ok',
+            },
+          }),
+        )
+      }
+    }
+
+    // The relay broadcasts this agent-status frame to `client`'s socket too
+    // (it's a channel member) — before the guard, handleMessage would fall
+    // through to `message.command` on a frame with no `message` and throw.
+    peer.send(
+      JSON.stringify({
+        type: 'agent-status',
+        channel: 'file-fkG',
+        record: {
+          key: 'k2',
+          level: 'normal',
+          text: 'hi',
+          activity: 'busy',
+          updatedAt: 2,
+        },
+      }),
+    )
+
+    // Prove the client is still usable: a normal round trip still resolves.
+    const result = await client
+      .forFile('fkG')
+      .sendCommand('inspect', { nodeId: '1:2' })
+    expect(result).toBe('ok')
+
+    await closeWs(peer)
+    client.disconnect()
+  })
 })
 
 describe('isInstanceDead', () => {
