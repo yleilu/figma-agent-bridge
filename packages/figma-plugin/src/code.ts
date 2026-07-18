@@ -1894,11 +1894,30 @@ const handleCommand = async (
           description?: string
         }
       > = {}
+      // B8 — scan budget (T10): bounding the O(all-instances) remote-discovery
+      // walk to avoid exceeding the 30 s command timeout on large UI-kit docs.
+      // Defaults: 2 000 instances scanned, 500 distinct remote mains. The caller
+      // may override MAX_INSTANCES via params.maxInstances (optional; no wire-
+      // version bump — the field is simply ignored by older servers).
+      const MAX_INSTANCES =
+        typeof params.maxInstances === 'number' &&
+        params.maxInstances > 0
+          ? (params.maxInstances as number)
+          : 2000
+      const MAX_REMOTE_MAINS = 500
+      let scanTruncated = false
+      let scanned = 0
+
       if (includeRemote) {
         const instances = figma.root.findAllWithCriteria({
           types: ['INSTANCE'],
         })
         for (const inst of instances) {
+          if (scanned >= MAX_INSTANCES || Object.keys(remoteMap).length >= MAX_REMOTE_MAINS) {
+            scanTruncated = true
+            break
+          }
+          scanned++
           const main = inst.mainComponent
           if (main && main.remote) {
             const mkey = main.key
@@ -1924,15 +1943,30 @@ const handleCommand = async (
       )
       const remoteAll = Object.values(remoteMap)
 
+      // Base reply: always carry local + remote (partial if scan was truncated).
+      const reply: {
+        local: typeof localAll
+        remote: typeof remoteAll
+        warnings?: string[]
+        scanTruncated?: boolean
+        scanned?: number
+        found?: number
+      } = { local: localAll, remote: remoteAll }
+
       // warnings[] rides on the success reply only when a node degraded (T7);
       // a clean read carries no `warnings` key — same shape the server expects.
-      return componentWarnings.length > 0
-        ? {
-            local: localAll,
-            remote: remoteAll,
-            warnings: componentWarnings,
-          }
-        : { local: localAll, remote: remoteAll }
+      if (componentWarnings.length > 0) {
+        reply.warnings = componentWarnings
+      }
+
+      // B8 scan-budget metadata: lets the server surface a truncation WARNING.
+      if (scanTruncated) {
+        reply.scanTruncated = true
+        reply.scanned = scanned
+        reply.found = remoteAll.length
+      }
+
+      return reply
     }
 
     // search (Rule A): the plugin SCANS the requested scope and returns the RAW

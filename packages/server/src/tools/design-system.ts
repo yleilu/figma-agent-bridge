@@ -231,6 +231,9 @@ export const handleGetComponents = async (
       local?: unknown
       remote?: unknown
       warnings?: unknown
+      scanTruncated?: boolean
+      scanned?: number
+      found?: number
       error?: string
     } | null
 
@@ -300,9 +303,20 @@ export const handleGetComponents = async (
     // per-set variant projection, that set degrades to a warning and the rest
     // still return. The warnings[] rides on the SUCCESS envelope (never thrown);
     // a clean read carries no `warnings` key.
-    const warnings = Array.isArray(raw.warnings)
-      ? (raw.warnings as string[])
-      : undefined
+    const warnings: string[] = Array.isArray(raw.warnings)
+      ? (raw.warnings as string[]).slice()
+      : []
+
+    // B8 — remote scan budget (T10): when the plugin's instance-scan hit the
+    // MAX_INSTANCES budget it sets scanTruncated:true on the reply. Surface a
+    // WARNING so the agent knows the remote list is partial and can instruct the
+    // user to narrow the query or raise maxInstances.
+    if (raw.scanTruncated === true) {
+      const budget = raw.scanned ?? 'unknown'
+      warnings.push(
+        `remote-component scan truncated at ${budget} instances; results may be incomplete — narrow the query or raise maxInstances`,
+      )
+    }
     const envelope: {
       results: unknown[]
       truncated: boolean
@@ -315,7 +329,7 @@ export const handleGetComponents = async (
     if (bounded.cursor !== undefined) {
       envelope.cursor = bounded.cursor
     }
-    if (warnings !== undefined && warnings.length > 0) {
+    if (warnings.length > 0) {
       envelope.warnings = warnings
     }
 
