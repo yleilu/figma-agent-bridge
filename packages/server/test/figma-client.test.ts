@@ -572,6 +572,41 @@ describe('figma-client', () => {
 
     server = startRelay(TEST_PORT)
   })
+
+  it('forFile stamps sessionId/agentId/agentType into command meta', async () => {
+    const client = createFigmaClient(WS_URL)
+    await client.joinChannel('id-ch', 'fk-id')
+
+    // A raw peer joins the same channel to observe forwarded frames.
+    const peer = await connectRaw()
+    const next = createMessageQueue(peer) // set up BEFORE join so the ack is captured
+    peer.send(JSON.stringify({ type: 'join', channel: 'id-ch' }))
+    await next() // consume the join system ack — peer is now a confirmed member,
+    // so it will receive the broadcast (the relay only fans out to current members)
+
+    void client
+      .forFile('fk-id', {
+        sessionId: 'sess-1',
+        agentId: 'agent-1',
+        agentType: 'general-purpose',
+      })
+      .sendCommand('inspect', { nodeId: '1:2' })
+      .catch(() => {}) // disconnect() below rejects the still-pending command
+
+    // Drain until the forwarded 'inspect' command arrives.
+    let frame: any
+    do {
+      frame = await next()
+    } while (frame?.message?.command !== 'inspect')
+
+    expect(frame.message.meta.fileKey).toBe('fk-id')
+    expect(frame.message.meta.sessionId).toBe('sess-1')
+    expect(frame.message.meta.agentId).toBe('agent-1')
+    expect(frame.message.meta.agentType).toBe('general-purpose')
+
+    await closeWs(peer)
+    client.disconnect()
+  })
 })
 
 describe('isInstanceDead', () => {
