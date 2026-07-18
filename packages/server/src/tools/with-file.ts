@@ -36,7 +36,7 @@ import {
  */
 type FileHandlerParams<S extends ZodRawShape> = Omit<
   objectOutputType<S, ZodTypeAny>,
-  'fileKey' | 'sessionId'
+  'fileKey' | 'sessionId' | 'agentId' | 'agentType'
 >
 
 /**
