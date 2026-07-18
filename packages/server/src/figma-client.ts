@@ -34,7 +34,11 @@ export type FigmaClient = {
   ) => Promise<unknown>
   forFile: (
     fileKey: string,
-    opts?: { sessionId?: string },
+    opts?: {
+      sessionId?: string
+      agentId?: string
+      agentType?: string
+    },
   ) => ScopedFigmaClient
   notify: (
     command: string,
@@ -392,7 +396,11 @@ export const createFigmaClient = (
     command: string,
     params: Record<string, unknown> | undefined,
     timeoutMs: number,
-    sessionId?: string,
+    identity?: {
+      sessionId?: string
+      agentId?: string
+      agentType?: string
+    },
   ): Promise<unknown> => {
     if (ws === null || ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error('Not connected'))
@@ -419,8 +427,14 @@ export const createFigmaClient = (
       pending.set(requestId, { resolve, reject, timer })
 
       const meta: Meta = { fileKey, requestId }
-      if (sessionId !== undefined) {
-        meta.sessionId = sessionId
+      if (identity?.sessionId !== undefined) {
+        meta.sessionId = identity.sessionId
+      }
+      if (identity?.agentId !== undefined) {
+        meta.agentId = identity.agentId
+      }
+      if (identity?.agentType !== undefined) {
+        meta.agentType = identity.agentType
       }
       const cmdMessage: CommandMessage = {
         command,
@@ -521,17 +535,15 @@ export const createFigmaClient = (
   // sessionId (reserved, forward-compat) rides meta when the wrapper supplies it.
   const forFile = (
     fileKey: string,
-    opts?: { sessionId?: string },
+    opts?: {
+      sessionId?: string
+      agentId?: string
+      agentType?: string
+    },
   ): ScopedFigmaClient => ({
     fileKey,
     sendCommand: (command, params, timeoutMs = 3e4) =>
-      dispatch(
-        fileKey,
-        command,
-        params,
-        timeoutMs,
-        opts?.sessionId,
-      ),
+      dispatch(fileKey, command, params, timeoutMs, opts),
   })
 
   // Fire-and-forget send (notify, sendReply). A broadcast frame carries no
@@ -561,11 +573,10 @@ export const createFigmaClient = (
     command: string,
     params: Record<string, unknown>,
   ): void => {
-    sendFrame({
-      command,
-      params,
-      meta: { requestId: genId('ntf') },
-    })
+    // request-envelope.md — pushes are unsolicited and carry NO requestId. A push
+    // is broadcast to every channel member and correlates to no pending command;
+    // the plugin acts on it by `command`, not by id.
+    sendFrame({ command, params })
   }
 
   const onRequest = (

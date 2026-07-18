@@ -64,6 +64,8 @@ export type RelayOutgoing = BroadcastMessage | SystemMessage
 export type Meta = {
   fileKey?: string | null
   sessionId?: string
+  agentId?: string
+  agentType?: string
   requestId?: string
   epoch?: string
 }

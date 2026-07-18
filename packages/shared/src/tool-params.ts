@@ -87,7 +87,19 @@ export const fileTargetParamsSchema = z.object({
     .string()
     .optional()
     .describe(
-      'Reserved — server-managed. Do NOT set. Injected by the session PreToolUse hook (request-envelope.md); ignored by this surface today.',
+      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook (request-envelope.md); ignored by this surface today.',
+    ),
+  agentId: z
+    .string()
+    .optional()
+    .describe(
+      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); ignored by this surface today.',
+    ),
+  agentType: z
+    .string()
+    .optional()
+    .describe(
+      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); ignored by this surface today.',
     ),
 })
 

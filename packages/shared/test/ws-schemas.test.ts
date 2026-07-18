@@ -349,4 +349,19 @@ describe('meta envelope', () => {
     })
     expect(r.success).toBe(true)
   })
+
+  it('metaSchema tolerates agentId + agentType (per-agent identity headers)', () => {
+    const r = metaSchema.safeParse({
+      fileKey: 'fk',
+      requestId: 'r',
+      sessionId: 's',
+      agentId: 'ad77d15fc6c0a67bb',
+      agentType: 'general-purpose',
+    })
+    expect(r.success).toBe(true)
+    if (r.success) {
+      expect(r.data.agentId).toBe('ad77d15fc6c0a67bb')
+      expect(r.data.agentType).toBe('general-purpose')
+    }
+  })
 })

@@ -4,8 +4,12 @@ import { z } from 'zod'
 export const metaSchema = z.object({
   // fileKey the request is addressed to (B3); null when unbound. Absent on replies.
   fileKey: z.string().nullable().optional(),
-  // Reserved header — hook-injected session id (request-envelope.md); not used yet.
+  // Reserved header — hook-injected session id (request-envelope.md).
   sessionId: z.string().optional(),
+  // Reserved headers — hook-injected per-agent identity (request-envelope.md);
+  // present only for subagent-originated calls. agentType is a display label.
+  agentId: z.string().optional(),
+  agentType: z.string().optional(),
   // genId('cmd') per request; correlates a reply to its command (pending map key).
   requestId: z.string().optional(),
   // Plugin connection nonce for change-feed pushes (forward-compat; not used here).

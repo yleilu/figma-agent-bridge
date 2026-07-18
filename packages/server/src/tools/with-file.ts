@@ -36,7 +36,7 @@ import {
  */
 type FileHandlerParams<S extends ZodRawShape> = Omit<
   objectOutputType<S, ZodTypeAny>,
-  'fileKey' | 'sessionId'
+  'fileKey' | 'sessionId' | 'agentId' | 'agentType'
 >
 
 /**
@@ -55,14 +55,29 @@ export const withFile =
     ) => Promise<R>,
   ) =>
   async (
-    args: P & { fileKey: string; sessionId?: string },
+    args: P & {
+      fileKey: string
+      sessionId?: string
+      agentId?: string
+      agentType?: string
+    },
   ): Promise<R | ToolResult> => {
     const gate = await requireFile(client, args.fileKey)
     if (!gate.ok) {
       return gate.result
     }
-    const { fileKey, sessionId, ...rest } = args
-    const scoped = client.forFile(fileKey, { sessionId })
+    const {
+      fileKey,
+      sessionId,
+      agentId,
+      agentType,
+      ...rest
+    } = args
+    const scoped = client.forFile(fileKey, {
+      sessionId,
+      agentId,
+      agentType,
+    })
     try {
       return await handler(rest as unknown as P, scoped)
     } catch (e) {
