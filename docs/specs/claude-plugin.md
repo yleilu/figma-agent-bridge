@@ -103,7 +103,7 @@ figma-agent-bridge/                       repo == marketplace
 │   │   ├── figma-designer.md             frontmatter: tools:, model: (§6.2)
 │   │   └── figma-reviewer.md             (§6.5)
 │   ├── hooks/
-│   │   ├── hooks.json                    PreToolUse → inject session_id; UserPromptSubmit → presence status block (§ plugin-presence.md)
+│   │   ├── hooks.json                    PreToolUse → inject session_id (+ agent_id/agent_type on subagent calls); UserPromptSubmit → presence status block (§ plugin-presence.md)
 │   └── README.md                         install + bun prerequisite check + Figma-plugin-import steps
 ├── packages/                             the Bun monorepo — UNCHANGED except build target
 │   ├── server/                           → MCP stdio server
@@ -119,15 +119,20 @@ Conventions confirmed from real plugins: MCP config lives in `.mcp.json` at plug
 `name, description, version, author, homepage, repository, license, keywords`; skills are
 `skills/<name>/SKILL.md`; agents are flat `agents/<name>.md` with `tools:`/`model:`
 frontmatter; hooks are `hooks/hooks.json` + sibling scripts (extensionless to avoid
-Windows auto-`bash` mangling). `hooks.json` holds **two hooks**: (1) a **`PreToolUse`** hook,
-matcher `mcp__figma-bridge__*`, that injects its native `session_id` into each MCP call's arguments
-(the reserved `sessionId` header — see
-[[figma-bridge/docs/specs/request-envelope|request-envelope.md]]); and (2) the
+Windows auto-`bash` mangling). `hooks.json` holds two **core** hooks (feature specs add more — see end of
+section): (1) a **`PreToolUse`** hook,
+matcher `mcp__figma-bridge__*`, that injects its native `session_id` — and, for subagent-originated
+calls, `agent_id`/`agent_type` — into each MCP call's arguments (the reserved `sessionId`/`agentId`/
+`agentType` headers — see [[figma-bridge/docs/specs/request-envelope|request-envelope.md]]); it must be
+the **only** `PreToolUse` hook rewriting these arguments (parallel rewriters race). And (2) the
 **`UserPromptSubmit`** presence hook — injecting the always-on status block that surfaces plugin/file
 availability and pending user edits (passive plugin/file awareness) — which uses its **native**
 `session_id` (the same value the `PreToolUse` hook injects), specified in
 [[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]] (folding in the change-feed count,
-[[figma-bridge/docs/specs/change-feed|change-feed.md]]).
+[[figma-bridge/docs/specs/change-feed|change-feed.md]]). Beyond these two core hooks, the **status
+monitor** ([[figma-bridge/docs/specs/status-monitor|status-monitor.md]]) registers three more
+`hooks.json` entries — `Stop`, `SubagentStop`, `SessionEnd` — for per-agent status lifecycle (owned by
+that spec).
 
 ## 5. The MCP server — JS bundle for the developer route
 
@@ -163,8 +168,9 @@ developer route on the same runtime used in development and testing.
 
 **No `SessionStart` download bootstrap.** There is no `hooks/bootstrap` script and no binary
 fetch on first run. The `SessionStart` hook used in the old design is removed; the only
-remaining hooks are the `PreToolUse` session-id injector and the `UserPromptSubmit` presence
-hook (see §4 / `hooks.json`).
+packaged **core** hooks are the `PreToolUse` identity injector (`session_id` + subagent `agent_id`/
+`agent_type`) and the `UserPromptSubmit` presence hook; the status monitor adds `Stop`/`SubagentStop`/
+`SessionEnd` (see §4 / `hooks.json` and [[figma-bridge/docs/specs/status-monitor|status-monitor.md]]).
 
 **Production config.** The feedback Worker URL is compiled into the bundle as a build-time
 constant via `bun build --define`. The Worker **secret is _not_ compiled in** — a distributed
@@ -447,6 +453,11 @@ as a comment on the mapped issue (the Worker holds the GitHub token; the plugin 
 passes a file path). Nothing leaves the machine until the user clicks Send.
 
 This milestone **packages** that mechanism and adds the plugin-layer pieces:
+
+> **Note:** the **in-plugin Feedback UI + human-gated Send** described here is **removed by**
+> [[figma-bridge/docs/specs/status-monitor|status-monitor.md]] (the panel becomes the agent status
+> monitor); its replacement send flow is a pending follow-up. `record_feedback` (the write path) and the
+> Worker are unchanged. Read the Feedback-UI wording below as the prior design.
 
 - `record_feedback` ships **inside the MCP server**; the Feedback UI section ships in the
   figma-plugin — both bundled by the plugin install.

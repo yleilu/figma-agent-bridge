@@ -35,8 +35,8 @@ request's **body vs. headers**:
 
 - **The agent's intent** — which tool, on which file, with what arguments. The *body*
   (`command` + `params`); the file target is the one part of it that must be explicit.
-- **Ambient request metadata** — *who* is asking (session), *which* request (correlation). The agent
-  never authors this; it is stamped for it. The *headers* (`meta`).
+- **Ambient request metadata** — *who* is asking (session, and which agent within it), *which* request
+  (correlation). The agent never authors this; it is stamped for it. The *headers* (`meta`).
 
 The rule that makes this clean: **a value is a param if the agent chooses it, and a header if the
 server or platform provides it.** Everything below follows from that one distinction.
@@ -48,7 +48,9 @@ server or platform provides it.** Everything below follows from that one distinc
 | Field | Kind | Generator · when · how | Consumers |
 |---|---|---|---|
 | `fileKey` | **param** (agent-selected) | an existing file identity the agent picks per call, sent in `arguments` | relay channel routing, plugin B3 guard, per-file index / change-feed buffers |
-| `sessionId` | **header** (platform, hook-injected — **reserved, agent never sets**) | the Claude Code `session_id`, injected into each call's `arguments` by a `PreToolUse` hook (see Sourcing) | change-feed **count-file path** (v1); multi-session `source` attribution (forward-compat) |
+| `sessionId` | **header** (platform, hook-injected — **reserved, agent never sets**) | the Claude Code `session_id`, injected into each call's `arguments` by a `PreToolUse` hook (see Sourcing) | change-feed **count-file path** (v1); multi-session `source` attribution (forward-compat); per-agent status identity **when no `agentId`** (top-level agent) |
+| `agentId` | **header** (platform, hook-injected — **reserved, agent never sets**) | the Claude Code `agent_id`, injected by the **same** `PreToolUse` hook alongside `sessionId`; **present only for subagent-originated calls** — absent for the top-level agent | per-agent status identity (a subagent's row key) — consumer owns the keying policy |
+| `agentType` | **header** (platform, hook-injected — **reserved, agent never sets**) | the Claude Code `agent_type` (e.g. `"Explore"`), injected by the same hook alongside `agentId`; same subagent-only presence | default display label for a per-agent status row |
 | `requestId` | **header** (server) | `genId('cmd')`, per request — the correlation id | request↔reply correlation (the pending map) |
 
 ### Connection-level — established once, **never** per-request
@@ -65,7 +67,7 @@ Today's `CommandMessage` carries a flat `targetFileKey`. Generalize it into a `m
 
 ```
 // command  (server → plugin)
-{ command, params, meta: { fileKey, sessionId, requestId } }
+{ command, params, meta: { fileKey, sessionId, agentId?, agentType?, requestId } }
 
 // reply     (plugin → server)   — correlation only
 { meta: { requestId }, result | error }
@@ -76,16 +78,16 @@ Today's `CommandMessage` carries a flat `targetFileKey`. Generalize it into a `m
 
 - `meta.fileKey` **replaces** `targetFileKey`; the plugin reads it for its **B3 identity guard**
   (refuse a command whose `meta.fileKey` ≠ its own `figma.fileKey`).
-- The wrapper **moves** the identity fields (`fileKey`, `sessionId`) out of the forwarded `params` and
-  into `meta` — each appears **once**, so an agent-set `params.fileKey` can never diverge from
-  `meta.fileKey`.
+- The wrapper **moves** the identity fields (`fileKey`, `sessionId`, and — when present — `agentId`,
+  `agentType`) out of the forwarded `params` and into `meta` — each appears **once**, so an agent-set
+  `params.fileKey` can never diverge from `meta.fileKey`.
 - `requestId` correlates a reply to its command (the pending map is keyed by it). The reply changes
   today's flat frame `id` → `meta.requestId` — a **coordinated plugin-side change**, not a server-only
   refactor (both sides adopt it atomically; the B2 handshake guards skew).
-- **Pushes carry no `sessionId`/`requestId`.** A push is unsolicited (no correlation) and the relay
-  **broadcasts** it to every channel member, so a single frame-level `sessionId` would be meaningless.
-  Self-write attribution therefore rides **per-record in `changes[].source`**, not in frame `meta`
-  (see [[figma-bridge/docs/specs/change-feed|change-feed.md]]).
+- **Pushes carry no `sessionId`/`agentId`/`agentType`/`requestId`.** A push is unsolicited (no
+  correlation) and the relay **broadcasts** it to every channel member, so a single frame-level sender
+  identity would be meaningless. Self-write attribution therefore rides **per-record in
+  `changes[].source`**, not in frame `meta` (see [[figma-bridge/docs/specs/change-feed|change-feed.md]]).
 
 ## `fileKey` — the one param
 
@@ -150,6 +152,41 @@ and must never be mistaken for "quiet turn":
    degrade is never a silent never-on.** (A *stray* agent-supplied `sessionId` with the hook absent
    routes to a wrong count file instead of the sentinel — the benign misroute noted in the Trust rule.)
 
+## `agentId` / `agentType` — the per-agent identity headers
+
+`agentId` is the **Claude Code `agent_id`** and `agentType` its **`agent_type`** (e.g. `"Explore"`).
+Together they name **which agent within a session** is asking — the granularity `sessionId` alone
+cannot provide, because **a session's subagents all share its `session_id`** and are distinguished only
+by `agent_id`. Like `sessionId`, they are ambient platform identity: **the agent never authors them.**
+
+- **Same hook, same channel.** They are injected by the **same `PreToolUse` hook** that injects
+  `sessionId`, read from that hook's native stdin (`agent_id`, `agent_type`) and written into the
+  call's `arguments` via `updatedInput`; the wrapper lifts them into `meta`. They are **reserved**
+  mixin fields (marked *server-managed — do not set*), present so an injected value validates.
+- **Subagent-only presence.** `agent_id`/`agent_type` appear **only when the call originates inside a
+  subagent** (or an `--agent` session); for the **top-level agent** both are **absent**. This is by
+  design, not a gap: the top-level agent's per-agent identity simply *is* its `sessionId`.
+- **Why the same `PreToolUse` hook — not `SessionStart` or `SubagentStart`.** The value must reach the
+  MCP server *inside the call's arguments* (MCP servers receive neither `session_id` nor `agent_id`
+  natively), and only `PreToolUse`'s `updatedInput` can rewrite per-call arguments. `SessionStart`
+  fires once per session and cannot attribute an individual subagent's call; `SubagentStart` knows the
+  `agent_id` but is not a tool event and cannot inject arguments. So one `PreToolUse` hook stamps all
+  three identity fields — no `SessionStart` dance, no manual id threaded through subagent prompts.
+
+**Identity resolution (mechanism here; keying/lifecycle policy is the consumer's).** A per-agent
+consumer resolves an agent's stable key as **`agentId ?? sessionId`** (a subagent → its `agentId`; the
+top-level agent → its `sessionId`) and uses `agentType` as the default display label. Because the
+injected `agentId` **is** the platform's canonical subagent id, it matches the `agent_id` that the
+`SubagentStart`/`SubagentStop` lifecycle hooks report — so a consumer can register and **clear** a
+per-agent entry against the same key without any id-mapping table. *How* a consumer keys, labels,
+expires, or renders per-agent state — and any fallback when the hook is absent — is owned by that
+consumer's spec, not here; this spec owns only that the headers exist and how they ride the wire.
+
+**Trust rule (extends `sessionId`'s).** `agentId`/`agentType` are injected **last** in the same
+`updatedInput`, forcibly overwriting any agent-supplied value. Exactly **one** `PreToolUse` hook may
+own this write: parallel `PreToolUse` hooks that each rewrite `updatedInput` race (last-writer-wins,
+non-deterministic order), so the identity injection is a **single** hook, never split across two.
+
 ## `requestId` — the server header
 
 `genId('cmd')` minted per `sendCommand` — the correlation id carried on the frame — globally unique
@@ -161,12 +198,12 @@ must stay global). Correlation only; the agent never sees it. The reply echoes i
 ```mermaid
 flowchart TB
     A["agent → arguments\n{ fileKey, …businessArgs }"] --> HK
-    HK["PreToolUse hook (mcp__figma-bridge__*)\ninjects session_id LAST (overwrites)"] --> SRV
+    HK["PreToolUse hook (mcp__figma-bridge__*)\ninjects session_id (+ agent_id/agent_type when subagent) LAST (overwrites)"] --> SRV
     subgraph SRV["MCP server"]
-        R["read fileKey (param) + sessionId (reserved, hook-set)"]
+        R["read fileKey (param) + sessionId (+ agentId/agentType if present) — reserved, hook-set"]
         Q["stamp requestId (genId cmd)"]
         RF["requireFile(fileKey) → scoped client"]
-        M["MOVE fileKey/sessionId into meta { fileKey, sessionId, requestId }"]
+        M["MOVE fileKey/sessionId (+ agentId/agentType if present) into meta"]
     end
     SRV --> P["plugin: read meta.fileKey (B3 guard), execute"]
 ```
@@ -177,8 +214,10 @@ Handlers never touch addressing or identity — the wrapper reads them and scope
 
 - **MCP model controls only `arguments`.** The model cannot set transport `_meta`, so an
   agent-*chosen* value (the file target) must be a schema param; ambient values are headers.
-- **MCP servers get no session id from Claude Code** (only `CLAUDE_PROJECT_DIR`); the CC `session_id`
-  reaches the server via a **`PreToolUse` hook injecting it into the call** (`updatedInput`,
-  which propagates to MCP tools). No file, no correlation.
+- **MCP servers get no session/agent id from Claude Code** (only `CLAUDE_PROJECT_DIR`); the CC
+  `session_id` — and, for subagent calls, `agent_id`/`agent_type` — reach the server via a **single
+  `PreToolUse` hook injecting them into the call** (`updatedInput`, which propagates to MCP tools). No
+  file, no correlation. A `SessionStart`/`SubagentStart` hook cannot substitute: neither can rewrite a
+  per-call argument, which is the only channel that reaches an MCP tool.
 - **Reuse the existing store root.** All server-side state lives under `~/.figma-agent-bridge/`
   (alongside `component-index/`, `feedbacks/`, change-feed `changes/`) — no new storage convention.

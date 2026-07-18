@@ -220,7 +220,9 @@ session** and each server to drop only `source === mySessionId`. The `source` fi
 this; **v1 ships the single-session filter** (drop all plugin-caused changes — correct when one agent
 drives the file) and leaves cross-session attribution to a later revision. v1's filter therefore
 **does not key on `sessionId`** — it drops *all* plugin-caused changes without consulting it — so
-v1's **only** `sessionId` consumer is the count-file path (below); attributing changes by `sessionId`
+**within the change feed** the count-file path is the only `sessionId` consumer (below); other features
+consume `sessionId` independently (e.g. the agent status monitor keys rows on it — see
+[[figma-bridge/docs/specs/status-monitor|status-monitor.md]]). Attributing *changes* by `sessionId`
 is the forward-compat multi-session work
 ([[figma-bridge/docs/specs/request-envelope|request-envelope.md]]).
 

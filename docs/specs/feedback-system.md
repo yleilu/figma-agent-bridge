@@ -15,6 +15,14 @@ related:
 
 # figma-agent-bridge — Feedback System
 
+> **⚠ Superseded in part by [[figma-bridge/docs/specs/status-monitor|status-monitor.md]].** That redesign
+> removes the in-plugin **Feedback UI and the human-gated Send button** from the plugin panel (the panel
+> becomes the agent status monitor). The **record path** (`record_feedback` writing an item) is unchanged;
+> what is being replaced is the *review-and-send* surface — the agent-driven send flow that succeeds the
+> Send button is a **pending follow-up spec**. Read the plugin-UI parts of this doc (the `App.tsx`
+> Feedback section, the Send button, the `feedback-added`/`feedback-updated` render path) as the *prior*
+> design pending that follow-up; the tool/store/Worker mechanism still stands.
+
 > Defines a dogfooding
 > loop: the agent records friction it hits while driving the MCP, the human reviews it in
 > the Figma plugin, and one click files it as a comment on a GitHub issue via a CloudFlare
