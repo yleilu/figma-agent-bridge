@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# PreToolUse identity injector (request-envelope.md). Reads the tool-call payload
+# on stdin and rewrites tool_input via hookSpecificOutput.updatedInput, stamping the
+# ambient Claude Code identity headers. This is the SINGLE authoritative injector.
+#
+# Trust rule (request-envelope.md L185-188): the injected identity must FORCIBLY
+# OVERWRITE any agent-supplied value. jq's `+` is a shallow merge with the RIGHT
+# operand winning — BUT for a top-level call agent_id/agent_type are absent, so a
+# bare `+ {}` would NOT remove an agent-spoofed `agentId` already in tool_input.
+# So we `del` all three identity keys from tool_input FIRST, then re-add only the
+# platform-sourced ones. Result: agent spoofs are always dropped; every OTHER arg
+# (including nested objects) is preserved untouched.
+#
+# sessionId is injected when present; agentId/agentType only for subagent calls
+# (top-level payloads have neither → omitted, never stamped null).
+set -euo pipefail
+
+payload=$(cat)
+
+updated=$(printf '%s' "$payload" | jq -c '
+  (.tool_input // {} | del(.sessionId, .agentId, .agentType)) as $ti
+  | $ti
+  + (if .session_id then { sessionId: .session_id } else {} end)
+  + (if .agent_id   then { agentId:   .agent_id }   else {} end)
+  + (if .agent_type then { agentType: .agent_type } else {} end)
+')
+
+jq -nc --argjson u "$updated" \
+  '{ hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput: $u } }'
+exit 0
