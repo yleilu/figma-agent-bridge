@@ -1,8 +1,8 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
-import { App } from './App'
-import { DesignSystemPreview } from './DesignSystemPreview'
+import { App } from './app'
+import { DesignSystemPreview } from './design-system-preview'
 
 // Dev flag: flip to true to render the design-system kitchen sink instead of the app.
 // Keep false on commit; used to live-verify the design system in Figma.
@@ -12,6 +12,8 @@ const rootEl = document.getElementById('root')
 
 if (rootEl) {
   createRoot(rootEl).render(
-    <StrictMode>{SHOW_DS_PREVIEW ? <DesignSystemPreview /> : <App />}</StrictMode>,
+    <StrictMode>
+      {SHOW_DS_PREVIEW ? <DesignSystemPreview /> : <App />}
+    </StrictMode>,
   )
 }
