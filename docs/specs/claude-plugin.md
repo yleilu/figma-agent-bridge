@@ -121,7 +121,8 @@ Conventions confirmed from real plugins: MCP config lives in `.mcp.json` at plug
 frontmatter; hooks are `hooks/hooks.json` + sibling scripts (extensionless to avoid
 Windows auto-`bash` mangling). `hooks.json` holds two **core** hooks (feature specs add more — see end of
 section): (1) a **`PreToolUse`** hook,
-matcher `mcp__figma-bridge__*`, that injects its native `session_id` — and, for subagent-originated
+matcher scoped to the figma-bridge MCP tools across both install namespaces
+(`mcp__(figma-bridge|plugin_figma-agent-bridge_figma-agent-bridge)__.*`), that injects its native `session_id` — and, for subagent-originated
 calls, `agent_id`/`agent_type` — into each MCP call's arguments (the reserved `sessionId`/`agentId`/
 `agentType` headers — see [[figma-bridge/docs/specs/request-envelope|request-envelope.md]]); it must be
 the **only** `PreToolUse` hook rewriting these arguments (parallel rewriters race). And (2) the

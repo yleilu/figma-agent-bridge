@@ -63,7 +63,7 @@ server or platform provides it.** Everything below follows from that one distinc
 
 ## The wire envelope
 
-Today's `CommandMessage` carries a flat `targetFileKey`. Generalize it into a `meta` block:
+`CommandMessage` carries a `meta` block (generalizing the earlier flat `targetFileKey`):
 
 ```
 // command  (server → plugin)
@@ -114,7 +114,9 @@ Mechanism: a **`PreToolUse` hook** can rewrite a call's arguments via
 `hookSpecificOutput.updatedInput`, and the change **propagates to MCP tools**; plugin `hooks.json`
 supports `PreToolUse` with a matcher. So:
 
-- A `PreToolUse` hook scoped by matcher to **`mcp__figma-bridge__*`** injects its native `session_id`
+- A `PreToolUse` hook scoped by matcher to the **figma-bridge MCP tools** — both install namespaces
+  (`mcp__figma-bridge__*` in dev, `mcp__plugin_figma-agent-bridge_figma-agent-bridge__*` under the
+  plugin install) — injects its native `session_id`
   into each call's arguments. The **server reads `sessionId` directly from the call** — **no handoff
   file, no `SessionStart` dance, no "which session is this" correlation.** The id is tied to the one
   session making the call because it *is* that call.
@@ -198,7 +200,7 @@ must stay global). Correlation only; the agent never sees it. The reply echoes i
 ```mermaid
 flowchart TB
     A["agent → arguments\n{ fileKey, …businessArgs }"] --> HK
-    HK["PreToolUse hook (mcp__figma-bridge__*)\ninjects session_id (+ agent_id/agent_type when subagent) LAST (overwrites)"] --> SRV
+    HK["PreToolUse hook (figma-bridge MCP tools, dev + plugin namespaces)\ninjects session_id (+ agent_id/agent_type when subagent) LAST (overwrites)"] --> SRV
     subgraph SRV["MCP server"]
         R["read fileKey (param) + sessionId (+ agentId/agentType if present) — reserved, hook-set"]
         Q["stamp requestId (genId cmd)"]
