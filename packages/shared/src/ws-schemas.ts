@@ -65,6 +65,46 @@ export const leaveMessageSchema = z.object({
   channel: z.string().min(1),
 })
 
+export const statusRecordSchema = z.object({
+  key: z.string().min(1),
+  sessionId: z.string().optional(),
+  agentId: z.string().optional(),
+  agentType: z.string().optional(),
+  label: z.string().optional(),
+  level: z.enum(['normal', 'error']),
+  text: z.string().nullable(),
+  activity: z.enum(['busy', 'idle']),
+  updatedAt: z.number(),
+})
+
+export const agentStatusMessageSchema = z.object({
+  type: z.literal('agent-status'),
+  channel: z.string().min(1),
+  record: statusRecordSchema,
+})
+
+export const statusSyncMessageSchema = z.object({
+  type: z.literal('status-sync'),
+  channel: z.string().min(1),
+})
+
+export const agentStatusBroadcastSchema = z.object({
+  type: z.literal('agent-status'),
+  record: statusRecordSchema,
+})
+
+export const agentStatusRemoveBroadcastSchema = z.object({
+  type: z.literal('agent-status-remove'),
+  sessionId: z.string().min(1),
+  agentId: z.string().optional(),
+  key: z.string().optional(), // row-precise removal (TTL sweep)
+})
+
+export const agentStatusSyncBroadcastSchema = z.object({
+  type: z.literal('agent-status-sync'),
+  records: z.array(statusRecordSchema),
+})
+
 export const relayIncomingSchema = z.discriminatedUnion(
   'type',
   [
@@ -73,6 +113,8 @@ export const relayIncomingSchema = z.discriminatedUnion(
     registerMessageSchema,
     presenceMessageSchema,
     leaveMessageSchema,
+    agentStatusMessageSchema,
+    statusSyncMessageSchema,
   ],
 )
 
@@ -88,5 +130,11 @@ export const systemMessageSchema = z.object({
 
 export const relayOutgoingSchema = z.discriminatedUnion(
   'type',
-  [broadcastMessageSchema, systemMessageSchema],
+  [
+    broadcastMessageSchema,
+    systemMessageSchema,
+    agentStatusBroadcastSchema,
+    agentStatusRemoveBroadcastSchema,
+    agentStatusSyncBroadcastSchema,
+  ],
 )
