@@ -607,6 +607,29 @@ describe('figma-client', () => {
     await closeWs(peer)
     client.disconnect()
   })
+
+  it('notify pushes carry no meta.requestId (pushes correlate to nothing)', async () => {
+    const client = createFigmaClient(WS_URL)
+    await client.joinChannel('ntf-ch', 'fk-ntf')
+
+    const peer = await connectRaw()
+    const next = createMessageQueue(peer) // set up BEFORE join so the ack is captured
+    peer.send(JSON.stringify({ type: 'join', channel: 'ntf-ch' }))
+    await next() // consume the join system ack so the peer receives the broadcast
+
+    client.notify('feedback_updated', { token: 'fb-1' })
+
+    let frame: any
+    do {
+      frame = await next()
+    } while (frame?.message?.command !== 'feedback_updated')
+
+    expect(frame.message.params.token).toBe('fb-1')
+    expect(frame.message.meta?.requestId).toBeUndefined()
+
+    await closeWs(peer)
+    client.disconnect()
+  })
 })
 
 describe('isInstanceDead', () => {

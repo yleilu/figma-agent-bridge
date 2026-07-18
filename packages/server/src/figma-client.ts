@@ -561,11 +561,10 @@ export const createFigmaClient = (
     command: string,
     params: Record<string, unknown>,
   ): void => {
-    sendFrame({
-      command,
-      params,
-      meta: { requestId: genId('ntf') },
-    })
+    // request-envelope.md — pushes are unsolicited and carry NO requestId. A push
+    // is broadcast to every channel member and correlates to no pending command;
+    // the plugin acts on it by `command`, not by id.
+    sendFrame({ command, params })
   }
 
   const onRequest = (
