@@ -1,212 +1,179 @@
-import { useState, useEffect } from 'react'
+import { useEffect } from 'react'
 import { useRelay } from './hooks/useRelay'
 import { useDiscovery } from './hooks/useDiscovery'
+import { buildRoster, type RosterRow } from './roster'
+import { cx } from './cx'
+import type { StatusRecord } from '@figma-agent-bridge/shared'
 
-const DEFAULT_PORT = 18080
+// busy wins while an action is in flight (spec: busy = "a Figma action is in flight";
+// error = "the LAST report flagged a failure" — only shown once settled).
+const dotClass = (r: StatusRecord): string =>
+  r.activity === 'busy'
+    ? 'bg-figma-icon-warning'
+    : r.level === 'error'
+      ? 'bg-figma-icon-danger'
+      : 'bg-figma-icon-success'
+
+// Relative timestamp. Approximate — refreshes on the next state change (frequent while
+// active); a settled row's time is stamped at its last update. (A 5s tick could keep it
+// live; deferred.)
+const timeAgo = (t: number): string => {
+  if (!t) return ''
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000))
+  if (s < 3) return 'now'
+  if (s < 60) return `${s}s`
+  const m = Math.round(s / 60)
+  return m < 60 ? `${m}m` : `${Math.round(m / 60)}h`
+}
+
+const Dot = ({ record }: { record: StatusRecord }) => (
+  <span
+    className={cx(
+      'inline-block w-2 h-2 rounded-full shrink-0',
+      dotClass(record),
+      record.activity === 'busy' && 'animate-pulse',
+    )}
+  />
+)
+
+const Skeleton = () => (
+  <span className="inline-flex gap-1 items-center">
+    {[0, 1, 2].map(i => (
+      <span
+        key={i}
+        className="w-1 h-1 rounded-full bg-figma-icon-tertiary animate-pulse"
+      />
+    ))}
+  </span>
+)
+
+const label = (r: StatusRecord): string =>
+  (r as { synthetic?: boolean }).synthetic
+    ? `session ${r.sessionId?.slice(0, 6) ?? ''}`
+    : (r.label ?? r.agentType ?? 'Agent')
+
+const Row = ({ row }: { row: RosterRow }) => {
+  const r = row.record
+  const busy = r.activity === 'busy'
+  // idle rows are muted (spec §Lifecycle: "the whole row dims"); busy rows get the
+  // full-width no-radius band (adjacent busy rows merge — design-system rule).
+  return (
+    <div
+      className={cx(
+        'flex items-center gap-2 px-3 py-1 text-11',
+        busy ? 'bg-figma-bg-secondary' : 'opacity-60',
+        row.kind === 'child' && 'pl-6',
+      )}
+    >
+      {row.kind === 'group-header' && (
+        <span className="text-figma-text-tertiary text-[9px]">
+          ▾
+        </span>
+      )}
+      <Dot record={r} />
+      <span className="font-semibold text-figma-text shrink-0">
+        {label(r)}
+      </span>
+      {r.text === null ? (
+        <Skeleton />
+      ) : (
+        <span className="text-figma-text-secondary truncate">
+          {r.text}
+        </span>
+      )}
+      <span className="text-figma-text-tertiary text-[10px] ml-auto shrink-0">
+        {timeAgo(r.updatedAt)}
+      </span>
+    </div>
+  )
+}
+
+const Fallback = ({
+  status,
+}: {
+  status: 'connecting' | 'disconnected'
+}) => {
+  const [dot, title, sub] =
+    status === 'connecting'
+      ? [
+          'bg-figma-icon-warning animate-pulse',
+          'Connecting…',
+          'reaching the bridge',
+        ]
+      : [
+          'bg-figma-icon-danger',
+          'Bridge offline',
+          'start the MCP / relay to connect',
+        ]
+  return (
+    <div className="flex flex-col gap-1 p-3.5 text-11">
+      <div className="flex items-center gap-2">
+        <span
+          className={cx(
+            'inline-block w-2 h-2 rounded-full',
+            dot,
+          )}
+        />
+        <span className="font-semibold text-figma-text">
+          {title}
+        </span>
+      </div>
+      <div className="text-figma-text-secondary pl-4">
+        {sub}
+      </div>
+    </div>
+  )
+}
+
+const Idle = () => (
+  <div className="flex flex-col gap-1 p-3.5 text-11">
+    <div className="flex items-center gap-2">
+      <span className="inline-block w-2 h-2 rounded-full bg-figma-icon-tertiary" />
+      <span className="font-semibold text-figma-text">
+        No agent active
+      </span>
+    </div>
+    <div className="text-figma-text-secondary pl-4">
+      waiting for an agent to start work
+    </div>
+  </div>
+)
 
 export const App = () => {
-  const [port, setPort] = useState(DEFAULT_PORT)
-  const [sending, setSending] = useState<Set<string>>(
-    new Set(),
-  )
-  const {
-    status,
-    channel,
-    error,
-    connect,
-    disconnect,
-    feedbackItems,
-    sendFeedback,
-  } = useRelay()
-  const { port: discoveredPort, retry } = useDiscovery()
-
-  const isConnected = status === 'connected'
-
-  // Auto-connect once a port is resolved. The channel is derived from
-  // figma.fileKey inside connect(), so a reload rejoins the same file's
-  // channel with no saved-channel restore.
+  const { status, connect, agentStatus } = useRelay()
+  // REUSE the existing discovery + auto-connect from the current app.tsx
+  // (its useDiscovery() usage + the auto-connect useEffect) VERBATIM — do
+  // not change the connect wiring, only the render.
+  const { port } = useDiscovery()
   useEffect(() => {
-    if (discoveredPort && status === 'disconnected') {
-      setPort(discoveredPort)
-      connect(discoveredPort)
+    if (status === 'disconnected' && port !== null) {
+      connect(port)
     }
-  }, [discoveredPort, status, connect])
+  }, [status, port, connect])
 
-  const statusClass = (() => {
-    if (status === 'connected') {
-      return 'bg-figma-bg-success text-figma-text-success'
-    }
-    if (status === 'connecting') {
-      return 'bg-figma-bg-warning text-figma-text-warning'
-    }
-    return 'bg-figma-bg-danger text-figma-text-danger'
-  })()
-
-  const statusText = (() => {
-    if (status === 'connecting') return 'Connecting...'
-    if (isConnected) return 'Connected'
-    return 'Disconnected'
-  })()
+  const rows = buildRoster(agentStatus)
 
   return (
-    <div className="p-4 font-sans text-sm text-figma-text bg-figma-bg">
-      <h3 className="text-base font-semibold mb-3">
-        Agent Bridge
-      </h3>
-
-      <div
-        className={`px-3 py-2 rounded-md mb-3 text-xs font-medium ${statusClass}`}
-      >
-        {statusText}
-      </div>
-
-      {error && (
-        <div className="px-3 py-2 rounded-md mb-3 text-xs bg-figma-bg-warning text-figma-text-warning">
-          {error}
-        </div>
+    <div className="min-h-full max-h-screen overflow-y-auto bg-figma-bg text-figma-text">
+      {status === 'connecting' && (
+        <Fallback status="connecting" />
       )}
-
-      {!isConnected && (
-        <>
-          <div className="mb-3">
-            <label className="block text-xs text-figma-text-secondary mb-1">
-              Port
-            </label>
-            <input
-              type="number"
-              value={port}
-              onChange={e => {
-                const val = parseInt(e.target.value, 10)
-                if (!Number.isNaN(val) && val > 0) {
-                  setPort(val)
-                }
-              }}
-              min={1}
-              max={65535}
-              className="w-full px-3 py-2 rounded-md border border-figma-border text-sm bg-figma-bg text-figma-text focus:border-figma-border-selected outline-none"
-            />
+      {status === 'disconnected' && (
+        <Fallback status="disconnected" />
+      )}
+      {status === 'connected' &&
+        (rows.length === 0 ? (
+          <Idle />
+        ) : (
+          <div className="py-1.5">
+            {rows.map(row => (
+              <Row
+                key={row.record.key}
+                row={row}
+              />
+            ))}
           </div>
-
-          <div className="flex gap-2">
-            <button
-              onClick={() => connect(port)}
-              className="flex-1 px-3 py-2 rounded-md text-sm font-medium bg-figma-bg-brand text-figma-text-onbrand hover:bg-figma-bg-brand-hover active:bg-figma-bg-brand-pressed"
-            >
-              Connect
-            </button>
-            <button
-              onClick={retry}
-              className="px-3 py-2 rounded-md text-sm font-medium bg-figma-bg-secondary text-figma-text hover:opacity-90"
-            >
-              Retry
-            </button>
-          </div>
-        </>
-      )}
-
-      {isConnected && (
-        <button
-          onClick={disconnect}
-          className="w-full px-3 py-2 rounded-md text-sm font-medium bg-figma-bg-danger text-figma-text-onbrand hover:opacity-90"
-        >
-          Disconnect
-        </button>
-      )}
-
-      {channel && (
-        <div className="mt-3 px-3 py-2 bg-figma-bg-secondary rounded-md">
-          <span className="text-xs text-figma-text-secondary">
-            Channel:{' '}
-          </span>
-          <span className="font-mono font-bold text-xs text-figma-text">
-            {channel}
-          </span>
-        </div>
-      )}
-
-      {isConnected && (
-        <div className="mt-3 px-3 py-2 bg-figma-bg-secondary rounded-md">
-          <div className="text-xs text-figma-text-secondary mb-2">
-            Feedback
-          </div>
-          {Object.values(feedbackItems).length === 0 && (
-            <div className="text-xs text-figma-text-secondary">
-              No feedback recorded.
-            </div>
-          )}
-          {(['bugs', 'proposals'] as const).map(
-            category => {
-              const rows = Object.values(
-                feedbackItems,
-              ).filter(i => i.category === category)
-              if (rows.length === 0) return null
-              return (
-                <div
-                  key={category}
-                  className="mb-2"
-                >
-                  <div className="text-xs font-semibold mb-1 capitalize">
-                    {category}
-                  </div>
-                  {rows.map(item => (
-                    <div
-                      key={item.path}
-                      className="flex items-center justify-between gap-2 py-1"
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate">
-                          {item.title}
-                        </div>
-                        <div className="text-xs text-figma-text-secondary">
-                          {new Date(
-                            item.created,
-                          ).toLocaleString()}
-                          {item.status !== 'pending' &&
-                            ` · ${item.status}`}
-                        </div>
-                      </div>
-                      <button
-                        className="px-2 py-1 rounded-md bg-figma-bg-brand text-figma-text-onbrand hover:bg-figma-bg-brand-hover active:bg-figma-bg-brand-pressed disabled:opacity-50"
-                        disabled={
-                          item.status === 'sent' ||
-                          sending.has(item.path)
-                        }
-                        onClick={() => {
-                          if (
-                            item.status === 'sent' ||
-                            sending.has(item.path)
-                          )
-                            return
-                          setSending(s =>
-                            new Set(s).add(item.path),
-                          )
-                          void sendFeedback(item.path)
-                            .catch(() => {})
-                            .finally(() => {
-                              setSending(s => {
-                                const next = new Set(s)
-                                next.delete(item.path)
-                                return next
-                              })
-                            })
-                        }}
-                      >
-                        {sending.has(item.path)
-                          ? 'Sending…'
-                          : item.status === 'failed'
-                            ? 'Retry'
-                            : item.status === 'sent'
-                              ? 'Sent'
-                              : 'Send'}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )
-            },
-          )}
-        </div>
-      )}
+        ))}
     </div>
   )
 }
