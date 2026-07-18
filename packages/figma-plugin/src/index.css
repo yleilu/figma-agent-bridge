@@ -9,6 +9,11 @@
   --color-figma-bg-danger: var(--figma-color-bg-danger);
   --color-figma-bg-success: var(--figma-color-bg-success);
   --color-figma-bg-warning: var(--figma-color-bg-warning);
+  --color-figma-bg-tertiary: var(--figma-color-bg-tertiary);
+  --color-figma-bg-hover: var(--figma-color-bg-hover);
+  --color-figma-bg-selected: var(--figma-color-bg-selected);
+  --color-figma-bg-pressed: var(--figma-color-bg-pressed);
+  --color-figma-bg-disabled: var(--figma-color-bg-disabled);
 
   --color-figma-text: var(--figma-color-text);
   --color-figma-text-secondary: var(--figma-color-text-secondary);
@@ -25,9 +30,30 @@
   --color-figma-icon-brand: var(--figma-color-icon-brand);
   --color-figma-icon-danger: var(--figma-color-icon-danger);
   --color-figma-icon-success: var(--figma-color-icon-success);
+  --color-figma-icon-tertiary: var(--figma-color-icon-tertiary);
+  --color-figma-icon-warning: var(--figma-color-icon-warning);
+  --color-figma-icon-disabled: var(--figma-color-icon-disabled);
 
   --color-figma-border: var(--figma-color-border);
   --color-figma-border-strong: var(--figma-color-border-strong);
   --color-figma-border-selected: var(--figma-color-border-selected);
   --color-figma-border-danger-strong: var(--figma-color-border-danger-strong);
+  --color-figma-border-disabled: var(--figma-color-border-disabled);
+  --color-figma-border-danger: var(--figma-color-border-danger);
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  --text-11: 11px;
+  --text-11--line-height: 16px;
+}
+
+@layer base {
+  body {
+    font-family: var(--font-sans);
+    font-size: 11px;
+    line-height: 16px;
+    font-weight: 400;
+    color: var(--figma-color-text);
+    background-color: var(--figma-color-bg);
+  }
 }
