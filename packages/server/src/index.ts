@@ -63,6 +63,7 @@ import {
   recordFeedbackParamsSchema,
   searchComponentsParamsSchema,
   reindexParamsSchema,
+  reportStatusParamsSchema,
 } from '@figma-agent-bridge/shared/tool-params'
 import {
   createFigmaClient,
@@ -148,6 +149,7 @@ import {
   handleSearchComponents,
   handleReindex,
 } from './tools/component-index'
+import { handleReportStatus } from './tools/report-status'
 
 if (process.argv.includes('--version')) {
   console.log(APP_VERSION)
@@ -578,6 +580,17 @@ if (process.argv.includes('--relay')) {
     reindexParamsSchema,
     (params, scoped) =>
       handleReindex(params, scoped, indexManager),
+  )
+
+  // report_status (status-monitor.md): a fire-and-forget, file-scoped status
+  // push — never reaches code.ts/figma.* (not in COMMANDS). Identity rides on
+  // the scoped client (scoped.identity), surfaced by forFile (Task 5).
+  registerFileTool(
+    server,
+    client,
+    'report_status',
+    reportStatusParamsSchema,
+    (p, scoped) => handleReportStatus(p, scoped),
   )
 
   const transport = new StdioServerTransport()
