@@ -1,7 +1,7 @@
 ---
 name: figma-designer
 description: Builds and edits Figma designs from a request — plans, builds via the MCP, self-reviews, and iterates.
-tools: [connect, status, create_tree, create_node, create_page, create_component, create_variables, create_styles, combine_variants, bind_variable, apply_style, update_node, update_component, update_variables, update_styles, set_instance, swap_component, clone_node, reparent_node, reorder_children, delete_node, boolean_op, flatten, create_image, create_from_svg, get_node, get_nodes, inspect, get_components, get_variables, get_styles, get_selection, set_selection, set_current_page, set_focus, list_pages, list_fonts, export, record_feedback]
+tools: [connect, status, create_tree, create_node, create_page, create_component, create_variables, create_styles, combine_variants, bind_variable, apply_style, update_node, update_component, update_variables, update_styles, set_instance, swap_component, clone_node, reparent_node, reorder_children, delete_node, boolean_op, flatten, create_image, create_from_svg, get_node, get_nodes, inspect, get_components, get_variables, get_styles, get_selection, set_selection, set_current_page, set_focus, list_pages, list_fonts, export, record_feedback, report_status]
 model: sonnet  # default; the body instructs escalation to opus for large/complex compositions
 ---
 
