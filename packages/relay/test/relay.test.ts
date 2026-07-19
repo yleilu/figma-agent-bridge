@@ -1021,7 +1021,7 @@ describe('relay', () => {
       await closeWs(plugin)
     })
 
-    it('merges by key (a later skeleton keeps an earlier label)', async () => {
+    it('merges by key (a later skeleton keeps an earlier label AND does not wipe the narrative)', async () => {
       const server2 = await connect()
       const sQ = createMessageQueue(server2)
       server2.send(
@@ -1072,12 +1072,109 @@ describe('relay', () => {
       const sync = (await pQ()) as {
         records: Record<string, unknown>[]
       }
+      // a skeleton frame (text:null) must not wipe the earlier narrative —
+      // the row stays "Building" (busy dot carries the busy signal instead)
       expect(sync.records[0]).toMatchObject({
         key: 'a3',
         label: 'Nav',
-        text: null,
+        text: 'Building',
         updatedAt: 2,
       })
+      await closeWs(server2)
+      await closeWs(plugin)
+    })
+
+    it('a skeleton after a narrative preserves the text (does not wipe it)', async () => {
+      const server2 = await connect()
+      const plugin = await connect()
+      const sQ = createMessageQueue(server2)
+      const pQ = createMessageQueue(plugin)
+      server2.send(
+        JSON.stringify({ type: 'join', channel: 'c3b' }),
+      )
+      await sQ()
+      plugin.send(
+        JSON.stringify({ type: 'join', channel: 'c3b' }),
+      )
+      await pQ()
+
+      server2.send(
+        JSON.stringify({
+          type: 'agent-status',
+          channel: 'c3b',
+          record: {
+            key: 'a3b',
+            sessionId: 's3b',
+            level: 'normal',
+            text: 'Building the header',
+            activity: 'busy',
+            updatedAt: 1,
+          },
+        }),
+      )
+      await pQ() // broadcast of the narrative
+
+      server2.send(
+        JSON.stringify({
+          type: 'agent-status',
+          channel: 'c3b',
+          record: {
+            key: 'a3b',
+            sessionId: 's3b',
+            level: 'normal',
+            text: null,
+            activity: 'busy',
+            updatedAt: 2,
+          },
+        }),
+      )
+      const got = await pQ()
+      expect(got).toMatchObject({
+        type: 'agent-status',
+        record: {
+          key: 'a3b',
+          text: 'Building the header',
+        },
+      })
+
+      await closeWs(server2)
+      await closeWs(plugin)
+    })
+
+    it('a skeleton with no prior narrative stays null (start state)', async () => {
+      const server2 = await connect()
+      const plugin = await connect()
+      const sQ = createMessageQueue(server2)
+      const pQ = createMessageQueue(plugin)
+      server2.send(
+        JSON.stringify({ type: 'join', channel: 'c3c' }),
+      )
+      await sQ()
+      plugin.send(
+        JSON.stringify({ type: 'join', channel: 'c3c' }),
+      )
+      await pQ()
+
+      server2.send(
+        JSON.stringify({
+          type: 'agent-status',
+          channel: 'c3c',
+          record: {
+            key: 'a3c',
+            sessionId: 's3c',
+            level: 'normal',
+            text: null,
+            activity: 'busy',
+            updatedAt: 1,
+          },
+        }),
+      )
+      const got = await pQ()
+      expect(got).toMatchObject({
+        type: 'agent-status',
+        record: { key: 'a3c', text: null },
+      })
+
       await closeWs(server2)
       await closeWs(plugin)
     })
@@ -1121,6 +1218,102 @@ describe('relay', () => {
       expect(got).toMatchObject({
         type: 'agent-status',
         record: { key: 'a4', activity: 'idle' },
+      })
+      await closeWs(server2)
+      await closeWs(plugin)
+    })
+
+    it('settle defaults a never-narrated row to "Done" (never a skeleton on green)', async () => {
+      const server2 = await connect()
+      const sQ = createMessageQueue(server2)
+      server2.send(
+        JSON.stringify({ type: 'join', channel: 'c4b' }),
+      )
+      await sQ()
+      server2.send(
+        JSON.stringify({
+          type: 'agent-status',
+          channel: 'c4b',
+          record: {
+            key: 'a4b',
+            sessionId: 's4b',
+            level: 'normal',
+            text: null,
+            activity: 'busy',
+            updatedAt: 1,
+          },
+        }),
+      )
+      const plugin = await connect()
+      const pQ = createMessageQueue(plugin)
+      plugin.send(
+        JSON.stringify({ type: 'join', channel: 'c4b' }),
+      )
+      await pQ()
+      const res = await fetch(
+        `${HTTP_URL}/agent-status/settle`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ sessionId: 's4b' }),
+        },
+      )
+      expect(res.status).toBe(200)
+      const got = await pQ()
+      expect(got).toMatchObject({
+        type: 'agent-status',
+        record: {
+          key: 'a4b',
+          activity: 'idle',
+          text: 'Done',
+        },
+      })
+      await closeWs(server2)
+      await closeWs(plugin)
+    })
+
+    it('settle keeps an existing narrative (does not overwrite with "Done")', async () => {
+      const server2 = await connect()
+      const sQ = createMessageQueue(server2)
+      server2.send(
+        JSON.stringify({ type: 'join', channel: 'c4c' }),
+      )
+      await sQ()
+      server2.send(
+        JSON.stringify({
+          type: 'agent-status',
+          channel: 'c4c',
+          record: {
+            key: 'a4c',
+            sessionId: 's4c',
+            level: 'normal',
+            text: 'Wiring cards',
+            activity: 'busy',
+            updatedAt: 1,
+          },
+        }),
+      )
+      const plugin = await connect()
+      const pQ = createMessageQueue(plugin)
+      plugin.send(
+        JSON.stringify({ type: 'join', channel: 'c4c' }),
+      )
+      await pQ()
+      const res = await fetch(
+        `${HTTP_URL}/agent-status/settle`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ sessionId: 's4c' }),
+        },
+      )
+      expect(res.status).toBe(200)
+      const got = await pQ()
+      expect(got).toMatchObject({
+        type: 'agent-status',
+        record: {
+          key: 'a4c',
+          activity: 'idle',
+          text: 'Wiring cards',
+        },
       })
       await closeWs(server2)
       await closeWs(plugin)

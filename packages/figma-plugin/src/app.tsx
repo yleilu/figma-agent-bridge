@@ -72,13 +72,13 @@ const Row = ({ row }: { row: RosterRow }) => {
       <span className="font-semibold text-figma-text shrink-0">
         {label(r)}
       </span>
-      {r.text === null ? (
-        <Skeleton />
-      ) : (
+      {r.text !== null ? (
         <span className="text-figma-text-secondary truncate">
           {r.text}
         </span>
-      )}
+      ) : busy ? (
+        <Skeleton />
+      ) : null}
       <span className="text-figma-text-tertiary text-[10px] ml-auto shrink-0">
         {timeAgo(r.updatedAt)}
       </span>

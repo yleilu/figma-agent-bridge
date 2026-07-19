@@ -22,6 +22,7 @@ const RATE_BURST = 100
 export const DEFAULT_HEARTBEAT_INTERVAL = 10_000
 export const DEFAULT_IDLE_MS = 50_000 // no activity → busy fades to idle
 export const DEFAULT_TTL_MS = 300_000 // no activity → row removed (ghost guard)
+export const DONE_TEXT = 'Done' // a settled row that never narrated shows this, never a skeleton
 
 type WsData = { id: string }
 type RateState = { tokens: number; last: number }
@@ -319,9 +320,21 @@ const handleAgentStatus = (
     ctx.agentStatus.set(channel, byKey)
   }
   // merge by key so a later skeleton emit preserves an earlier label/agentType
+  const prev = byKey.get(record.key)
   const merged: StatusRecord = {
-    ...byKey.get(record.key),
+    ...prev,
     ...record,
+  }
+  // A skeleton frame (text:null) marks "busy" but must NOT wipe an existing
+  // narrative — keep the last line so a busy row shows what it last said (the
+  // amber dot carries "busy"). The skeleton therefore only ever shows BEFORE the
+  // first narrative (prev has no text yet).
+  if (
+    record.text === null &&
+    prev?.text !== undefined &&
+    prev.text !== null
+  ) {
+    merged.text = prev.text
   }
   byKey.set(record.key, merged)
   const payload = JSON.stringify({
@@ -358,6 +371,14 @@ const broadcastToChannel = (
   members.forEach(client => client.send(payload))
 }
 
+// Flip a record to idle. A row that reaches green with no narrative ever gets
+// the DONE_TEXT default so a green row never shows a skeleton.
+const toIdle = (rec: StatusRecord): StatusRecord => ({
+  ...rec,
+  activity: 'idle',
+  text: rec.text ?? DONE_TEXT,
+})
+
 const settleSession = (
   ctx: RelayContext,
   sessionId: string,
@@ -368,7 +389,7 @@ const settleSession = (
         rec.sessionId === sessionId &&
         rec.activity !== 'idle'
       ) {
-        const idle = { ...rec, activity: 'idle' as const }
+        const idle = toIdle(rec)
         byKey.set(rec.key, idle)
         broadcastToChannel(ctx, channel, {
           type: 'agent-status',
@@ -621,7 +642,7 @@ export const startRelay = (
           age >= ctx.idleMs &&
           rec.activity === 'busy'
         ) {
-          const idle = { ...rec, activity: 'idle' as const }
+          const idle = toIdle(rec)
           byKey.set(rec.key, idle)
           broadcastToChannel(ctx, channel, {
             type: 'agent-status',

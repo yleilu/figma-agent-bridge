@@ -176,10 +176,12 @@ carrying the agent's `meta` identity); the relay upserts it into the channel map
 - **Text (`report_status`):** the server emits the record `{ key, sessionId, agentId?, agentType?, label?,
   level, text, activity, updatedAt }` with the new `text`/`level` and `activity: "busy"`.
 - **Busy + skeleton (any *other* Figma tool call):** the server emits the same record with `text: null`
-  (the skeleton) and `activity: "busy"` — a new action has started, so the old line is no longer current.
-  This is the per-tool "clear to loading", decided **at the server** from the tool it is invoking (no
-  dedicated `PreToolUse` ping). It relies on the agent's `meta.sessionId`/`agentId` — the envelope's
-  identity headers.
+  (the skeleton) and `activity: "busy"` — marking the row busy. The relay **preserves the last narrative**
+  across this frame: a skeleton `text: null` never wipes an existing `text`, so the skeleton only ever
+  appears **before** the row's first narrative; once a `report_status` line has landed, the last line stays
+  visible while the dot alone carries "busy" through subsequent tool calls. This is the per-tool "clear to
+  loading", decided **at the server** from the tool it is invoking (no dedicated `PreToolUse` ping). It
+  relies on the agent's `meta.sessionId`/`agentId` — the envelope's identity headers.
 - **Settle to idle:** a **`Stop`** hook (turn ended) — or a short activity-quiet window — flips
   `activity: "idle"`; the dot stops pulsing (green `ok` / red `error`) and the last `text` stays.
 - **Replay:** on plugin `register`, the relay replays the channel's current records (so a reopened or
@@ -211,7 +213,8 @@ stateDiagram-v2
     The text shows the latest `report_status` narrative, or a **skeleton** when the current action has not
     been narrated yet — the *skeleton is just Busy with no text*, so the Busy transitions below cover it.
   - **Idle** — green (`ok`) / red (`error`), static — no recent activity, or the turn ended (**`Stop`**
-    hook). The last `text` stays (a row that was only ever a skeleton settles to just its label + dot).
+    hook). The last `text` stays; a row that reaches idle having never been narrated settles to a default
+    line ("Done") instead of a skeleton — a green row never shows a skeleton.
 - **Presence (the row, minutes):**
   - **Muted** — after `IDLE_MS` (~45–60s) of no activity the whole row dims: present, so you can still see
     *who* is here, but clearly not working.
