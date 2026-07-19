@@ -1,6 +1,15 @@
-# figma-agent-bridge — Claude Code Plugin
+<p align="center">
+  <img src="../packages/branding/assets/logo-128.png" width="72" alt="Agent Bridge" />
+</p>
 
-Drive Figma from Claude Code: design, review, and file feedback with an AI agent.
+<h1 align="center">Agent Bridge</h1>
+
+<p align="center">Drive Figma from Claude Code — design, review, and file feedback.</p>
+
+---
+
+The **Agent Bridge** Claude Code plugin bundles the skills, agents, and commands for
+building and reviewing Figma designs with an AI agent over the MCP bridge.
 
 ## Requirements (Claude Code)
 

@@ -1,5 +1,6 @@
 {
   "name": "figma-agent-bridge",
+  "displayName": "Agent Bridge",
   "version": "0.3.0",
   "description": "Drive Figma from Claude Code — design, review, and file feedback.",
   "author": {

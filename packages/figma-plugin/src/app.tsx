@@ -3,6 +3,8 @@ import { useRelay } from './hooks/useRelay'
 import { useDiscovery } from './hooks/useDiscovery'
 import { buildRoster, type RosterRow } from './roster'
 import { cx } from './cx'
+import { BRAND } from '@figma-agent-bridge/branding'
+import { LogoMark } from './logo-mark'
 import type { StatusRecord } from '@figma-agent-bridge/shared'
 
 // busy wins while an action is in flight (spec: busy = "a Figma action is in flight";
@@ -153,6 +155,12 @@ export const App = () => {
 
   return (
     <div className="min-h-full max-h-screen overflow-y-auto bg-figma-bg text-figma-text">
+      <div className="flex items-center gap-2 border-b border-figma-border px-3 py-2">
+        <LogoMark decorative />
+        <span className="text-11 font-semibold text-figma-text">
+          {BRAND.name}
+        </span>
+      </div>
       {status === 'connecting' && (
         <Fallback status="connecting" />
       )}
