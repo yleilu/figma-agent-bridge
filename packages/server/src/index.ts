@@ -5,6 +5,8 @@ import {
   APP_VERSION,
   COMMANDS,
   DEFAULT_PORT,
+  OAUTH_CLIENT_ID,
+  OAUTH_SCOPE,
   connectParamsSchema,
   createFromSvgParamsSchema,
 } from '@figma-agent-bridge/shared'
@@ -64,6 +66,10 @@ import {
   searchComponentsParamsSchema,
   reindexParamsSchema,
   reportStatusParamsSchema,
+  listFeedbackParamsSchema,
+  sendFeedbackParamsSchema,
+  githubAuthStartParamsSchema,
+  githubAuthPollParamsSchema,
 } from '@figma-agent-bridge/shared/tool-params'
 import {
   createFigmaClient,
@@ -143,6 +149,14 @@ import {
 import { handleCreateFromSvg } from './tools/create-svg'
 import { handleBatch } from './tools/batch'
 import { handleRecordFeedback } from './tools/feedback'
+import {
+  handleListFeedback,
+  handleSendFeedback,
+} from './tools/feedback-send'
+import {
+  handleGithubAuthStart,
+  handleGithubAuthPoll,
+} from './tools/github-auth'
 import { IndexManager } from './component-index/manager'
 import {
   handleSearchComponents,
@@ -209,6 +223,35 @@ if (process.argv.includes('--relay')) {
     'record_feedback',
     recordFeedbackParamsSchema,
     p => handleRecordFeedback(p, client),
+  )
+
+  registerSessionTool(
+    server,
+    'list_feedback',
+    listFeedbackParamsSchema,
+    p => handleListFeedback(p),
+  )
+
+  registerSessionTool(
+    server,
+    'send_feedback',
+    sendFeedbackParamsSchema,
+    p => handleSendFeedback(p),
+  )
+
+  registerSessionTool(
+    server,
+    'github_auth_start',
+    githubAuthStartParamsSchema,
+    () =>
+      handleGithubAuthStart(OAUTH_CLIENT_ID, OAUTH_SCOPE),
+  )
+
+  registerSessionTool(
+    server,
+    'github_auth_poll',
+    githubAuthPollParamsSchema,
+    () => handleGithubAuthPoll(),
   )
 
   // --- File-addressed tools (B3) ---------------------------------------------
