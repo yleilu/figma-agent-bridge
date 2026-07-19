@@ -98,7 +98,8 @@ figma-agent-bridge/                       repo == marketplace
 │   │   ├── figma-design/SKILL.md         + references/ (§6.1)
 │   │   ├── figma-feedback/SKILL.md       + references/ (§6.3)
 │   │   ├── figma-reviewer/SKILL.md       + references/ (§6.4)
-│   │   └── figma-connection/SKILL.md     + references/ (§6.6)
+│   │   ├── figma-connection/SKILL.md     + references/ (§6.6)
+│   │   └── figma-setup/SKILL.md          + references/figma-bridge-prefs.template.md (§6.7)
 │   ├── agents/
 │   │   ├── figma-designer.md             frontmatter: tools:, model: (§6.2)
 │   │   └── figma-reviewer.md             (§6.5)
@@ -220,16 +221,17 @@ structure).
 
 ## 6. Components
 
-**At a glance** — four skills (the knowledge) + two agents (the executors). Skills are
+**At a glance** — five skills (the knowledge) + two agents (the executors). Skills are
 introduced before the agents that consume them, except `figma-designer` (§6.2), which
 forward-references the feedback/reviewer skills below:
 
 | Concern                       | Skill                     | Agent                                                          |
 | ----------------------------- | ------------------------- | -------------------------------------------------------------- |
 | Build                         | `figma-design` (§6.1)     | `figma-designer` (§6.2) — consumes all three build-loop skills |
-| Report _tool_ friction        | `figma-feedback` (§6.3)   | — (folds into the skill)                                       |
+| Report _tool_ friction        | `figma-feedback` (§6.3)   | — (mechanics fold into the skill; taste → figma-bridge-prefs)  |
 | Review the _design_           | `figma-reviewer` (§6.4)   | `figma-reviewer` (§6.5)                                        |
 | Diagnose connection / version | `figma-connection` (§6.6) | — (main-agent guidance)                                        |
+| Customize house style         | `figma-setup` (§6.7)      | — (authors `figma-bridge-prefs`, not shipped)                  |
 
 ### 6.1 Skill — `figma-design`
 
@@ -277,6 +279,12 @@ code snippets** (tool-usage patterns, not visual templates):
 **Workflow spine** (a default, not a mandate): tokens → styles → components → layout →
 content → verify.
 
+figma-design ships only the **basic (reactive)** level of design-system-first / component-first; a
+user's `figma-bridge-prefs` may raise them to a **strict (proactive)** level and supply concrete
+values (tokens, spacing scale, type ramp, naming), and per the extension-point backstop this skill
+defers to `figma-bridge-prefs` when installed — see
+[[figma-bridge/docs/specs/customization|customization.md]] (P1).
+
 **Verification discipline:** `export` PNG + `get_node`/`inspect` read-back (read-back proves
 `var(…)` bindings + `INSTANCE` types).
 
@@ -294,7 +302,9 @@ A subagent that **consumes** `figma-design`. Loop: request → plan (DS → comp
 layout → content) → build via the MCP tools → `export` + read-back verify →
 **self-review (`figma-reviewer` skill, §6.4)** → iterate.
 Frontmatter declares the MCP tools it may call and `model:` (sonnet default, opus for
-complex compositions). Calls `record_feedback` (§7) when it hits a tool limit — guided by the
+complex compositions), and includes `Skill` so it **loads the user's `figma-bridge-prefs` overlay
+as a first step** when present (per [[figma-bridge/docs/specs/customization|customization.md]] §7).
+Calls `record_feedback` (§7) when it hits a tool limit — guided by the
 `figma-feedback` skill (§6.3).
 
 ### 6.3 Skill — `figma-feedback`
@@ -350,7 +360,10 @@ it implied a capability that doesn't exist (_"I thought I could do X but I can't
 **corrects this skill's own guidance** (folding back like an accepted shortcut), not just a tool
 bug; file it under `bugs` with the misleading line quoted. _Example:_ the skill said
 "`set_instance` changes instance text" → it doesn't (the prop isn't bound) → the skill is
-corrected to point at the compound-id override.
+corrected to point at the compound-id override. **This fold-back is mechanics-only:** a
+**taste / preference** correction instead routes to `figma-bridge-prefs` via `figma-setup` and
+**never** folds into a shipped skill nor rides the feedback rail off-box — see
+[[figma-bridge/docs/specs/customization|customization.md]].
 
 **PROPOSAL — it works, but could be better, or something's missing.** Signals: a **better
 approach** ("_doing X this way would be better_"), a **shortcut** (a shorter path to the same
@@ -434,7 +447,8 @@ dashboards.
    §6.1 guard)_ — hardcoded values that should be tokens, text off a style, duplicated elements
    that should be components, detached instances.
 2. **Consistency** — off-scale spacing/padding, inconsistent radius, type off the ramp,
-   misaligned / off-grid elements.
+   misaligned / off-grid elements — measured against the file's **own** detected system (or the
+   user's `figma-bridge-prefs` scale when installed), never a shipped baseline scale.
 3. **Accessibility** — text contrast vs WCAG AA (4.5:1 / 3:1 large), min text size, touch-target
    size, meaning conveyed by colour alone.
 4. **Layout & structure hygiene** — absolute positioning where auto-layout fits, default names
@@ -456,9 +470,12 @@ after the report it offers to apply the fixes, and on the user's approval edits 
 (reusing the `figma-design` mechanics). A finding that's actually a **tool** limitation (not a
 design flaw) routes to `figma-feedback` (§6.3) instead of a fix.
 
-**Structure:** `SKILL.md` (dimensions, output format, flow) → `references/checks.md` (the concrete
-per-dimension checks + thresholds — the WCAG ratios, the spacing scale, naming rules), loaded when
-reviewing.
+**Structure:** `SKILL.md` (dimensions, output format, flow) → `references/checks.md`, loaded when
+reviewing. `checks.md` ships **only the hard floor** — the WCAG ratios, verification discipline, and
+destructive-op safety — plus **internal-consistency** checks (does the file use its *own* detected
+tokens / scale / ramp consistently). The concrete house scale, token set, type ramp, and naming
+rules are a **user preference** supplied by `figma-bridge-prefs/references/review-standards.md` when
+installed (P1) — see [[figma-bridge/docs/specs/customization|customization.md]].
 
 ### 6.5 Agent — `figma-reviewer`
 
@@ -466,7 +483,9 @@ A dedicated subagent consuming the `figma-reviewer` skill (§6.4) — matches th
 keeps a review's heavy read output out of the main context. Loop: read the target
 (`inspect`/`get_node`/`export`) → check each dimension → emit the standardized report → **offer to
 fix** → on approval apply edits (or route tool-gaps to `figma-feedback`). Frontmatter: `tools:`
-(read tools + the edit tools for the fix step + `record_feedback`), `model:` (sonnet; opus for
+(read tools + the edit tools for the fix step + `record_feedback` + `Skill`, so it **loads the
+user's `figma-bridge-prefs` overlay as a first step** when present — per
+[[figma-bridge/docs/specs/customization|customization.md]] §7), `model:` (sonnet; opus for
 large/complex reviews). Also invoked by `figma-designer` as its self-review gate.
 
 ### 6.6 Skill — `figma-connection`
@@ -478,6 +497,16 @@ it when a call can't reach Figma or the version handshake reports a mismatch. Th
 handshake **mechanism** it wraps is specced authoritatively in §8 (app-semver major.minor per B2);
 this skill is the _when + how to react_ layer over it. **Structure:** `SKILL.md` (symptoms →
 diagnosis → recovery) → `references/` as needed.
+
+### 6.7 Skill — `figma-setup` (customization layer)
+
+A shipped **helper** that authors the user's **`figma-bridge-prefs`** overlay — the user-authored
+preference skill (**NOT shipped**) that holds taste, concrete values (tokens, spacing scale, type
+ramp, naming), and any stricter-than-basic standard, overriding the shipped skills' basic floor
+upward (P1). `figma-setup` instantiates it on explicit opt-in from a shipped, inert template
+(`references/figma-bridge-prefs.template.md`) and owns its later updates. The whole layer — the
+partition, the load path, and the hard floor the reviewer enforces — is specced authoritatively in
+[[figma-bridge/docs/specs/customization|customization.md]] (its SSOT); this section only catalogs it.
 
 ## 7. Feedback
 

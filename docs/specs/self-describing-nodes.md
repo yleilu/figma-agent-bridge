@@ -83,10 +83,14 @@ No principle changes. This spec is consistent with `docs/principles.md`:
 - **T10 — bounded by default.** Fidelity reads are bounded by `depth` and the 2 KB per-field cap;
   `inspect` by its budget; `search` / `get_components` by their `limit` — and `contextSummary`
   keeps per-entry cost small.
-- **P1 — preferences live in the skill/agent layer.** *What* to record as context, the naming
-  convention, and name auditing are skill/agent content. The size cap is data validation; the
-  markdown *structure* (required `purpose`, the `status` enum, the fixed sections) is advisory
-  skill-layer convention, not server-enforced.
+- **P1 — what ships vs what the user customizes.** The size cap is data validation. Naming
+  **discipline** (name every node meaningfully at creation) and the basic component-first /
+  design-system-first workflow ship as the professional **floor** in `figma-design`; the concrete
+  naming **convention** (PascalCase, the `/` taxonomy, semantic-text rules) and any
+  stricter-than-basic standard are **user preferences** in `figma-bridge-prefs`, not a single
+  shipped bucket — see [[figma-bridge/docs/specs/customization|customization.md]]. *What* to record
+  as context, and the markdown *structure* (required `purpose`, the `status` enum, the fixed
+  sections), stay advisory skill-layer convention, not server-enforced.
 - **B2 — versioned and compatible.** An optional `NodeSpec` field plus `description` on the asset
   reads are additive and backward-compatible; no new command; `get_plugin_data` / `set_plugin_data`
   are reused verbatim.
@@ -100,17 +104,21 @@ adds **no code, no tool, and no version bump** — the rules live in the `figma-
 audit lives in the `figma-reviewer` agent. The design facts:
 
 - **Discipline, not tooling.** Agents name every node meaningfully at creation; there is no
-  server-side enforcement. The opinionated rules and the structured convention (descriptive
-  PascalCase / Title-Case layer names; a mandatory `/` taxonomy for components — `Button/Primary`,
-  `Icon/Chevron`; semantic names for structural text) are the **single source in the `figma-design`
-  skill**, not duplicated here.
+  server-side enforcement. The **basic** naming discipline — name every node meaningfully — and the
+  component-first practice ship as the professional **floor** in the `figma-design` skill. The
+  concrete **convention** (descriptive PascalCase / Title-Case layer names; a mandatory `/` taxonomy
+  for components — `Button/Primary`, `Icon/Chevron`; semantic names for structural text) is a
+  **user preference** in `figma-bridge-prefs`, not a shipped default — see
+  [[figma-bridge/docs/specs/customization|customization.md]]. Neither is duplicated here.
 - **Auditing.** The `figma-reviewer` agent flags names that are blank, whitespace-only, or match
   the default-name heuristic
-  (`^(Frame|Group|Rectangle|Ellipse|Line|Polygon|Star|Vector|Component|Component Set|Instance|Slice|Image|Section|Boolean|Union|Subtract|Intersect|Exclude)(\s+\d+)?$`),
-  plus components lacking a `/` taxonomy. **Variant children** (names containing `=`, e.g.
-  `Size=Lg, State=Hover`) are exempt from the taxonomy check. Text nodes are exempt from the
-  "matches type" rule (their name may legitimately equal their content); only blank text-node names
-  are flagged.
+  (`^(Frame|Group|Rectangle|Ellipse|Line|Polygon|Star|Vector|Component|Component Set|Instance|Slice|Image|Section|Boolean|Union|Subtract|Intersect|Exclude)(\s+\d+)?$`)
+  — the **basic floor**. Flagging components that lack a `/` taxonomy is a **stricter naming
+  standard** that applies **only when `figma-bridge-prefs` opts into it** (see
+  [[figma-bridge/docs/specs/customization|customization.md]]). **Variant children** (names
+  containing `=`, e.g. `Size=Lg, State=Hover`) are exempt from the taxonomy check. Text nodes are
+  exempt from the "matches type" rule (their name may legitimately equal their content); only blank
+  text-node names are flagged.
 - **Bounded enumeration.** The audit finds offenders with `search` using `match.regex` = the
   default-name pattern (server-side filter, cursor-paginated, T10-bounded), and applies fixes via
   `update_node` (name), batched through `batch`. The name↔context agreement check (a good name

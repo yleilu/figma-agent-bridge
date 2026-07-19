@@ -170,12 +170,26 @@ compact yet still O(document)).
 
 ## Plugin layer (skills / agents / commands)
 
-### P1 — Preferences and recommendations live here
-All **opinionated guidance** lives in the plugin layer. *What to do and when*, recommended
-workflows, and house style — for example **design-system-first** (prefer styles, variables,
-and components over ad-hoc values) — are taught here, **never baked into the tools**.
-*Why:* the tools must serve every user and outlast any single opinion; the plugin layer is
-where opinions can be strong, versioned, and swapped.
+### P1 — What ships vs what the user customizes
+Opinions never live in the tools (T6). Within the plugin layer, a **shipped** skill may carry
+only **tool usage** (how to operate the surface) and a **basic level of the universal
+professional practices** — **design-system-first** and **component-first**. These ship because
+they are **construction, not taste** (how a design is built, not how it looks) and have a
+**universally-defensible default**, so the plugin guarantees a professional **baseline** for a
+user who customizes nothing.
+
+Everything else is a **preference** and lives in the **user preference skill**
+(`figma-bridge-prefs`), never in a shipped skill: all **concrete values** (tokens, spacing
+scale, type ramp, naming) and any **stricter-than-basic standard** — including *how strictly* to
+apply design-system-first and component-first. A preference may ship a default **only if** it
+has a universally-defensible floor; design-system-first and component-first do — a brand colour
+or spacing scale does not (any default there imposes one team's taste on all).
+
+*Why:* the shipped layer serves every user, so it holds only the universal — the mechanics and
+the basic floor of the construction workflow the whole surface is built around (T9). A user with
+no preferences still gets that floor; `figma-bridge-prefs` raises the level and supplies the
+concrete values. The moment guidance encodes a particular value or a stricter-than-basic
+standard it is no longer universal and must be swappable — so it belongs to the user.
 
 ## Where mechanism lives
 *How* these principles are met — transport and reconnection, the typed `{error, code}`
