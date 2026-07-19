@@ -62,14 +62,12 @@ const Row = ({ row }: { row: RosterRow }) => {
       className={cx(
         'flex items-center gap-2 px-3 py-1 text-11',
         busy ? 'bg-figma-bg-secondary' : 'opacity-60',
-        row.kind === 'child' && 'pl-6',
+        // a child's dot indents to sit under its header's label
+        // (native layers-panel nesting). The header renders like a
+        // flat row — no caret; the child indent carries the grouping.
+        row.kind === 'child' && 'pl-7',
       )}
     >
-      {row.kind === 'group-header' && (
-        <span className="text-figma-text-tertiary text-[9px]">
-          ▾
-        </span>
-      )}
       <Dot record={r} />
       <span className="font-semibold text-figma-text shrink-0">
         {label(r)}
