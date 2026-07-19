@@ -22,15 +22,20 @@ and that **they Send it from the plugin** (the human gate) — never send it you
 Something is broken or wrong. File under **`category: 'bugs'`**.
 
 **Signals — any of these triggers a bug report:**
+
 - **Silent no-op** — the tool returns success but nothing changed in Figma.
 - **Confusing / unexpected error** — an error whose message doesn't tell you what to fix.
 - **Contradicts the spec** — the tool description promises behaviour X; you got Y.
-- **Skill-misleading** — *"I thought I could do X but I can't"* and the **skill** set
-  that expectation. File it as a bug (the skill is wrong), and correct the skill guidance
-  as part of this session's work (the fix folds back like an accepted shortcut). Quote the
+- **Skill-misleading** — _"I thought I could do X but I can't"_ and the **skill** set
+  that expectation. File it as a bug (the skill is wrong). **If the miss is mechanics**,
+  correct the skill guidance as part of this session's work (the fix folds back like an
+  accepted shortcut). **If the miss is a taste / preference** (a house-style default, a
+  threshold, a naming choice), capture it in the user's `figma-bridge-prefs` via
+  `figma-setup` instead — never fold a preference into a shipped skill. Quote the
   misleading line.
 
 **Body format:**
+
 ```
 **What I did:** <tool call / action>
 **Expected:** <correct behaviour>
@@ -39,6 +44,7 @@ Something is broken or wrong. File under **`category: 'bugs'`**.
 ```
 
 **Example** — `update_component` adds a TEXT property that never binds:
+
 ```
 record_feedback({
   category: 'bugs',
@@ -60,6 +66,7 @@ It works, but could be better, or something is missing. File under
 **`category: 'proposals'`**.
 
 **Signals — any of these triggers a proposal:**
+
 - **Better approach** — doing X this way would be cleaner or more reliable.
 - **Shortcut** — a shorter path to the same outcome (see shape below).
 - **Missing tool or arg** — you needed a capability the tool surface doesn't expose.
@@ -67,6 +74,7 @@ It works, but could be better, or something is missing. File under
 - **Feature request** — a genuinely new capability that would improve the workflow.
 
 **Body format:**
+
 ```
 **Context:** <what I was doing>
 **Opportunity:** <better-approach | shortcut | missing tool/arg | missing docs | feature>
@@ -75,6 +83,7 @@ It works, but could be better, or something is missing. File under
 ```
 
 **Example** — `set_instance` should accept text overrides in one call:
+
 ```
 record_feedback({
   category: 'proposals',
@@ -91,7 +100,11 @@ record_feedback({
 ### Shortcut shape
 
 A shortcut is a high-value proposal: a shorter path to the same outcome. **Accepted
-shortcuts fold back into the `figma-design` skill's recipes.** Use this body format:
+_mechanics_ shortcuts fold back into the `figma-design` skill's recipes. A
+_taste / preference_ correction (a house-style default, a threshold, a naming choice)
+instead routes to the user's `figma-bridge-prefs` via `figma-setup` — it never folds into
+a shipped skill, and `figma-bridge-prefs` content never rides the feedback rail off-box.**
+See [[figma-bridge/docs/specs/customization|customization.md]] §11. Use this body format:
 
 ```
 **Long path:** A → B → C → outcome
@@ -100,6 +113,7 @@ shortcuts fold back into the `figma-design` skill's recipes.** Use this body for
 ```
 
 **Example** — instance text-child id is deterministic:
+
 ```
 record_feedback({
   category: 'proposals',
@@ -131,12 +145,12 @@ A proposal earns its place when it does **at least one** of:
 
 ## `record_feedback` param mapping
 
-| Param | Type | Value |
-|---|---|---|
-| `category` | `'bugs'` \| `'proposals'` | The directory / issue stream the item routes to. |
-| `title` | string | One-line heading — specific and scannable. |
-| `description` | string | The formatted prose body (the **What I did:** / **Context:** … block above). |
-| `tool` | string (optional) | The tool name when the feedback is tool-specific; omit for skill or workflow feedback. |
+| Param         | Type                      | Value                                                                                  |
+| ------------- | ------------------------- | -------------------------------------------------------------------------------------- |
+| `category`    | `'bugs'` \| `'proposals'` | The directory / issue stream the item routes to.                                       |
+| `title`       | string                    | One-line heading — specific and scannable.                                             |
+| `description` | string                    | The formatted prose body (the **What I did:** / **Context:** … block above).           |
+| `tool`        | string (optional)         | The tool name when the feedback is tool-specific; omit for skill or workflow feedback. |
 
 The `category` value **is** the directory name — no mapping, no pluralization. Only
 `'bugs'` and `'proposals'` exist today; adding a category is a project decision, not an
