@@ -10495,12 +10495,14 @@ var init_schemas = __esm(() => {
 });
 
 // packages/shared/src/ws-schemas.ts
-var metaSchema, commandMessageSchema, joinMessageSchema, channelMessageSchema, registerMessageSchema, presenceMessageSchema, leaveMessageSchema, relayIncomingSchema, broadcastMessageSchema, systemMessageSchema, relayOutgoingSchema;
+var metaSchema, commandMessageSchema, joinMessageSchema, channelMessageSchema, registerMessageSchema, presenceMessageSchema, leaveMessageSchema, statusRecordSchema, agentStatusMessageSchema, statusSyncMessageSchema, agentStatusBroadcastSchema, agentStatusRemoveBroadcastSchema, agentStatusSyncBroadcastSchema, relayIncomingSchema, broadcastMessageSchema, systemMessageSchema, relayOutgoingSchema;
 var init_ws_schemas = __esm(() => {
   init_zod();
   metaSchema = exports_external.object({
     fileKey: exports_external.string().nullable().optional(),
     sessionId: exports_external.string().optional(),
+    agentId: exports_external.string().optional(),
+    agentType: exports_external.string().optional(),
     requestId: exports_external.string().optional(),
     epoch: exports_external.string().optional()
   });
@@ -10539,12 +10541,48 @@ var init_ws_schemas = __esm(() => {
     type: exports_external.literal("leave"),
     channel: exports_external.string().min(1)
   });
+  statusRecordSchema = exports_external.object({
+    key: exports_external.string().min(1),
+    sessionId: exports_external.string().optional(),
+    agentId: exports_external.string().optional(),
+    agentType: exports_external.string().optional(),
+    label: exports_external.string().optional(),
+    level: exports_external.enum(["normal", "error"]),
+    text: exports_external.string().nullable(),
+    activity: exports_external.enum(["busy", "idle"]),
+    updatedAt: exports_external.number()
+  });
+  agentStatusMessageSchema = exports_external.object({
+    type: exports_external.literal("agent-status"),
+    channel: exports_external.string().min(1),
+    record: statusRecordSchema
+  });
+  statusSyncMessageSchema = exports_external.object({
+    type: exports_external.literal("status-sync"),
+    channel: exports_external.string().min(1)
+  });
+  agentStatusBroadcastSchema = exports_external.object({
+    type: exports_external.literal("agent-status"),
+    record: statusRecordSchema
+  });
+  agentStatusRemoveBroadcastSchema = exports_external.object({
+    type: exports_external.literal("agent-status-remove"),
+    sessionId: exports_external.string().min(1),
+    agentId: exports_external.string().optional(),
+    key: exports_external.string().optional()
+  });
+  agentStatusSyncBroadcastSchema = exports_external.object({
+    type: exports_external.literal("agent-status-sync"),
+    records: exports_external.array(statusRecordSchema)
+  });
   relayIncomingSchema = exports_external.discriminatedUnion("type", [
     joinMessageSchema,
     channelMessageSchema,
     registerMessageSchema,
     presenceMessageSchema,
-    leaveMessageSchema
+    leaveMessageSchema,
+    agentStatusMessageSchema,
+    statusSyncMessageSchema
   ]);
   broadcastMessageSchema = exports_external.object({
     type: exports_external.literal("broadcast"),
@@ -10554,7 +10592,13 @@ var init_ws_schemas = __esm(() => {
     type: exports_external.literal("system"),
     message: exports_external.object({ id: exports_external.string(), result: exports_external.string() })
   });
-  relayOutgoingSchema = exports_external.discriminatedUnion("type", [broadcastMessageSchema, systemMessageSchema]);
+  relayOutgoingSchema = exports_external.discriminatedUnion("type", [
+    broadcastMessageSchema,
+    systemMessageSchema,
+    agentStatusBroadcastSchema,
+    agentStatusRemoveBroadcastSchema,
+    agentStatusSyncBroadcastSchema
+  ]);
 });
 
 // packages/shared/src/create-schemas.ts
@@ -10564,6 +10608,8 @@ var init_create_schemas = __esm(() => {
   createFromSvgParamsSchema = exports_external.object({
     fileKey: exports_external.string().min(1).describe("Stable Figma fileKey of the file this call operates on (from status/connect available[]). Required \u2014 the server never guesses which file (B3)."),
     sessionId: exports_external.string().optional().describe("Reserved \u2014 server-managed. Do NOT set. Injected by the session PreToolUse hook (request-envelope.md); ignored by this surface today."),
+    agentId: exports_external.string().optional().describe("Reserved \u2014 server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); ignored by this surface today."),
+    agentType: exports_external.string().optional().describe("Reserved \u2014 server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); ignored by this surface today."),
     parentId: exports_external.string().describe("Parent node ID where the SVG frame will be appended."),
     svg: exports_external.string().describe("SVG string to import. Must be valid SVG markup."),
     name: exports_external.string().optional().describe('Name for the created frame. Defaults to "SVG".'),
@@ -10588,11 +10634,15 @@ var init_node_spec_schema = __esm(() => {
   init_zod();
   atomSchema = exports_external.string();
   layoutSpecSchema = exports_external.object({
-    mode: exports_external.enum(["H", "V", "NONE"]),
+    mode: exports_external.enum(["H", "V", "NONE", "GRID"]),
     gap: exports_external.number().optional(),
     pad: exports_external.tuple([exports_external.number(), exports_external.number(), exports_external.number(), exports_external.number()]).optional(),
     align: exports_external.tuple([exports_external.string(), exports_external.string()]).optional(),
-    wrap: exports_external.boolean().optional()
+    wrap: exports_external.boolean().optional(),
+    rows: exports_external.number().int().positive().optional(),
+    cols: exports_external.number().int().positive().optional(),
+    rowGap: exports_external.number().nonnegative().optional(),
+    colGap: exports_external.number().nonnegative().optional()
   });
   textRunSchema = exports_external.object({
     at: exports_external.tuple([exports_external.number(), exports_external.number()]),
@@ -10655,12 +10705,21 @@ var init_node_spec_schema = __esm(() => {
     visible: exports_external.boolean().optional(),
     clipsContent: exports_external.boolean().optional(),
     grids: exports_external.array(atomSchema).optional(),
+    vectorPaths: exports_external.array(atomSchema).optional(),
+    pointCount: exports_external.number().int().min(3).optional(),
+    innerRadius: exports_external.number().min(0).max(1).optional(),
+    sectionContentsHidden: exports_external.boolean().optional(),
+    isMask: exports_external.boolean().optional(),
+    maskType: exports_external.enum(["ALPHA", "VECTOR", "LUMINANCE"]).optional(),
+    explicitVariableModes: exports_external.record(exports_external.string()).optional(),
+    componentPropertyReferences: exports_external.record(exports_external.string()).optional(),
     text: textSpecSchema.optional(),
     exportSettings: exports_external.array(exportSettingSchema).optional(),
     component: exports_external.object({
       key: exports_external.string().optional(),
       id: exports_external.string().optional(),
-      properties: exports_external.record(exports_external.union([exports_external.string(), exports_external.boolean()])).optional()
+      properties: exports_external.record(exports_external.union([exports_external.string(), exports_external.boolean()])).optional(),
+      remote: exports_external.boolean().optional()
     }).optional(),
     componentProperties: exports_external.record(exports_external.union([exports_external.string(), exports_external.boolean()])).optional(),
     variantProperties: exports_external.record(exports_external.string()).optional(),
@@ -10723,6 +10782,8 @@ var init_commands = __esm(() => {
     SET_FOCUS: "set_focus",
     BOOLEAN_OP: "boolean_op",
     FLATTEN: "flatten",
+    GROUP_NODES: "group_nodes",
+    TRANSFORM_GROUP: "transform_group",
     CREATE_PAGE: "create_page",
     SET_CURRENT_PAGE: "set_current_page",
     DUPLICATE_PAGE: "duplicate_page",
@@ -10733,9 +10794,11 @@ var init_commands = __esm(() => {
     SET_INSTANCE: "set_instance",
     CREATE_STYLES: "create_styles",
     UPDATE_STYLES: "update_styles",
+    DELETE_STYLES: "delete_styles",
     APPLY_STYLE: "apply_style",
     CREATE_VARIABLES: "create_variables",
     UPDATE_VARIABLES: "update_variables",
+    DELETE_VARIABLES: "delete_variables",
     BIND_VARIABLE: "bind_variable",
     SET_PLUGIN_DATA: "set_plugin_data",
     SET_REACTIONS: "set_reactions",
@@ -17771,9 +17834,11 @@ var exports_relay = {};
 __export(exports_relay, {
   stopRelay: () => stopRelay,
   startRelay: () => startRelay,
+  DEFAULT_TTL_MS: () => DEFAULT_TTL_MS,
+  DEFAULT_IDLE_MS: () => DEFAULT_IDLE_MS,
   DEFAULT_HEARTBEAT_INTERVAL: () => DEFAULT_HEARTBEAT_INTERVAL
 });
-var MAX_CHANNELS_PER_CONNECTION = 32, MAX_MEMBERS_PER_CHANNEL = 64, MAX_TOTAL_CHANNELS = 1024, MAX_PAYLOAD_BYTES, RATE_TOKENS_PER_SEC = 50, RATE_BURST = 100, DEFAULT_HEARTBEAT_INTERVAL = 1e4, contexts, createContext = () => ({
+var MAX_CHANNELS_PER_CONNECTION = 32, MAX_MEMBERS_PER_CHANNEL = 64, MAX_TOTAL_CHANNELS = 1024, MAX_PAYLOAD_BYTES, RATE_TOKENS_PER_SEC = 50, RATE_BURST = 100, DEFAULT_HEARTBEAT_INTERVAL = 1e4, DEFAULT_IDLE_MS = 50000, DEFAULT_TTL_MS = 300000, contexts, createContext = () => ({
   channels: new Map,
   clientChannels: new Map,
   channelRegistry: new Map,
@@ -17782,7 +17847,10 @@ var MAX_CHANNELS_PER_CONNECTION = 32, MAX_MEMBERS_PER_CHANNEL = 64, MAX_TOTAL_CH
   rate: new WeakMap,
   heartbeatTimer: null,
   rateBurst: RATE_BURST,
-  rateTokensPerSec: RATE_TOKENS_PER_SEC
+  rateTokensPerSec: RATE_TOKENS_PER_SEC,
+  agentStatus: new Map,
+  idleMs: DEFAULT_IDLE_MS,
+  ttlMs: DEFAULT_TTL_MS
 }), send = (ws, msg) => {
   ws.send(JSON.stringify(msg));
 }, consumeToken = (ctx, ws) => {
@@ -17819,6 +17887,7 @@ var MAX_CHANNELS_PER_CONNECTION = 32, MAX_MEMBERS_PER_CHANNEL = 64, MAX_TOTAL_CH
         if (members.size === 0) {
           ctx.channels.delete(channel);
           ctx.channelRegistry.delete(channel);
+          ctx.agentStatus.delete(channel);
         }
       }
     });
@@ -17914,6 +17983,7 @@ var MAX_CHANNELS_PER_CONNECTION = 32, MAX_MEMBERS_PER_CHANNEL = 64, MAX_TOTAL_CH
     if (members.size === 0) {
       ctx.channels.delete(channel);
       ctx.channelRegistry.delete(channel);
+      ctx.agentStatus.delete(channel);
     }
   }
   joined.delete(channel);
@@ -17935,16 +18005,83 @@ var MAX_CHANNELS_PER_CONNECTION = 32, MAX_MEMBERS_PER_CHANNEL = 64, MAX_TOTAL_CH
       client.send(payload);
     }
   });
+}, handleAgentStatus = (ctx, ws, channel, record3) => {
+  const members = ctx.channels.get(channel);
+  if (members === undefined) {
+    return;
+  }
+  let byKey = ctx.agentStatus.get(channel);
+  if (byKey === undefined) {
+    byKey = new Map;
+    ctx.agentStatus.set(channel, byKey);
+  }
+  const merged = {
+    ...byKey.get(record3.key),
+    ...record3
+  };
+  byKey.set(record3.key, merged);
+  const payload = JSON.stringify({
+    type: "agent-status",
+    record: merged
+  });
+  members.forEach((client) => {
+    if (client !== ws) {
+      client.send(payload);
+    }
+  });
+}, handleStatusReplay = (ctx, ws, channel) => {
+  const byKey = ctx.agentStatus.get(channel);
+  const records = byKey ? Array.from(byKey.values()) : [];
+  send(ws, { type: "agent-status-sync", records });
+}, broadcastToChannel = (ctx, channel, msg) => {
+  const members = ctx.channels.get(channel);
+  if (members === undefined) {
+    return;
+  }
+  const payload = JSON.stringify(msg);
+  members.forEach((client) => client.send(payload));
+}, settleSession = (ctx, sessionId) => {
+  for (const [channel, byKey] of ctx.agentStatus) {
+    for (const rec of byKey.values()) {
+      if (rec.sessionId === sessionId && rec.activity !== "idle") {
+        const idle = { ...rec, activity: "idle" };
+        byKey.set(rec.key, idle);
+        broadcastToChannel(ctx, channel, {
+          type: "agent-status",
+          record: idle
+        });
+      }
+    }
+  }
+}, removeAgent = (ctx, sessionId, agentId) => {
+  for (const [channel, byKey] of ctx.agentStatus) {
+    for (const rec of [...byKey.values()]) {
+      const match = rec.sessionId === sessionId && (agentId === undefined || rec.agentId === agentId);
+      if (match) {
+        byKey.delete(rec.key);
+        broadcastToChannel(ctx, channel, {
+          type: "agent-status-remove",
+          sessionId,
+          agentId
+        });
+      }
+    }
+    if (byKey.size === 0) {
+      ctx.agentStatus.delete(channel);
+    }
+  }
 }, startRelay = (port = DEFAULT_PORT, opts = {}) => {
   const ctx = createContext();
   ctx.rateBurst = opts.rateBurst ?? RATE_BURST;
   ctx.rateTokensPerSec = opts.rateTokensPerSec ?? RATE_TOKENS_PER_SEC;
+  ctx.idleMs = opts.idleMs ?? DEFAULT_IDLE_MS;
+  ctx.ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS;
   const hostname2 = opts.hostname ?? process.env.RELAY_BIND ?? "127.0.0.1";
   const heartbeatInterval = opts.heartbeatInterval ?? DEFAULT_HEARTBEAT_INTERVAL;
   const server = Bun.serve({
     port,
     hostname: hostname2,
-    fetch: (req, srv) => {
+    fetch: async (req, srv) => {
       if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
         const upgraded = srv.upgrade(req, {
           data: { id: genId("cli") }
@@ -17956,6 +18093,26 @@ var MAX_CHANNELS_PER_CONNECTION = 32, MAX_MEMBERS_PER_CHANNEL = 64, MAX_TOTAL_CH
       const url = new URL(req.url);
       if (req.method === "GET" && url.pathname === "/channels") {
         return Response.json(Array.from(ctx.channelRegistry.values()));
+      }
+      if (req.method === "POST" && url.pathname === "/agent-status/settle") {
+        const body = await req.json().catch(() => null);
+        if (!body?.sessionId) {
+          return new Response("bad request", {
+            status: 400
+          });
+        }
+        settleSession(ctx, body.sessionId);
+        return new Response("ok");
+      }
+      if (req.method === "POST" && url.pathname === "/agent-status/remove") {
+        const body = await req.json().catch(() => null);
+        if (!body?.sessionId) {
+          return new Response("bad request", {
+            status: 400
+          });
+        }
+        removeAgent(ctx, body.sessionId, body.agentId);
+        return new Response("ok");
       }
       return new Response("WebSocket only", {
         status: 426
@@ -17972,9 +18129,6 @@ var MAX_CHANNELS_PER_CONNECTION = 32, MAX_MEMBERS_PER_CHANNEL = 64, MAX_TOTAL_CH
         });
       },
       message: (ws, raw) => {
-        if (!consumeToken(ctx, ws)) {
-          return;
-        }
         let json;
         try {
           json = JSON.parse(raw);
@@ -17986,6 +18140,9 @@ var MAX_CHANNELS_PER_CONNECTION = 32, MAX_MEMBERS_PER_CHANNEL = 64, MAX_TOTAL_CH
           return;
         }
         const frame = parsed.data;
+        if (frame.type !== "agent-status" && !consumeToken(ctx, ws)) {
+          return;
+        }
         if (frame.type === "join") {
           handleJoin(ctx, ws, frame.channel);
         } else if (frame.type === "register") {
@@ -17996,6 +18153,10 @@ var MAX_CHANNELS_PER_CONNECTION = 32, MAX_MEMBERS_PER_CHANNEL = 64, MAX_TOTAL_CH
           handleLeave(ctx, ws, frame.channel);
         } else if (frame.type === "message") {
           handleMessage(ctx, ws, frame.channel, frame);
+        } else if (frame.type === "agent-status") {
+          handleAgentStatus(ctx, ws, frame.channel, frame.record);
+        } else if (frame.type === "status-sync") {
+          handleStatusReplay(ctx, ws, frame.channel);
         }
       },
       pong: (ws) => {
@@ -18020,6 +18181,31 @@ var MAX_CHANNELS_PER_CONNECTION = 32, MAX_MEMBERS_PER_CHANNEL = 64, MAX_TOTAL_CH
     for (const ws of dead) {
       ws.close();
     }
+    const now = Date.now();
+    for (const [channel, byKey] of ctx.agentStatus) {
+      for (const rec of [...byKey.values()]) {
+        const age = now - rec.updatedAt;
+        if (age >= ctx.ttlMs) {
+          byKey.delete(rec.key);
+          broadcastToChannel(ctx, channel, {
+            type: "agent-status-remove",
+            sessionId: rec.sessionId ?? "",
+            agentId: rec.agentId,
+            key: rec.key
+          });
+        } else if (age >= ctx.idleMs && rec.activity === "busy") {
+          const idle = { ...rec, activity: "idle" };
+          byKey.set(rec.key, idle);
+          broadcastToChannel(ctx, channel, {
+            type: "agent-status",
+            record: idle
+          });
+        }
+      }
+      if (byKey.size === 0) {
+        ctx.agentStatus.delete(channel);
+      }
+    }
   }, heartbeatInterval);
   contexts.set(server, ctx);
   return server;
@@ -18034,6 +18220,7 @@ var MAX_CHANNELS_PER_CONNECTION = 32, MAX_MEMBERS_PER_CHANNEL = 64, MAX_TOTAL_CH
     ctx.clientChannels.clear();
     ctx.channelRegistry.clear();
     ctx.sockets.clear();
+    ctx.agentStatus.clear();
     contexts.delete(server);
   }
   server.stop(true);
@@ -27044,7 +27231,9 @@ var listPaginationParamsSchema = exports_external.object({
 });
 var fileTargetParamsSchema = exports_external.object({
   fileKey: exports_external.string().min(1).describe("Stable Figma fileKey of the file this call operates on (from status/connect available[]). Required \u2014 the server never guesses which file (B3)."),
-  sessionId: exports_external.string().optional().describe("Reserved \u2014 server-managed. Do NOT set. Injected by the session PreToolUse hook (request-envelope.md); ignored by this surface today.")
+  sessionId: exports_external.string().optional().describe("Reserved \u2014 server-managed. Do NOT set. Injected by the identity PreToolUse hook (request-envelope.md); ignored by this surface today."),
+  agentId: exports_external.string().optional().describe("Reserved \u2014 server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); ignored by this surface today."),
+  agentType: exports_external.string().optional().describe("Reserved \u2014 server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); ignored by this surface today.")
 });
 var getNodeParamsSchema = exports_external.object({
   ...fileTargetParamsSchema.shape,
@@ -27125,6 +27314,31 @@ var flattenParamsSchema = exports_external.object({
   nodeIds: exports_external.array(exports_external.string()).min(1).describe("Node IDs to flatten into one vector."),
   parentId: exports_external.string().optional().describe("Parent for the result. Omit to use the first node's parent.")
 });
+var groupNodesParamsSchema = exports_external.object({
+  ...fileTargetParamsSchema.shape,
+  nodeIds: exports_external.array(exports_external.string()).min(1).describe("Node IDs to group (at least 1)."),
+  parentId: exports_external.string().optional().describe("Parent for the resulting group. Omit to use the first node's parent.")
+});
+var linearRepeatModifierSchema = exports_external.object({
+  type: exports_external.literal("REPEAT"),
+  repeatType: exports_external.literal("LINEAR").describe("Linear repeat: replicate nodes in a straight line."),
+  count: exports_external.number().int().min(1).describe("Number of repeated copies (including the source)."),
+  unitType: exports_external.string().describe("Unit for the offset distance (e.g. 'PIXELS')."),
+  offset: exports_external.number().describe("Distance between repeated instances, in unitType units."),
+  axis: exports_external.enum(["HORIZONTAL", "VERTICAL"]).describe("Direction of repetition.")
+}).passthrough();
+var radialRepeatModifierSchema = exports_external.object({
+  type: exports_external.literal("REPEAT"),
+  repeatType: exports_external.literal("RADIAL").describe("Radial repeat: replicate nodes around a centre point."),
+  count: exports_external.number().int().min(1).describe("Number of repeated copies (including the source).")
+}).passthrough().describe("RADIAL modifier shape not live-confirmed; required fields beyond type/repeatType/count pass through to Figma unvalidated.");
+var transformModifierSchema = exports_external.discriminatedUnion("repeatType", [linearRepeatModifierSchema, radialRepeatModifierSchema]);
+var transformGroupParamsSchema = exports_external.object({
+  ...fileTargetParamsSchema.shape,
+  nodeIds: exports_external.array(exports_external.string()).min(1).describe("Node IDs to include in the transform group (at least 1)."),
+  parentId: exports_external.string().optional().describe("Parent for the result. Omit to use the first node's parent."),
+  modifiers: exports_external.array(transformModifierSchema).min(1).describe("One or more repeat-pattern modifiers. Each has type:'REPEAT' and repeatType:'LINEAR'|'RADIAL'. Confirmed LINEAR shape: {type:'REPEAT',repeatType:'LINEAR',count,unitType:'PIXELS',offset,axis:'HORIZONTAL'|'VERTICAL'}.")
+});
 var createPageParamsSchema = exports_external.object({
   ...fileTargetParamsSchema.shape,
   name: exports_external.string().describe("Name for the new page.")
@@ -27162,8 +27376,13 @@ var createImageParamsSchema = exports_external.object({
 var bindVariableParamsSchema = exports_external.object({
   ...fileTargetParamsSchema.shape,
   nodeId: exports_external.string().describe("ID of the node to bind the variable to."),
-  variableId: exports_external.string().describe("ID of the variable to bind."),
-  field: exports_external.string().describe('Node field to bind (e.g. "fills", "opacity", "itemSpacing").')
+  variableId: exports_external.string().optional().describe("ID of the variable to bind. Required when `field` is present."),
+  field: exports_external.string().optional().describe('Node field to bind (e.g. "fills", "opacity", "itemSpacing"). Required when `variableId` is present.'),
+  mode: exports_external.record(exports_external.object({
+    modeId: exports_external.string().optional(),
+    modeName: exports_external.string().optional(),
+    clearMode: exports_external.boolean().optional()
+  })).optional().describe("Map of collectionId \u2192 mode entry. Each entry pins the node to render that collection in the given mode.")
 });
 var getVariablesParamsSchema = exports_external.object({
   ...fileTargetParamsSchema.shape,
@@ -27194,6 +27413,7 @@ var createVariablesParamsSchema = exports_external.object({
 var updateVariableSpecSchema = exports_external.object({
   id: exports_external.string().describe("ID of the variable to edit."),
   valuesByMode: exports_external.record(exports_external.union([exports_external.string(), exports_external.number(), exports_external.boolean()])).optional().describe("Map of mode NAME \u2192 new value (COLOR = hex atom; else literal)."),
+  aliases: exports_external.record(exports_external.string()).optional().describe("Map of mode NAME \u2192 target variable ID \u2014 sets that mode to a VARIABLE_ALIAS of the target (feature-detected + T7-degraded). Mirrors createVariableSpecSchema for round-trip parity (T2)."),
   scopes: exports_external.array(exports_external.string()).optional().describe('Variable scopes (e.g. ["ALL_SCOPES"]).'),
   codeSyntax: exports_external.record(exports_external.string()).optional().describe("Code syntax per platform (keys: WEB | ANDROID | iOS)."),
   hiddenFromPublishing: exports_external.boolean().optional().describe("Whether to hide the variable from publishing.")
@@ -27208,6 +27428,11 @@ var updateVariablesParamsSchema = exports_external.object({
     to: exports_external.string().describe("New mode name.")
   })).optional().describe("Modes to rename."),
   variables: exports_external.array(updateVariableSpecSchema).optional().describe("Per-variable edits.")
+});
+var deleteVariablesParamsSchema = exports_external.object({
+  ...fileTargetParamsSchema.shape,
+  variables: exports_external.array(exports_external.string()).optional().describe("IDs of variables to remove."),
+  collections: exports_external.array(exports_external.string()).optional().describe("IDs of variable collections to remove (cascades their variables).")
 });
 var styleTypeSchema = exports_external.enum([
   "paint",
@@ -27236,6 +27461,15 @@ var updateStyleSpecSchema = exports_external.object({
 var updateStylesParamsSchema = exports_external.object({
   ...fileTargetParamsSchema.shape,
   styles: exports_external.array(updateStyleSpecSchema).describe("The styles to edit (partial success).")
+});
+var deleteStyleSpecSchema = exports_external.object({
+  id: exports_external.string().optional().describe("ID of the style to delete (or look it up by name + type)."),
+  name: exports_external.string().optional().describe("Style name to look up (with `type`) when no `id` is given."),
+  type: styleTypeSchema.optional().describe("Style category for name lookup: paint | text | effect | grid.")
+});
+var deleteStylesParamsSchema = exports_external.object({
+  ...fileTargetParamsSchema.shape,
+  styles: exports_external.array(deleteStyleSpecSchema).describe("The styles to delete (partial success).")
 });
 var applyStyleParamsSchema = exports_external.object({
   ...fileTargetParamsSchema.shape,
@@ -27307,7 +27541,9 @@ var createComponentParamsSchema = exports_external.object({
 var componentPropertyDefSchema = exports_external.object({
   name: exports_external.string().describe("Property name."),
   type: exports_external.enum(["BOOLEAN", "TEXT", "INSTANCE_SWAP", "SLOT"]).describe("Property type."),
-  defaultValue: exports_external.union([exports_external.string(), exports_external.boolean()]).describe('Default value (boolean for BOOLEAN, string for TEXT, component key for INSTANCE_SWAP, "" for SLOT).')
+  defaultValue: exports_external.union([exports_external.string(), exports_external.boolean()]).describe('Default value (boolean for BOOLEAN, string for TEXT, component key for INSTANCE_SWAP, "" for SLOT).'),
+  targetNodeId: exports_external.string().optional().describe("Descendant node to bind this property to via componentPropertyReferences. " + "Omitting it adds the property but leaves it unbound \u2014 set_instance will be inert (a warning is emitted)."),
+  field: exports_external.enum(["characters", "visible", "mainComponent"]).optional().describe("Which field on the target node to drive. Inferred from type when omitted: TEXT\u2192'characters', BOOLEAN\u2192'visible', INSTANCE_SWAP\u2192'mainComponent'.")
 });
 var componentPropertyEditSchema = exports_external.object({
   name: exports_external.string().describe("Existing property name to edit."),
@@ -27321,7 +27557,8 @@ var updateComponentParamsSchema = exports_external.object({
   edit: exports_external.array(componentPropertyEditSchema).optional().describe("Property definitions to edit (rename / new default)."),
   delete: exports_external.array(exports_external.string()).optional().describe("Property names to delete."),
   description: exports_external.string().optional().describe("New description for the component."),
-  expose: exports_external.array(exports_external.string()).optional().describe("Nested instance node IDs to expose (T7-gated: degrades with a warning if unsupported).")
+  expose: exports_external.array(exports_external.string()).optional().describe("Nested instance node IDs to expose (T7-gated: degrades with a warning if unsupported)."),
+  slots: exports_external.array(exports_external.string()).optional().describe("Names of slots to CREATE inside this component. Each becomes a new empty SLOT node (named accordingly) that instances fill per-screen. T7-gated: degrades with a warning if createSlot is unavailable.")
 });
 var combineVariantsParamsSchema = exports_external.object({
   ...fileTargetParamsSchema.shape,
@@ -27355,6 +27592,8 @@ var batchOpSchema = exports_external.enum([
   "clone_node",
   "boolean_op",
   "flatten",
+  "group_nodes",
+  "transform_group",
   "apply_style",
   "update_component",
   "combine_variants",
@@ -27365,6 +27604,7 @@ var batchOpSchema = exports_external.enum([
   "update_styles",
   "create_variables",
   "update_variables",
+  "delete_variables",
   "set_plugin_data",
   "set_reactions",
   "set_annotations",
@@ -27388,6 +27628,12 @@ var searchComponentsParamsSchema = exports_external.object({
 });
 var reindexParamsSchema = exports_external.object({
   ...fileTargetParamsSchema.shape
+});
+var reportStatusParamsSchema = exports_external.object({
+  ...fileTargetParamsSchema.shape,
+  text: exports_external.string().describe("One-line, human-meaningful status shown in the plugin panel."),
+  level: exports_external.enum(["normal", "error"]).optional().describe("normal (default) or error (red dot). Busy is automatic."),
+  label: exports_external.string().optional().describe('Optional friendly name for this agent; defaults to agentType or "Agent".')
 });
 var recordFeedbackParamsSchema = exports_external.object({
   category: exports_external.enum(FEEDBACK_CATEGORIES).describe("Which feedback stream this belongs to. Routes to that stream's GitHub issue."),
@@ -27490,6 +27736,9 @@ var createFigmaClient = (relayUrl, joinTimeoutMs = JOIN_TIMEOUT_MS, watchdog) =>
           resolve(result);
         }
       }
+      return;
+    }
+    if (parsed.type !== "broadcast") {
       return;
     }
     const { message } = parsed;
@@ -27603,7 +27852,15 @@ var createFigmaClient = (relayUrl, joinTimeoutMs = JOIN_TIMEOUT_MS, watchdog) =>
     p.then(clear, clear);
     return p;
   };
-  const dispatch = (fileKey, command, params, timeoutMs, sessionId) => {
+  const sendToChannel = (channel, frame) => {
+    const socket = ws;
+    if (socket === null || socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    socket.send(JSON.stringify(frame));
+  };
+  const channelFor = (fileKey) => joined.get(fileKey) ?? null;
+  const dispatch = (fileKey, command, params, timeoutMs, identity) => {
     if (ws === null || ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("Not connected"));
     }
@@ -27621,8 +27878,32 @@ var createFigmaClient = (relayUrl, joinTimeoutMs = JOIN_TIMEOUT_MS, watchdog) =>
       }, timeoutMs);
       pending.set(requestId, { resolve, reject, timer });
       const meta = { fileKey, requestId };
-      if (sessionId !== undefined) {
-        meta.sessionId = sessionId;
+      if (identity?.sessionId !== undefined) {
+        meta.sessionId = identity.sessionId;
+      }
+      if (identity?.agentId !== undefined) {
+        meta.agentId = identity.agentId;
+      }
+      if (identity?.agentType !== undefined) {
+        meta.agentType = identity.agentType;
+      }
+      const skeletonKey = identity?.agentId ?? identity?.sessionId;
+      if (command !== COMMANDS.PING && skeletonKey !== undefined) {
+        const skeleton = {
+          key: skeletonKey,
+          sessionId: identity?.sessionId,
+          agentId: identity?.agentId,
+          agentType: identity?.agentType,
+          level: "normal",
+          text: null,
+          activity: "busy",
+          updatedAt: Date.now()
+        };
+        sendToChannel(ch, {
+          type: "agent-status",
+          channel: ch,
+          record: skeleton
+        });
       }
       const cmdMessage = {
         command,
@@ -27684,7 +27965,18 @@ var createFigmaClient = (relayUrl, joinTimeoutMs = JOIN_TIMEOUT_MS, watchdog) =>
   const sendCommand = (fileKey, command, params, timeoutMs = 30000) => dispatch(fileKey, command, params, timeoutMs);
   const forFile = (fileKey, opts) => ({
     fileKey,
-    sendCommand: (command, params, timeoutMs = 30000) => dispatch(fileKey, command, params, timeoutMs, opts?.sessionId)
+    sendCommand: (command, params, timeoutMs = 30000) => dispatch(fileKey, command, params, timeoutMs, opts),
+    notifyStatus: (record3) => {
+      const ch = channelFor(fileKey);
+      if (ch !== null) {
+        sendToChannel(ch, {
+          type: "agent-status",
+          channel: ch,
+          record: record3
+        });
+      }
+    },
+    identity: opts
   });
   const sendFrame = (message) => {
     const socket = ws;
@@ -27700,11 +27992,7 @@ var createFigmaClient = (relayUrl, joinTimeoutMs = JOIN_TIMEOUT_MS, watchdog) =>
     }
   };
   const notify = (command, params) => {
-    sendFrame({
-      command,
-      params,
-      meta: { requestId: genId("ntf") }
-    });
+    sendFrame({ command, params });
   };
   const onRequest = (command, handler) => {
     requestHandlers.set(command, handler);
@@ -27725,7 +28013,6 @@ var createFigmaClient = (relayUrl, joinTimeoutMs = JOIN_TIMEOUT_MS, watchdog) =>
   };
   const isConnected = () => ws !== null && ws.readyState === WebSocket.OPEN && joined.size > 0;
   const joinedFiles = () => Array.from(joined.keys());
-  const channelFor = (fileKey) => joined.get(fileKey) ?? null;
   const discover = () => discoverChannels(relayHttpUrl);
   const isInstanceDead = (fileKey, liveConnectedAt) => {
     const dead = deadInstances.get(fileKey);
@@ -27836,8 +28123,18 @@ var withFile = (client, handler) => async (args) => {
   if (!gate.ok) {
     return gate.result;
   }
-  const { fileKey, sessionId, ...rest } = args;
-  const scoped = client.forFile(fileKey, { sessionId });
+  const {
+    fileKey,
+    sessionId,
+    agentId,
+    agentType,
+    ...rest
+  } = args;
+  const scoped = client.forFile(fileKey, {
+    sessionId,
+    agentId,
+    agentType
+  });
   try {
     return await handler(rest, scoped);
   } catch (e) {
@@ -28955,6 +29252,48 @@ var atomToGrid = (s) => {
   return out;
 };
 var gridToAtom = (g) => renderAtom(gridToAst(g));
+// packages/server/src/grammar/heads/path.ts
+var WINDING_RULES = new Set([
+  "NONZERO",
+  "EVENODD",
+  "NONE"
+]);
+var DEFAULT_WINDING = "NONZERO";
+var scalar2 = (a) => a !== undefined && a.kind === "scalar" ? a.value : undefined;
+var unquote = (v) => {
+  if (v.startsWith('"') && v.endsWith('"') && v.length >= 2) {
+    return v.slice(1, -1);
+  }
+  return v;
+};
+var atomToPath = (s) => {
+  const ast = parseAtom(s);
+  if (ast.kind !== "head" || ast.head !== "path") {
+    throw new Error(`atomToPath: not a path atom \u2014 got "${s}"`);
+  }
+  const { args } = ast;
+  const windingRaw = scalar2(args[0]);
+  const windingRule = typeof windingRaw === "string" && WINDING_RULES.has(windingRaw) ? windingRaw : DEFAULT_WINDING;
+  const dataRaw = scalar2(args[1]);
+  const data = typeof dataRaw === "string" ? unquote(dataRaw) : "";
+  return { windingRule, data };
+};
+var normalizePathData = (data) => data.replace(/,/g, " ").replace(/\s{2,}/g, " ");
+var pathToAtom = (p) => {
+  const args = [
+    { kind: "scalar", value: p.windingRule },
+    {
+      kind: "scalar",
+      value: `"${normalizePathData(p.data)}"`
+    }
+  ];
+  const ast = {
+    kind: "head",
+    head: "path",
+    args
+  };
+  return renderAtom(ast);
+};
 // packages/server/src/serialize/node-spec-reader.ts
 var num2 = (v) => typeof v === "number" ? v : undefined;
 var str2 = (v) => typeof v === "string" ? v : undefined;
@@ -28974,12 +29313,15 @@ var restConstraintToPlugin = (value) => {
   }
 };
 var sizeOf = (raw) => {
+  const w = num2(raw.width);
+  const h = num2(raw.height);
+  if (w !== undefined && h !== undefined) {
+    return [w, h];
+  }
   const bbox = raw.absoluteBoundingBox;
   if (bbox !== undefined && bbox !== null) {
     return [bbox.width, bbox.height];
   }
-  const w = num2(raw.width);
-  const h = num2(raw.height);
   return [w ?? 0, h ?? 0];
 };
 var bboxOf = (raw) => {
@@ -29026,14 +29368,35 @@ var rawToFigmaPaint = (p) => {
     return out;
   }
   if ((p.type === "GRADIENT_LINEAR" || p.type === "GRADIENT_RADIAL" || p.type === "GRADIENT_ANGULAR" || p.type === "GRADIENT_DIAMOND") && p.gradientStops !== undefined) {
+    const handles = p.gradientHandlePositions;
     const tf = p.gradientTransform;
-    const gradientTransform = tf !== undefined && tf.length === 2 ? [
-      [tf[0][0], tf[0][1], tf[0][2]],
-      [tf[1][0], tf[1][1], tf[1][2]]
-    ] : [
-      [1, 0, 0],
-      [0, 1, 0]
-    ];
+    const gradientTransform = (() => {
+      if (p.type === "GRADIENT_LINEAR" && handles !== undefined && handles.length >= 2) {
+        const p1 = handles[0];
+        const p2 = handles[1];
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        const len = Math.sqrt(dx * dx + dy * dy) || 1;
+        const cos = dx / len;
+        const sin = dy / len;
+        const e = 0.5 - (cos * 0.5 + sin * 0.5);
+        const f = 0.5 - (-sin * 0.5 + cos * 0.5);
+        return [
+          [cos, sin, e],
+          [-sin, cos, f]
+        ];
+      }
+      if (tf !== undefined && tf.length === 2) {
+        return [
+          [tf[0][0], tf[0][1], tf[0][2]],
+          [tf[1][0], tf[1][1], tf[1][2]]
+        ];
+      }
+      return [
+        [1, 0, 0],
+        [0, 1, 0]
+      ];
+    })();
     const out = {
       type: p.type,
       gradientStops: p.gradientStops,
@@ -29138,8 +29501,28 @@ var radiusAtom = (raw) => {
 };
 var layoutSpec = (raw) => {
   const mode = str2(raw.layoutMode);
-  if (mode !== "HORIZONTAL" && mode !== "VERTICAL") {
+  if (mode !== "HORIZONTAL" && mode !== "VERTICAL" && mode !== "GRID") {
     return;
+  }
+  if (mode === "GRID") {
+    const out2 = { mode: "GRID" };
+    const rows = num2(raw.gridRowCount);
+    if (rows !== undefined) {
+      out2.rows = rows;
+    }
+    const cols = num2(raw.gridColumnCount);
+    if (cols !== undefined) {
+      out2.cols = cols;
+    }
+    const rowGap = num2(raw.gridRowGap);
+    if (rowGap !== undefined) {
+      out2.rowGap = rowGap;
+    }
+    const colGap = num2(raw.gridColumnGap);
+    if (colGap !== undefined) {
+      out2.colGap = colGap;
+    }
+    return out2;
   }
   const out = {
     mode: mode === "HORIZONTAL" ? "H" : "V"
@@ -29283,6 +29666,7 @@ var componentMeta = (raw) => {
   if (str2(raw.type) === "INSTANCE") {
     const componentId = str2(raw.componentId);
     const componentKey = str2(raw.componentKey);
+    const componentRemote = raw.componentRemote === true ? true : undefined;
     if (componentId !== undefined || componentKey !== undefined) {
       const component = {};
       if (componentId !== undefined) {
@@ -29290,6 +29674,9 @@ var componentMeta = (raw) => {
       }
       if (componentKey !== undefined) {
         component.key = componentKey;
+      }
+      if (componentRemote !== undefined) {
+        component.remote = componentRemote;
       }
       out.component = component;
     }
@@ -29383,6 +29770,39 @@ var buildNode = (raw, remaining, parentBBox) => {
   if (radius !== undefined) {
     out.radius = radius;
   }
+  const vp = raw.vectorPaths;
+  if (Array.isArray(vp)) {
+    out.vectorPaths = vp.map((p) => {
+      const path = p;
+      return pathToAtom({
+        windingRule: path.windingRule,
+        data: path.data
+      });
+    });
+  }
+  const pointCount = num2(raw.pointCount);
+  if (pointCount !== undefined) {
+    out.pointCount = pointCount;
+  }
+  const innerRadius = num2(raw.innerRadius);
+  if (innerRadius !== undefined) {
+    out.innerRadius = innerRadius;
+  }
+  if (typeof raw.sectionContentsHidden === "boolean") {
+    out.sectionContentsHidden = raw.sectionContentsHidden;
+  }
+  if (raw.isMask === true) {
+    out.isMask = true;
+    if (typeof raw.maskType === "string") {
+      out.maskType = raw.maskType;
+    }
+  }
+  if (typeof raw.explicitVariableModes === "object" && raw.explicitVariableModes !== null && Object.keys(raw.explicitVariableModes).length > 0) {
+    out.explicitVariableModes = raw.explicitVariableModes;
+  }
+  if (raw.componentPropertyReferences && typeof raw.componentPropertyReferences === "object") {
+    out.componentPropertyReferences = raw.componentPropertyReferences;
+  }
   const opacity = num2(raw.opacity);
   if (opacity !== undefined && opacity < 1) {
     out.opacity = opacity;
@@ -29401,7 +29821,8 @@ var buildNode = (raw, remaining, parentBBox) => {
   if (raw.visible === false) {
     out.visible = false;
   }
-  if (raw.clipsContent === true) {
+  const nodeType = str2(raw.type) ?? "";
+  if (raw.clipsContent === true && nodeType !== "GROUP") {
     out.clipsContent = true;
   }
   const text = textSpec(raw);
@@ -29714,8 +30135,8 @@ var projectNode = (n, sel) => {
   if (!sel) {
     return n;
   }
-  const keys = sel.fields?.length ? sel.fields : sel.profile !== undefined ? PROFILES[sel.profile] : null;
-  if (keys === null) {
+  const keys = sel.fields?.length ? sel.fields : sel.profile !== undefined ? PROFILES[sel.profile] : undefined;
+  if (!keys) {
     return n;
   }
   const result = {};
@@ -30109,7 +30530,11 @@ var handleGetComponents = async ({
       }
       throw err;
     }
-    const warnings = Array.isArray(raw.warnings) ? raw.warnings : undefined;
+    const warnings = Array.isArray(raw.warnings) ? raw.warnings.slice() : [];
+    if (raw.scanTruncated === true) {
+      const budget = raw.scanned ?? "unknown";
+      warnings.push(`remote-component scan truncated at ${budget} instances; results may be incomplete \u2014 narrow the query or raise maxInstances`);
+    }
     const envelope = {
       results: bounded.page,
       truncated: bounded.truncated
@@ -30117,7 +30542,7 @@ var handleGetComponents = async ({
     if (bounded.cursor !== undefined) {
       envelope.cursor = bounded.cursor;
     }
-    if (warnings !== undefined && warnings.length > 0) {
+    if (warnings.length > 0) {
       envelope.warnings = warnings;
     }
     return textResult(import_yaml2.default.stringify(envelope));
@@ -30170,14 +30595,48 @@ var handleListFonts = async ({
 var handleBindVariable = async ({
   nodeId,
   variableId,
-  field
+  field,
+  mode
 }, client) => {
+  const hasFieldBinding = variableId !== undefined && field !== undefined;
+  const hasModeMap = mode !== undefined && Object.keys(mode).length > 0;
+  if (!hasFieldBinding && !hasModeMap) {
+    return textResult("Error: INVALID_PARAM \u2014 bind_variable requires at least one of: (variableId + field) for a field binding, or mode for a mode pin.");
+  }
   try {
-    const result = await client.sendCommand(COMMANDS.BIND_VARIABLE, { nodeId, variableId, field });
-    return formatMutationResult(result, `Failed to bind variable ${variableId} to ${field}`);
+    const params = { nodeId };
+    if (variableId !== undefined) {
+      params.variableId = variableId;
+    }
+    if (field !== undefined) {
+      params.field = field;
+    }
+    if (mode !== undefined) {
+      params.mode = mode;
+    }
+    const result = await client.sendCommand(COMMANDS.BIND_VARIABLE, params);
+    return formatMutationResult(result, `Failed to bind variable${variableId ? ` ${variableId} to ${field ?? ""}` : ""} / mode on node ${nodeId}`);
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`);
   }
+};
+var translateAliases = (rawAliases, modes) => {
+  if (rawAliases === null || rawAliases === undefined || typeof rawAliases !== "object" || Array.isArray(rawAliases)) {
+    return;
+  }
+  const aliasMap = rawAliases;
+  const modeIdToName = {};
+  for (const m of modes) {
+    modeIdToName[m.modeId] = m.name;
+  }
+  const out = {};
+  for (const [modeId, targetId] of Object.entries(aliasMap)) {
+    const modeName = modeIdToName[modeId];
+    if (modeName !== undefined) {
+      out[modeName] = targetId;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 };
 var isRgbaColor = (v) => typeof v === "object" && v !== null && typeof v.r === "number" && typeof v.g === "number" && typeof v.b === "number";
 var renderVariableValues = (valuesByMode) => {
@@ -30201,21 +30660,30 @@ var handleGetVariables = async ({
       return textResult("Failed to get variables from plugin.");
     }
     const collections = raw.results ?? [];
-    const results = collections.map((c) => ({
-      id: c.id,
-      name: c.name,
-      modes: c.modes,
-      variables: (c.variables ?? []).map((v) => ({
-        id: v.id,
-        name: v.name,
-        type: v.resolvedType,
-        valuesByMode: renderVariableValues(v.valuesByMode),
-        aliases: v.aliases,
-        scopes: v.scopes,
-        codeSyntax: v.codeSyntax,
-        hiddenFromPublishing: v.hiddenFromPublishing
-      }))
-    }));
+    const results = collections.map((c) => {
+      const modes = Array.isArray(c.modes) ? c.modes : [];
+      return {
+        id: c.id,
+        name: c.name,
+        modes: c.modes,
+        variables: (c.variables ?? []).map((v) => {
+          const aliases = translateAliases(v.aliases, modes);
+          const entry = {
+            id: v.id,
+            name: v.name,
+            type: v.resolvedType,
+            valuesByMode: renderVariableValues(v.valuesByMode),
+            scopes: v.scopes,
+            codeSyntax: v.codeSyntax,
+            hiddenFromPublishing: v.hiddenFromPublishing
+          };
+          if (aliases !== undefined) {
+            entry.aliases = aliases;
+          }
+          return entry;
+        })
+      };
+    });
     let bounded;
     try {
       bounded = paginateList(results, { limit, cursor });
@@ -30331,6 +30799,22 @@ var handleUpdateVariables = async ({
     return textResult(`Error: ${errorMessage(err)}`);
   }
 };
+var handleDeleteVariables = async ({
+  variables,
+  collections
+}, client) => {
+  const hasVariables = variables !== undefined && variables.length > 0;
+  const hasCollections = collections !== undefined && collections.length > 0;
+  if (!hasVariables && !hasCollections) {
+    return textResult("Error: At least one of `variables` or `collections` must be a non-empty array.");
+  }
+  try {
+    const result = await client.sendCommand(COMMANDS.DELETE_VARIABLES, { variables, collections });
+    return formatMutationResult(result, "Failed to delete variables.");
+  } catch (err) {
+    return textResult(`Error: ${errorMessage(err)}`);
+  }
+};
 var handleCreateStyles = async ({ styles }, client) => {
   const converted = [];
   const preErrors = [];
@@ -30407,6 +30891,28 @@ var handleUpdateStyles = async ({ styles }, client) => {
       ...preErrors,
       ...reply.errors ?? []
     ].sort((a, b) => a.index - b.index);
+    return textResult(JSON.stringify({ results, errors: errors4 }, null, 2));
+  } catch (err) {
+    return textResult(`Error: ${errorMessage(err)}`);
+  }
+};
+var handleDeleteStyles = async ({ styles }, client) => {
+  const tagged = styles.map((entry, index) => ({
+    index,
+    id: entry.id,
+    name: entry.name,
+    type: entry.type
+  }));
+  try {
+    const reply = await client.sendCommand(COMMANDS.DELETE_STYLES, { styles: tagged });
+    if (reply === null) {
+      return textResult("Failed to delete styles.");
+    }
+    if (reply.error !== undefined) {
+      return textResult(`Error: ${reply.error}`);
+    }
+    const results = reply.results ?? [];
+    const errors4 = (reply.errors ?? []).sort((a, b) => a.index - b.index);
     return textResult(JSON.stringify({ results, errors: errors4 }, null, 2));
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`);
@@ -30644,6 +31150,29 @@ var handleFlatten = async ({
     return textResult(`Error: ${errorMessage(err)}`);
   }
 };
+var handleGroupNodes = async ({
+  nodeIds,
+  parentId
+}, client) => {
+  try {
+    const result = await client.sendCommand(COMMANDS.GROUP_NODES, { nodeIds, parentId });
+    return formatMutationResult(result, "Failed to group nodes.");
+  } catch (err) {
+    return textResult(`Error: ${errorMessage(err)}`);
+  }
+};
+var handleTransformGroup = async ({
+  nodeIds,
+  parentId,
+  modifiers
+}, client) => {
+  try {
+    const result = await client.sendCommand(COMMANDS.TRANSFORM_GROUP, { nodeIds, parentId, modifiers });
+    return formatMutationResult(result, "Failed to transform group nodes.");
+  } catch (err) {
+    return textResult(`Error: ${errorMessage(err)}`);
+  }
+};
 
 // packages/server/src/tools/pages.ts
 init_src();
@@ -30718,7 +31247,7 @@ var parseRadius = (s) => {
   }
   return Number(trimmed);
 };
-var convertLayout = (layout) => {
+var convertLayout = (layout, warnings) => {
   const out = { mode: layout.mode };
   if (layout.gap !== undefined) {
     out.spacing = layout.gap;
@@ -30731,6 +31260,22 @@ var convertLayout = (layout) => {
   }
   if (layout.wrap !== undefined) {
     out.wrap = layout.wrap;
+  }
+  const hasGridKeys = layout.rows !== undefined || layout.cols !== undefined || layout.rowGap !== undefined || layout.colGap !== undefined;
+  if (hasGridKeys && layout.mode !== "GRID" && warnings) {
+    warnings.push(`layout: rows/cols/rowGap/colGap keys are GRID-only but mode is '${layout.mode}' \u2014 keys ignored`);
+  }
+  if (layout.rows !== undefined) {
+    out.rows = layout.rows;
+  }
+  if (layout.cols !== undefined) {
+    out.cols = layout.cols;
+  }
+  if (layout.rowGap !== undefined) {
+    out.rowGap = layout.rowGap;
+  }
+  if (layout.colGap !== undefined) {
+    out.colGap = layout.colGap;
   }
   return out;
 };
@@ -30749,7 +31294,7 @@ var specToFigma = (spec, warnings) => {
     out.position = spec.position;
   }
   if (spec.layout !== undefined) {
-    out.layout = convertLayout(spec.layout);
+    out.layout = convertLayout(spec.layout, warnings);
   }
   if (spec.sizing !== undefined) {
     out.sizing = spec.sizing;
@@ -30829,6 +31374,24 @@ var specToFigma = (spec, warnings) => {
   }
   if (spec.grids !== undefined) {
     out.grids = spec.grids.map(atomToGrid);
+  }
+  if (spec.vectorPaths !== undefined) {
+    out.vectorPaths = spec.vectorPaths.map(atomToPath);
+  }
+  if (spec.pointCount !== undefined) {
+    out.pointCount = spec.pointCount;
+  }
+  if (spec.innerRadius !== undefined) {
+    out.innerRadius = spec.innerRadius;
+  }
+  if (spec.sectionContentsHidden !== undefined) {
+    out.sectionContentsHidden = spec.sectionContentsHidden;
+  }
+  if (spec.isMask !== undefined) {
+    out.isMask = spec.isMask;
+  }
+  if (spec.maskType !== undefined) {
+    out.maskType = spec.maskType;
   }
   if (spec.text !== undefined) {
     const t = spec.text;
@@ -31216,7 +31779,8 @@ var handleUpdateComponent = async ({
   edit,
   delete: del,
   description,
-  expose
+  expose,
+  slots
 }, client) => {
   try {
     const result = await client.sendCommand(COMMANDS.UPDATE_COMPONENT, {
@@ -31225,7 +31789,8 @@ var handleUpdateComponent = async ({
       edit,
       delete: del,
       description,
-      expose
+      expose,
+      slots
     });
     return formatMutationResult(result, "Failed to update component.");
   } catch (err) {
@@ -32970,6 +33535,25 @@ var handleReindex = async (_params, client, manager) => {
   }
 };
 
+// packages/server/src/tools/report-status.ts
+var handleReportStatus = async (params, scoped) => {
+  const id2 = scoped.identity;
+  const key = id2?.agentId ?? id2?.sessionId ?? params.label ?? "agent";
+  const record3 = {
+    key,
+    sessionId: id2?.sessionId,
+    agentId: id2?.agentId,
+    agentType: id2?.agentType,
+    label: params.label,
+    level: params.level ?? "normal",
+    text: params.text,
+    activity: "busy",
+    updatedAt: Date.now()
+  };
+  scoped.notifyStatus(record3);
+  return textResult("ok");
+};
+
 // packages/server/src/index.ts
 if (process.argv.includes("--version")) {
   console.log(APP_VERSION);
@@ -33031,6 +33615,8 @@ if (process.argv.includes("--relay")) {
   registerFileTool(server, client, "reorder_children", reorderChildrenParamsSchema, handleReorderChildren);
   registerFileTool(server, client, "boolean_op", booleanOpParamsSchema, handleBooleanOp);
   registerFileTool(server, client, "flatten", flattenParamsSchema, handleFlatten);
+  registerFileTool(server, client, "group_nodes", groupNodesParamsSchema, handleGroupNodes);
+  registerFileTool(server, client, "transform_group", transformGroupParamsSchema, handleTransformGroup);
   registerFileTool(server, client, "create_page", createPageParamsSchema, handleCreatePage);
   registerFileTool(server, client, "set_current_page", setCurrentPageParamsSchema, handleSetCurrentPage);
   registerFileTool(server, client, "duplicate_page", duplicatePageParamsSchema, handleDuplicatePage);
@@ -33040,12 +33626,15 @@ if (process.argv.includes("--relay")) {
   registerFileTool(server, client, "set_annotations", setAnnotationsParamsSchema, handleSetAnnotations);
   registerFileTool(server, client, "create_variables", createVariablesParamsSchema, handleCreateVariables);
   registerFileTool(server, client, "update_variables", updateVariablesParamsSchema, handleUpdateVariables);
+  registerFileTool(server, client, "delete_variables", deleteVariablesParamsSchema, handleDeleteVariables);
   registerFileTool(server, client, "create_styles", createStylesParamsSchema, handleCreateStyles);
   registerFileTool(server, client, "update_styles", updateStylesParamsSchema, handleUpdateStyles);
+  registerFileTool(server, client, "delete_styles", deleteStylesParamsSchema, handleDeleteStyles);
   registerFileTool(server, client, "apply_style", applyStyleParamsSchema, handleApplyStyle);
   registerFileTool(server, client, "batch", batchParamsSchema, handleBatch);
   registerFileTool(server, client, "search_components", searchComponentsParamsSchema, (params, scoped) => handleSearchComponents(params, scoped, indexManager));
   registerFileTool(server, client, "reindex", reindexParamsSchema, (params, scoped) => handleReindex(params, scoped, indexManager));
+  registerFileTool(server, client, "report_status", reportStatusParamsSchema, (p, scoped) => handleReportStatus(p, scoped));
   const transport = new StdioServerTransport;
   await server.connect(transport);
 }
