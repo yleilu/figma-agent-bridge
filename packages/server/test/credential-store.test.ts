@@ -14,7 +14,7 @@ import {
   setToken,
   clearToken,
   setPreference,
-  __setSecretsForTest,
+  setSecretsForTest,
 } from '@figma-agent-bridge/server/credential-store'
 
 let dir: string
@@ -24,7 +24,7 @@ beforeEach(async () => {
   process.env.FIGMA_BRIDGE_NO_KEYCHAIN = '1'
 })
 afterEach(async () => {
-  __setSecretsForTest(null)
+  setSecretsForTest(null)
   delete process.env.CREDENTIALS_DIR
   delete process.env.FIGMA_BRIDGE_NO_KEYCHAIN
   await rm(dir, { recursive: true, force: true })
@@ -78,7 +78,7 @@ describe('credential-store (keychain backend, feature-detected)', () => {
     // up the injected keychain
     delete process.env.FIGMA_BRIDGE_NO_KEYCHAIN
     const kc = new Map<string, string>()
-    __setSecretsForTest({
+    setSecretsForTest({
       get: async ({ service, name }) =>
         kc.get(`${service}:${name}`) ?? null,
       set: async ({ service, name, value }) => {

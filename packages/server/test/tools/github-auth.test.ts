@@ -12,7 +12,7 @@ import { readCredentials } from '@figma-agent-bridge/server/credential-store'
 import {
   handleGithubAuthStart,
   handleGithubAuthPoll,
-  __resetPendingAuth,
+  resetPendingAuth,
 } from '@figma-agent-bridge/server/tools/github-auth'
 
 const seq = (...responses: unknown[]) => {
@@ -33,7 +33,7 @@ beforeEach(async () => {
   cred = await mkdtemp(join(tmpdir(), 'cred-'))
   process.env.CREDENTIALS_DIR = cred
   process.env.FIGMA_BRIDGE_NO_KEYCHAIN = '1'
-  __resetPendingAuth()
+  resetPendingAuth()
 })
 afterEach(async () => {
   delete process.env.CREDENTIALS_DIR

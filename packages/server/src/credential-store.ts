@@ -42,7 +42,7 @@ type Secrets = {
 
 // test seam: inject a fake keychain to exercise the Bun.secrets branch
 let secretsOverride: Secrets | null = null
-export const __setSecretsForTest = (
+export const setSecretsForTest = (
   s: Secrets | null,
 ): void => {
   secretsOverride = s
@@ -57,12 +57,21 @@ const credentialsFile = (): string =>
 
 // Bun.secrets is experimental + v1.2.21+; feature-detect and
 // fall back to a 0600 file.
-const useKeychain = (): boolean =>
-  !process.env.FIGMA_BRIDGE_NO_KEYCHAIN &&
-  (secretsOverride != null ||
-    (typeof Bun !== 'undefined' &&
-      (Bun as unknown as { secrets?: unknown }).secrets !=
-        null))
+const useKeychain = (): boolean => {
+  if (process.env.FIGMA_BRIDGE_NO_KEYCHAIN) {
+    return false
+  }
+  if (secretsOverride !== null) {
+    return true
+  }
+  if (typeof Bun === 'undefined') {
+    return false
+  }
+  const bunSecrets = (
+    Bun as unknown as { secrets?: unknown }
+  ).secrets
+  return bunSecrets !== null && bunSecrets !== undefined
+}
 
 const secrets = (): Secrets =>
   secretsOverride ??

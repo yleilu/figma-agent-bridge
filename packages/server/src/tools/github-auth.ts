@@ -20,7 +20,7 @@ interface PendingAuth {
 let pending: PendingAuth | null = null
 
 // test-only reset hook
-export const __resetPendingAuth = (): void => {
+export const resetPendingAuth = (): void => {
   pending = null
 }
 
