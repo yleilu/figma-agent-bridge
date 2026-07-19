@@ -143,7 +143,6 @@ import {
 import { handleCreateFromSvg } from './tools/create-svg'
 import { handleBatch } from './tools/batch'
 import { handleRecordFeedback } from './tools/feedback'
-import { wireFeedback } from './feedback-wiring'
 import { IndexManager } from './component-index/manager'
 import {
   handleSearchComponents,
@@ -177,7 +176,6 @@ if (process.argv.includes('--relay')) {
     process.env.RELAY_URL ?? `ws://localhost:${port}`
   const relayHttpUrl = toHttpUrl(relayUrl)
   const client = createFigmaClient(relayUrl)
-  wireFeedback(client)
 
   const indexManager = new IndexManager()
 
