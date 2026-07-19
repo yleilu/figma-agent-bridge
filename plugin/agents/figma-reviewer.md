@@ -118,7 +118,8 @@ concrete numbers (WCAG ratios, spacing scales, naming patterns).
 
 6. **Naming & context legibility** — blank or default-pattern names (with the text-node
    exemption: a text node's name may equal its content, so only a _blank_ one is flagged),
-   components lacking a `/` taxonomy (variant children with `=` exempt), malformed or
+   components lacking a `/` taxonomy (a house preference — flag only when a
+   `figma-bridge-prefs` `review-standards` opts in; variant children with `=` exempt), malformed or
    over-cap `context`, and name ↔ `context.role` contradictions (advisory). Enumerate
    default names with a bounded `search` (`match.regex` = the default-name pattern), not a
    manual tree walk.
@@ -179,7 +180,8 @@ On approval, apply the requested fixes using `figma-design` mechanics:
 - **Token binding:** `bind_variable` on fills / effects; `apply_style` on text nodes.
   Apply on masters so instances inherit.
 - **Renaming:** `update_node` with a `name` patch — rename default-named nodes to
-  semantic names, and add a `/` taxonomy path to untaxonomied components. Batch multiple
+  semantic names, and — only when `figma-bridge-prefs` `review-standards` opts into it — add a
+  `/` taxonomy path to untaxonomied components. Batch multiple
   renames through `batch`.
 - **Layout fixes:** `update_node` to set `layoutMode`, `layoutSizing`, `padding`, `gap`,
   or `layoutPositioning` on the offending node.

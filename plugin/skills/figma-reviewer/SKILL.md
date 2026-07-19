@@ -152,8 +152,9 @@ pure style audit), skip it.
 ### 6. Naming & context legibility
 
 Audits the two hidden-in-plain-sight legibility surfaces: every node should carry a
-legible `name`, and any `context` note should be well-formed. (The naming _opinions_ —
-what a good name is — live in the `figma-design` skill; this dimension only audits.)
+legible `name`, and any `context` note should be well-formed. (The naming _floor_ — a
+meaningful, non-default name — lives in the `figma-design` skill; the concrete naming
+convention is a `figma-bridge-prefs` preference. This dimension only audits.)
 
 - **Blank or default name** — a `name` that is empty, whitespace-only, or matches
   Figma's default-name pattern (`Frame 12`, `Rectangle`, `Ellipse 3` — the full regex

@@ -3,8 +3,8 @@ name: figma-setup
 description: >-
   Use when the user wants to set up, edit, or update their personal or team
   Figma house style and preferences — design-system-first / component-first
-  strictness, spacing scale, tokens, type ramp, naming, review standards,
-  feedback prefs — that figma-agent-bridge should follow. Creates/updates
+  strictness, spacing scale, tokens, type ramp, naming, review standards
+  — that figma-agent-bridge should follow. Creates/updates
   the figma-bridge-prefs skill. Do NOT use for building or reviewing a
   design (that is figma-design / figma-reviewer).
 version: 0.1.0
@@ -16,7 +16,7 @@ A lightweight, Figma-specific skill-creator. On the user's explicit request it
 instantiates — or updates — a **user-authored** skill named exactly
 `figma-bridge-prefs`: the sanctioned home for one user's or team's house style
 (strict design-system-first / component-first levels, concrete tokens and
-scales, naming, review standards, feedback prefs). This skill only authors
+scales, naming, review standards). This skill only authors
 that overlay; it never builds or reviews a design itself — that's
 `figma-design` / `figma-reviewer`. Full design:
 [[figma-bridge/docs/specs/customization|customization.md]] §5.
@@ -82,8 +82,8 @@ whichever scope was chosen.
    becomes the real, loadable `figma-bridge-prefs` skill.
 4. **Tailor by interview.** Ask the user for concrete values — spacing
    scale, token set, type ramp, naming conventions, how strict
-   design-system-first / component-first should be, review standards, how
-   they want tool friction recorded — and edit the copied `references/*.md`
+   design-system-first / component-first should be, review standards — and
+   edit the copied `references/*.md`
    files to match. **Preserve the floor-preserving header** in every file you
    touch: a tailoring edit may only _tighten_ (add a scale, a stricter rule);
    it must never relax verification discipline, destructive-op safety, or
