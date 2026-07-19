@@ -5,14 +5,12 @@ import {
   useEffect,
 } from 'react'
 import type {
-  FeedbackItem,
   Meta,
   StatusRecord,
 } from '@figma-agent-bridge/shared'
 import {
   APP_VERSION,
   COMMANDS,
-  genId,
   genToken,
 } from '@figma-agent-bridge/shared'
 import { deriveChannel } from '../file-channel'
@@ -46,29 +44,6 @@ export const useRelay = () => {
   // Stable across reconnects within this session; a reload starts a new
   // session. A saved file never uses this — its channel is deterministic.
   const sessionChannelRef = useRef<string | null>(null)
-
-  // Feedback review list, keyed by FeedbackItem.path (its stable identity).
-  const [feedbackItems, setFeedbackItems] = useState<
-    Record<string, FeedbackItem>
-  >({})
-  // Requests THIS plugin originated (send-feedback / feedback-sync), tracked by
-  // id so their correlated replies can be matched without swallowing normal
-  // figma command traffic.
-  const feedbackPending = useRef(
-    new Map<
-      string,
-      {
-        resolve: (v: unknown) => void
-        reject: (e: unknown) => void
-      }
-    >(),
-  )
-  const upsert = useCallback((item: FeedbackItem) => {
-    setFeedbackItems(prev => ({
-      ...prev,
-      [item.path]: item,
-    }))
-  }, [])
 
   // Agent status monitor (status-monitor.md): live per-agent rows fed by
   // the relay's agent-status broadcasts, keyed by StatusRecord.key.
@@ -118,52 +93,6 @@ export const useRelay = () => {
       )
     }
   }, [])
-
-  // Send a correlated request over the relay and resolve on its reply.
-  const request = useCallback(
-    (
-      command: string,
-      params: Record<string, unknown>,
-    ): Promise<unknown> => {
-      const socket = wsRef.current
-      const ch = channelRef.current
-      if (!socket || !ch)
-        return Promise.reject(new Error('Not connected'))
-      const id = genId('req')
-      return new Promise((resolve, reject) => {
-        feedbackPending.current.set(id, { resolve, reject })
-        socket.send(
-          JSON.stringify({
-            type: 'message',
-            channel: ch,
-            message: {
-              command,
-              params,
-              meta: { requestId: id },
-            },
-          }),
-        )
-      })
-    },
-    [],
-  )
-
-  const sendFeedback = useCallback(
-    (path: string) => request('send-feedback', { path }),
-    [request],
-  )
-
-  const syncFeedback = useCallback(async () => {
-    const { items } = (await request(
-      'feedback-sync',
-      {},
-    )) as {
-      items: FeedbackItem[]
-    }
-    setFeedbackItems(
-      Object.fromEntries(items.map(i => [i.path, i])),
-    )
-  }, [request])
 
   // Listen for command results and file name from plugin code
   useEffect(() => {
@@ -373,7 +302,6 @@ export const useRelay = () => {
               error: null,
             })
 
-            void syncFeedback().catch(() => {})
             ws.send(
               JSON.stringify({
                 type: 'status-sync',
@@ -415,32 +343,6 @@ export const useRelay = () => {
               string,
               unknown
             >
-
-            if (
-              msg.command === 'feedback-added' ||
-              msg.command === 'feedback-updated'
-            ) {
-              upsert(
-                (msg.params as { item: FeedbackItem }).item,
-              )
-              return
-            }
-
-            const replyId = (msg.meta as Meta | undefined)
-              ?.requestId
-            if (
-              !msg.command &&
-              replyId &&
-              feedbackPending.current.has(replyId)
-            ) {
-              const p =
-                feedbackPending.current.get(replyId)!
-              feedbackPending.current.delete(replyId)
-              if (msg.error)
-                p.reject(new Error(String(msg.error)))
-              else p.resolve(msg.result)
-              return
-            }
 
             // Liveness ping (connection-liveness.md): answer HERE in the UI
             // iframe and NEVER forward to the main thread. A "slow" command
@@ -519,12 +421,6 @@ export const useRelay = () => {
           wsRef.current = null
           channelRef.current = null
 
-          // Settle any in-flight feedback requests — the socket is gone.
-          feedbackPending.current.forEach(({ reject }) =>
-            reject(new Error('Disconnected')),
-          )
-          feedbackPending.current.clear()
-
           // A dropped socket means the rows are stale -> fall to the
           // connection fallback (the invariant "agent shown => connected").
           setAgentStatus({})
@@ -538,13 +434,7 @@ export const useRelay = () => {
         }
       })
     },
-    [
-      requestIdentity,
-      syncFeedback,
-      upsert,
-      upsertStatus,
-      removeStatus,
-    ],
+    [requestIdentity, upsertStatus, removeStatus],
   )
 
   const disconnect = useCallback(() => {
@@ -570,9 +460,6 @@ export const useRelay = () => {
     ...state,
     connect,
     disconnect,
-    feedbackItems,
-    sendFeedback,
-    syncFeedback,
     agentStatus,
   }
 }
