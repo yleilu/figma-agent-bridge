@@ -28,6 +28,26 @@ const seq = (
   }) as unknown as typeof fetch
 }
 
+// Like `seq`, but records each call's url + JSON-parsed body so
+// tests can assert exactly what was sent to each endpoint.
+const recordingSeq = (
+  calls: { url: string; body: unknown }[],
+  ...steps: { status: number; body: unknown }[]
+): typeof fetch => {
+  let i = 0
+  return (async (url: string, init?: { body?: string }) => {
+    calls.push({
+      url,
+      body: init?.body ? JSON.parse(init.body) : undefined,
+    })
+    const s = steps[Math.min(i, steps.length - 1)]
+    i += 1
+    return new Response(JSON.stringify(s.body), {
+      status: s.status,
+    })
+  }) as unknown as typeof fetch
+}
+
 describe('startDeviceAuth', () => {
   it('parses the device-code response', async () => {
     const r = await startDeviceAuth(
@@ -130,6 +150,7 @@ describe('fetchIdentity', () => {
 
 describe('createSubIssue', () => {
   it('creates the issue then links it, returning the sub-issue url', async () => {
+    const calls: { url: string; body: unknown }[] = []
     const r = await createSubIssue(
       {
         repo: 'o/r',
@@ -138,7 +159,8 @@ describe('createSubIssue', () => {
         body: 'b',
         token: 'gho_1',
       },
-      seq(
+      recordingSeq(
+        calls,
         {
           status: 201,
           body: {
@@ -149,7 +171,17 @@ describe('createSubIssue', () => {
         { status: 201, body: {} },
       ),
     )
-    expect(r.url).toBe('https://gh/issues/9')
+    expect(r).toEqual({
+      url: 'https://gh/issues/9',
+      linked: true,
+    })
+    expect(calls).toHaveLength(2)
+    // the sub-issue link must use the created issue's REST `id`
+    // (555), NOT its `number` — that's the gotcha this guards.
+    expect(
+      calls[1].url.endsWith('/issues/2/sub_issues'),
+    ).toBe(true)
+    expect(calls[1].body).toEqual({ sub_issue_id: 555 })
   })
   it('throws auth on a 401 at issue creation', async () => {
     await expect(
@@ -185,27 +217,29 @@ describe('createSubIssue', () => {
       ),
     ).rejects.toMatchObject({ code: 'access' })
   })
-  it('throws access on a 403 at the link step', async () => {
-    await expect(
-      createSubIssue(
+  it('does not throw on a 403 at the link step — surfaces the created url instead', async () => {
+    const r = await createSubIssue(
+      {
+        repo: 'o/r',
+        parentIssueNumber: 2,
+        title: 't',
+        body: 'b',
+        token: 'gho_1',
+      },
+      seq(
         {
-          repo: 'o/r',
-          parentIssueNumber: 2,
-          title: 't',
-          body: 'b',
-          token: 'gho_1',
-        },
-        seq(
-          {
-            status: 201,
-            body: {
-              id: 1,
-              html_url: 'https://gh/issues/1',
-            },
+          status: 201,
+          body: {
+            id: 1,
+            html_url: 'https://gh/issues/1',
           },
-          { status: 403, body: {} },
-        ),
+        },
+        { status: 403, body: {} },
       ),
-    ).rejects.toMatchObject({ code: 'access' })
+    )
+    expect(r).toEqual({
+      url: 'https://gh/issues/1',
+      linked: false,
+    })
   })
 })

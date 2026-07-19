@@ -7,11 +7,11 @@ tags:
   - feedback
 type: spec
 related:
-  - "[[figma-bridge/docs/principles]]"
-  - "[[figma-bridge/docs/architecture]]"
-  - "[[figma-bridge/docs/specs/tool-surface]]"
-  - "[[figma-bridge/docs/specs/claude-plugin]]"
-  - "[[figma-bridge/docs/specs/status-monitor]]"
+  - '[[figma-bridge/docs/principles]]'
+  - '[[figma-bridge/docs/architecture]]'
+  - '[[figma-bridge/docs/specs/tool-surface]]'
+  - '[[figma-bridge/docs/specs/claude-plugin]]'
+  - '[[figma-bridge/docs/specs/status-monitor]]'
 ---
 
 # figma-agent-bridge — Feedback System
@@ -24,7 +24,7 @@ related:
 > once, in-browser). Governed by `docs/principles.md`; transport reuses `docs/architecture.md`.
 
 > **The agent records; the human decides what ships, and under whose name.** Nothing is filed
-> until the human picks it in the selector — that is the human gate. *When* to record and *when*
+> until the human picks it in the selector — that is the human gate. _When_ to record and _when_
 > to raise the selector is plugin-layer guidance (the `figma-feedback` skill, P1), never a tool
 > opinion — the tools themselves are neutral mechanisms.
 
@@ -38,7 +38,7 @@ project's own GitHub issues so it can be triaged.
 The design goals, in priority order:
 
 1. **Zero-friction capture** — one neutral tool call (`record_feedback`) persists an item
-   mid-task without derailing. The tool holds no opinion about *when* to call it; that guidance
+   mid-task without derailing. The tool holds no opinion about _when_ to call it; that guidance
    is a plugin-layer skill (P1).
 2. **Human gate** — nothing is filed automatically. At the end of a unit of work the human
    reviews the backlog in a selector, picks what to file, and **the items they do not pick are
@@ -59,11 +59,11 @@ The feature is divided across layers so no opinion leaks into the tools:
 
 - **Tool layer** — neutral capabilities: `record_feedback` (capture), and `list_feedback` /
   `send_feedback` / `github_auth_start` / `github_auth_poll` (the review-and-file mechanism and
-  the identity handshake). None of them decide *when* to fire or *what* to send. They are
+  the identity handshake). None of them decide _when_ to fire or _what_ to send. They are
   **non-facade meta-tools** — the documented T6/T7 carve-out (see [Principle
   alignment](#principle-alignment)), siblings of `record_feedback` and `report_status`.
-- **Plugin layer** — the **`figma-feedback` skill** teaches the agent *when* to record and
-  *when/how* to raise the selector, triage the backlog, and resolve identity. This opinionated
+- **Plugin layer** — the **`figma-feedback` skill** teaches the agent _when_ to record and
+  _when/how_ to raise the selector, triage the backlog, and resolve identity. This opinionated
   workflow lives in [[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]] §6.3 (P1), never
   in a tool description.
 
@@ -146,8 +146,8 @@ for headless/CLI clients — and the human **never pastes a token to the agent**
 in-browser.
 
 - **Public client, no secret shipped.** The device-flow token exchange requires only the OAuth
-  App's **`client_id`** (public) — GitHub's docs are explicit that *"the `client_secret` is not
-  needed for the device flow."* The `client_id` is embedded in the build; no secret is ever
+  App's **`client_id`** (public) — GitHub's docs are explicit that _"the `client_secret` is not
+  needed for the device flow."_ The `client_id` is embedded in the build; no secret is ever
   distributed. The OAuth App must have **"Enable Device Flow"** turned on (an app-owner setting,
   set once).
 - **Scope, and who can file a sub-issue.** A single build-time constant `OAUTH_SCOPE` —
@@ -225,32 +225,32 @@ sub-issue's title.
 ```markdown
 ---
 title: resize_node silently no-ops on locked nodes
-status: pending          # pending → sent | failed
-version: 0.0.1           # figma-agent-bridge version at record time (from package.json)
+status: pending # pending → sent | failed
+version: 0.0.1 # figma-agent-bridge version at record time (from package.json)
 created: 2026-07-06T20:14:00+08:00
-tool: resize_node        # optional context chip; omitted if not tool-specific
-sent_at:                 # ISO 8601, filled on successful send
-comment_url:             # URL of the filed sub-issue, filled on successful send
+tool: resize_node # optional context chip; omitted if not tool-specific
+sent_at: # ISO 8601, filled on successful send
+comment_url: # URL of the filed sub-issue, filled on successful send
 ---
 
 Called resize_node on a locked frame; got a success result but nothing changed.
 Expected either a mutation or an explicit "node is locked" error.
 ```
 
-| Field | Source | Purpose |
-|---|---|---|
-| `title` | agent (`record_feedback`) | Selector label; the sub-issue's title |
-| `status` | server | `pending` → `sent` \| `failed` |
-| `version` | server (`package.json`) | Ties the report to the build it came from |
-| `created` | server | Sort order |
-| `tool` | agent (optional) | Context chip; may be absent |
-| `sent_at` | server | Audit; set on successful send |
-| `comment_url` | server (from GitHub) | The filed sub-issue's URL (name kept for compatibility) |
+| Field         | Source                    | Purpose                                                 |
+| ------------- | ------------------------- | ------------------------------------------------------- |
+| `title`       | agent (`record_feedback`) | Selector label; the sub-issue's title                   |
+| `status`      | server                    | `pending` → `sent` \| `failed`                          |
+| `version`     | server (`package.json`)   | Ties the report to the build it came from               |
+| `created`     | server                    | Sort order                                              |
+| `tool`        | agent (optional)          | Context chip; may be absent                             |
+| `sent_at`     | server                    | Audit; set on successful send                           |
+| `comment_url` | server (from GitHub)      | The filed sub-issue's URL (name kept for compatibility) |
 
 The **category is the directory**, not a frontmatter field — routing is unambiguous end to end
 (file → category → parent issue). The category value **is** the directory name — so `bugs` and
 `proposals` are the two categories to start; adding one is a new subdirectory + a parent-issue
-mapping (see *Extending categories*).
+mapping (see _Extending categories_).
 
 **Discard deletes the file.** An item the human does not pick in the selector is removed from the
 store entirely — it is not a status, it is gone.
@@ -264,14 +264,16 @@ owns filename generation.
 ## Components
 
 ### `packages/shared`
+
 - A `FeedbackItem` type and a `FeedbackCategory` enum (`bugs` | `proposals` — values equal the
   directory names), colocated with the existing schema exports. **No feedback frame types in
   `ws-schemas`** — feedback does not travel over the relay.
 
 ### `packages/server`
+
 - **`record_feedback` MCP tool** — a neutral capture capability. Runs entirely server-side: it
   writes the Markdown file with `status: pending`. Params: `{ category, title, description,
-  tool? }`.
+tool? }`.
 - **`feedback-store.ts`** — the only module that touches the feedback filesystem: create dirs,
   write an item, parse/serialize frontmatter, list `pending` (bounded), update status
   (`markSent` / `markFailed`), and **`discard`** (delete a file). Frontmatter round-trips
@@ -308,28 +310,30 @@ owns filename generation.
   `OAUTH_SCOPE` (device flow).
 
 ### `packages/figma-plugin`
+
 - **No feedback UI and no feedback relay handling.** The panel is the status monitor; feedback
   is agent-driven and never reaches the iframe. `code.ts` is not involved.
 
 ### `packages/worker` (CloudFlare Worker — anonymous path)
+
 - Validates the shared secret (`SHARED_SECRET`), maps `category → parent issue#` by convention
   (`<CATEGORY>_ISSUE`), and files a **sub-issue** via the GitHub API (create the issue, then link
   it under the parent) using `GITHUB_TOKEN` (a fine-grained bot PAT with issues:write, held as a
   Worker secret). Composes the sub-issue title/body from `title`, `body`, `version`; returns
   `{ comment_url }` (the sub-issue URL). Secrets: `GITHUB_TOKEN`, `SHARED_SECRET`. Vars: `REPO`,
-  `BUGS_ISSUE`, `PROPOSALS_ISSUE`. *(The Worker/anonymous path is deferred — its sub-issue update
-  lands with the anonymous milestone; the logged-in path is built first.)*
+  `BUGS_ISSUE`, `PROPOSALS_ISSUE`. _(The Worker/anonymous path is deferred — its sub-issue update
+  lands with the anonymous milestone; the logged-in path is built first.)_
 
 ## The selector (plugin layer — `figma-feedback` skill, P1)
 
-*When* to raise the selector and *how* to triage is opinion, owned by the `figma-feedback` skill
+_When_ to raise the selector and _how_ to triage is opinion, owned by the `figma-feedback` skill
 ([[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]] §6.3). Summarized here only to make
 the mechanism above legible; the skill is the source of truth:
 
 - **When.** At the end of a unit of work, when the pending backlog is non-empty. The **top-level
   agent** raises it (the selector is `AskUserQuestion`, a main-agent affordance; subagents only
   `record_feedback`).
-- **Identity (first time only).** Ask *Send anonymously* vs *Log in with GitHub*. Logging in runs
+- **Identity (first time only).** Ask _Send anonymously_ vs _Log in with GitHub_. Logging in runs
   the device-flow handshake; the choice is then remembered and this question is skipped on later
   runs.
 - **Issues.** A multi-select of **all** pending items, plus a free-text option to describe an
@@ -338,16 +342,16 @@ the mechanism above legible; the skill is the source of truth:
 
 ## Error handling
 
-| Failure | Behaviour |
-|---|---|
-| Record — dir/write fails | `record_feedback` returns an error result; no file. |
-| Send (anonymous) — Worker unreachable / non-2xx / 401 secret | Item's frontmatter → `failed`; `send_feedback` reports it in `results`; the item is kept for a later selector. |
-| Send (logged-in) — GitHub `401` (revoked/invalid token) | Clear the stored token, mark identity unauthenticated; item kept; next selector re-offers login. |
-| Send (logged-in) — GitHub `403`/`404` on create or link (not a collaborator) | Item kept; the human is offered the anonymous path (the bot files the sub-issue). |
-| Send (logged-in) — issue created but link step fails | The child issue exists but is unlinked; the send is reported `failed` with the child URL so the human can relink or retry. |
-| Device flow — `access_denied` / `expired_token` / `slow_down` | Cancelled → stop; expired → restart `github_auth_start`; slow_down → adopt the new `interval`. |
-| Discard — delete fails | Reported in `results`; the item is kept. |
-| Server not running | The agent cannot call the tools; nothing is filed. |
+| Failure                                                                      | Behaviour                                                                                                                                                                 |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Record — dir/write fails                                                     | `record_feedback` returns an error result; no file.                                                                                                                       |
+| Send (anonymous) — Worker unreachable / non-2xx / 401 secret                 | Item's frontmatter → `failed`; `send_feedback` reports it in `results`; the item is kept for a later selector.                                                            |
+| Send (logged-in) — GitHub `401` (revoked/invalid token)                      | Clear the stored token, mark identity unauthenticated; item kept; next selector re-offers login.                                                                          |
+| Send (logged-in) — GitHub `403`/`404` on create or link (not a collaborator) | Item kept; the human is offered the anonymous path (the bot files the sub-issue).                                                                                         |
+| Send (logged-in) — issue created but link step fails                         | The item is marked `sent` with the child issue's URL — not left `pending`, so a retry never files a duplicate — flagged as not nested under the parent (relink manually). |
+| Device flow — `access_denied` / `expired_token` / `slow_down`                | Cancelled → stop; expired → restart `github_auth_start`; slow_down → adopt the new `interval`.                                                                            |
+| Discard — delete fails                                                       | Reported in `results`; the item is kept.                                                                                                                                  |
+| Server not running                                                           | The agent cannot call the tools; nothing is filed.                                                                                                                        |
 
 The **shared bot secret never leaves the Worker**; the **human's own token never leaves their
 machine** (server env + OS keychain). No shared credential is ever shipped in the build or sent to
@@ -361,7 +365,7 @@ the agent.
   to capture and file friction), quarantined in the `feedback` group, and recorded in
   [[figma-bridge/docs/specs/tool-surface|tool-surface.md]]'s count formula as non-facade —
   siblings of `report_status`. Precedent: `get_document_info` / `close_plugin`.
-- **P1 — no opinion in the tools.** *When* to record and *when/how* to raise the selector lives in
+- **P1 — no opinion in the tools.** _When_ to record and _when/how_ to raise the selector lives in
   the `figma-feedback` skill. Every feedback tool description states only what the tool does.
 - **B1 — uniform contract; the relay stays dumb.** Every feedback tool uses the standard MCP
   result/error contract. Feedback carries **no relay frames at all** — it never touches the pipe,
@@ -369,7 +373,7 @@ the agent.
 - **T10 — bounded by default.** `list_feedback` returns a bounded page of pending items, never an
   unbounded flush of a large backlog.
 - **No shared secret on the client (a design property; principles.md is silent on credentials).**
-  No *shared* secret ever reaches the client — the bot PAT stays in the Worker (anonymous path).
+  No _shared_ secret ever reaches the client — the bot PAT stays in the Worker (anonymous path).
   The only client-side credential is the **human's own** token: device-flow-authorized (no client
   secret shipped, nothing pasted), minimally scoped, OS-keychain-stored, on the human's own machine.
 

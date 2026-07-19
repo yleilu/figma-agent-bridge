@@ -135,6 +135,7 @@ export const handleSendFeedback = async (
       try {
         const item = await readItem(path)
         let commentUrl: string
+        let linkError: string | undefined
         if (identity === 'github') {
           if (!cred.token) {
             results.push({
@@ -157,6 +158,13 @@ export const handleSendFeedback = async (
             fetchImpl,
           )
           commentUrl = r.url
+          // The issue IS filed even if linking under the parent
+          // failed — mark it sent either way so a retry never
+          // files a duplicate. Just flag it as unlinked.
+          if (!r.linked) {
+            linkError =
+              'issue created but not nested under parent — relink manually'
+          }
         } else {
           const r = await postFeedback(
             {
@@ -176,6 +184,7 @@ export const handleSendFeedback = async (
           path,
           status: 'sent',
           commentUrl: updated.commentUrl,
+          ...(linkError ? { error: linkError } : {}),
         })
       } catch (err) {
         if (

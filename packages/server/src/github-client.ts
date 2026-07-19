@@ -201,11 +201,15 @@ export interface CreateSubIssueArgs {
 
 // Two steps: create the item as its own issue, then link it as a
 // sub-issue under the category parent. `sub_issue_id` is the new
-// issue's REST `id` — NOT its `number`.
+// issue's REST `id` — NOT its `number`. A failed create means
+// nothing was filed, so that step still throws. A failed link
+// leaves a real, already-filed issue behind — so that step never
+// throws; it reports `linked: false` instead, so callers can mark
+// the item sent (not pending) and avoid filing a duplicate on retry.
 export const createSubIssue = async (
   args: CreateSubIssueArgs,
   fetchImpl: typeof fetch = fetch,
-): Promise<{ url: string }> => {
+): Promise<{ url: string; linked: boolean }> => {
   const created = (await ghSend(
     fetchImpl,
     'POST',
@@ -219,12 +223,16 @@ export const createSubIssue = async (
       'issue-create response missing id/html_url',
     )
   }
-  await ghSend(
-    fetchImpl,
-    'POST',
-    `${API}/repos/${args.repo}/issues/${args.parentIssueNumber}/sub_issues`,
-    args.token,
-    { sub_issue_id: created.id },
-  )
-  return { url: created.html_url }
+  try {
+    await ghSend(
+      fetchImpl,
+      'POST',
+      `${API}/repos/${args.repo}/issues/${args.parentIssueNumber}/sub_issues`,
+      args.token,
+      { sub_issue_id: created.id },
+    )
+  } catch {
+    return { url: created.html_url, linked: false }
+  }
+  return { url: created.html_url, linked: true }
 }
