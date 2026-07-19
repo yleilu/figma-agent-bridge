@@ -32,7 +32,6 @@
       "name": "@figma-agent-bridge/figma-plugin",
       "version": "0.1.0",
       "dependencies": {
-        "@figma-agent-bridge/branding": "workspace:*",
         "@figma-agent-bridge/shared": "workspace:*",
         "clsx": "^2.1.1",
         "react": "^19.1.0",

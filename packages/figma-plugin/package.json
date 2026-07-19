@@ -11,7 +11,6 @@
     "watch": "concurrently 'vite build --watch --config vite.config.ui.ts' 'vite build --watch --config vite.config.code.ts'"
   },
   "dependencies": {
-    "@figma-agent-bridge/branding": "workspace:*",
     "@figma-agent-bridge/shared": "workspace:*",
     "clsx": "^2.1.1",
     "react": "^19.1.0",
