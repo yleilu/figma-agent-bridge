@@ -21,7 +21,7 @@ export const ICON_SIZES = [
 ] as const
 
 const svgToDataUri = (svg: string) =>
-  `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`
+  `data:image/svg+xml,${encodeURIComponent(svg)}`
 
 export const logoDataUri = svgToDataUri(LOGO_SVG)
 

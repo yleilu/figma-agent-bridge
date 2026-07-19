@@ -46,6 +46,11 @@ describe('branding', () => {
     )
   })
 
+  test('baked SVG uses the BRAND color (no drift)', () => {
+    expect(LOGO_SVG).toContain(BRAND.color)
+    expect(LOGO_ON_WHITE_SVG).toContain(BRAND.color)
+  })
+
   test('BRAND tokens', () => {
     expect(BRAND.color).toBe('#D97757')
     expect(BRAND.name).toBe('Agent Bridge')
