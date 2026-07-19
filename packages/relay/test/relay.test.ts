@@ -942,6 +942,400 @@ describe('relay', () => {
 
     await closeWs(ws)
   })
+
+  describe('agent-status store', () => {
+    it('stores an agent-status frame and broadcasts it to other channel members', async () => {
+      const server2 = await connect() // the "MCP server" socket
+      const plugin = await connect() // the "plugin" socket
+      const sQ = createMessageQueue(server2)
+      const pQ = createMessageQueue(plugin)
+      server2.send(
+        JSON.stringify({ type: 'join', channel: 'c1' }),
+      )
+      await sQ()
+      plugin.send(
+        JSON.stringify({ type: 'join', channel: 'c1' }),
+      )
+      await pQ()
+      const record = {
+        key: 'a1',
+        sessionId: 's1',
+        level: 'normal',
+        text: 'Building',
+        activity: 'busy',
+        updatedAt: 1,
+      }
+      server2.send(
+        JSON.stringify({
+          type: 'agent-status',
+          channel: 'c1',
+          record,
+        }),
+      )
+      const got = await pQ()
+      expect(got).toEqual({ type: 'agent-status', record })
+      await closeWs(server2)
+      await closeWs(plugin)
+    })
+
+    it('replays current records on status-sync', async () => {
+      const server2 = await connect()
+      const sQ = createMessageQueue(server2)
+      server2.send(
+        JSON.stringify({ type: 'join', channel: 'c2' }),
+      )
+      await sQ()
+      const record = {
+        key: 'a2',
+        sessionId: 's2',
+        level: 'normal',
+        text: 'X',
+        activity: 'busy',
+        updatedAt: 2,
+      }
+      server2.send(
+        JSON.stringify({
+          type: 'agent-status',
+          channel: 'c2',
+          record,
+        }),
+      )
+      const plugin = await connect()
+      const pQ = createMessageQueue(plugin)
+      plugin.send(
+        JSON.stringify({ type: 'join', channel: 'c2' }),
+      )
+      await pQ()
+      plugin.send(
+        JSON.stringify({
+          type: 'status-sync',
+          channel: 'c2',
+        }),
+      )
+      const sync = await pQ()
+      expect(sync).toEqual({
+        type: 'agent-status-sync',
+        records: [record],
+      })
+      await closeWs(server2)
+      await closeWs(plugin)
+    })
+
+    it('merges by key (a later skeleton keeps an earlier label)', async () => {
+      const server2 = await connect()
+      const sQ = createMessageQueue(server2)
+      server2.send(
+        JSON.stringify({ type: 'join', channel: 'c3' }),
+      )
+      await sQ()
+      server2.send(
+        JSON.stringify({
+          type: 'agent-status',
+          channel: 'c3',
+          record: {
+            key: 'a3',
+            sessionId: 's3',
+            label: 'Nav',
+            level: 'normal',
+            text: 'Building',
+            activity: 'busy',
+            updatedAt: 1,
+          },
+        }),
+      )
+      server2.send(
+        JSON.stringify({
+          type: 'agent-status',
+          channel: 'c3',
+          record: {
+            key: 'a3',
+            sessionId: 's3',
+            level: 'normal',
+            text: null,
+            activity: 'busy',
+            updatedAt: 2,
+          },
+        }),
+      )
+      const plugin = await connect()
+      const pQ = createMessageQueue(plugin)
+      plugin.send(
+        JSON.stringify({ type: 'join', channel: 'c3' }),
+      )
+      await pQ()
+      plugin.send(
+        JSON.stringify({
+          type: 'status-sync',
+          channel: 'c3',
+        }),
+      )
+      const sync = (await pQ()) as {
+        records: Record<string, unknown>[]
+      }
+      expect(sync.records[0]).toMatchObject({
+        key: 'a3',
+        label: 'Nav',
+        text: null,
+        updatedAt: 2,
+      })
+      await closeWs(server2)
+      await closeWs(plugin)
+    })
+
+    it("POST /agent-status/settle flips a session's rows to idle and broadcasts", async () => {
+      const server2 = await connect()
+      const sQ = createMessageQueue(server2)
+      server2.send(
+        JSON.stringify({ type: 'join', channel: 'c4' }),
+      )
+      await sQ()
+      server2.send(
+        JSON.stringify({
+          type: 'agent-status',
+          channel: 'c4',
+          record: {
+            key: 'a4',
+            sessionId: 's4',
+            level: 'normal',
+            text: 'X',
+            activity: 'busy',
+            updatedAt: 1,
+          },
+        }),
+      )
+      const plugin = await connect()
+      const pQ = createMessageQueue(plugin)
+      plugin.send(
+        JSON.stringify({ type: 'join', channel: 'c4' }),
+      )
+      await pQ()
+      const res = await fetch(
+        `${HTTP_URL}/agent-status/settle`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ sessionId: 's4' }),
+        },
+      )
+      expect(res.status).toBe(200)
+      const got = await pQ()
+      expect(got).toMatchObject({
+        type: 'agent-status',
+        record: { key: 'a4', activity: 'idle' },
+      })
+      await closeWs(server2)
+      await closeWs(plugin)
+    })
+
+    it('POST /agent-status/remove drops matching rows and broadcasts a remove', async () => {
+      const server2 = await connect()
+      const sQ = createMessageQueue(server2)
+      server2.send(
+        JSON.stringify({ type: 'join', channel: 'c5' }),
+      )
+      await sQ()
+      server2.send(
+        JSON.stringify({
+          type: 'agent-status',
+          channel: 'c5',
+          record: {
+            key: 'ag5',
+            sessionId: 's5',
+            agentId: 'ag5',
+            level: 'normal',
+            text: 'X',
+            activity: 'busy',
+            updatedAt: 1,
+          },
+        }),
+      )
+      const plugin = await connect()
+      const pQ = createMessageQueue(plugin)
+      plugin.send(
+        JSON.stringify({ type: 'join', channel: 'c5' }),
+      )
+      await pQ()
+      const res = await fetch(
+        `${HTTP_URL}/agent-status/remove`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            sessionId: 's5',
+            agentId: 'ag5',
+          }),
+        },
+      )
+      expect(res.status).toBe(200)
+      expect(await pQ()).toEqual({
+        type: 'agent-status-remove',
+        sessionId: 's5',
+        agentId: 'ag5',
+      })
+      await closeWs(server2)
+      await closeWs(plugin)
+    })
+
+    it('fades a busy row to idle after idleMs and removes it after ttlMs', async () => {
+      const IDLE_PORT = 3130
+      const idleServer = startRelay(IDLE_PORT, {
+        idleMs: 30,
+        ttlMs: 80,
+        heartbeatInterval: 15,
+      })
+
+      const connectIdle = (): Promise<WebSocket> =>
+        new Promise((resolve, reject) => {
+          const ws = new WebSocket(
+            `ws://localhost:${IDLE_PORT}`,
+          )
+          ws.onopen = () => resolve(ws)
+          ws.onerror = () =>
+            reject(new Error('WebSocket connection failed'))
+        })
+
+      try {
+        const s = await connectIdle()
+        const sQ = createMessageQueue(s)
+        s.send(
+          JSON.stringify({ type: 'join', channel: 'cx' }),
+        )
+        await sQ()
+        s.send(
+          JSON.stringify({
+            type: 'agent-status',
+            channel: 'cx',
+            record: {
+              key: 'k',
+              sessionId: 's',
+              level: 'normal',
+              text: 'x',
+              activity: 'busy',
+              updatedAt: Date.now(),
+            },
+          }),
+        )
+
+        const p = await connectIdle()
+        const pQ = createMessageQueue(p)
+        p.send(
+          JSON.stringify({ type: 'join', channel: 'cx' }),
+        )
+        await pQ()
+
+        const idle = await pQ()
+        expect(idle).toMatchObject({
+          type: 'agent-status',
+          record: { key: 'k', activity: 'idle' },
+        })
+
+        const removed = await pQ()
+        expect(removed).toMatchObject({
+          type: 'agent-status-remove',
+          sessionId: 's',
+          key: 'k',
+        })
+
+        await closeWs(s)
+        await closeWs(p)
+      } finally {
+        stopRelay(idleServer)
+      }
+    })
+
+    it('does not drop command frames when interleaved agent-status skeletons share the token bucket (status-monitor.md review corrections)', async () => {
+      // dispatch() sends one agent-status skeleton immediately before every
+      // identity-bearing command (Task 7), doubling the server→relay frame
+      // rate on the same socket. A small, deterministic token bucket proves
+      // the point fast: N command frames alone fit the burst; N commands
+      // PLUS N skeletons (2N frames) would overflow it if agent-status still
+      // consumed a token. agent-status frames must be exempt from
+      // `consumeToken` so a burst of real commands never gets silently
+      // dropped (a dropped command frame hangs the caller forever).
+      const BURST_PORT = 3140
+      const burstServer = startRelay(BURST_PORT, {
+        rateBurst: 20,
+        rateTokensPerSec: 1,
+      })
+      const connectBurst = (): Promise<WebSocket> =>
+        new Promise((resolve, reject) => {
+          const ws = new WebSocket(
+            `ws://localhost:${BURST_PORT}`,
+          )
+          ws.onopen = () => resolve(ws)
+          ws.onerror = () =>
+            reject(new Error('WebSocket connection failed'))
+        })
+
+      try {
+        const server2 = await connectBurst() // the "MCP server" socket
+        const plugin = await connectBurst() // the "plugin" socket
+        const sQ = createMessageQueue(server2)
+        const pQ = createMessageQueue(plugin)
+        server2.send(
+          JSON.stringify({
+            type: 'join',
+            channel: 'burst-ch',
+          }),
+        )
+        await sQ()
+        plugin.send(
+          JSON.stringify({
+            type: 'join',
+            channel: 'burst-ch',
+          }),
+        )
+        await pQ()
+
+        const N = 15 // <= rateBurst(20) alone; 2*N (30) overflows it
+        const commandFrames: unknown[] = []
+        plugin.onmessage = event => {
+          const parsed = JSON.parse(
+            event.data as string,
+          ) as { type: string }
+          if (parsed.type === 'broadcast') {
+            commandFrames.push(parsed)
+          }
+        }
+
+        for (let i = 0; i < N; i++) {
+          // Mirrors dispatch(): skeleton immediately followed by the real
+          // command, on the same server socket.
+          server2.send(
+            JSON.stringify({
+              type: 'agent-status',
+              channel: 'burst-ch',
+              record: {
+                key: 'a',
+                sessionId: 's',
+                level: 'normal',
+                text: null,
+                activity: 'busy',
+                updatedAt: Date.now(),
+              },
+            }),
+          )
+          server2.send(
+            JSON.stringify({
+              type: 'message',
+              channel: 'burst-ch',
+              message: {
+                command: 'inspect',
+                params: {},
+                meta: { requestId: `r${i}` },
+              },
+            }),
+          )
+        }
+
+        await Bun.sleep(150)
+        expect(commandFrames.length).toBe(N)
+
+        await closeWs(server2)
+        await closeWs(plugin)
+      } finally {
+        stopRelay(burstServer)
+      }
+    })
+  })
 })
 
 const RELAY_VERSION_PORT = 18191

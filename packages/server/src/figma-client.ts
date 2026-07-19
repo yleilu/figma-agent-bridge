@@ -9,6 +9,8 @@ import type {
   CommandMessage,
   JoinMessage,
   Meta,
+  RelayIncoming,
+  StatusRecord,
 } from '@figma-agent-bridge/shared'
 
 /** A file-scoped view of the client: sendCommand needs no fileKey (captured). */
@@ -19,6 +21,12 @@ export type ScopedFigmaClient = {
     params?: Record<string, unknown>,
     timeoutMs?: number,
   ) => Promise<unknown>
+  notifyStatus: (record: StatusRecord) => void
+  identity?: {
+    sessionId?: string
+    agentId?: string
+    agentType?: string
+  }
 }
 
 export type FigmaClient = {
@@ -223,7 +231,14 @@ export const createFigmaClient = (
       return
     }
 
-    // parsed.type === 'broadcast'
+    // The server is a channel member, so the relay's settle/remove/idle-sweep
+    // agent-status broadcasts (status-monitor.md) reach it too — it only ever
+    // EMITS agent-status frames, never consumes them. Ignore anything that
+    // isn't the plain command/reply broadcast shape (status-monitor.md).
+    if (parsed.type !== 'broadcast') {
+      return
+    }
+
     const { message } = parsed
 
     // Inbound request/push from the plugin (unsolicited; we did not originate
@@ -389,6 +404,27 @@ export const createFigmaClient = (
     return p
   }
 
+  // A channel-scoped send for frames that are NOT ChannelMessage commands
+  // (e.g. the server → relay agent-status push, status-monitor.md). Unlike
+  // sendFrame (which fans a CommandMessage out to every joined channel),
+  // this targets exactly one channel — the caller already knows which.
+  const sendToChannel = (
+    channel: string,
+    frame: RelayIncoming,
+  ): void => {
+    const socket = ws
+    if (
+      socket === null ||
+      socket.readyState !== WebSocket.OPEN
+    ) {
+      return
+    }
+    socket.send(JSON.stringify(frame))
+  }
+
+  const channelFor = (fileKey: string): string | null =>
+    joined.get(fileKey) ?? null
+
   // The one request sender. Stamps meta { fileKey, requestId[, sessionId] } and
   // routes on the file's joined channel; the pending map is keyed by requestId.
   const dispatch = (
@@ -436,6 +472,36 @@ export const createFigmaClient = (
       if (identity?.agentType !== undefined) {
         meta.agentType = identity.agentType
       }
+
+      // status-monitor.md — emit a busy+skeleton agent-status frame ahead of
+      // every identity-bearing command. Guarding on identity presence (rather
+      // than a per-command name list) automatically excludes PING, status(),
+      // and connect() — they reach dispatch with no sessionId/agentId.
+      // report_status never calls dispatch (it's display-only via
+      // notifyStatus), so it needs no separate exclusion.
+      const skeletonKey =
+        identity?.agentId ?? identity?.sessionId
+      if (
+        command !== COMMANDS.PING &&
+        skeletonKey !== undefined
+      ) {
+        const skeleton: StatusRecord = {
+          key: skeletonKey,
+          sessionId: identity?.sessionId,
+          agentId: identity?.agentId,
+          agentType: identity?.agentType,
+          level: 'normal',
+          text: null,
+          activity: 'busy',
+          updatedAt: Date.now(),
+        }
+        sendToChannel(ch, {
+          type: 'agent-status',
+          channel: ch,
+          record: skeleton,
+        })
+      }
+
       const cmdMessage: CommandMessage = {
         command,
         params,
@@ -544,6 +610,17 @@ export const createFigmaClient = (
     fileKey,
     sendCommand: (command, params, timeoutMs = 3e4) =>
       dispatch(fileKey, command, params, timeoutMs, opts),
+    notifyStatus: record => {
+      const ch = channelFor(fileKey)
+      if (ch !== null) {
+        sendToChannel(ch, {
+          type: 'agent-status',
+          channel: ch,
+          record,
+        })
+      }
+    },
+    identity: opts,
   })
 
   // Fire-and-forget send (notify, sendReply). A broadcast frame carries no
@@ -614,9 +691,6 @@ export const createFigmaClient = (
 
   const joinedFiles = (): string[] =>
     Array.from(joined.keys())
-
-  const channelFor = (fileKey: string): string | null =>
-    joined.get(fileKey) ?? null
 
   const discover = (): Promise<ChannelInfo[]> =>
     discoverChannels(relayHttpUrl)

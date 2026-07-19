@@ -46,13 +46,62 @@ export type LeaveMessage = {
   channel: string
 }
 
+// --- Agent status monitor (status-monitor.md) ---
+export type StatusRecord = {
+  key: string // agentId ?? sessionId ?? label ?? 'agent'
+  sessionId?: string
+  agentId?: string
+  agentType?: string
+  label?: string
+  level: 'normal' | 'error'
+  text: string | null // null = skeleton (action started, no narrative yet)
+  activity: 'busy' | 'idle'
+  updatedAt: number
+}
+
+// server → relay: store + broadcast one file's channel
+export type AgentStatusMessage = {
+  type: 'agent-status'
+  channel: string
+  record: StatusRecord
+}
+
+// plugin → relay: request the channel's current records (relay replies with AgentStatusSync)
+export type StatusSyncMessage = {
+  type: 'status-sync'
+  channel: string
+}
+
+// relay → plugin broadcasts
+export type AgentStatusBroadcast = {
+  type: 'agent-status'
+  record: StatusRecord
+}
+export type AgentStatusRemoveBroadcast = {
+  type: 'agent-status-remove'
+  sessionId: string
+  agentId?: string
+  key?: string // row-precise removal (TTL sweep); overrides sessionId/agentId matching when present
+}
+export type AgentStatusSyncBroadcast = {
+  type: 'agent-status-sync'
+  records: StatusRecord[]
+}
+
 export type RelayIncoming =
   | JoinMessage
   | ChannelMessage
   | RegisterMessage
   | PresenceMessage
   | LeaveMessage
-export type RelayOutgoing = BroadcastMessage | SystemMessage
+  | AgentStatusMessage
+  | StatusSyncMessage
+export type RelayOutgoing =
+  | BroadcastMessage
+  | SystemMessage
+  | AgentStatusBroadcast
+  | AgentStatusRemoveBroadcast
+  | AgentStatusSyncBroadcast
 
 // --- Command types ---
 

@@ -10,7 +10,7 @@ import {
 
 figma.showUI(__html__, {
   width: 340,
-  height: 280,
+  height: 400,
   title: 'Agent Bridge',
   themeColors: true,
 })

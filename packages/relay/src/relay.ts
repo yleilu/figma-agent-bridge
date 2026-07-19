@@ -4,6 +4,7 @@ import type {
   ChannelInfo,
   ChannelMessage,
   RelayOutgoing,
+  StatusRecord,
   SystemMessage,
 } from '@figma-agent-bridge/shared'
 import {
@@ -19,6 +20,8 @@ const MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
 const RATE_TOKENS_PER_SEC = 50
 const RATE_BURST = 100
 export const DEFAULT_HEARTBEAT_INTERVAL = 10_000
+export const DEFAULT_IDLE_MS = 50_000 // no activity → busy fades to idle
+export const DEFAULT_TTL_MS = 300_000 // no activity → row removed (ghost guard)
 
 type WsData = { id: string }
 type RateState = { tokens: number; last: number }
@@ -34,6 +37,11 @@ type RelayContext = {
   /** Per-relay token-bucket sizing (defaults to the module constants). */
   rateBurst: number
   rateTokensPerSec: number
+  /** channel → key → record (status-monitor.md) */
+  agentStatus: Map<string, Map<string, StatusRecord>>
+  /** Per-relay idle-fade / backstop-TTL sizing (defaults to the module constants). */
+  idleMs: number
+  ttlMs: number
 }
 
 const contexts = new WeakMap<Server<WsData>, RelayContext>()
@@ -48,6 +56,9 @@ const createContext = (): RelayContext => ({
   heartbeatTimer: null,
   rateBurst: RATE_BURST,
   rateTokensPerSec: RATE_TOKENS_PER_SEC,
+  agentStatus: new Map(),
+  idleMs: DEFAULT_IDLE_MS,
+  ttlMs: DEFAULT_TTL_MS,
 })
 
 const send = (
@@ -109,6 +120,7 @@ const removeClient = (
         if (members.size === 0) {
           ctx.channels.delete(channel)
           ctx.channelRegistry.delete(channel)
+          ctx.agentStatus.delete(channel)
         }
       }
     })
@@ -257,6 +269,7 @@ const handleLeave = (
     if (members.size === 0) {
       ctx.channels.delete(channel)
       ctx.channelRegistry.delete(channel)
+      ctx.agentStatus.delete(channel)
     }
   }
 
@@ -290,6 +303,107 @@ const handleMessage = (
   })
 }
 
+const handleAgentStatus = (
+  ctx: RelayContext,
+  ws: ServerWebSocket<WsData>,
+  channel: string,
+  record: StatusRecord,
+) => {
+  const members = ctx.channels.get(channel)
+  if (members === undefined) {
+    return
+  }
+  let byKey = ctx.agentStatus.get(channel)
+  if (byKey === undefined) {
+    byKey = new Map()
+    ctx.agentStatus.set(channel, byKey)
+  }
+  // merge by key so a later skeleton emit preserves an earlier label/agentType
+  const merged: StatusRecord = {
+    ...byKey.get(record.key),
+    ...record,
+  }
+  byKey.set(record.key, merged)
+  const payload = JSON.stringify({
+    type: 'agent-status',
+    record: merged,
+  } satisfies RelayOutgoing)
+  members.forEach(client => {
+    if (client !== ws) {
+      client.send(payload)
+    }
+  })
+}
+
+const handleStatusReplay = (
+  ctx: RelayContext,
+  ws: ServerWebSocket<WsData>,
+  channel: string,
+) => {
+  const byKey = ctx.agentStatus.get(channel)
+  const records = byKey ? Array.from(byKey.values()) : []
+  send(ws, { type: 'agent-status-sync', records })
+}
+
+const broadcastToChannel = (
+  ctx: RelayContext,
+  channel: string,
+  msg: RelayOutgoing,
+) => {
+  const members = ctx.channels.get(channel)
+  if (members === undefined) {
+    return
+  }
+  const payload = JSON.stringify(msg)
+  members.forEach(client => client.send(payload))
+}
+
+const settleSession = (
+  ctx: RelayContext,
+  sessionId: string,
+) => {
+  for (const [channel, byKey] of ctx.agentStatus) {
+    for (const rec of byKey.values()) {
+      if (
+        rec.sessionId === sessionId &&
+        rec.activity !== 'idle'
+      ) {
+        const idle = { ...rec, activity: 'idle' as const }
+        byKey.set(rec.key, idle)
+        broadcastToChannel(ctx, channel, {
+          type: 'agent-status',
+          record: idle,
+        })
+      }
+    }
+  }
+}
+
+const removeAgent = (
+  ctx: RelayContext,
+  sessionId: string,
+  agentId?: string,
+) => {
+  for (const [channel, byKey] of ctx.agentStatus) {
+    for (const rec of [...byKey.values()]) {
+      const match =
+        rec.sessionId === sessionId &&
+        (agentId === undefined || rec.agentId === agentId)
+      if (match) {
+        byKey.delete(rec.key)
+        broadcastToChannel(ctx, channel, {
+          type: 'agent-status-remove',
+          sessionId,
+          agentId,
+        })
+      }
+    }
+    if (byKey.size === 0) {
+      ctx.agentStatus.delete(channel)
+    }
+  }
+}
+
 export type StartRelayOptions = {
   hostname?: string
   heartbeatInterval?: number
@@ -300,6 +414,12 @@ export type StartRelayOptions = {
   rateBurst?: number
   /** Token refill rate per second (default RATE_TOKENS_PER_SEC). */
   rateTokensPerSec?: number
+  /** Idle-fade threshold in ms (default DEFAULT_IDLE_MS): a busy row with no
+   * activity for this long is broadcast as idle. */
+  idleMs?: number
+  /** Backstop-TTL in ms (default DEFAULT_TTL_MS): a row with no activity for
+   * this long is removed outright (ghost guard). */
+  ttlMs?: number
 }
 
 export const startRelay = (
@@ -310,6 +430,8 @@ export const startRelay = (
   ctx.rateBurst = opts.rateBurst ?? RATE_BURST
   ctx.rateTokensPerSec =
     opts.rateTokensPerSec ?? RATE_TOKENS_PER_SEC
+  ctx.idleMs = opts.idleMs ?? DEFAULT_IDLE_MS
+  ctx.ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS
   const hostname =
     opts.hostname ?? process.env.RELAY_BIND ?? '127.0.0.1'
   const heartbeatInterval =
@@ -318,7 +440,7 @@ export const startRelay = (
   const server = Bun.serve<WsData>({
     port,
     hostname,
-    fetch: (req, srv) => {
+    fetch: async (req, srv) => {
       if (
         req.headers.get('upgrade')?.toLowerCase() ===
         'websocket'
@@ -341,6 +463,42 @@ export const startRelay = (
         )
       }
 
+      if (
+        req.method === 'POST' &&
+        url.pathname === '/agent-status/settle'
+      ) {
+        const body = (await req
+          .json()
+          .catch(() => null)) as {
+          sessionId?: string
+        } | null
+        if (!body?.sessionId) {
+          return new Response('bad request', {
+            status: 400,
+          })
+        }
+        settleSession(ctx, body.sessionId)
+        return new Response('ok')
+      }
+      if (
+        req.method === 'POST' &&
+        url.pathname === '/agent-status/remove'
+      ) {
+        const body = (await req
+          .json()
+          .catch(() => null)) as {
+          sessionId?: string
+          agentId?: string
+        } | null
+        if (!body?.sessionId) {
+          return new Response('bad request', {
+            status: 400,
+          })
+        }
+        removeAgent(ctx, body.sessionId, body.agentId)
+        return new Response('ok')
+      }
+
       return new Response('WebSocket only', {
         status: 426,
       })
@@ -356,10 +514,6 @@ export const startRelay = (
         })
       },
       message: (ws, raw) => {
-        if (!consumeToken(ctx, ws)) {
-          return
-        }
-
         let json: unknown
         try {
           json = JSON.parse(raw as string)
@@ -372,6 +526,20 @@ export const startRelay = (
           return
         }
         const frame = parsed.data
+
+        // status-monitor.md review corrections — dispatch()'s busy+skeleton
+        // emit doubles the server→relay frame rate (one agent-status frame
+        // per identity-bearing command, Task 7). agent-status frames are
+        // internal status chatter: dropping one is harmless (a later emit
+        // supersedes it, or status-sync replays current state), but dropping
+        // a paired COMMAND frame hangs the caller. Exempt agent-status from
+        // the token bucket so a command burst never gets silently dropped.
+        if (
+          frame.type !== 'agent-status' &&
+          !consumeToken(ctx, ws)
+        ) {
+          return
+        }
 
         if (frame.type === 'join') {
           handleJoin(ctx, ws, frame.channel)
@@ -398,6 +566,15 @@ export const startRelay = (
           handleLeave(ctx, ws, frame.channel)
         } else if (frame.type === 'message') {
           handleMessage(ctx, ws, frame.channel, frame)
+        } else if (frame.type === 'agent-status') {
+          handleAgentStatus(
+            ctx,
+            ws,
+            frame.channel,
+            frame.record,
+          )
+        } else if (frame.type === 'status-sync') {
+          handleStatusReplay(ctx, ws, frame.channel)
         }
       },
       pong: ws => {
@@ -423,6 +600,39 @@ export const startRelay = (
     for (const ws of dead) {
       ws.close()
     }
+
+    // agent-status idle-fade + backstop-TTL sweep (status-monitor.md)
+    const now = Date.now()
+    for (const [channel, byKey] of ctx.agentStatus) {
+      for (const rec of [...byKey.values()]) {
+        const age = now - rec.updatedAt
+        if (age >= ctx.ttlMs) {
+          byKey.delete(rec.key)
+          // KEY-scoped remove: prune exactly this one row. A bare {sessionId}
+          // would make the plugin drop the whole session (incl. still-live
+          // subagents) — see I2.
+          broadcastToChannel(ctx, channel, {
+            type: 'agent-status-remove',
+            sessionId: rec.sessionId ?? '',
+            agentId: rec.agentId,
+            key: rec.key,
+          })
+        } else if (
+          age >= ctx.idleMs &&
+          rec.activity === 'busy'
+        ) {
+          const idle = { ...rec, activity: 'idle' as const }
+          byKey.set(rec.key, idle)
+          broadcastToChannel(ctx, channel, {
+            type: 'agent-status',
+            record: idle,
+          })
+        }
+      }
+      if (byKey.size === 0) {
+        ctx.agentStatus.delete(channel)
+      }
+    }
   }, heartbeatInterval)
 
   contexts.set(server, ctx)
@@ -440,6 +650,7 @@ export const stopRelay = (server: Server<WsData>): void => {
     ctx.clientChannels.clear()
     ctx.channelRegistry.clear()
     ctx.sockets.clear()
+    ctx.agentStatus.clear()
     contexts.delete(server)
   }
   server.stop(true)

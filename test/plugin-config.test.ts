@@ -65,4 +65,33 @@ describe('plugin config', () => {
     const st = await stat(`${root}plugin/hooks/identity`)
     expect(st.mode & 0o100).toBeGreaterThan(0) // owner-executable bit set
   })
+
+  it('registers the Stop/SubagentStop/SessionEnd lifecycle hooks', async () => {
+    const hooks = await read('plugin/hooks/hooks.json')
+    const cases: [string, string][] = [
+      ['Stop', 'hooks/stop'],
+      ['SubagentStop', 'hooks/subagent-stop'],
+      ['SessionEnd', 'hooks/session-end'],
+    ]
+    for (const [event, scriptSuffix] of cases) {
+      const entries = hooks.hooks[event]
+      expect(Array.isArray(entries)).toBe(true)
+      const entry = entries[0]
+      expect(entry.hooks[0].command).toContain(scriptSuffix)
+      expect(entry.hooks[0].async).toBe(false)
+      expect(entry.hooks[0].timeout).toBe(10)
+    }
+  })
+
+  it('the lifecycle hook scripts exist and are executable', async () => {
+    const { stat } = await import('node:fs/promises')
+    for (const script of [
+      'stop',
+      'subagent-stop',
+      'session-end',
+    ]) {
+      const st = await stat(`${root}plugin/hooks/${script}`)
+      expect(st.mode & 0o100).toBeGreaterThan(0) // owner-executable bit set
+    }
+  })
 })

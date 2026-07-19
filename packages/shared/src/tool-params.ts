@@ -1499,6 +1499,38 @@ export const reindexParamsSchema = z.object({
 })
 
 // ---------------------------------------------------------------------------
+// Status monitor tool
+// ---------------------------------------------------------------------------
+
+/**
+ * Params for `report_status`: a fire-and-forget, file-scoped status push
+ * (status-monitor.md). Display-only — it never reaches `code.ts`/`figma.*`.
+ */
+export const reportStatusParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
+  text: z
+    .string()
+    .describe(
+      'One-line, human-meaningful status shown in the plugin panel.',
+    ),
+  level: z
+    .enum(['normal', 'error'])
+    .optional()
+    .describe(
+      'normal (default) or error (red dot). Busy is automatic.',
+    ),
+  label: z
+    .string()
+    .optional()
+    .describe(
+      'Optional friendly name for this agent; defaults to agentType or "Agent".',
+    ),
+})
+export type ReportStatusInput = z.infer<
+  typeof reportStatusParamsSchema
+>
+
+// ---------------------------------------------------------------------------
 // Feedback tool
 // ---------------------------------------------------------------------------
 
