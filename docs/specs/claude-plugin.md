@@ -36,8 +36,8 @@ self-contained compiled binary.
 1. Install the Claude Code plugin (`/plugin install figma-agent-bridge@figma-agent-bridge`; see §3).
 2. Import + open the Figma plugin in Figma desktop (auto-connects).
 
-**Non-goals (this milestone).** Windows/Linux binaries (macOS-arm64 first); the live GitHub
-**Send** path (the Worker is deferred — local capture built now, per
+**Non-goals (this milestone).** Windows/Linux binaries (macOS-arm64 first); the live **anonymous
+Send → GitHub** path (its CloudFlare Worker is deferred — local capture built first, per
 [[figma-bridge/docs/specs/feedback-system|feedback-system.md]]); a true one-click `claude://`
 install (no such scheme exists — see §3). _(The Figma plugin ships by **manifest import** — this
 is the permanent path; Figma Community publish is **not pursued**.)_
@@ -299,14 +299,26 @@ complex compositions). Calls `record_feedback` (§7) when it hits a tool limit �
 
 ### 6.3 Skill — `figma-feedback`
 
-The plugin-layer **when + how to report** guidance — feedback-system.md's named follow-up.
-**Consumed by `figma-designer` (auto, inline the moment it hits friction) and the main agent
-(manual "file feedback")** — so a separate feedback _agent_ folds into it. It defines **two
-flows, one per category, each with a standardized `record_feedback` body format and a worked
-example.** After recording, the agent tells the user it's noted and that **they Send it from
-the plugin** (human gate) — it never sends to GitHub itself; it never records expected errors
-(the user's own invalid input); it records **one item per distinct issue** and then continues
-the task (zero-friction, never derail).
+The plugin-layer **when + how to report** guidance — the opinion layer over feedback-system.md's
+neutral tools (P1). **Consumed by `figma-designer` (auto, inline the moment it hits friction) and
+the main agent (manual "file feedback")** — so a separate feedback _agent_ folds into it. It
+defines **two flows, one per category, each with a standardized `record_feedback` body format and
+a worked example.** It records **one item per distinct issue**, never records expected errors (the
+user's own invalid input), and continues the task (zero-friction, never derail).
+
+**Recording, then the end-of-work review.** `record_feedback` only *captures* an item to the local
+backlog — mid-task, by whoever hits the friction (a `figma-designer` subagent, or the main agent).
+It **does not send**. The human gate is a selector the **top-level agent** raises at the end of a
+unit of work when the backlog is non-empty (`AskUserQuestion` is a main-agent affordance, so
+subagents only record):
+
+- **Identity (first time only).** Ask _Send anonymously_ vs _Log in with GitHub_; logging in runs
+  the device-flow handshake (`github_auth_start` / `github_auth_poll`, feedback-system.md). The
+  choice is **remembered** and skipped on later runs.
+- **Review the backlog.** `list_feedback` fetches all pending items; the selector is a multi-select
+  of them plus a free-text option for the human to describe an issue/opinion in their own words
+  (the agent classifies its category). **Checked → filed via `send_feedback`; unchecked → discarded;
+  dismiss → no-op** (backlog preserved). Nothing leaves the machine until the human picks it.
 
 **BUG — something is broken or wrong.** Signals: a **silent no-op** (success result, nothing
 changed), an unexpected/confusing error, a result that **contradicts the spec**, or
@@ -470,22 +482,26 @@ diagnosis → recovery) → `references/` as needed.
 ## 7. Feedback
 
 The feedback **mechanism** is specced authoritatively in
-[[figma-bridge/docs/specs/feedback-system|feedback-system.md]]: a neutral **`record_feedback`**
-MCP tool (the one documented non-Figma "meta" tool, in its own `feedback` group), a
-**one-Markdown-file-per-item** store (**category = directory = one GitHub issue**), a
-**human-gated Send** in the Figma plugin UI, and a **CloudFlare Worker** that files the item
-as a comment on the mapped issue (the Worker holds the GitHub token; the plugin only ever
-passes a file path). Nothing leaves the machine until the user clicks Send.
+[[figma-bridge/docs/specs/feedback-system|feedback-system.md]]: neutral **meta-tools**
+(`record_feedback` to capture, plus `list_feedback` / `send_feedback` / `github_auth_start` /
+`github_auth_poll` to review and file — their own `feedback` group), a
+**one-Markdown-file-per-item** store (**category = directory = one GitHub issue**), and an
+**agent-driven send flow** — at the end of a unit of work the top-level agent reviews the backlog
+with the human in a selector and files the chosen items as comments, either **anonymously** via a
+**CloudFlare Worker** (holding a shared bot token) or **as the human's own GitHub account** (a
+token they authorize once, in-browser). The human gate is the selector; nothing leaves the machine
+until the human picks it.
 
 This milestone **packages** that mechanism and adds the plugin-layer pieces:
 
-> **Note:** the **in-plugin Feedback UI + human-gated Send** described here is **removed by**
-> [[figma-bridge/docs/specs/status-monitor|status-monitor.md]] (the panel becomes the agent status
-> monitor); its replacement send flow is a pending follow-up. `record_feedback` (the write path) and the
-> Worker are unchanged. Read the Feedback-UI wording below as the prior design.
+> **Note:** there is **no in-plugin Feedback UI** — the panel is the agent status monitor
+> ([[figma-bridge/docs/specs/status-monitor|status-monitor.md]]), and the send flow is
+> **agent-driven** (the end-of-work selector), fully specced in
+> [[figma-bridge/docs/specs/feedback-system|feedback-system.md]]. `record_feedback` (the capture
+> path) is unchanged.
 
-- `record_feedback` ships **inside the MCP server**; the Feedback UI section ships in the
-  figma-plugin — both bundled by the plugin install.
+- `record_feedback` and the send-flow meta-tools ship **inside the MCP server**; there is no
+  figma-plugin feedback surface. All are bundled by the plugin install.
 - **The production Worker URL is a build-time constant baked into the compiled binary** (designer
   routes), so the endpoint needs no user config; the Claude Code bundle reads it from the
   environment (feedback is off if unset), and env may override for dev. **The Worker
@@ -497,9 +513,10 @@ This milestone **packages** that mechanism and adds the plugin-layer pieces:
   milestone** — it supersedes feedback-system.md's _Out of scope_ note that deferred the
   when-to-record skill (updated there).
 
-Local Markdown capture is the built-in path; **Send → GitHub** goes live when the Worker is deployed
-(URL already compiled in). The shared-**secret** handling for a _distributed_ artifact is the
-open piece — see §11.
+Local Markdown capture is always available; **filing to GitHub** has two paths — the **anonymous**
+path via the Worker (goes live when the Worker is deployed; URL already compiled in) and the
+**logged-in** path direct to GitHub with the human's own token (no Worker). The shared-**secret**
+handling for the Worker path in a _distributed_ artifact is the open piece — see §11.
 
 ## 8. Connection lifecycle
 
@@ -561,19 +578,20 @@ Headless-testable in CI: the feedback harness (schema validation + sink routing)
    download step, no ordering race.
 3. **Skills + agents** — author the `figma-design`, `figma-feedback`, and `figma-reviewer`
    skills (§6.1, §6.3, §6.4), then the `figma-designer` and `figma-reviewer` agents. The
-   `record_feedback` tool, plugin Feedback UI, and Worker are feedback-system.md's build; this
-   milestone bundles them and compiles in the Worker URL.
+   feedback meta-tools (`record_feedback` + the send flow) and Worker are feedback-system.md's
+   build; this milestone bundles them and compiles in the Worker URL.
 
 Rationale: front-load the _novel_ packaging risk and prove it clean-room before investing in
 skill/agent content.
 
 ## 11. Open items & deferred
 
-- **Feedback Send (Worker → GitHub)** — deferred; local Markdown capture now
-  ([[figma-bridge/docs/specs/feedback-system|feedback-system.md]]). The Worker URL compiles
+- **Anonymous Feedback Send (Worker → GitHub)** — deferred; local Markdown capture is the built-in
+  path ([[figma-bridge/docs/specs/feedback-system|feedback-system.md]]). The Worker URL compiles
   in cleanly, but the **shared secret for a _distributed_ artifact is unresolved** — a distributed
   artifact can't safely embed it (extractable → Worker spam). Decide: per-install token,
-  Worker-side rate-limiting, or accept the risk.
+  Worker-side rate-limiting, or accept the risk. *(The **logged-in** send path is direct-to-GitHub
+  with the human's own device-flow token and does not use the Worker or this shared secret.)*
 - **Windows/Linux designer-route binaries** — deferred; darwin-arm64 first. (The Claude Code
   bundle route has no per-platform binary; `bun` handles cross-platform.)
 - **One-click install** — not possible today (no official scheme); revisit if Claude Code

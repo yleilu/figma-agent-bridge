@@ -28,9 +28,11 @@ related:
 > hand-maintained number is the **facade group-sum = 49**. The exposed MCP surface is
 > then **`48 facade + K non-facade meta-tools`**, where the non-facade meta-tools are
 > `record_feedback`, `search_components`, `reindex`, `pull_changes` (change-feed.md),
-> `report_status` (status-monitor.md), and the three registry tools `register_library` /
-> `unregister_library` / `list_libraries` (team-library-registry.md). Do not restate a
-> hardcoded total (a bare "49" already wrongly omits `record_feedback`).
+> `report_status` (status-monitor.md), the three registry tools `register_library` /
+> `unregister_library` / `list_libraries` (team-library-registry.md), and the four feedback
+> send-flow tools `list_feedback` / `send_feedback` / `github_auth_start` / `github_auth_poll`
+> (feedback-system.md). Do not restate a hardcoded total (a bare "49" already wrongly omits
+> `record_feedback`).
 >
 > The **change feed** (docs/specs/change-feed.md) adds one non-facade meta-tool
 > `pull_changes({fileKey}) → {changes, state}` — a destructive buffer **drain**
@@ -46,6 +48,13 @@ related:
 > `report_status({fileKey, text, level?, label?})` — a **display-only** push of an agent's
 > live status to the plugin panel (no `figma.*` counterpart; file-addressed, so it spreads
 > the `fileTargetParamsSchema` mixin). It must **not** inflate the facade count.
+>
+> The **feedback send-flow** (docs/specs/feedback-system.md) adds four non-facade meta-tools —
+> `list_feedback` (read the pending backlog + remembered identity, bounded by T10),
+> `send_feedback` (file the chosen items / discard the rest), and the device-flow pair
+> `github_auth_start` / `github_auth_poll` (the logged-in-identity handshake) — the agent-driven
+> review-and-file mechanism. All four are **machine-global** (no `fileKey`), so they do **not**
+> spread the `fileTargetParamsSchema` mixin, and they must **not** inflate the facade count.
 
 > The tool layer only — opinions (design-system-first, audit verdicts, layout
 > inference) are skill-layer (P1) and deliberately absent.
@@ -243,8 +252,9 @@ Format: `name(params) → returns` — purpose · principle/checklist need.
 [[figma-bridge/docs/specs/feedback-system]]). The facade
 rule (T6/T7) requires every tool to map to a real `figma.*` capability. `record_feedback` is
 the **original** such exception (the enumerated non-facade meta-tools above — `report_status`,
-`search_components`, `reindex`, `pull_changes`, the registry tools — are admitted on the same basis) —
-it captures bridge-experience friction and has no Figma API counterpart.
+`search_components`, `reindex`, `pull_changes`, the registry tools, and the feedback send-flow
+tools `list_feedback` / `send_feedback` / `github_auth_start` / `github_auth_poll` — are admitted
+on the same basis) — it captures bridge-experience friction and has no Figma API counterpart.
 It is admitted knowingly and quarantined: placed in its own conceptual `feedback` group, absent
 from `COMMANDS` and the verify-live `ALL_TOOLS` catalogue, so the 50 count is unchanged.
 Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle commands (as is the new
@@ -254,7 +264,7 @@ Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle
 ### Session (2)
 - `connect({fileKey?, fileName?}) → {fileKey, fileName, connected, available[]}` — pair the MCP server to a **specific file's** plugin, targeted by `fileKey` (or `fileName`), and return the currently **available** files `available:[{fileKey, fileName, connectedAt, version?, currentPage?, selected?}]` (the enriched relay availability registry — the same entry `status().available[]` returns; see [[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]]). When the target is ambiguous or **not available**, it does **not** guess — it returns an error listing `available[]` and asks the agent to choose (B3). The raw channel is now an internal detail (server resolves `fileKey`→channel). *(`fileKey` needs `enablePrivatePluginApi`; `fileName` is the fallback id — see overview *Connection lifecycle*.)* · B1, B3; §2 connect.
 - `status() → {connected, joined:[{fileKey, fileName, channel, currentPage, selection[], viewport, version}], available[]}` — **every joined file** (multi-file) with its best-effort live context, plus the **availability set**, in one read (live context is best-effort; failures degrade, they don't throw) · B1, B3, T4; §2 read-what-user-sees.
-- *(plugin teardown = internal `close_plugin` command, not a tool — transport/dev-reload lifecycle, see overview *Connection lifecycle*; T6. **Addressing (B3):** tools take an explicit per-call **`fileKey`** param naming their target file (canonical; per [[figma-bridge/docs/specs/overview|overview.md]] and [[figma-bridge/docs/specs/request-envelope|request-envelope.md]] — the addressing/envelope source of truth). The param is carried by a shared **`fileTargetParamsSchema` mixin** — a required **`fileKey`** plus the **reserved, server-managed** optional identity headers **`sessionId`** and (for subagent calls) **`agentId`/`agentType`** (all marked *do not set — injected by the session `PreToolUse` hook*, per request-envelope) — **spread into every file-addressed tool** so "required" is one definition, not per-tool. It is a **param-schema mixin, not a new tool** — the 47-facade count is unchanged. The **session/transport and non-file meta-tools are the exceptions:** `connect({fileKey?})` (discovery), `status()` (no per-call file), and `record_feedback` (global feedback store, no file) address the *connection* or a non-file store, not a per-call file, and do **not** spread the mixin. `requestId` is a **server header** (`genId('cmd')`), not a tool param.)*
+- *(plugin teardown = internal `close_plugin` command, not a tool — transport/dev-reload lifecycle, see overview *Connection lifecycle*; T6. **Addressing (B3):** tools take an explicit per-call **`fileKey`** param naming their target file (canonical; per [[figma-bridge/docs/specs/overview|overview.md]] and [[figma-bridge/docs/specs/request-envelope|request-envelope.md]] — the addressing/envelope source of truth). The param is carried by a shared **`fileTargetParamsSchema` mixin** — a required **`fileKey`** plus the **reserved, server-managed** optional identity headers **`sessionId`** and (for subagent calls) **`agentId`/`agentType`** (all marked *do not set — injected by the session `PreToolUse` hook*, per request-envelope) — **spread into every file-addressed tool** so "required" is one definition, not per-tool. It is a **param-schema mixin, not a new tool** — the 47-facade count is unchanged. The **session/transport and non-file meta-tools are the exceptions:** `connect({fileKey?})` (discovery), `status()` (no per-call file), and the global feedback meta-tools `record_feedback` / `list_feedback` / `send_feedback` / `github_auth_start` / `github_auth_poll` (global feedback store + machine-wide identity, no file) address the *connection* or a non-file store, not a per-call file, and do **not** spread the mixin. `requestId` is a **server header** (`genId('cmd')`), not a tool param.)*
 
 ### Read — nodes (4)
 - `inspect({nodeId?, pageId?, depth?, budget?, fields?, profile?, match?}) → {view, truncated[]}` — compact lossy view, drill-by-id (Rule B); each node carries a read-only **`contextSummary`** (the frontmatter slice of `context`, capped at `CONTEXT_SUMMARY_MAX_BYTES` = 512, rendered as a YAML block scalar; server-derived, **not** `fields`/`profile`-projectable; omitted when absent); omit both ids to inspect the current selection (multi-select returns a `SELECTION` forest) · **T3 inspect**, T4; §1 human view, §3 deep/large trees, §13 CSS-handoff data.

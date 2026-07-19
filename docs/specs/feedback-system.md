@@ -11,153 +11,194 @@ related:
   - "[[figma-bridge/docs/architecture]]"
   - "[[figma-bridge/docs/specs/tool-surface]]"
   - "[[figma-bridge/docs/specs/claude-plugin]]"
+  - "[[figma-bridge/docs/specs/status-monitor]]"
 ---
 
 # figma-agent-bridge — Feedback System
 
-> **⚠ Superseded in part by [[figma-bridge/docs/specs/status-monitor|status-monitor.md]].** That redesign
-> removes the in-plugin **Feedback UI and the human-gated Send button** from the plugin panel (the panel
-> becomes the agent status monitor). The **record path** (`record_feedback` writing an item) is unchanged;
-> what is being replaced is the *review-and-send* surface — the agent-driven send flow that succeeds the
-> Send button is a **pending follow-up spec**. Read the plugin-UI parts of this doc (the `App.tsx`
-> Feedback section, the Send button, the `feedback-added`/`feedback-updated` render path) as the *prior*
-> design pending that follow-up; the tool/store/Worker mechanism still stands.
+> Defines a dogfooding loop: the agent **records** friction it hits while driving the MCP; at
+> the end of a unit of work the agent **reviews the backlog with the human** through a selector
+> and **files** the chosen items as comments on the project's GitHub issues — either
+> **anonymously** (a shared bot identity, via a CloudFlare Worker) or **as the human's own
+> GitHub account** (a token the human authorizes once, in-browser). Governed by
+> `docs/principles.md`; transport reuses `docs/architecture.md`.
 
-> Defines a dogfooding
-> loop: the agent records friction it hits while driving the MCP, the human reviews it in
-> the Figma plugin, and one click files it as a comment on a GitHub issue via a CloudFlare
-> Worker. Governed by `docs/principles.md`; transport reuses `docs/architecture.md`
-> (relay/WS). It rides existing plumbing and holds to the layer rule — with **one
-> deliberate, documented exception** to T6/T7 (the tool is not a Figma capability), spelled
-> out in [Principle alignment](#principle-alignment).
-
-> The agent records; the human decides what ships. Nothing leaves the machine until the
-> user clicks **Send**. *When* to record is plugin-layer guidance (a skill), not a tool
-> opinion (P1) — the tool itself is neutral.
+> **The agent records; the human decides what ships, and under whose name.** Nothing is filed
+> until the human picks it in the selector — that is the human gate. *When* to record and *when*
+> to raise the selector is plugin-layer guidance (the `figma-feedback` skill, P1), never a tool
+> opinion — the tools themselves are neutral mechanisms.
 
 ## Purpose
 
-While the agent uses the MCP it encounters friction — a tool that silently no-ops, a
-missing capability, a confusing result. Today that signal evaporates at the end of the
-session. This feature captures it at the moment it happens and routes it, on human
-approval, into the project's own GitHub issues so it can be triaged weekly.
+While the agent uses the MCP it encounters friction — a tool that silently no-ops, a missing
+capability, a confusing result. Today that signal evaporates at the end of the session. This
+feature captures it at the moment it happens and, on human approval, routes it into the
+project's own GitHub issues so it can be triaged weekly.
 
 The design goals, in priority order:
 
-1. **Zero-friction capture** — one neutral tool call (`record_feedback`) persists an item mid-task without derailing. The tool holds no opinion about *when* to call it; that guidance is a plugin-layer skill (P1).
-2. **Human gate** — nothing is filed automatically; the user reviews each item in the plugin and clicks Send.
-3. **Easy weekly triage** — one GitHub issue per category, so a weekly read is one API call per stream with no filtering.
-4. **Rides existing rails** — reuse the relay/WS transport and the tool/handler patterns; add the minimum new surface, and keep the bridge contract uniform (B1).
+1. **Zero-friction capture** — one neutral tool call (`record_feedback`) persists an item
+   mid-task without derailing. The tool holds no opinion about *when* to call it; that guidance
+   is a plugin-layer skill (P1).
+2. **Human gate** — nothing is filed automatically. At the end of a unit of work the human
+   reviews the backlog in a selector, picks what to file, and **the items they do not pick are
+   discarded**. Dismissing the selector files and discards nothing (the backlog is preserved).
+3. **Attributable** — the human files either **anonymously** (a shared bot identity) or **as
+   themselves** (their own GitHub account, so the comment is authored by them). The choice is
+   made once and **remembered**.
+4. **Easy weekly triage** — one GitHub issue per category, so a weekly read is one API call per
+   stream with no filtering. Both identity paths comment on the same two standing issues; only
+   the comment's author differs.
+5. **Rides existing rails** — reuse the store and the tool/handler patterns; add the minimum new
+   surface, and keep the bridge contract uniform (B1).
 
 ### Layer split (P1)
 
-The feature is deliberately divided across two layers so no opinion leaks into the tools:
+The feature is divided across layers so no opinion leaks into the tools:
 
-- **Tool layer** — `record_feedback`, a neutral capability to persist a feedback item. No opinion about when it should fire. It is the one tool that does not map to a Figma API — a documented T6/T7 exception (see [Principle alignment](#principle-alignment)).
-- **Plugin layer** — a **skill/command** teaches the agent *when and how* to record (on a silent no-op, a missing capability, a confusing result). This is opinionated workflow guidance and lives here per P1, never in the tool description. **Follow-up deliverable**, out of scope for this spec's implementation but required for the loop to work as intended.
+- **Tool layer** — neutral capabilities: `record_feedback` (capture), and `list_feedback` /
+  `send_feedback` / `github_auth_start` / `github_auth_poll` (the review-and-file mechanism and
+  the identity handshake). None of them decide *when* to fire or *what* to send. They are
+  **non-facade meta-tools** — the documented T6/T7 carve-out (see [Principle
+  alignment](#principle-alignment)), siblings of `record_feedback` and `report_status`.
+- **Plugin layer** — the **`figma-feedback` skill** teaches the agent *when* to record and
+  *when/how* to raise the selector, triage the backlog, and resolve identity. This opinionated
+  workflow lives in [[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]] §6.3 (P1), never
+  in a tool description.
 
 ## Architecture
 
-One request already crosses four hops (`Agent → MCP server → relay → plugin`; see
-[[figma-bridge/docs/architecture]]). This feature adds **three new message flows over the
-same relay** plus **one new external hop** (server → CloudFlare Worker → GitHub).
+The **record path** persists a `pending` item to a local store (below). The **send path** is
+**agent-driven**: at the end of a unit of work the agent reads the backlog (`list_feedback`),
+raises a selector (owned by the skill), and files the chosen items (`send_feedback`). There are
+two identity paths, differing only in the comment's author:
 
-The relay stays dumb — it broadcasts any `{ type, channel, message }` envelope, so it
-needs **no logic change** and **no new named Zod frame types**: the feedback messages ride
-the existing generic `commandMessageSchema` envelope in `packages/shared/src/ws-schemas.ts`.
-It **only routes** these messages; their meaning lives entirely in the server and the UI, so
-the bridge stays semantics-free (B1). The three new flows are:
+- **Anonymous** → MCP server → **CloudFlare Worker** (holds the shared bot PAT) → issue comment.
+- **Logged-in** → MCP server → **GitHub API directly**, with the human's own OAuth token → issue
+  comment **authored by the human**.
 
-- **Server → plugin push** — `feedback-added`, `feedback-updated`. Unsolicited
-  notifications; no reply is awaited. (New: today the server only sends `command`
-  envelopes and awaits an `{ id, result }`.) These are list-refresh pushes, not the
-  authoritative reply to any request.
-- **Plugin → server hydrate/sync** — `feedback-sync { id }`. Plugin-initiated on each
-  successful (re)connect — so it is the **earliest plugin→server traffic that is not a
-  `command-result`** (it precedes any `send-feedback`). It is **correlated like a command**:
-  the plugin generates an `id`, the server replies `{ id, result }` with a **bounded** set of
-  `pending` items (T10) or `{ id, error }` — the same B1 envelope `send-feedback` uses. It
-  hydrates the list so it survives plugin reloads.
-- **Plugin → server request** — `send-feedback { id, path }`. User-initiated. To keep B1's
-  uniform contract, it is **correlated like a command**: the plugin generates an `id`, the
-  server replies `{ id, result }` or `{ id, error }` — the same shape every other bridge
-  message uses. The `feedback-updated` broadcast is a secondary refresh for the list, *not*
-  the send's result.
-
-The Figma sandbox thread (`packages/figma-plugin/src/code.ts`) is **untouched** — the
-feedback list lives entirely in the React UI iframe and never touches `figma.*`.
+Feedback flows **agent → MCP server → (Worker | GitHub)**. It never traverses the relay or the
+plugin iframe: the relay carries **no feedback semantics**, and the Figma sandbox thread
+(`packages/figma-plugin/src/code.ts`) is never involved. The plugin panel renders the agent
+status monitor ([[figma-bridge/docs/specs/status-monitor|status-monitor.md]]) and shows no
+feedback surface.
 
 ```mermaid
 sequenceDiagram
     participant Agent
     participant Server as MCP server
-    participant Relay
-    participant Plugin as Plugin UI
+    participant Store as Local store
+    participant Cred as Credential store
     participant Worker as CF Worker
     participant GH as GitHub
 
-    Note over Plugin: on (re)connect — hydrate list
-    Plugin->>Relay: feedback-sync { id }
-    Relay->>Server: feedback-sync { id }
-    Server-->>Relay: { id, result } (bounded pending items, B1/T10)
-    Relay-->>Plugin: { id, result }
-
     Agent->>Server: record_feedback(category, title, description, tool?)
-    Server->>Server: write feedbacks/<cat>/<file>.md (status pending)
-    Server-->>Relay: feedback-added(item)
-    Relay-->>Plugin: feedback-added(item)
-    Note over Plugin: lists item under its category with a Send button
+    Server->>Store: write feedbacks/<cat>/<file>.md (status pending)
 
-    Plugin->>Relay: send-feedback { id, path }
-    Relay->>Server: send-feedback { id, path }
-    Server->>Worker: POST { category, title, body, version, secret }
-    Worker->>GH: POST /repos/:owner/:repo/issues/:mapped#/comments
-    GH-->>Worker: { html_url }
-    Worker-->>Server: { comment_url }
-    Server->>Server: frontmatter → status sent, sent_at, comment_url
-    Server-->>Relay: { id, result } (correlated reply, B1)
-    Relay-->>Plugin: { id, result }
-    Server-->>Relay: feedback-updated(item) (secondary list refresh)
-    Relay-->>Plugin: feedback-updated(item)
+    Note over Agent: end of a unit of work (skill-driven)
+    Agent->>Server: list_feedback()
+    Server->>Store: read pending (bounded, T10)
+    Server->>Cred: read identity preference + cached identity
+    Server-->>Agent: { pending[], identity }
+
+    alt no remembered identity, human chooses "Log in"
+        Agent->>Server: github_auth_start()
+        Server->>GH: POST /login/device/code (client_id, scope)
+        GH-->>Server: { user_code, verification_uri, expires_in, interval }
+        Server-->>Agent: { user_code, verification_uri, ... }
+        Note over Agent: shows code + URL to the human
+        Agent->>Server: github_auth_poll()
+        Server->>GH: POST /login/oauth/access_token (client_id, device_code)
+        GH-->>Server: { access_token }  (or authorization_pending / slow_down)
+        Server->>GH: GET /user  (fetch identity for display)
+        Server->>Cred: store token + identity, preference = github
+        Server-->>Agent: { status: authorized, identity }
+    end
+
+    Note over Agent: selector — human checks items to file, unchecked = discard
+    Agent->>Server: send_feedback({ send[], discard[], add?, identity })
+    loop each discarded
+        Server->>Store: delete file
+    end
+    loop each sent
+        alt anonymous
+            Server->>Worker: POST { category, title, body, version, secret }
+            Worker->>GH: POST /repos/:owner/:repo/issues/:n/comments (bot)
+        else logged-in
+            Server->>Cred: read user token
+            Server->>GH: POST /repos/:owner/:repo/issues/:n/comments (as the human)
+        end
+        GH-->>Server: { html_url }
+        Server->>Store: frontmatter → status sent, sent_at, comment_url
+    end
+    Server-->>Agent: { results[] }
 ```
 
-## Principle alignment
+## Identity & authentication
 
-This feature touches the bridge and tool layers, so it is checked explicitly against
-`docs/principles.md`. Most of it rides existing rails cleanly; the deviations are named,
-justified, and confined.
+The logged-in path authors comments as the human, so it needs a GitHub token that acts as the
+human. It is obtained with the **GitHub OAuth App device flow** — the flow GitHub prescribes for
+headless/CLI clients — and the human **never pastes a token to the agent**; they authorize
+in-browser.
 
-- **T6 / T7 — the one non-Figma tool (deliberate, documented exception).** The tool layer is
-  a facade over Figma: "every tool maps to a real Figma API," one tool per `figma.*`
-  capability. `record_feedback` is the sole exception — it is a **meta tool** about the
-  bridge experience itself, not a Figma capability. It is admitted knowingly because the
-  agent has no other channel to emit a signal, and it is **quarantined**: placed in its own
-  `feedback` group, absent from the Figma concept groups, and flagged as an exception in
-  `tool-surface.md`. Precedent: `get_document_info` / `close_plugin` are already non-facade
-  lifecycle commands. This keeps the exception a labelled carve-out, never a silent leak.
-- **P1 — no opinion in the tool.** "*What to do and when*" is plugin-layer guidance.
-  `record_feedback` is therefore a **neutral capability** with a description that never tells
-  the agent when to record. The *when* (silent no-op, missing capability, confusing result)
-  lives in a plugin-layer **skill** — a separate follow-up deliverable (see
-  [Layer split](#layer-split-p1)).
-- **B1 — uniform result/error contract.** The send is **correlated like a command**
-  (`send-feedback { id, path }` → `{ id, result | error }`), so every bridge message keeps
-  one shape. `feedback-added` / `feedback-updated` are unsolicited *refresh* pushes, not the
-  authoritative reply to a request — the send's truth is its correlated reply. The relay
-  gains no feedback semantics; it only routes envelopes.
-- **T10 — bounded by default.** Hydration is a plugin-initiated `feedback-sync` request on
-  each successful (re)connect, which the server answers with a **capped** set of `pending`
-  items — never an unbounded O(store) flush, so a large backlog can never blow up the channel.
-- **Layer containment.** The bridge stays semantics-free (routing only); design meaning is
-  never introduced (no node interpretation); the plugin's `code.ts` and `figma.*` are
-  untouched. Feedback state lives server-side (files) and in the UI, not in the pipe.
+- **Public client, no secret shipped.** The device-flow token exchange requires only the OAuth
+  App's **`client_id`** (public) — GitHub's docs are explicit that *"the `client_secret` is not
+  needed for the device flow."* The `client_id` is embedded in the build; no secret is ever
+  distributed. The OAuth App must have **"Enable Device Flow"** turned on (an app-owner setting,
+  set once).
+- **Scope.** A single build-time constant `OAUTH_SCOPE`. The target state (a **public** repo)
+  needs only **`public_repo`**; while the repo is **private** it needs **`repo`**, and only repo
+  **collaborators** can log in and author comments as themselves — non-collaborators use the
+  anonymous path. Flipping the repo public narrows the scope to `public_repo` and opens the
+  logged-in path to any GitHub user.
+- **The handshake** (`github_auth_start` → `github_auth_poll`):
+  1. `github_auth_start` requests a device + user code and returns
+     `{ user_code, verification_uri, expires_in, interval }`.
+  2. The agent shows the human the `user_code` and `verification_uri`
+     (`https://github.com/login/device`).
+  3. `github_auth_poll` polls the token endpoint, honoring `interval` and backing off on
+     `slow_down`. It resolves to `authorized` (token obtained), `pending`, `denied`
+     (`access_denied` — the human cancelled), or `expired` (`expired_token` — restart).
+  4. On `authorized` the server fetches the identity (`GET /user`) and caches it.
+- **Token lifetime.** An OAuth App user token does not expire by default (GitHub revokes it only
+  after a year unused), so the human authorizes **once**; there is no refresh loop.
+- **Identity for display.** `GET /user` yields `login`, `name`, and `email`. `email` is `null`
+  when the human keeps it private; the display email then falls back to the GitHub noreply
+  address `{id}+{login}@users.noreply.github.com`, and the display name falls back to `login`.
+  The selector shows `name <email>`.
+- **No access.** If the logged-in send returns `403`/`404` (not a collaborator on a still-private
+  repo), the item is kept and the human is offered the anonymous path instead.
+
+**Prerequisites (provided out-of-band by the app owner):** register one OAuth App with Device
+Flow enabled (→ `client_id`); set the two standing issue numbers (`BUGS_ISSUE`,
+`PROPOSALS_ISSUE`); keep logged-in users as repo collaborators until the repo is public.
+
+## Credential & preference store
+
+A local store (`~/.figma-agent-bridge`, the same root as the feedback store) holds the identity
+**preference** (`anonymous` | `github`), the human's **OAuth token**, and the **cached identity**
+(`login`, `name`, `email`). It is the piece that lets the selector show `name <email>` across
+restarts and lets `send_feedback` reuse the remembered choice without re-asking.
+
+- **Secure by default, with a fallback.** The token is written via **`Bun.secrets`** — Bun's
+  built-in credential API, which maps to the macOS **Keychain**, Windows **Credential Manager**
+  (DPAPI-encrypted), and Linux **libsecret**, and works inside a `bun build --compile` binary
+  with no native addon. `Bun.secrets` is feature-detected (it is recent and experimental); when
+  it is unavailable the store falls back to a **`0600` file** at
+  `~/.figma-agent-bridge/credentials.json` (POSIX perms are a no-op on Windows — a DPAPI-encrypted
+  file is the Windows hardening option).
+- **The client-side credential is the human's own.** It is minimally scoped, device-flow
+  authorized (never pasted, never a shared secret), and lives only on the human's machine. The
+  **shared bot PAT stays in the Worker** and is used only for the anonymous path.
+- **Reset.** A send that returns `401` (revoked/invalid token) clears the stored token and marks
+  the identity unauthenticated, so the next selector re-offers login.
 
 ## Data model — one item, one Markdown file
 
 The store is a directory tree under a configurable root (default `~/.figma-agent-bridge/feedbacks`).
-**Each feedback item is one Markdown file. The subdirectory is the category, and each
-category maps 1:1 to a GitHub issue.** The file path is the item's identity — the handle
-the plugin passes back on Send. There is no separate id field.
+**Each feedback item is one Markdown file. The subdirectory is the category, and each category
+maps 1:1 to a GitHub issue.** The file path is the item's identity — the handle the agent passes
+to `send_feedback`. There is no separate id field.
 
 ```
 ~/.figma-agent-bridge/
@@ -168,7 +209,7 @@ the plugin passes back on Send. There is no separate id field.
       2026-07-06T2030-batch-postop.md
 ```
 
-Frontmatter holds everything the plugin UI needs to **list** an item; the body is natural
+Frontmatter holds everything needed to **list** an item in the selector; the body is natural
 language for the human weekly read (and becomes the GitHub comment body).
 
 ```markdown
@@ -188,127 +229,162 @@ Expected either a mutation or an explicit "node is locked" error.
 
 | Field | Source | Purpose |
 |---|---|---|
-| `title` | agent (`record_feedback`) | List label; GitHub comment heading |
-| `status` | server | `pending` → `sent` \| `failed`; drives the Send button state |
+| `title` | agent (`record_feedback`) | Selector label; GitHub comment heading |
+| `status` | server | `pending` → `sent` \| `failed` |
 | `version` | server (`package.json`) | Ties the report to the build it came from |
-| `created` | server | Sort order in the list |
-| `tool` | agent (optional) | Context chip in the UI; may be absent |
+| `created` | server | Sort order |
+| `tool` | agent (optional) | Context chip; may be absent |
 | `sent_at` | server | Audit; set on successful send |
-| `comment_url` | server (from Worker) | Trace a filed comment back to its item |
+| `comment_url` | server (from GitHub) | Trace a filed comment back to its item |
 
-The **category is the directory**, not a frontmatter field — routing is unambiguous end to
-end (file → server → Worker → issue). The category value **is** the directory name — no
-mapping, no pluralization rule — so `bugs` and `proposals` are the two categories to start;
-adding one is a new subdirectory + a Worker mapping entry (see *Extending categories*).
+The **category is the directory**, not a frontmatter field — routing is unambiguous end to end
+(file → issue). The category value **is** the directory name — so `bugs` and `proposals` are the
+two categories to start; adding one is a new subdirectory + an issue mapping (see *Extending
+categories*).
+
+**Discard deletes the file.** An item the human does not pick in the selector is removed from the
+store entirely — it is not a status, it is gone.
 
 ### Filename convention
 
-`<ISO-8601-compact>-<slug>.md`, e.g. `2026-07-06T2014-resize-node-locked.md`. The
-timestamp keeps files sorted and unique; the slug (derived from the title) keeps them
-human-scannable in the directory. The server owns filename generation.
+`<ISO-8601-compact>-<slug>.md`, e.g. `2026-07-06T2014-resize-node-locked.md`. The timestamp keeps
+files sorted and unique; the slug (derived from the title) keeps them human-scannable. The server
+owns filename generation.
 
 ## Components
 
 ### `packages/shared`
-- **No new named `ws-schemas` frame types.** The four feedback messages (`feedback-added`,
-  `feedback-updated`, `feedback-sync`, `send-feedback`) travel through the existing
-  generic/permissive `commandMessageSchema` envelope (the `command` string + `params`), so no
-  new named Zod frame types are needed — the cleaner B1-aligned choice.
-- A `Feedback` type (the item shape the UI consumes) and a `FeedbackCategory` enum
-  (`bugs` | `proposals` — values equal the directory names), colocated with the existing
-  schema exports.
+- A `FeedbackItem` type and a `FeedbackCategory` enum (`bugs` | `proposals` — values equal the
+  directory names), colocated with the existing schema exports. **No feedback frame types in
+  `ws-schemas`** — feedback does not travel over the relay.
 
 ### `packages/server`
-- **`record_feedback` MCP tool** — registered in `src/index.ts`, params in
-  `packages/shared/src/tool-params.ts`. **Grouped under its own `feedback` group, separate
-  from the Figma concept groups** — it is a meta tool, not part of the Figma facade
-  (documented T6/T7 exception; see [Principle alignment](#principle-alignment)). The tool
-  description is **neutral** — it states what the tool does, never *when* to call it (that is
-  the plugin-layer skill's job, P1). Its handler runs **entirely server-side**: it does
-  **not** `sendCommand` to the plugin. It writes the Markdown file, then broadcasts
-  `feedback-added`. Params: `{ category, title, description, tool? }`.
-- **`feedback-store.ts`** — the only module that touches the filesystem: create dirs,
-  write an item, parse/serialize frontmatter, list `pending` (bounded — see below), update
-  status. Frontmatter read/write round-trips losslessly.
-- **`worker-client.ts`** — HTTPS POST to the CloudFlare Worker. The **first external HTTP
-  client in the codebase** (today all `fetch` targets the local relay). Sends
-  `{ category, title, body, version, secret }`, returns `{ comment_url }`.
-- **inbound `send-feedback` handler** — added to `src/figma-client.ts`. On a
-  `send-feedback { id, path }` message: read the file, call `worker-client`, update
-  frontmatter, then **reply `{ id, result }` / `{ id, error }`** (correlated, B1) and also
-  broadcast `feedback-updated` as a secondary list refresh.
-- **Hydrate on plugin (re)connect (bounded, T10)** — the plugin issues a `feedback-sync`
-  request on each successful (re)connect, and the server answers with the current `pending`
-  items so the list survives plugin reloads. This is a **plugin-pull, not a server-push**:
-  the relay is a blind forwarder and the server cannot reliably detect a plugin join, so a
-  client-pull on connect is the correct realization of the same T10-bounded intent. The
-  answer is **bounded by default** — a cap (e.g. the N most recent `pending` items) with the
-  rest available on demand — rather than an unbounded O(store) flush. At human scale this cap
-  is rarely hit, but the surface never emits an unbounded list (T10).
-- **Config (env):** `FEEDBACK_DIR` (default `~/.figma-agent-bridge/feedbacks`), `WORKER_URL`,
-  `WORKER_SECRET`.
+- **`record_feedback` MCP tool** — a neutral capture capability. Runs entirely server-side: it
+  writes the Markdown file with `status: pending`. Params: `{ category, title, description,
+  tool? }`.
+- **`feedback-store.ts`** — the only module that touches the feedback filesystem: create dirs,
+  write an item, parse/serialize frontmatter, list `pending` (bounded), update status
+  (`markSent` / `markFailed`), and **`discard`** (delete a file). Frontmatter round-trips
+  losslessly.
+- **`credential-store.ts`** (new) — the identity preference + OAuth token + cached identity,
+  backed by `Bun.secrets` with a `0600`-file fallback (see [Credential &
+  preference store](#credential--preference-store)).
+- **`github-client.ts`** (new) — the direct GitHub client for the logged-in path: the device
+  flow (`startDeviceAuth`, `pollDeviceAuth`), `fetchIdentity` (`GET /user`), and
+  `postIssueComment(issueNumber, body, token)`.
+- **`worker-client.ts`** — the anonymous path: an HTTPS POST to the CloudFlare Worker sending
+  `{ category, title, body, version, secret }`, returning `{ comment_url }`.
+- **The review-and-file meta-tools** — global (machine-scoped, no `fileKey`): they do **not**
+  spread the `fileTargetParamsSchema` mixin, exactly like `record_feedback`.
+  - `list_feedback({ cursor?, limit?=100 }) → { pending: FeedbackItem[], truncated, cursor?, identity: { preference, name?, login?, email? } | null }`
+    — a bounded page of the pending backlog (Rule A, T10 — the skill drains the `cursor` until
+    exhausted to present the whole backlog) plus the remembered identity, so the agent can build
+    the selector and decide whether to ask about identity.
+  - `send_feedback({ send: path[], discard: path[], add?: { title, description, category }, identity?: 'anonymous' | 'github' }) → { results: [...] }`
+    — files each `send` item (anonymous → Worker; github → direct as the human), **deletes** each
+    `discard` item, and, when `add` is present, creates that human-authored item and files it.
+    `identity` defaults to the remembered preference.
+  - `github_auth_start() → { user_code, verification_uri, expires_in, interval }` — begins the
+    device flow.
+  - `github_auth_poll() → { status: 'pending' | 'authorized' | 'expired' | 'denied', identity?, interval? }`
+    — polls for the token; on `authorized`, the token + identity are stored and returned.
+- **Config:** `FEEDBACK_DIR` (default `~/.figma-agent-bridge/feedbacks`); `WORKER_URL`,
+  `WORKER_SECRET` (anonymous path); `REPO`, `BUGS_ISSUE`, `PROPOSALS_ISSUE` (required client-side
+  for the direct logged-in path); `OAUTH_CLIENT_ID`, `OAUTH_SCOPE` (device flow).
 
 ### `packages/figma-plugin`
-- `hooks/useRelay.ts` — handle inbound `feedback-added` / `feedback-updated` into feedback
-  list state, keyed by file path.
-- `App.tsx` — a new **Feedback** section grouped by category. Each row: title, timestamp,
-  status chip, and a **Send** button (disabled once `sent`; shows *Retry* on `failed`).
-  Send generates an `id`, posts `send-feedback { id, path }` over WS, and resolves on the
-  correlated `{ id, result | error }` reply (the row's optimistic state reconciles with the
-  `feedback-updated` push). Follows existing `figma-*` Tailwind tokens.
-- `code.ts` — **no change.**
+- **No feedback UI and no feedback relay handling.** The panel is the status monitor; feedback
+  is agent-driven and never reaches the iframe. `code.ts` is not involved.
 
-### `packages/worker` (new — CloudFlare Worker)
-- Deployed with Wrangler (the `cloudflare` skill covers the CLI). Single POST endpoint.
+### `packages/worker` (CloudFlare Worker — anonymous path)
 - Validates the shared secret (`SHARED_SECRET`), maps `category → issue#` by convention
-  (`<CATEGORY>_ISSUE`, e.g. `bugs → BUGS_ISSUE`), and files a comment via the GitHub API
-  (`POST /repos/:owner/:repo/issues/:n/comments`) using `GITHUB_TOKEN` (a fine-grained PAT
-  with issues:write, held as a Worker secret — the "linked to my GitHub account" piece).
-- Composes the comment body from `title`, `body`, and `version`. Returns `{ comment_url }`.
-- Secrets: `GITHUB_TOKEN`, `SHARED_SECRET`. Vars: `REPO` (`owner/repo`), `BUGS_ISSUE`, `PROPOSALS_ISSUE`.
+  (`<CATEGORY>_ISSUE`), and files a comment via the GitHub API
+  (`POST /repos/:owner/:repo/issues/:n/comments`) using `GITHUB_TOKEN` (a fine-grained bot PAT
+  with issues:write, held as a Worker secret). Composes the body from `title`, `body`, `version`;
+  returns `{ comment_url }`. Secrets: `GITHUB_TOKEN`, `SHARED_SECRET`. Vars: `REPO`, `BUGS_ISSUE`,
+  `PROPOSALS_ISSUE`.
+
+## The selector (plugin layer — `figma-feedback` skill, P1)
+
+*When* to raise the selector and *how* to triage is opinion, owned by the `figma-feedback` skill
+([[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]] §6.3). Summarized here only to make
+the mechanism above legible; the skill is the source of truth:
+
+- **When.** At the end of a unit of work, when the pending backlog is non-empty. The **top-level
+  agent** raises it (the selector is `AskUserQuestion`, a main-agent affordance; subagents only
+  `record_feedback`).
+- **Identity (first time only).** Ask *Send anonymously* vs *Log in with GitHub*. Logging in runs
+  the device-flow handshake; the choice is then remembered and this question is skipped on later
+  runs.
+- **Issues.** A multi-select of **all** pending items, plus a free-text option to describe an
+  issue/opinion in the human's own words (the agent classifies its category and files it as the
+  `add` item). **Checked → filed; unchecked → discarded; dismiss → no-op** (backlog preserved).
 
 ## Error handling
 
 | Failure | Behaviour |
 |---|---|
-| Record — dir/write fails | `record_feedback` returns an error result; no broadcast, no file. |
-| Send — Worker unreachable / non-2xx | Frontmatter `status: failed`; server replies `{ id, error }` (B1) and broadcasts `feedback-updated`; plugin shows *Failed* + Retry. |
-| Send — bad shared secret | Worker returns 401; treated as a failed send (above). |
-| Send — item already `sent` | Server-side no-op (idempotent); replies `{ id, result }` with the existing state and re-broadcasts it. |
-| Server not running at send time | Send routes through the server, so it requires the MCP alive — which it is whenever the agent/relay is active. Plugin greys out Send while disconnected. |
+| Record — dir/write fails | `record_feedback` returns an error result; no file. |
+| Send (anonymous) — Worker unreachable / non-2xx / 401 secret | Item's frontmatter → `failed`; `send_feedback` reports it in `results`; the item is kept for a later selector. |
+| Send (logged-in) — GitHub `401` (revoked/invalid token) | Clear the stored token, mark identity unauthenticated; item kept; next selector re-offers login. |
+| Send (logged-in) — GitHub `403`/`404` (no repo access) | Item kept; the human is offered the anonymous path. |
+| Device flow — `access_denied` / `expired_token` / `slow_down` | Cancelled → stop; expired → restart `github_auth_start`; slow_down → adopt the new `interval`. |
+| Discard — delete fails | Reported in `results`; the item is kept. |
+| Server not running | The agent cannot call the tools; nothing is filed. |
 
-The GitHub token and shared secret **never reach the plugin** — the plugin only ever sends
-a file path. All privileged material lives in the server env and the Worker secrets.
+The **shared bot secret never leaves the Worker**; the **human's own token never leaves their
+machine** (server env + OS keychain). No shared credential is ever shipped in the build or sent to
+the agent.
+
+## Principle alignment
+
+- **T6 / T7 — non-facade meta-tools (documented exception).** `record_feedback`, `list_feedback`,
+  `send_feedback`, `github_auth_start`, and `github_auth_poll` are meta-tools about the bridge
+  experience, not Figma capabilities. They are admitted knowingly (the agent has no other channel
+  to capture and file friction), quarantined in the `feedback` group, and recorded in
+  [[figma-bridge/docs/specs/tool-surface|tool-surface.md]]'s count formula as non-facade —
+  siblings of `report_status`. Precedent: `get_document_info` / `close_plugin`.
+- **P1 — no opinion in the tools.** *When* to record and *when/how* to raise the selector lives in
+  the `figma-feedback` skill. Every feedback tool description states only what the tool does.
+- **B1 — uniform contract; the relay stays dumb.** Every feedback tool uses the standard MCP
+  result/error contract. Feedback carries **no relay frames at all** — it never touches the pipe,
+  so the bridge gains no feedback semantics.
+- **T10 — bounded by default.** `list_feedback` returns a bounded page of pending items, never an
+  unbounded flush of a large backlog.
+- **No shared secret on the client (a design property; principles.md is silent on credentials).**
+  No *shared* secret ever reaches the client — the bot PAT stays in the Worker (anonymous path).
+  The only client-side credential is the **human's own** token: device-flow-authorized (no client
+  secret shipped, nothing pasted), minimally scoped, OS-keychain-stored, on the human's own machine.
 
 ## Extending categories
 
-Adding a category (e.g. `questions`) touches three places:
-
-1. `FeedbackCategory` enum in `packages/shared`.
-2. A new subdirectory under `feedbacks/` (created on first write by `feedback-store`).
-3. A `category → issue#` entry in the Worker — a `QUESTIONS_ISSUE` var (the `<CATEGORY>_ISSUE` convention).
-
-No new message types, no plugin logic beyond rendering the new group.
+Adding a category (e.g. `questions`) touches: (1) the `FeedbackCategory` enum in
+`packages/shared`; (2) a new subdirectory under `feedbacks/` (created on first write); (3) a
+`category → issue#` entry — a `QUESTIONS_ISSUE` var in the Worker (anonymous path) and the
+client-side issue map (logged-in path). No new tools, no relay changes.
 
 ## Testing
 
-- **server unit** — `feedback-store` frontmatter round-trip + status update; `worker-client`
-  against a mocked `fetch`; the `send-feedback` handler flips status and broadcasts.
-- **e2e (existing mock plugin)** — `record_feedback` → assert file written + `feedback-added`
-  broadcast; inject `send-feedback { id, path }` → assert Worker POST (mocked) + status flip +
-  correlated `{ id, result }` reply + `feedback-updated` push. Also assert the failed-send
-  path replies `{ id, error }`.
-- **worker** — category→issue mapping and secret check against a mocked GitHub API
-  (vitest / miniflare).
-- **live-verify** — the plugin UI section MUST be live-verified in real Figma (per the
-  plugin-side live-verify rule; the headless mock cannot exercise the iframe UI). Covers:
-  item appears on record, Send flips to *sent*, failed send shows Retry, list survives a
-  plugin reload (hydrate-on-join).
+- **server unit** — `feedback-store` frontmatter round-trip, status update, and `discard`
+  (delete); `credential-store` round-trip against a `Bun.secrets` mock **and** the `0600`-file
+  fallback (incl. feature-detect); `github-client` device flow (`start`/`poll`, including
+  `slow_down` / `expired_token` / `access_denied`), `fetchIdentity`, and `postIssueComment`
+  against a mocked `fetch`; `send_feedback` triage — `send` (anonymous → mocked Worker; github →
+  mocked GitHub, authored), `discard` (file deleted), `add` (created + filed).
+- **e2e (mock plugin)** — `record_feedback` → file written; `list_feedback` → bounded pending +
+  identity; `send_feedback` anonymous → mocked Worker POST + status flip; `send_feedback` github →
+  mocked GitHub POST + status flip; `discard` → file gone.
+- **live-verify** — the real `AskUserQuestion` selector; one real device-flow login; a real
+  comment posted **as the human** and **as the bot**; unchecked items discarded; a dismissed
+  selector leaves the backlog intact.
 
 ## Out of scope (YAGNI)
 
-- **The when-to-record skill is specced in the plugin milestone** — as the **`figma-feedback` skill** in [[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]] §6.3 (no longer a separate future follow-up). This spec still owns the tool/bridge/UI/Worker mechanism; the plugin-layer skill that teaches the agent *when* to call `record_feedback` (P1) lives there and is required before the loop behaves as intended.
-- No editing/deleting feedback from the plugin — the agent records, the human sends; edits happen in the Markdown file or on GitHub.
-- No auto-send — the human gate is the point.
-- No reading GitHub comments back into the tool — the weekly triage is a separate manual/agent read of the issues.
-- No per-item arbitrary issue targeting — category→issue is the routing model.
+- **Switching a remembered identity mid-flow / an explicit logout tool.** Re-auth happens
+  automatically on a `401`; a deliberate identity switch is deferred.
+- **A GitHub App / fine-grained least-privilege token.** The OAuth App device flow is the chosen
+  mechanism; the repo becomes public, so `public_repo` suffices.
+- **Editing feedback bodies from the selector** — edit the Markdown file or the comment on GitHub.
+- **Auto-send** — the selector gate is the point.
+- **Reading GitHub comments back into the tool** — weekly triage is a separate read of the issues.
+- **Per-item arbitrary issue targeting** — category → issue is the routing model.
