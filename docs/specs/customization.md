@@ -21,7 +21,7 @@ related:
 > shipped plugin skills — the sanctioned home for taste, concrete values, and stricter-than-basic
 > standards. Governs a **new user skill** (`figma-bridge-prefs`), a **shipped helper**
 > (`figma-setup`), and a **shipped, inert template**. It changes no tool in
-> [[figma-bridge/docs/specs/overview|overview.md]]; it partitions the *plugin* layer per
+> [[figma-bridge/docs/specs/overview|overview.md]]; it partitions the _plugin_ layer per
 > [[figma-bridge/docs/principles|P1]].
 
 ## 1. Goal & non-goals
@@ -65,15 +65,15 @@ flowchart TB
 
 **Three buckets, one discriminator.** Guidance is one of:
 
-| Bucket | Home | Examples |
-| --- | --- | --- |
-| **Tool usage** | shipped `figma-design` | mechanics, exact call patterns, limits to route around |
-| **Basic professional practice** | shipped `figma-design` | the *basic level* of design-system-first + component-first |
-| **Preference** | `figma-bridge-prefs` (user skill) | all concrete values (tokens, scale, type ramp, naming), and the *strict level* of the two practices |
+| Bucket                          | Home                              | Examples                                                                                            |
+| ------------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------- |
+| **Tool usage**                  | shipped `figma-design`            | mechanics, exact call patterns, limits to route around                                              |
+| **Basic professional practice** | shipped `figma-design`            | the _basic level_ of design-system-first + component-first                                          |
+| **Preference**                  | `figma-bridge-prefs` (user skill) | all concrete values (tokens, scale, type ramp, naming), and the _strict level_ of the two practices |
 
 The discriminator for **why the two practices may ship a default at all** (and a brand colour or
 spacing scale may not): **a preference ships a default only if it has a universally-defensible
-floor.** Design-system-first and component-first do — a *mild* "prefer systematic design" baseline
+floor.** Design-system-first and component-first do — a _mild_ "prefer systematic design" baseline
 no professional objects to. A brand colour or spacing scale has no universal default; any default
 there imposes one team's taste on all, so it ships nothing. This is the P1 rule, applied.
 
@@ -84,10 +84,10 @@ the **basic** level (the floor a non-customizing user gets); the `figma-bridge-p
 ships the **strict** level. Absent `figma-bridge-prefs`, the basic floor is the default; present,
 it **raises the level** and supplies concrete values.
 
-| | **Basic — shipped `figma-design`** (default when no prefs) | **Strict — `figma-bridge-prefs` template** (opt-in) |
-| --- | --- | --- |
-| **Design-system-first** | *Reactive:* if a design system exists, adopt & extend it; don't duplicate; use an existing token/style over a raw literal. Blank file → offer, don't impose. | *Proactive:* always establish tokens/styles first, even for a one-off; never place a raw value that could be a token; every value bound. |
-| **Component-first** | Reuse an existing component before creating; a meaningfully repeated element *can* become a component. | Any element used ≥2× **must** be a component; prefer variants over duplicates; never detach; name by role. |
+|                         | **Basic — shipped `figma-design`** (default when no prefs)                                                                                                   | **Strict — `figma-bridge-prefs` template** (opt-in)                                                                                      |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **Design-system-first** | _Reactive:_ if a design system exists, adopt & extend it; don't duplicate; use an existing token/style over a raw literal. Blank file → offer, don't impose. | _Proactive:_ always establish tokens/styles first, even for a one-off; never place a raw value that could be a token; every value bound. |
+| **Component-first**     | Reuse an existing component before creating; a meaningfully repeated element _can_ become a component.                                                       | Any element used ≥2× **must** be a component; prefer variants over duplicates; never detach; name by role.                               |
 
 These are **defaults**, not hard floors — a user may tune them in any direction (e.g. relax
 design-system-first for a throwaway mockup). The **hard, non-overridable** floor is separate
@@ -106,12 +106,10 @@ skill loads only the concern it consumes):
   concrete values (tokens, spacing scale, type ramp, naming). Consumed by `figma-design`.
 - `references/review-standards.md` — the house scale / token set / type ramp the reviewer checks
   against (§9). Consumed by `figma-reviewer`.
-- `references/feedback-prefs.md` — how this user wants tool friction recorded. Consumed by
-  `figma-feedback`.
 
-`figma-connection` has no section — it is pure mechanics/safety and takes no preference overlay;
+`figma-connection` (pure mechanics/safety) and `figma-feedback` take no preference overlay;
 `figma-setup` (the helper) authors the overlay rather than receiving it. So `figma-bridge-prefs`
-overlays the **three build-loop skills** — `figma-design`, `figma-reviewer`, `figma-feedback`.
+overlays the **two build-loop skills** — `figma-design` and `figma-reviewer`.
 
 ## 5. `figma-setup` — the shipped helper
 
@@ -131,7 +129,7 @@ is never written by any other path.
 
 `plugin/skills/figma-setup/references/figma-bridge-prefs-template/` — a **shipped, git-tracked
 template directory** mirroring the `figma-bridge-prefs` skill structure (§4): a thin skill file
-plus `references/house-style.md`, `review-standards.md`, `feedback-prefs.md`. The skill file
+plus `references/house-style.md` and `review-standards.md`. The skill file
 ships as **`SKILL.md.tmpl`** (not `SKILL.md`) and `figma-setup` renames it to `SKILL.md` on copy —
 so the template can **never** be globbed as a live shipped skill, whatever Claude Code's skill
 discovery does. It is a **supporting asset** — never auto-loaded as a skill; inert until
@@ -144,7 +142,7 @@ starter values (a spacing scale, a token set, a type ramp) — the user's editab
 
 **Safety contract on the template.**
 
-- **Additive / stricter-only.** The template may only *tighten* — add a scale, a stricter
+- **Additive / stricter-only.** The template may only _tighten_ — add a scale, a stricter
   standard. It must **never** contain a directive that relaxes verification, destructive-op
   safety, or accessibility. A floor-preserving header states this.
 - **Lint-gated in CI.** Valid frontmatter, size under a cap, and a check that it introduces no
@@ -160,13 +158,13 @@ not guaranteed. So the load path is explicit, not incidental:
 
 1. **Agent-def load (primary).** The `figma-designer` and `figma-reviewer` agent definitions load
    `figma-bridge-prefs` as a **first step**, and list the `Skill` invocation in their `tools:`
-   whitelist so they *can*.
-2. **Extension-point backstop.** Each shipped build-loop skill (`figma-design`, `figma-reviewer`,
-   `figma-feedback`) ends with: *"If a skill named `figma-bridge-prefs` is in your available
-   skills and not yet loaded, load it now; it raises the level of these defaults and supplies
-   concrete values."* The check matches the **exact** name `figma-bridge-prefs` (never a
-   substring — so it can never match the `figma-setup` helper). `figma-connection` carries no such
-   line.
+   whitelist so they _can_.
+2. **Extension-point backstop.** Each shipped build-loop skill that consumes an overlay
+   (`figma-design`, `figma-reviewer`) ends with: _"If a skill named `figma-bridge-prefs` is in
+   your available skills and not yet loaded, load it now; it raises the level of these defaults
+   and supplies concrete values."_ The check matches the **exact** name `figma-bridge-prefs`
+   (never a substring — so it can never match the `figma-setup` helper). `figma-connection` and
+   `figma-feedback` carry no such line.
 3. **Description co-fire (best-effort only).** `figma-bridge-prefs` may carry a description that
    co-fires on design/review intents, but nothing depends on it.
 
@@ -190,7 +188,7 @@ across all the user's Figma work, per-machine) or **project scope**
 (`<project>/.claude/skills/figma-bridge-prefs/`, git-committed, shareable with a team).
 
 - **Default: user scope**, offered up front. The helper is **context-aware**: inside a git repo
-  that already uses a design system, it *offers* project scope as well (a house style is a team
+  that already uses a design system, it _offers_ project scope as well (a house style is a team
   artifact best shared via a committed skill).
 - **Shadowing guard.** Claude Code resolves same-named skills **personal (user) > project**, so a
   user-scope `figma-bridge-prefs` **silently shadows** a project-scope one. Before writing a
@@ -209,7 +207,7 @@ owns the reconciliation:
   **offers a diff / selective merge**. A **pristine** seed (byte-identical to its template, never
   edited) may be refreshed safely; an **edited** file is **never clobbered**.
 - **Graceful degradation.** The reviewer treats an absent or unparseable `review-standards` as
-  *"no house standard"* — it falls back to **internal consistency** (does the file use its own
+  _"no house standard"_ — it falls back to **internal consistency** (does the file use its own
   detected tokens/scale/ramp consistently?) plus the hard floor (WCAG, verification), **never** a
   shipped concrete scale (there is none). It never errors on a malformed or missing preference file.
 
@@ -217,8 +215,8 @@ owns the reconciliation:
 
 There is **no auto-seed**. Instead:
 
-- The shipped build-loop skills' extension-point line adds: *"if no `figma-bridge-prefs` exists,
-  offer to run `figma-setup`."* — zero-config discovery, no filesystem side effects.
+- The shipped build-loop skills' extension-point line adds: _"if no `figma-bridge-prefs` exists,
+  offer to run `figma-setup`."_ — zero-config discovery, no filesystem side effects.
 - The README documents `figma-setup` as the way to set house style.
 
 ## 11. Relationship to other specs
@@ -239,8 +237,8 @@ There is **no auto-seed**. Instead:
   installed; absent it, the reviewer checks internal consistency plus the floor.
 
 **Fold-back split (privacy + the maintenance guard).** The `figma-feedback` skill-correction /
-fold-back loop is scoped to **shipped skills only**: a *mechanics* correction folds into the
-shipped skill; a *taste / preference / default* correction routes to `figma-bridge-prefs` via
+fold-back loop is scoped to **shipped skills only**: a _mechanics_ correction folds into the
+shipped skill; a _taste / preference / default_ correction routes to `figma-bridge-prefs` via
 `figma-setup` and **never enters a shipped skill** (this is the guard that keeps one user's
 opinions from accreting into the shipped skills over time). `figma-bridge-prefs` content is
 **never quoted** into `record_feedback` / `send_feedback` — the feedback rail must not carry a
