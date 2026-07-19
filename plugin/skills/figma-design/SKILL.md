@@ -12,8 +12,8 @@ version: 0.1.0
 # figma-design skill
 
 Purpose: teach **how to operate** the 47-tool surface well. This skill deliberately
-does not encode visual taste or a house style — *how the outcome looks is the user's
-to specify, per request*. Principles and mechanics age well; baked aesthetics don't.
+does not encode visual taste or a house style — _how the outcome looks is the user's
+to specify, per request_. Principles and mechanics age well; baked aesthetics don't.
 The skill covers the full surface: create, inspect, and edit (including the current
 selection). There is no create-only vs. edit split.
 
@@ -57,6 +57,12 @@ These apply once a design system is in play:
    or apply the style (`apply_style`). Hardcoded values that shadow tokens drift
    silently.
 
+> **Basic level only.** This skill ships only the **basic (reactive)** level of
+> design-system-first and component-first — adopt a system if one exists, reuse before
+> create, bind an existing token. A user's `figma-bridge-prefs` may raise these to a
+> strict/proactive level and supply concrete values (tokens, spacing scale, type ramp,
+> naming). See [[figma-bridge/docs/specs/customization|customization.md]] (P1).
+
 ---
 
 ## Operating rules
@@ -80,7 +86,7 @@ Rules for running the surface smoothly and cheaply:
 
 **Always keep the panel current.** `report_status` paints one live line onto the plugin's
 agent-status panel — your row is a progress dot, a label, and that line. Narrate what you're
-doing: never work silently, never let the line go stale. Update it *before* you start a step,
+doing: never work silently, never let the line go stale. Update it _before_ you start a step,
 not after. It is **fire-and-forget** — display-only, latest-wins, no round-trip, no return to
 act on — one cheap call, so always send it. It is **not feedback**: no Send, no human gate,
 nothing reaches GitHub; don't borrow `figma-feedback`'s record-don't-send etiquette.
@@ -99,10 +105,10 @@ nothing reaches GitHub; don't borrow `figma-feedback`'s record-don't-send etique
 - **Usually omit `label`** — `agentType` / "Agent" is fine. Set one friendly name only when
   `agentType` is unhelpful or absent, so the row isn't a generic "Agent".
 
-| Say this (intent) | Not this (mechanics) |
-|---|---|
-| `Drawing the header bar` | `create_node RECTANGLE 56:12` |
-| `Wiring the 4 stat cards` | `calling set_instance ×4` |
+| Say this (intent)          | Not this (mechanics)            |
+| -------------------------- | ------------------------------- |
+| `Drawing the header bar`   | `create_node RECTANGLE 56:12`   |
+| `Wiring the 4 stat cards`  | `calling set_instance ×4`       |
 | `Scanning existing tokens` | `get_variables then get_styles` |
 
 ```
@@ -121,13 +127,13 @@ for both agents and humans. This is discipline, not tooling: the tools accept `n
 every create, and nothing enforces it server-side. Never leave the Figma defaults
 (`Frame 12`, `Rectangle 3`).
 
-- **Semantic layer names** — name a node for what it *is* or *does*, in descriptive
-  PascalCase / Title-Case (`CheckoutButton`, `Search Bar`, `StatCard`).
-- **`/` taxonomy for components** — a `COMPONENT` / `COMPONENT_SET` carries a slash path
-  that places it in the system: `Button/Primary`, `Icon/Chevron`, `Card/Product`. The
-  taxonomy is how the component browser groups assets, so it is mandatory on every
-  master. Variant children are named by their properties (`Size=Lg, State=Hover`) — that
-  `=` form is the variant convention, not a taxonomy path.
+- **Meaningful, non-default names (floor).** Name every node for what it _is_ or _does_;
+  never leave a Figma default (`Frame 12`, `Rectangle 3`). The _concrete_ convention —
+  descriptive PascalCase / Title-Case and the mandatory component `/` taxonomy
+  (`Button/Primary`) — is a **user preference**, relocated to `figma-bridge-prefs`
+  `references/house-style.md`; this skill ships only the floor (a meaningful,
+  self-describing name on every node). See
+  [[figma-bridge/docs/specs/customization|customization.md]] §11 (P1).
 - **Semantic names for structural text** — a text node that plays a structural role (a
   heading, a label, a field caption) earns a role name (`SectionTitle`, `PriceLabel`),
   not its literal content. A text node whose name simply mirrors its own characters is
@@ -138,7 +144,7 @@ every create, and nothing enforces it server-side. Never leave the Figma default
 
 ## Context — the hidden note
 
-`context` is a round-trippable markdown note stored on a node: the non-derivable *why* a
+`context` is a round-trippable markdown note stored on a node: the non-derivable _why_ a
 structural read can't give — purpose, role, status, constraints, links. Write it with
 `create_node` / `update_node` (the `context` field); read it back in full on `get_node`
 / `get_nodes`, or as a compact `contextSummary` (the frontmatter slice) on `inspect` /
@@ -153,33 +159,37 @@ role: button/primary
 status: stable
 updated: agent · 2026-07-08
 ---
+
 ## Constraints
+
 Token-bound (do not restyle) · text localized · width fluid
 
 ## Links
+
 linear:ENG-1234 · pr:#456
 
 ## Notes
+
 Visually dominant by design; only one primary per screen.
 ```
 
-- **Frontmatter** — `purpose` (required by convention: what it is and what it's *for*),
+- **Frontmatter** — `purpose` (required by convention: what it is and what it's _for_),
   `role` (design-system label like `button/primary`), `status` (`draft` | `stable` |
   `deprecated`, default `stable`), `updated` (provenance — `agent · <date>`). All but
   `purpose` are optional.
 - **Body** — the three fixed sections `## Constraints`, `## Links`, `## Notes`, in that
   order. Skip any you have nothing for; don't invent new headings.
-- **Keep it to one screen of *why*** — a ~600-character soft budget. Past that you're
+- **Keep it to one screen of _why_** — a ~600-character soft budget. Past that you're
   writing docs: link out via `## Links` instead. The hard cap is 2 KB; a write over it
   is rejected with a clean size error.
 
 Two boundaries to respect:
 
-- **Root-only read-back (v1).** `context` can be *written* on any node — including
-  `create_tree` descendants — but it is only *read back* when that node is the read /
+- **Root-only read-back (v1).** `context` can be _written_ on any node — including
+  `create_tree` descendants — but it is only _read back_ when that node is the read /
   export **root**. A deep `get_node` returns `context` on the root, not on descendants.
   Do not rely on a deep read or a `create_tree` round-trip to preserve descendant
-  context; write it, then read each node *as its own root* to confirm.
+  context; write it, then read each node _as its own root_ to confirm.
 - **Over-cap writes are read-only.** The raw `set_plugin_data(figmabridge/context, …)`
   escape hatch is unopinionated and can store a value above the 2 KB cap. Such a value
   reads back faithfully but is **read-only** — a full-spec write-back through
@@ -249,3 +259,11 @@ are in `references/grammar.md`. Load it when writing or reading any atom value.
 
 When a limit blocks a task, record it via the `figma-feedback` skill (proposals or
 bugs, as appropriate) and continue with the best available workaround.
+
+## User preferences
+
+If a skill named **`figma-bridge-prefs`** is in your available skills and not yet loaded,
+load it now and read its `references/house-style.md`. It raises the level of the defaults
+above and supplies concrete values; it may only make you stricter — it never relaxes the
+verification discipline. Match the **exact** name `figma-bridge-prefs` (not a prefix). If
+none is present, you may offer to run `figma-setup` to create one.
