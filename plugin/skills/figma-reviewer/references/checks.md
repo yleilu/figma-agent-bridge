@@ -24,6 +24,7 @@ A fill color is **unhardcoded** when `inspect` shows `var(TokenName)#RRGGBB` —
 wrapper) is a candidate for a token check.
 
 To decide whether to flag it:
+
 1. Call `get_variables` and scan the local color collection for the same hex value.
 2. If a match is found → `warning`: the node uses a hardcoded value where a token
    exists and should be bound.
@@ -37,6 +38,7 @@ A text node is **on-style** when `inspect` shows `style(Style/Name)font(…)`. A
 `font(…)` with no `style(…)` wrapper is a candidate for a style check.
 
 To decide:
+
 1. Call `get_styles` (filter `type: TEXT`).
 2. Compare the node's `font(Family, Weight, Size){lh=…}` against each style's font
    atom. If a match exists (same family + weight + size, lh within 2 px) → `warning`.
@@ -45,6 +47,7 @@ To decide:
 ### Component detection
 
 Check for duplicate subtrees:
+
 - Two or more sibling frames/groups with the same `name` prefix and same child count
   and same layout mode → `warning`: consider making one a component and the others instances.
 - A node of `type: FRAME` or `GROUP` whose structure exactly mirrors a known component
@@ -60,16 +63,21 @@ Preferred: use the project's spacing variable collection if one exists (look for
 collection named `Spacing`, `Space`, or `Scale` in `get_variables`). Extract the
 values and treat them as the canonical scale.
 
-Fallback (no explicit scale found): flag spacing values that are **not multiples of
-4**. This is the de-facto Figma community convention and covers 4, 8, 12, 16, 20, 24,
-32, 40, 48, 64, 80, 96, …
+The concrete house spacing scale is a **user preference**: when a `figma-bridge-prefs`
+skill is installed, use its `references/review-standards.md` scale. Absent it — or if
+`figma-bridge-prefs` is present but its `review-standards` is missing or unparseable — do
+**not** assert a shipped scale and never error: fall back to **internal consistency** —
+flag spacing that is inconsistent with the file's _own_ prevailing step (the value used
+most across siblings). See [[figma-bridge/docs/specs/customization|customization.md]] §11 (P1).
 
 Severity:
+
 - Off-scale by 1–3 px (rounding slip) → `nit`
 - Off-scale by ≥ 4 px (likely deliberate non-scale value) → `warning`
 - Off-scale in a prominent spacing (card padding, section gap) → `warning`
 
 What to check:
+
 - `layout.gap` on auto-layout frames
 - `layout.pad` (each of top/right/bottom/left) on auto-layout frames
 - `size` (width/height) on spacing/divider nodes
@@ -77,6 +85,7 @@ What to check:
 ### Corner radius
 
 Severity thresholds:
+
 - Mixed radii across sibling elements of the same semantic type (e.g. cards)
   differing by > 2 px → `warning`
 - A mix of per-corner (`[TL,TR,BR,BL]` tuple) and uniform (`N`) on the same element
@@ -85,17 +94,22 @@ Severity thresholds:
 ### Type scale
 
 Extract all distinct font sizes from the frame (from `inspect`). Flag if:
+
 - Any size is not a member of the project's type-scale variable (if one exists).
 - More than 4 distinct sizes in one frame without a clear hierarchy → `warning`
 - A size differs from the nearest scale step by 1–2 px → `nit` (likely a rounding error)
 
-Common scales for reference (not authoritative — prefer the project's own):
-`10, 11, 12, 13, 14, 16, 18, 20, 24, 28, 32, 36, 48, 60, 72`
+The concrete house type ramp is a **user preference**: when a `figma-bridge-prefs` skill
+is installed, use its `references/review-standards.md` ramp as the target. Absent it (or
+if `review-standards` is missing / unparseable), do **not** assert a shipped list — check
+the frame's **own prevailing ramp** for consistency (flag sizes that don't sit on the ramp
+the file itself uses most). See [[figma-bridge/docs/specs/customization|customization.md]] §11.
 
 ### Alignment
 
 Flag `layoutPositioning: ABSOLUTE` on children of an auto-layout frame that are **not**
 intentional overlays:
+
 - A badge, tooltip, or floating action button overlapping another element → likely intentional.
 - A regular content block sitting next to other flow children → `warning`: should be a
   flow child, not absolutely positioned.
@@ -134,29 +148,30 @@ before computing luminance.
 
 ### WCAG AA thresholds
 
-| Text type | Minimum ratio | Severity if failing |
-|---|---|---|
-| Normal text (< 18 pt regular; < 14 pt bold) | 4.5 : 1 | `blocker` |
-| Large text (≥ 18 pt regular; ≥ 14 pt bold) | 3.0 : 1 | `blocker` |
-| UI components and graphical objects | 3.0 : 1 | `warning` |
+| Text type                                   | Minimum ratio | Severity if failing |
+| ------------------------------------------- | ------------- | ------------------- |
+| Normal text (< 18 pt regular; < 14 pt bold) | 4.5 : 1       | `blocker`           |
+| Large text (≥ 18 pt regular; ≥ 14 pt bold)  | 3.0 : 1       | `blocker`           |
+| UI components and graphical objects         | 3.0 : 1       | `warning`           |
 
 WCAG AAA thresholds (for reference — not required, flag as `nit` if near-miss):
+
 - Normal text: 7.0 : 1
 - Large text: 4.5 : 1
 
 ### Text size thresholds
 
-| Size | Severity |
-|---|---|
-| < 9 px | `warning` — illegible at standard density |
-| 9–10 px | `nit` — very small; may be intentional (captions) |
-| 11–12 px | acceptable minimum for body |
+| Size     | Severity                                          |
+| -------- | ------------------------------------------------- |
+| < 9 px   | `warning` — illegible at standard density         |
+| 9–10 px  | `nit` — very small; may be intentional (captions) |
+| 11–12 px | acceptable minimum for body                       |
 
 ### Touch-target thresholds
 
-| Dimension | Threshold | Severity |
-|---|---|---|
-| Interactive element bounding box | < 44 × 44 pt | `warning` |
+| Dimension                                | Threshold    | Severity  |
+| ---------------------------------------- | ------------ | --------- |
+| Interactive element bounding box         | < 44 × 44 pt | `warning` |
 | Interactive element (minimum acceptable) | < 24 × 24 pt | `blocker` |
 
 "Interactive" in Figma context: nodes named with verb patterns (`Button`, `Btn`, `CTA`,
@@ -165,6 +180,7 @@ WCAG AAA thresholds (for reference — not required, flag as `nit` if near-miss)
 ### Colour-alone signal
 
 Flag when:
+
 - A status indicator (e.g. `type: ELLIPSE` or a solid `FRAME`) uses only hue to convey
   state (success/warning/error) with no accompanying text label, icon, or shape change.
 - A chart or data visualisation uses only colour to distinguish series.
@@ -192,6 +208,7 @@ all with default constraints in a frame that appears to be a responsive layout c
 ### Redundant nesting
 
 A node qualifies as redundant if **all** of:
+
 - `type: FRAME` or `type: GROUP`
 - Exactly one child
 - `fills: []`, `strokes: []`, `effects: []` (no decoration)
@@ -202,11 +219,11 @@ Severity: `nit`.
 
 ### Orphan / hidden nodes
 
-| Case | Severity |
-|---|---|
-| `visible: false` node not part of a component variant set | `nit` |
-| Node with `size: [0, 0]` (zero-area) | `nit` |
-| Node positioned entirely outside the frame's clipping bounds | `nit` |
+| Case                                                         | Severity |
+| ------------------------------------------------------------ | -------- |
+| `visible: false` node not part of a component variant set    | `nit`    |
+| Node with `size: [0, 0]` (zero-area)                         | `nit`    |
+| Node positioned entirely outside the frame's clipping bounds | `nit`    |
 
 ---
 
@@ -231,6 +248,7 @@ No fixed thresholds — this dimension is relative to the stated request. Checkl
    - Boilerplate from a template that wasn't part of the request
 
 Severity:
+
 - Missing a named section or feature → `blocker`
 - Count mismatch (2 cards instead of 3) → `warning`
 - Placeholder content in a real content slot → `warning`
@@ -258,19 +276,22 @@ own content, so a text node is flagged **only when its name is blank / whitespac
 never for matching its `characters` or the default pattern.
 
 Severity:
+
 - Root-level frames / page sections → `warning` (agents and developers target them by name)
 - Component masters and variants → `warning`
 - Blank name on any targetable node → `warning`
 - Leaf content nodes inside a component → `nit`
 - Purely decorative or structural helpers → `nit`
 
-### Component `/` taxonomy
+### Component `/` taxonomy _(house-preference, not a shipped floor)_
 
-A `COMPONENT` or `COMPONENT_SET` whose `name` contains no `/` is missing its
-design-system taxonomy path (`Button/Primary`, `Icon/Chevron`). Severity: `warning`.
-
-**Exempt:** variant children whose names contain `=` (`Size=Lg, State=Hover`) — that is
-the variant-property form, not a taxonomy miss.
+Requiring a `/` taxonomy path on every `COMPONENT` / `COMPONENT_SET` (`Button/Primary`,
+`Icon/Chevron`) is a **stricter naming standard** that applies **only when a
+`figma-bridge-prefs` `review-standards` opts into it**. When opted in, a component whose
+`name` contains no `/` is a `warning`; **variant children** whose names contain `=`
+(`Size=Lg, State=Hover`) are exempt (variant-property form, not a taxonomy miss). Absent
+that opt-in, do **not** flag a missing `/` taxonomy — only the blank / default-name check
+is the shipped floor.
 
 ### Context well-formedness
 
@@ -278,11 +299,11 @@ The full `context` value is on `get_node`; the `contextSummary` slice is on `ins
 `search` / `get_components`. A malformed `context` yields **no** `contextSummary`, so the
 note is silently invisible at a glance — worth flagging.
 
-| Case | Severity |
-|---|---|
-| Frontmatter fence opened (`---`) but never closed | `warning` |
-| `context` exceeds 2 KB (`CONTEXT_MAX_BYTES`; only via the `set_plugin_data` escape hatch) | `warning` |
-| Missing `purpose:` in the frontmatter | `nit` (advisory — convention, not server-enforced) |
+| Case                                                                                      | Severity                                           |
+| ----------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| Frontmatter fence opened (`---`) but never closed                                         | `warning`                                          |
+| `context` exceeds 2 KB (`CONTEXT_MAX_BYTES`; only via the `set_plugin_data` escape hatch) | `warning`                                          |
+| Missing `purpose:` in the frontmatter                                                     | `nit` (advisory — convention, not server-enforced) |
 
 ### Name ↔ context.role agreement (advisory)
 
@@ -294,11 +315,11 @@ Always `nit` / advisory — never a hard fail, since either field could be the s
 
 ## Quick-reference severity table
 
-| Dimension | Blocker | Warning | Nit |
-|---|---|---|---|
-| DS adherence | — | Hardcoded color/text with matching token/style; detached instance | Near-match token candidate |
-| Consistency | — | Off-scale spacing ≥ 4 px; > 4 type sizes; misaligned block | Off-scale ≤ 3 px; radius rounding; type size ±2 px |
-| Accessibility | WCAG AA text contrast fail; touch target < 24×24 | WCAG AA UI/graphic fail; touch target < 44×44; colour-alone signal; text < 9 px | WCAG AAA near-miss; text 9–10 px |
-| Layout hygiene | — | Pile-up at [0,0] | Redundant nesting; hidden nodes; default constraints |
-| Fidelity | Missing named section or feature | Count mismatch; placeholder content | Extra elements not asked for |
-| Naming & context | — | Blank/default-named frames/components; component without `/` taxonomy; unclosed/over-cap context | Default-named leaves; missing `purpose`; name↔role contradiction |
+| Dimension        | Blocker                                          | Warning                                                                                                               | Nit                                                              |
+| ---------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| DS adherence     | —                                                | Hardcoded color/text with matching token/style; detached instance                                                     | Near-match token candidate                                       |
+| Consistency      | —                                                | Off-scale spacing ≥ 4 px; > 4 type sizes; misaligned block                                                            | Off-scale ≤ 3 px; radius rounding; type size ±2 px               |
+| Accessibility    | WCAG AA text contrast fail; touch target < 24×24 | WCAG AA UI/graphic fail; touch target < 44×44; colour-alone signal; text < 9 px                                       | WCAG AAA near-miss; text 9–10 px                                 |
+| Layout hygiene   | —                                                | Pile-up at [0,0]                                                                                                      | Redundant nesting; hidden nodes; default constraints             |
+| Fidelity         | Missing named section or feature                 | Count mismatch; placeholder content                                                                                   | Extra elements not asked for                                     |
+| Naming & context | —                                                | Blank/default-named frames/components; component without `/` taxonomy _(house-preference)_; unclosed/over-cap context | Default-named leaves; missing `purpose`; name↔role contradiction |
