@@ -222,7 +222,7 @@ if (process.argv.includes('--relay')) {
     server,
     'record_feedback',
     recordFeedbackParamsSchema,
-    p => handleRecordFeedback(p, client),
+    p => handleRecordFeedback(p),
   )
 
   registerSessionTool(
