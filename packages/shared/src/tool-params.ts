@@ -1561,3 +1561,36 @@ export const recordFeedbackParamsSchema = z.object({
       'The tool/command involved, if this is tool-specific (e.g. "resize_node").',
     ),
 })
+
+export const listFeedbackParamsSchema = z.object({
+  ...listPaginationParamsSchema.shape,
+})
+
+export const sendFeedbackParamsSchema = z.object({
+  send: z
+    .array(z.string())
+    .describe('Backlog item paths to file to GitHub.'),
+  discard: z
+    .array(z.string())
+    .describe('Backlog item paths to delete unsent.'),
+  add: z
+    .object({
+      category: z.enum(FEEDBACK_CATEGORIES),
+      title: z.string(),
+      description: z.string(),
+    })
+    .optional()
+    .describe(
+      "A new human-authored item (from the selector's free-text) to record and file.",
+    ),
+  identity: z
+    .enum(['anonymous', 'github'])
+    .optional()
+    .describe(
+      'Override the remembered identity for this send.',
+    ),
+})
+
+export const githubAuthStartParamsSchema = z.object({})
+
+export const githubAuthPollParamsSchema = z.object({})

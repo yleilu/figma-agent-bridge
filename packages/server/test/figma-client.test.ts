@@ -152,42 +152,6 @@ describe('figma-client', () => {
     client.disconnect()
   })
 
-  it('notify broadcasts a fire-and-forget frame with no reply expected', async () => {
-    const client = createFigmaClient(WS_URL)
-    await client.joinChannel('notify-ch', 'fk-notify')
-
-    const plugin = await connectRaw()
-    const nextMessage = createMessageQueue(plugin)
-    plugin.send(
-      JSON.stringify({
-        type: 'join',
-        channel: 'notify-ch',
-      }),
-    )
-    // Wait for system confirmation.
-    await nextMessage()
-
-    client.notify('feedback-added', {
-      item: { path: 'bugs/x.md', title: 'x' },
-    })
-
-    const received =
-      (await nextMessage()) as BroadcastMessage
-    expect(received.type).toBe('broadcast')
-    expect(received.message.command).toBe('feedback-added')
-    expect(
-      (
-        received.message.params as {
-          item: { path: string }
-        }
-      ).item.path,
-    ).toBe('bugs/x.md')
-    expect(received.message.result).toBeUndefined()
-
-    await closeWs(plugin)
-    client.disconnect()
-  })
-
   it('onRequest handles an inbound command and replies with a correlated result', async () => {
     const CHANNEL = 'req-ch'
     const client = createFigmaClient(WS_URL)
@@ -202,7 +166,7 @@ describe('figma-client', () => {
     await pluginQueue()
 
     client.onRequest(
-      'feedback-sync',
+      'ping-req',
       async (params: Record<string, unknown>) => ({
         echoed: params.marker,
       }),
@@ -214,7 +178,7 @@ describe('figma-client', () => {
         channel: CHANNEL,
         message: {
           meta: { requestId: 'req-1' },
-          command: 'feedback-sync',
+          command: 'ping-req',
           params: { marker: 7 },
         },
       }),
@@ -243,7 +207,7 @@ describe('figma-client', () => {
     )
     await pluginQueue()
 
-    client.onRequest('send-feedback', async () => {
+    client.onRequest('ping-err', async () => {
       throw new Error('boom')
     })
 
@@ -253,7 +217,7 @@ describe('figma-client', () => {
         channel: CHANNEL,
         message: {
           meta: { requestId: 'req-2' },
-          command: 'send-feedback',
+          command: 'ping-err',
           params: {},
         },
       }),

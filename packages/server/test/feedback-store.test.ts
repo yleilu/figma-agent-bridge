@@ -19,6 +19,7 @@ import {
   listPending,
   markSent,
   markFailed,
+  discard,
 } from '@figma-agent-bridge/server/feedback-store'
 
 let dir: string
@@ -103,10 +104,12 @@ describe('read / list / mark', () => {
       '0.0.1',
     )
     await markSent(a.path, 'https://example.com/c/1')
-    const pending = await listPending(10)
-    expect(pending.map(i => i.title)).toEqual(['second'])
-    const capped = await listPending(1)
-    expect(capped).toHaveLength(1)
+    const pending = await listPending({ limit: 10 })
+    expect(pending.items.map(i => i.title)).toEqual([
+      'second',
+    ])
+    const capped = await listPending({ limit: 1 })
+    expect(capped.items).toHaveLength(1)
   })
   it('markSent flips status and records the comment url', async () => {
     const item = await recordFeedback(
@@ -135,5 +138,61 @@ describe('read / list / mark', () => {
     expect(failed.status).toBe('failed')
     const reread = await readItem(item.path)
     expect(reread.status).toBe('failed')
+  })
+})
+
+describe('listPending pagination', () => {
+  it('pages pending items newest-first with an opaque cursor', async () => {
+    for (const t of ['a', 'b', 'c']) {
+      await recordFeedback(
+        { category: 'bugs', title: t, description: 'd' },
+        '0.0.1',
+      )
+    }
+    const p1 = await listPending({ limit: 2 })
+    expect(p1.items).toHaveLength(2)
+    expect(p1.truncated).toBe(true)
+    expect(typeof p1.cursor).toBe('string')
+
+    const p2 = await listPending({
+      limit: 2,
+      cursor: p1.cursor,
+    })
+    expect(p2.items).toHaveLength(1)
+    expect(p2.truncated).toBe(false)
+    expect(p2.cursor).toBeUndefined()
+
+    const seen = [...p1.items, ...p2.items].map(
+      i => i.title,
+    )
+    expect(new Set(seen).size).toBe(3)
+  })
+
+  it('excludes sent items', async () => {
+    const it0 = await recordFeedback(
+      { category: 'bugs', title: 'x', description: 'd' },
+      '0.0.1',
+    )
+    await markSent(it0.path, 'https://gh/c/1')
+    const page = await listPending({ limit: 10 })
+    expect(page.items).toHaveLength(0)
+  })
+})
+
+describe('discard', () => {
+  it('deletes the item file', async () => {
+    const it0 = await recordFeedback(
+      { category: 'bugs', title: 'gone', description: 'd' },
+      '0.0.1',
+    )
+    await discard(it0.path)
+    const page = await listPending({ limit: 10 })
+    expect(page.items).toHaveLength(0)
+  })
+
+  it('throws if the file is missing', async () => {
+    await expect(
+      discard('bugs/does-not-exist.md'),
+    ).rejects.toThrow()
   })
 })

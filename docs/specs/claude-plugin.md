@@ -514,12 +514,13 @@ The feedback **mechanism** is specced authoritatively in
 [[figma-bridge/docs/specs/feedback-system|feedback-system.md]]: neutral **meta-tools**
 (`record_feedback` to capture, plus `list_feedback` / `send_feedback` / `github_auth_start` /
 `github_auth_poll` to review and file — their own `feedback` group), a
-**one-Markdown-file-per-item** store (**category = directory = one GitHub issue**), and an
+**one-Markdown-file-per-item** store (**category = directory = one GitHub parent issue**), and an
 **agent-driven send flow** — at the end of a unit of work the top-level agent reviews the backlog
-with the human in a selector and files the chosen items as comments, either **anonymously** via a
-**CloudFlare Worker** (holding a shared bot token) or **as the human's own GitHub account** (a
-token they authorize once, in-browser). The human gate is the selector; nothing leaves the machine
-until the human picks it.
+with the human in a selector and files each chosen item as a **sub-issue** under its category
+parent, either **anonymously** via a **CloudFlare Worker** (holding a shared bot token) or **as
+the human's own GitHub account** (a token they authorize once, in-browser; self-authored filing is
+collaborator-only, else it falls back to anonymous). The human gate is the selector; nothing
+leaves the machine until the human picks it.
 
 This milestone **packages** that mechanism and adds the plugin-layer pieces:
 

@@ -2,6 +2,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  unlink,
   writeFile,
 } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -124,11 +125,30 @@ export const readItem = async (
   return parse(relPath, raw)
 }
 
-export const listPending = async (
-  limit: number,
-): Promise<FeedbackItem[]> => {
+export interface ListPendingResult {
+  items: FeedbackItem[]
+  truncated: boolean
+  cursor?: string
+}
+
+const sortKey = (i: FeedbackItem): string =>
+  `${i.created} ${i.path}`
+
+const encodeCursor = (key: string): string =>
+  Buffer.from(key).toString('base64url')
+
+const decodeCursor = (c: string): string =>
+  Buffer.from(c, 'base64url').toString()
+
+export const listPending = async ({
+  limit = 100,
+  cursor,
+}: {
+  limit?: number
+  cursor?: string
+} = {}): Promise<ListPendingResult> => {
   const root = resolveFeedbackDir()
-  const items: FeedbackItem[] = []
+  const all: FeedbackItem[] = []
   for (const category of FEEDBACK_CATEGORIES) {
     let files: string[]
     try {
@@ -146,12 +166,35 @@ export const listPending = async (
         await readFile(join(root, relPath), 'utf8'),
       )
       if (item.status === 'pending') {
-        items.push(item)
+        all.push(item)
       }
     }
   }
-  items.sort((a, b) => b.created.localeCompare(a.created))
-  return items.slice(0, limit)
+  // newest-first total order, broken by path
+  all.sort((a, b) => sortKey(b).localeCompare(sortKey(a)))
+  const after = cursor ? decodeCursor(cursor) : null
+  const rest = after
+    ? all.filter(i => sortKey(i).localeCompare(after) < 0)
+    : all
+  const items = rest.slice(0, limit)
+  const truncated = rest.length > limit
+  return {
+    items,
+    truncated,
+    ...(truncated && items.length
+      ? {
+          cursor: encodeCursor(
+            sortKey(items[items.length - 1]),
+          ),
+        }
+      : {}),
+  }
+}
+
+export const discard = async (
+  relPath: string,
+): Promise<void> => {
+  await unlink(join(resolveFeedbackDir(), relPath))
 }
 
 const rewrite = async (
