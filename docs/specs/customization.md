@@ -129,10 +129,15 @@ is never written by any other path.
 
 ## 6. The template — shipped, inert, git-tracked
 
-`plugin/skills/figma-setup/references/figma-bridge-prefs.template.md` — a **supporting file**
-(shipped and git-tracked, but **never auto-loaded** as a skill; it is inert until `figma-setup`
-copies it). This is how good defaults ship without violating P1: taste ships only as an opt-in
-template the user consciously adopts and then owns, never as active shipped-skill guidance.
+`plugin/skills/figma-setup/references/figma-bridge-prefs-template/` — a **shipped, git-tracked
+template directory** mirroring the `figma-bridge-prefs` skill structure (§4): a thin skill file
+plus `references/house-style.md`, `review-standards.md`, `feedback-prefs.md`. The skill file
+ships as **`SKILL.md.tmpl`** (not `SKILL.md`) and `figma-setup` renames it to `SKILL.md` on copy —
+so the template can **never** be globbed as a live shipped skill, whatever Claude Code's skill
+discovery does. It is a **supporting asset** — never auto-loaded as a skill; inert until
+`figma-setup` copies it wholesale into the user's skills directory. This is how good defaults ship without violating P1: taste ships only as
+an opt-in template the user consciously adopts and then owns, never as active shipped-skill
+guidance. The `template_version` (§9) lives in the template `SKILL.md` frontmatter.
 
 **Content.** The **strict level** of design-system-first / component-first (§3) plus concrete
 starter values (a spacing scale, a token set, a type ramp) — the user's editable starting point.
