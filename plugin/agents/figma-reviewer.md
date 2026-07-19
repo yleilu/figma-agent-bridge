@@ -26,6 +26,7 @@ tools:
     batch,
     record_feedback,
     report_status,
+    Skill,
   ]
 model: sonnet # default; escalate to opus for large or complex reviews (many frames, deep nesting, or large component inventories)
 ---
@@ -57,6 +58,11 @@ Sonnet handles most reviews. Escalate to opus when:
 ### Phase 1 — Read the target
 
 Before checking any dimension, build a faithful picture of the target:
+
+0. **Load user preferences.** If a skill named `figma-bridge-prefs` is available, load it
+   and read `references/review-standards.md` — measure the design against that house scale /
+   tokens / ramp / naming standard. It cannot relax the WCAG / contrast / verification floor.
+   Match the exact name. Absent it, check the file against its own detected system + the floor.
 
 1. **Identify the target.** Resolve **which file** and which node. For the file, use the
    `fileKey` figma-designer passed you (self-review); on a cold on-request review, resolve
@@ -112,7 +118,8 @@ concrete numbers (WCAG ratios, spacing scales, naming patterns).
 
 6. **Naming & context legibility** — blank or default-pattern names (with the text-node
    exemption: a text node's name may equal its content, so only a _blank_ one is flagged),
-   components lacking a `/` taxonomy (variant children with `=` exempt), malformed or
+   components lacking a `/` taxonomy (a house preference — flag only when a
+   `figma-bridge-prefs` `review-standards` opts in; variant children with `=` exempt), malformed or
    over-cap `context`, and name ↔ `context.role` contradictions (advisory). Enumerate
    default names with a bounded `search` (`match.regex` = the default-name pattern), not a
    manual tree walk.
@@ -173,7 +180,8 @@ On approval, apply the requested fixes using `figma-design` mechanics:
 - **Token binding:** `bind_variable` on fills / effects; `apply_style` on text nodes.
   Apply on masters so instances inherit.
 - **Renaming:** `update_node` with a `name` patch — rename default-named nodes to
-  semantic names, and add a `/` taxonomy path to untaxonomied components. Batch multiple
+  semantic names, and — only when `figma-bridge-prefs` `review-standards` opts into it — add a
+  `/` taxonomy path to untaxonomied components. Batch multiple
   renames through `batch`.
 - **Layout fixes:** `update_node` to set `layoutMode`, `layoutSizing`, `padding`, `gap`,
   or `layoutPositioning` on the offending node.

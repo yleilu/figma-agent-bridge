@@ -28,8 +28,11 @@ Something is broken or wrong. File under **`category: 'bugs'`**.
 - **Confusing / unexpected error** — an error whose message doesn't tell you what to fix.
 - **Contradicts the spec** — the tool description promises behaviour X; you got Y.
 - **Skill-misleading** — _"I thought I could do X but I can't"_ and the **skill** set
-  that expectation. File it as a bug (the skill is wrong), and correct the skill guidance
-  as part of this session's work (the fix folds back like an accepted shortcut). Quote the
+  that expectation. File it as a bug (the skill is wrong). **If the miss is mechanics**,
+  correct the skill guidance as part of this session's work (the fix folds back like an
+  accepted shortcut). **If the miss is a taste / preference** (a house-style default, a
+  threshold, a naming choice), capture it in the user's `figma-bridge-prefs` via
+  `figma-setup` instead — never fold a preference into a shipped skill. Quote the
   misleading line.
 
 **Body format:**
@@ -98,7 +101,11 @@ record_feedback({
 ### Shortcut shape
 
 A shortcut is a high-value proposal: a shorter path to the same outcome. **Accepted
-shortcuts fold back into the `figma-design` skill's recipes.** Use this body format:
+_mechanics_ shortcuts fold back into the `figma-design` skill's recipes. A
+_taste / preference_ correction (a house-style default, a threshold, a naming choice)
+instead routes to the user's `figma-bridge-prefs` via `figma-setup` — it never folds into
+a shipped skill, and `figma-bridge-prefs` content never rides the feedback rail off-box.**
+See [[figma-bridge/docs/specs/customization|customization.md]] §11. Use this body format:
 
 ```
 **Long path:** A → B → C → outcome

@@ -56,6 +56,11 @@ Once installed, the `figma-agent-bridge` MCP server is available in every Claude
 Code session. Ask Claude to read, create, or edit Figma frames — it routes calls
 through the relay to the Figma plugin running in your open document.
 
+To set a personal or team house style (spacing scale, tokens, type ramp, naming, review
+standards) that the designer and reviewer follow, run the **`figma-setup`** skill — it
+creates a `figma-bridge-prefs` skill you own and can edit. Without it, you get the basic
+professional defaults.
+
 ## Architecture
 
 ```

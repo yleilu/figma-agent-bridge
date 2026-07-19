@@ -43,6 +43,7 @@ tools:
     export,
     record_feedback,
     report_status,
+    Skill,
   ]
 model: sonnet # default; the body instructs escalation to opus for large/complex compositions
 ---
@@ -52,6 +53,12 @@ model: sonnet # default; the body instructs escalation to opus for large/complex
 A subagent that consumes the **figma-design skill** for build mechanics. Use the
 figma-design skill throughout all build and edit work — it carries the design-system
 guard, principles, operating rules, workflow spine, and verification discipline.
+
+**Load user preferences first.** Before planning, if a skill named `figma-bridge-prefs`
+is in your available skills, load it and read `references/house-style.md` — it raises the
+design-system-first / component-first level and supplies the concrete tokens, scale, type
+ramp, and naming to build with. Match the exact name. If none is present, proceed on the
+figma-design basic defaults (and you may offer to run `figma-setup`).
 
 ---
 
@@ -130,8 +137,8 @@ Run the **figma-reviewer skill** as a self-check before calling the build done.
 Pass the session `fileKey` (and the just-built target's node id) into the invocation —
 alongside the already-established design-system context — so the reviewer targets the
 right file and does not re-resolve or mis-target.
-The figma-reviewer skill checks five dimensions: design-system adherence, consistency,
-accessibility, layout and structure hygiene, and fidelity to intent.
+The figma-reviewer skill checks six dimensions: design-system adherence, consistency,
+accessibility, layout and structure hygiene, fidelity to intent, and naming & context.
 
 Emit the standardized report:
 

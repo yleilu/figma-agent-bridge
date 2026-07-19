@@ -14,6 +14,7 @@ Reviews a **design artifact** against six quality dimensions and emits a standar
 report. Distinct from `figma-feedback`, which reviews the **tool** (bugs/proposals).
 
 Consumed by:
+
 - `figma-reviewer` agent — a dedicated review pass on an existing design
 - `figma-designer` — self-review gate before a build is called done
 
@@ -63,13 +64,14 @@ successful review. Fire-and-forget — it's the progress line, not the finding r
 
 ## The six dimensions
 
-### 1. Design-system adherence *(context-aware)*
+### 1. Design-system adherence _(context-aware)_
 
 **Only check when the file has a design system** (the §6.1 guard: local variables /
 shared styles / components-in-use). If none is found, skip this dimension — the
 dimension does not apply and filing findings against it would be wrong.
 
 When a design system exists, check for:
+
 - **Hardcoded color that should be a token** — a `fills` value that is a plain hex
   but a matching `var(…)` token exists in the local variable collection.
 - **Text off a style** — `font(…)` without a `style(…)` wrapper where a matching
@@ -84,14 +86,18 @@ When a design system exists, check for:
 ### 2. Consistency
 
 Check regardless of whether a design system is present:
-- **Off-scale spacing / padding** — layout `gap` or `pad` values that don't sit on
-  the project's spacing scale (see `references/checks.md`). If no explicit scale is
-  discoverable, flag values that are not multiples of 4.
+
+- **Off-scale spacing / padding** — layout `gap` or `pad` values that don't sit on the
+  scale (see `references/checks.md`): the user's `figma-bridge-prefs` `review-standards`
+  scale when installed, else the file's **own** prevailing step. If neither is
+  discoverable, do **not** assert a shipped scale — check internal consistency, never
+  "multiples of 4".
 - **Inconsistent corner radius** — radii that differ across sibling cards/chips/buttons
   without an obvious intent to differ; or a mix of per-corner and uniform radii for the
   same element type.
-- **Type off the ramp** — font sizes that are not on the project's type scale; or more
-  than 4 distinct sizes in one frame without a clear hierarchy.
+- **Type off the ramp** — font sizes not on the ramp — the `figma-bridge-prefs`
+  `review-standards` ramp when installed, else the file's own prevailing ramp; never a
+  shipped baseline; or more than 4 distinct sizes in one frame without a clear hierarchy.
 - **Misaligned or off-grid elements** — siblings in an auto-layout frame whose sizes
   or positions suggest manual override (check `layoutPositioning: ABSOLUTE` on
   children in a flow-mode frame).
@@ -99,11 +105,12 @@ Check regardless of whether a design system is present:
 ### 3. Accessibility
 
 Check regardless of design system:
+
 - **Text contrast** — compare text `color` against the background `fills` of the
   nearest ancestor frame. Apply WCAG AA thresholds:
   - Normal text (< 18 pt, not bold; < 14 pt bold): contrast ratio ≥ 4.5:1
   - Large text (≥ 18 pt regular, ≥ 14 pt bold): contrast ratio ≥ 3:1
-  (Thresholds and the contrast-ratio formula are in `references/checks.md`.)
+    (Thresholds and the contrast-ratio formula are in `references/checks.md`.)
 - **Minimum text size** — body / label text below 11 px is a nit; below 9 px is a
   warning (unreadable at standard screen densities).
 - **Touch-target size** — interactive elements (buttons, icon buttons, links) whose
@@ -114,7 +121,7 @@ Check regardless of design system:
 ### 4. Layout & structure hygiene
 
 - **Absolute positioning where auto-layout fits** — a child with `layoutPositioning:
-  ABSOLUTE` inside an auto-layout frame, where the positioning could be expressed as
+ABSOLUTE` inside an auto-layout frame, where the positioning could be expressed as
   flow. (Legitimate use: overlapping badges, floating tooltips — use judgement.)
 - **Pile-up at [0,0]** — multiple sibling nodes all at `position: [0, 0]` on the page
   root with no layout parent (the "create-without-placement" symptom).
@@ -130,6 +137,7 @@ Check regardless of design system:
 ### 5. Fidelity to intent
 
 Compare the built design against the stated request:
+
 - **Matches the request** — all mentioned components, screens, or sections are present.
 - **Nothing missing** — check the request for count ("three cards") or specific items
   ("a search bar", "a sidebar nav") and verify each is present.
@@ -144,8 +152,9 @@ pure style audit), skip it.
 ### 6. Naming & context legibility
 
 Audits the two hidden-in-plain-sight legibility surfaces: every node should carry a
-legible `name`, and any `context` note should be well-formed. (The naming *opinions* —
-what a good name is — live in the `figma-design` skill; this dimension only audits.)
+legible `name`, and any `context` note should be well-formed. (The naming _floor_ — a
+meaningful, non-default name — lives in the `figma-design` skill; the concrete naming
+convention is a `figma-bridge-prefs` preference. This dimension only audits.)
 
 - **Blank or default name** — a `name` that is empty, whitespace-only, or matches
   Figma's default-name pattern (`Frame 12`, `Rectangle`, `Ellipse 3` — the full regex
@@ -153,13 +162,15 @@ what a good name is — live in the `figma-design` skill; this dimension only au
   - **Text-node exemption:** a text node's `name` may legitimately equal its
     `characters`, so a text node is flagged **only when its name is blank** — never for
     mirroring its own content or the default pattern.
-- **Component without a `/` taxonomy** — a `COMPONENT` / `COMPONENT_SET` whose name has
-  no slash path (`Button` rather than `Button/Primary`). **Variant children** (names
-  containing `=`, e.g. `Size=Lg, State=Hover`) are exempt.
+- **Component without a `/` taxonomy _(house-preference)_** — requiring a slash path
+  (`Button/Primary` rather than `Button`) is a **stricter standard that applies only when a
+  `figma-bridge-prefs` `review-standards` opts into it**; absent that opt-in, do not flag it.
+  **Variant children** (names containing `=`, e.g. `Size=Lg, State=Hover`) are exempt. The
+  **blank / default-name** check above remains the shipped floor.
 - **Malformed or oversized context** — a `context` value with an unclosed frontmatter
   fence (yields no `contextSummary`, so the note is invisible at a glance), or one that
   exceeds the 2 KB cap (only reachable via the `set_plugin_data` escape hatch).
-- **Name ↔ context.role contradiction *(advisory)*** — when a node's `name` and its
+- **Name ↔ context.role contradiction _(advisory)_** — when a node's `name` and its
   `context` frontmatter `role` tell different stories (a node named `SecondaryButton`
   with `role: button/primary`). Advisory only — a judgement call, never a hard fail,
   since either field could be the stale one.
@@ -181,6 +192,7 @@ Emit one finding per line in this shape:
 ```
 
 Severity levels:
+
 - `blocker` — prevents the design from meeting its purpose or fails a hard
   threshold (e.g. WCAG AA contrast fail, completely missing section).
 - `warning` — degrades quality or maintainability; should be fixed before shipping.
@@ -197,6 +209,7 @@ Blockers: N   Warnings: N   Nits: N
 ```
 
 Verdict rules:
+
 - `PASS` — zero blockers, zero warnings (nits allowed).
 - `PASS WITH NITS` — zero blockers, zero warnings, one or more nits.
 - `NEEDS WORK` — one or more warnings, zero blockers.
@@ -215,6 +228,7 @@ Once the report is presented, offer:
 > 'blockers only', list severities, or name specific findings.)"
 
 On approval:
+
 - Apply edits using `figma-design` mechanics (token binding, renaming, layout fixes).
 - Re-run the affected dimension(s) and confirm the finding is resolved.
 - Do not re-run the full review unless asked.
@@ -236,3 +250,14 @@ doesn't exist), do **not** invent a workaround that breaks the design. Instead:
 
 Concrete numbers, formulas, spacing scales, and naming patterns are in
 `references/checks.md`. Load it when reviewing — it prevents guessing at thresholds.
+
+## User preferences
+
+If a skill named **`figma-bridge-prefs`** is in your available skills and not yet loaded,
+load it now and read its `references/review-standards.md` — it supplies the concrete house
+scale / tokens / type ramp / naming standard you measure against, and may add stricter
+checks. It **cannot** relax the hard floor: WCAG minimums, contrast, and verification are
+non-overridable; you still emit those findings. If `figma-bridge-prefs` is present but its
+`review-standards` is missing or unparseable, treat it as **no house standard** — fall back
+to internal-consistency + the floor, and never error. Match the **exact** name
+`figma-bridge-prefs`. If none is present, you may offer to run `figma-setup` to create one.
