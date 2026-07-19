@@ -13,6 +13,10 @@ related:
   - '[[figma-bridge/docs/specs/expression-formats]]'
 ---
 
+<p align="center">
+  <img src="packages/branding/assets/logo-128.png" width="88" alt="Agent Bridge" />
+</p>
+
 # figma-agent-bridge
 
 > Governed by [the principles](docs/principles.md).
