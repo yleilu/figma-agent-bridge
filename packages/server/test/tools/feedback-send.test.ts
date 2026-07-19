@@ -21,20 +21,19 @@ const ok = (body: unknown, status = 200) =>
       status,
     })) as unknown as typeof fetch
 
-// Sequenced fetch: returns each step in order, then repeats the
-// last step — for flows that make more than one call (e.g. GitHub
-// create-then-link).
-const seq = (
-  ...steps: { status: number; body: unknown }[]
-): typeof fetch => {
-  let i = 0
-  return (async () => {
-    const s = steps[Math.min(i, steps.length - 1)]
-    i += 1
-    return new Response(JSON.stringify(s.body), {
-      status: s.status,
+const recordingOk = (respBody: unknown) => {
+  const calls: { url: string; body: { body: string } }[] =
+    []
+  const fetchImpl = (async (
+    url: string,
+    init: { body: string },
+  ) => {
+    calls.push({ url, body: JSON.parse(init.body) })
+    return new Response(JSON.stringify(respBody), {
+      status: 201,
     })
   }) as unknown as typeof fetch
+  return { fetchImpl, calls }
 }
 
 let dir: string
@@ -175,73 +174,40 @@ describe('handleSendFeedback', () => {
     expect(byPath[good.path]).toBe('sent')
   })
 
-  it('github logged-in: creates + links the sub-issue and marks sent', async () => {
+  it('github: posts a comment carrying the title heading, marks sent', async () => {
     await writeCredentials({
       preference: 'github',
       token: 'gho_x',
       identity: { login: 'lei' },
     })
     const it0 = await recordFeedback(
-      { category: 'bugs', title: 't', description: 'd' },
+      {
+        category: 'proposals',
+        title: 'Widget X breaks',
+        description: 'd',
+      },
       '0.0.1',
     )
-    const res = await handleSendFeedback(
-      { send: [it0.path], discard: [] },
-      seq(
-        {
-          status: 201,
-          body: {
-            id: 555,
-            html_url: 'https://gh/issues/9',
-          },
-        },
-        { status: 201, body: {} },
-      ),
-    )
-    const data = JSON.parse(res.content[0].text)
-    expect(data.results[0].status).toBe('sent')
-    expect(data.results[0].commentUrl).toBe(
-      'https://gh/issues/9',
-    )
-    expect(data.results[0].error).toBeUndefined()
-  })
-
-  it('github logged-in: link step fails — still marks sent (no duplicate on retry)', async () => {
-    await writeCredentials({
-      preference: 'github',
-      token: 'gho_x',
-      identity: { login: 'lei' },
+    const { fetchImpl, calls } = recordingOk({
+      html_url: 'https://gh/c/9',
     })
-    const it0 = await recordFeedback(
-      { category: 'bugs', title: 't', description: 'd' },
-      '0.0.1',
-    )
     const res = await handleSendFeedback(
       { send: [it0.path], discard: [] },
-      seq(
-        {
-          status: 201,
-          body: {
-            id: 555,
-            html_url: 'https://gh/issues/9',
-          },
-        },
-        { status: 403, body: {} },
-      ),
+      fetchImpl,
     )
     const data = JSON.parse(res.content[0].text)
     expect(data.results[0].status).toBe('sent')
     expect(data.results[0].commentUrl).toBe(
-      'https://gh/issues/9',
+      'https://gh/c/9',
     )
-    expect(data.results[0].error).toMatch(/not nested/)
-
-    // the item is filed, not left pending — a retry must not
-    // find it in the backlog (which would re-file a duplicate).
-    const list = JSON.parse(
-      (await handleListFeedback({})).content[0].text,
+    // routed to the proposals issue (#2) with the title as a heading + footer
+    expect(calls[0].url).toContain('/issues/2/comments')
+    expect(calls[0].body.body).toContain(
+      '## Widget X breaks',
     )
-    expect(list.pending).toEqual([])
+    expect(calls[0].body.body).toContain(
+      'figma-agent-bridge',
+    )
   })
 
   it('github 401: clears the token and reports auth-required', async () => {

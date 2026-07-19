@@ -191,48 +191,29 @@ const ghSend = async (
   return res.status === 204 ? {} : res.json()
 }
 
-export interface CreateSubIssueArgs {
+export interface PostCommentArgs {
   repo: string
-  parentIssueNumber: number
-  title: string
+  issueNumber: number
   body: string
   token: string
 }
 
-// Two steps: create the item as its own issue, then link it as a
-// sub-issue under the category parent. `sub_issue_id` is the new
-// issue's REST `id` — NOT its `number`. A failed create means
-// nothing was filed, so that step still throws. A failed link
-// leaves a real, already-filed issue behind — so that step never
-// throws; it reports `linked: false` instead, so callers can mark
-// the item sent (not pending) and avoid filing a duplicate on retry.
-export const createSubIssue = async (
-  args: CreateSubIssueArgs,
+export const postIssueComment = async (
+  args: PostCommentArgs,
   fetchImpl: typeof fetch = fetch,
-): Promise<{ url: string; linked: boolean }> => {
-  const created = (await ghSend(
+): Promise<{ commentUrl: string }> => {
+  const d = (await ghSend(
     fetchImpl,
     'POST',
-    `${API}/repos/${args.repo}/issues`,
+    `${API}/repos/${args.repo}/issues/${args.issueNumber}/comments`,
     args.token,
-    { title: args.title, body: args.body },
-  )) as { id?: number; html_url?: string }
-  if (!created.id || !created.html_url) {
+    { body: args.body },
+  )) as { html_url?: string }
+  if (!d.html_url) {
     throw new GithubError(
       'http',
-      'issue-create response missing id/html_url',
+      'comment response missing html_url',
     )
   }
-  try {
-    await ghSend(
-      fetchImpl,
-      'POST',
-      `${API}/repos/${args.repo}/issues/${args.parentIssueNumber}/sub_issues`,
-      args.token,
-      { sub_issue_id: created.id },
-    )
-  } catch {
-    return { url: created.html_url, linked: false }
-  }
-  return { url: created.html_url, linked: true }
+  return { commentUrl: d.html_url }
 }
