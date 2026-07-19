@@ -76,6 +76,44 @@ Rules for running the surface smoothly and cheaply:
 
 ---
 
+## Report your progress
+
+**Always keep the panel current.** `report_status` paints one live line onto the plugin's
+agent-status panel — your row is a progress dot, a label, and that line. Narrate what you're
+doing: never work silently, never let the line go stale. Update it *before* you start a step,
+not after. It is **fire-and-forget** — display-only, latest-wins, no round-trip, no return to
+act on — one cheap call, so always send it. It is **not feedback**: no Send, no human gate,
+nothing reaches GitHub; don't borrow `figma-feedback`'s record-don't-send etiquette.
+
+- **Update per unit of work — always, but not per tool call.** Post a line the moment you
+  begin a coherent step, and a fresh line whenever the work materially shifts. Every figma
+  call already auto-emits a busy skeleton (the per-move loader), so you don't narrate per
+  call — you post at the step boundary, and each call then shows that wordless skeleton until
+  your next line. Never fall silent or skip a step's line: a new step always gets a new line.
+- **Say the intent, not the mechanics** — present-tense, one line, what a watching human
+  would say. Never tool names, node ids, or param dumps.
+- **`level: 'normal'` by default; `'error'` only for a genuine failure a human should
+  notice** — `Font missing — used a fallback`, `Couldn't bind the token — hardcoded instead`.
+  Never for expected/handled errors, validation rejections, or normal completion (the dot
+  settles green on Stop). Busy is automatic — never set it.
+- **Usually omit `label`** — `agentType` / "Agent" is fine. Set one friendly name only when
+  `agentType` is unhelpful or absent, so the row isn't a generic "Agent".
+
+| Say this (intent) | Not this (mechanics) |
+|---|---|
+| `Drawing the header bar` | `create_node RECTANGLE 56:12` |
+| `Wiring the 4 stat cards` | `calling set_instance ×4` |
+| `Scanning existing tokens` | `get_variables then get_styles` |
+
+```
+report_status({ fileKey, text: 'Wiring the 4 stat cards' })
+report_status({ fileKey, text: 'Font "Inter Tight" missing — used Inter', level: 'error' })
+```
+
+(`fileKey` addresses the file like every tool — see **Address the file first**.)
+
+---
+
 ## Naming discipline
 
 Every node ships with a meaningful `name` — the layer panel is the design's first read,

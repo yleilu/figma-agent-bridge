@@ -48,6 +48,19 @@ The flow is strictly three phases — never collapse them:
 
 ---
 
+## Report your progress
+
+**Always narrate as you review** — never inspect silently. `report_status` works exactly as
+it does in figma-design (**Report your progress** there is the source of truth for cadence,
+`level`, and etiquette), applied to inspection: post a line as you enter each dimension
+(`Auditing token bindings on the stat cards`, `Checking contrast`). `level` follows
+figma-design — use `error` only if the **review itself** can't proceed (file unreadable,
+`WRONG_FILE`, export fails), **never** for design defects you find: those carry their own
+`blocker`/`warning`/`nit` severity in the finding report, and the dot stays green through a
+successful review. Fire-and-forget — it's the progress line, not the finding report.
+
+---
+
 ## The six dimensions
 
 ### 1. Design-system adherence *(context-aware)*
