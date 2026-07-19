@@ -27,7 +27,7 @@ export const CONTEXT_SUMMARY_MAX_BYTES = 512
 // owner/repo the feedback issues live in
 export const REPO = 'yleilu/figma-agent-bridge'
 
-// Category PARENT issue numbers — each item is filed as a sub-issue under one.
+// Standing issue numbers, one per category — feedback is posted as a comment on one of these.
 export const BUGS_ISSUE = 1
 export const PROPOSALS_ISSUE = 2
 
@@ -36,7 +36,7 @@ export const OAUTH_CLIENT_ID = 'Ov23li2wE2mr9sLPX6dP'
 // 'public_repo' (repo is public); 'repo' if it ever goes private again.
 export const OAUTH_SCOPE = 'public_repo'
 
-// The parent issue a category's sub-issues are filed under.
+// The standing issue a category's comments are posted to.
 export const issueForCategory = (
   category: FeedbackCategory,
 ): number =>
