@@ -20,7 +20,7 @@ import {
 import { postFeedback } from '../worker-client'
 import {
   GithubError,
-  createSubIssue,
+  postIssueComment,
 } from '../github-client'
 import {
   type ToolResult,
@@ -87,13 +87,14 @@ interface SendResult {
   error?: string
 }
 
-// The item's title becomes the sub-issue title, so the body is just
-// the description + a provenance footer.
+// The item's title becomes the comment heading, followed by the body
+// and a provenance footer.
 const composeBody = (item: {
+  title: string
   description: string
   version: string
 }): string =>
-  `${item.description}\n\n_filed via figma-agent-bridge ${item.version}_`
+  `## ${item.title}\n\n${item.description}\n\n_filed via figma-agent-bridge ${item.version}_`
 
 export const handleSendFeedback = async (
   params: SendFeedbackInput,
@@ -135,7 +136,6 @@ export const handleSendFeedback = async (
       try {
         const item = await readItem(path)
         let commentUrl: string
-        let linkError: string | undefined
         if (identity === 'github') {
           if (!cred.token) {
             results.push({
@@ -145,26 +145,16 @@ export const handleSendFeedback = async (
             })
             continue
           }
-          const r = await createSubIssue(
+          const r = await postIssueComment(
             {
               repo: REPO,
-              parentIssueNumber: issueForCategory(
-                item.category,
-              ),
-              title: item.title,
+              issueNumber: issueForCategory(item.category),
               body: composeBody(item),
               token: cred.token,
             },
             fetchImpl,
           )
-          commentUrl = r.url
-          // The issue IS filed even if linking under the parent
-          // failed — mark it sent either way so a retry never
-          // files a duplicate. Just flag it as unlinked.
-          if (!r.linked) {
-            linkError =
-              'issue created but not nested under parent — relink manually'
-          }
+          commentUrl = r.commentUrl
         } else {
           const r = await postFeedback(
             {
@@ -184,7 +174,6 @@ export const handleSendFeedback = async (
           path,
           status: 'sent',
           commentUrl: updated.commentUrl,
-          ...(linkError ? { error: linkError } : {}),
         })
       } catch (err) {
         if (
