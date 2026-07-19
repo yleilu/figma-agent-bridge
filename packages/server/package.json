@@ -10,6 +10,7 @@
     "./ensure-relay": "./src/ensure-relay.ts",
     "./figma-client": "./src/figma-client.ts",
     "./feedback-store": "./src/feedback-store.ts",
+    "./credential-store": "./src/credential-store.ts",
     "./worker-client": "./src/worker-client.ts",
     "./parser": "./src/parser.ts",
     "./expression-parser": "./src/expression-parser.ts"
