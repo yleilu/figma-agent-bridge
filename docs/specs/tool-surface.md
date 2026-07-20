@@ -16,7 +16,7 @@ related:
 
 # figma-agent-bridge — Tool Surface
 
-> **Spec of record.** This is the **48-tool** facade surface — the contract of record
+> **Spec of record.** This is the **51-tool** facade surface — the contract of record
 > for the MCP tool layer. Governed by `docs/principles.md` (T1–T10, B1, P1).
 >
 > The **component index** feature layers two further MCP tools —
@@ -25,13 +25,14 @@ related:
 > meta-tools** (outside the `figma.*` facade count), like `record_feedback`.
 >
 > **Count is a formula, not a hand-summed aggregate (stops silent rot).** The one
-> hand-maintained number is the **facade group-sum = 49**. The exposed MCP surface is
-> then **`48 facade + K non-facade meta-tools`**, where the non-facade meta-tools are
+> hand-maintained number is the **facade group-sum = 51** (the Tool catalogue below is the one
+> place it is summed). The exposed MCP surface is then **`51 facade + K non-facade meta-tools`**,
+> where the non-facade meta-tools are
 > `record_feedback`, `search_components`, `reindex`, `pull_changes` (change-feed.md),
 > `report_status` (status-monitor.md), the three registry tools `register_library` /
 > `unregister_library` / `list_libraries` (team-library-registry.md), and the four feedback
 > send-flow tools `list_feedback` / `send_feedback` / `github_auth_start` / `github_auth_poll`
-> (feedback-system.md). Do not restate a hardcoded total (a bare "49" already wrongly omits
+> (feedback-system.md). Do not restate a hardcoded total (a bare "51" already wrongly omits
 > `record_feedback`).
 >
 > The **change feed** (docs/specs/change-feed.md) adds one non-facade meta-tool
@@ -61,7 +62,7 @@ related:
 
 ## Overview
 
-The surface is **47 tools**: read/write pairs over five concept groups (session, nodes,
+The surface is **51 tools**: read/write pairs over five concept groups (session, nodes,
 structure, design-system, handoff) **+ one generic `batch`**. It is the lean facade base plus
 the capabilities the coverage verify pass proved were over-deferred — reactions,
 boolean/flatten, image fill, plugin-data, page tools, variable-mode lifecycle, viewport focus.
@@ -245,9 +246,9 @@ One grammar, two faces (T8, expression-formats.md):
 
 Format: `name(params) → returns` — purpose · principle/checklist need.
 
-**Count = 51** (ship-gated: `transform_group` row gated on runtime availability — controller may revert to 50 if `figma.transformGroup` is absent live) (auditable per group): Session 2 · Read-nodes 4 · Read-query 3 · Read-DS 4 · Read-meta 2 · Write-nodes 5 · Write-structure 10 · Write-pages 3 · Write-components 5 · Write-DS 8 · Write-meta 2 · Handoff 2 · Batch 1 = **51**.
+**Count = 51** (auditable per group): Session 2 · Read-nodes 4 · Read-query 3 · Read-DS 4 · Read-meta 2 · Write-nodes 5 · Write-structure 10 · Write-pages 3 · Write-components 5 · Write-DS 8 · Write-meta 2 · Handoff 2 · Batch 1 = **51**.
 
-**`record_feedback` — deliberate meta-tool, outside the 48 (T6/T7 exception).**
+**`record_feedback` — deliberate meta-tool, outside the 51-tool facade (T6/T7 exception).**
 `record_feedback({category, title, description, tool?}) → {…}` (see
 [[figma-bridge/docs/specs/feedback-system]]). The facade
 rule (T6/T7) requires every tool to map to a real `figma.*` capability. `record_feedback` is
@@ -256,7 +257,7 @@ the **original** such exception (the enumerated non-facade meta-tools above — 
 tools `list_feedback` / `send_feedback` / `github_auth_start` / `github_auth_poll` — are admitted
 on the same basis) — it captures bridge-experience friction and has no Figma API counterpart.
 It is admitted knowingly and quarantined: placed in its own conceptual `feedback` group, absent
-from `COMMANDS` and the verify-live `ALL_TOOLS` catalogue, so the 50 count is unchanged.
+from `COMMANDS` and the verify-live `ALL_TOOLS` catalogue, so the facade count is unchanged.
 Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle commands (as is the new
 `ping` liveness probe — [[figma-bridge/docs/specs/connection-liveness|connection-liveness.md]]). See
 [[figma-bridge/docs/specs/feedback-system]].
@@ -264,7 +265,7 @@ Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle
 ### Session (2)
 - `connect({fileKey?, fileName?}) → {fileKey, fileName, connected, available[]}` — pair the MCP server to a **specific file's** plugin, targeted by `fileKey` (or `fileName`), and return the currently **available** files `available:[{fileKey, fileName, connectedAt, version?, currentPage?, selected?}]` (the enriched relay availability registry — the same entry `status().available[]` returns; see [[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]]). When the target is ambiguous or **not available**, it does **not** guess — it returns an error listing `available[]` and asks the agent to choose (B3). The raw channel is now an internal detail (server resolves `fileKey`→channel). *(`fileKey` needs `enablePrivatePluginApi`; `fileName` is the fallback id — see overview *Connection lifecycle*.)* · B1, B3; §2 connect.
 - `status() → {connected, joined:[{fileKey, fileName, channel, currentPage, selection[], viewport, version}], available[]}` — **every joined file** (multi-file) with its best-effort live context, plus the **availability set**, in one read (live context is best-effort; failures degrade, they don't throw) · B1, B3, T4; §2 read-what-user-sees.
-- *(plugin teardown = internal `close_plugin` command, not a tool — transport/dev-reload lifecycle, see overview *Connection lifecycle*; T6. **Addressing (B3):** tools take an explicit per-call **`fileKey`** param naming their target file (canonical; per [[figma-bridge/docs/specs/overview|overview.md]] and [[figma-bridge/docs/specs/request-envelope|request-envelope.md]] — the addressing/envelope source of truth). The param is carried by a shared **`fileTargetParamsSchema` mixin** — a required **`fileKey`** plus the **reserved, server-managed** optional identity headers **`sessionId`** and (for subagent calls) **`agentId`/`agentType`** (all marked *do not set — injected by the session `PreToolUse` hook*, per request-envelope) — **spread into every file-addressed tool** so "required" is one definition, not per-tool. It is a **param-schema mixin, not a new tool** — the 47-facade count is unchanged. The **session/transport and non-file meta-tools are the exceptions:** `connect({fileKey?})` (discovery), `status()` (no per-call file), and the global feedback meta-tools `record_feedback` / `list_feedback` / `send_feedback` / `github_auth_start` / `github_auth_poll` (global feedback store + machine-wide identity, no file) address the *connection* or a non-file store, not a per-call file, and do **not** spread the mixin. `requestId` is a **server header** (`genId('cmd')`), not a tool param.)*
+- *(plugin teardown = internal `close_plugin` command, not a tool — transport/dev-reload lifecycle, see overview *Connection lifecycle*; T6. **Addressing (B3):** tools take an explicit per-call **`fileKey`** param naming their target file (canonical; per [[figma-bridge/docs/specs/overview|overview.md]] and [[figma-bridge/docs/specs/request-envelope|request-envelope.md]] — the addressing/envelope source of truth). The param is carried by a shared **`fileTargetParamsSchema` mixin** — a required **`fileKey`** plus the **reserved, server-managed** optional identity headers **`sessionId`** and (for subagent calls) **`agentId`/`agentType`** (all marked *do not set — injected by the session `PreToolUse` hook*, per request-envelope) — **spread into every file-addressed tool** so "required" is one definition, not per-tool. It is a **param-schema mixin, not a new tool** — the 51-facade count is unchanged. The **session/transport and non-file meta-tools are the exceptions:** `connect({fileKey?})` (discovery), `status()` (no per-call file), and the global feedback meta-tools `record_feedback` / `list_feedback` / `send_feedback` / `github_auth_start` / `github_auth_poll` (global feedback store + machine-wide identity, no file) address the *connection* or a non-file store, not a per-call file, and do **not** spread the mixin. `requestId` is a **server header** (`genId('cmd')`), not a tool param.)*
 
 ### Read — nodes (4)
 - `inspect({nodeId?, pageId?, depth?, budget?, fields?, profile?, match?}) → {view, truncated[]}` — compact lossy view, drill-by-id (Rule B); each node carries a read-only **`contextSummary`** (the frontmatter slice of `context`, capped at `CONTEXT_SUMMARY_MAX_BYTES` = 512, rendered as a YAML block scalar; server-derived, **not** `fields`/`profile`-projectable; omitted when absent); omit both ids to inspect the current selection (multi-select returns a `SELECTION` forest) · **T3 inspect**, T4; §1 human view, §3 deep/large trees, §13 CSS-handoff data.
@@ -304,7 +305,7 @@ Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle
 - `boolean_op(op, nodeIds[], {parentId?}) → {id,…}` — union/subtract/intersect/exclude → BooleanOperationNode (`op`: UNION|SUBTRACT|INTERSECT|EXCLUDE; ≥2 nodes; `parentId` defaults to the first node's parent) · T6; §10 combine-shapes (restored).
 - `flatten(nodeIds[], {parentId?}) → {id,…}` — flatten to one vector (≥1 node; `parentId` defaults to the first node's parent) · T6; §10 flatten/icon-prep (restored).
 - `group_nodes(nodeIds[], {parentId?}) → {id,name,type}` — group ≥1 existing nodes into a GROUP via `figma.group()` (`parentId` defaults to the first node's parent; T7-gated: feature-detects `figma.group` availability); the GROUP reads back via `get_node` (T1/T2 round-trip with M10a). **Batch op-set member** — same shape as `boolean_op`/`flatten` (operation over existing ids) · T1, T2, T6, T7, T9; §10 group-for-layout.
-- `transform_group(nodeIds[], modifiers[], {parentId?}) → {id,name,type}` — apply a **repeat-pattern** transform to ≥1 existing nodes via `figma.transformGroup()` → TransformGroupNode (a REPEAT feature — linear/radial repeat — **NOT** general grouping; that is `group_nodes`). `modifiers` is a discriminated union on `repeatType`: `{ type: 'REPEAT', repeatType: 'LINEAR', count, unitType, offset, axis: 'HORIZONTAL'|'VERTICAL' }` or `{ type: 'REPEAT', repeatType: 'RADIAL', count, …passthrough }` — **confirmed live LINEAR shape**: `{type:'REPEAT',repeatType:'LINEAR',count:3,unitType:'PIXELS',offset:100,axis:'HORIZONTAL'}`; `parentId` defaults to the first node's parent. **T7-gated**: feature-detects `figma.transformGroup` availability — absent → `{error}` (clear, not a throw). **Ship-gated**: `figma.transformGroup` is a niche API added in @figma/plugin-typings 1.130.0; runtime absence is expected (repo pins 1.123.0). The controller must live-verify before shipping; if absent, this row reverts and the count returns to 50. **Batch op-set member** — same operation-over-existing-ids shape as `boolean_op`/`flatten`/`group_nodes`. **T8**: discriminator + structural fields are plain enum/struct (not grammar-routed); numeric scalars are plain numbers (structural op, not an appearance atom) · T1, T2, T6, T7, T8, T9; §10 repeat-pattern.
+- `transform_group(nodeIds[], modifiers[], {parentId?}) → {id,name,type}` — apply a **repeat-pattern** transform to ≥1 existing nodes via `figma.transformGroup()` → TransformGroupNode (a REPEAT feature — linear/radial repeat — **NOT** general grouping; that is `group_nodes`). `modifiers` is a discriminated union on `repeatType`: `{ type: 'REPEAT', repeatType: 'LINEAR', count, unitType, offset, axis: 'HORIZONTAL'|'VERTICAL' }` or `{ type: 'REPEAT', repeatType: 'RADIAL', count, …passthrough }` — **confirmed live LINEAR shape**: `{type:'REPEAT',repeatType:'LINEAR',count:3,unitType:'PIXELS',offset:100,axis:'HORIZONTAL'}`; `parentId` defaults to the first node's parent. **T7-gated**: feature-detects `figma.transformGroup` availability — absent → `{error}` (clear, not a throw). **Runtime absence is expected** (`figma.transformGroup` is a niche API added in @figma/plugin-typings 1.130.0; the repo pins 1.123.0) and is handled by the T7 gate above, which returns `{error}` when the API is missing. The tool stays registered either way, so the facade count is a firm 51. **Batch op-set member** — same operation-over-existing-ids shape as `boolean_op`/`flatten`/`group_nodes`. **T8**: discriminator + structural fields are plain enum/struct (not grammar-routed); numeric scalars are plain numbers (structural op, not an appearance atom) · T1, T2, T6, T7, T8, T9; §10 repeat-pattern.
 
 ### Write — pages (3 · restored)
 - `create_page(name) → {id,name}` — new page; write twin of `list_pages` · §2 create-page.
