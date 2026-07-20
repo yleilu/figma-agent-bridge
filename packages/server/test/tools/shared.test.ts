@@ -118,6 +118,7 @@ const makeClient = (
   channelFor: () => null,
   discover: () => Promise.resolve([]),
   isInstanceDead: () => false,
+  notifyMismatch: () => undefined,
   ...over,
 })
 
@@ -221,7 +222,7 @@ describe('requireFile', () => {
     expect(joinedWith).toEqual(['sess-9', 'sess-9'])
   })
 
-  it('refuses a version-skewed plugin (B2) BEFORE joining or dispatching', async () => {
+  it('refuses a version-skewed plugin (B2) AND pushes version-mismatch, BEFORE joining', async () => {
     // ChannelInfo has a `version?: string` field; a skewed value → INCOMPATIBLE.
     const skewed: ChannelInfo = {
       channel: 'ch-old',
@@ -231,11 +232,15 @@ describe('requireFile', () => {
       version: '0.0.1', // ≠ APP_VERSION major.minor
     }
     let joinCalled = false
+    const pushes: Array<[string, string, string]> = []
     const client = makeClient({
       discover: () => Promise.resolve([skewed]),
       joinChannel: () => {
         joinCalled = true
         return Promise.resolve('ok')
+      },
+      notifyMismatch: (channel, plugin, server) => {
+        pushes.push([channel, plugin, server])
       },
     })
     const r = await requireFile(client, 'fk-old')
@@ -246,6 +251,45 @@ describe('requireFile', () => {
       ).toBe('INCOMPATIBLE')
     }
     expect(joinCalled).toBe(false) // no join, no dispatch — refused loudly, not a 30s hang
+    expect(pushes).toEqual([
+      ['ch-old', '0.0.1', APP_VERSION],
+    ])
+  })
+
+  it('a plugin reporting NO version pushes plugin: "(none)"', async () => {
+    const pushes: Array<[string, string, string]> = []
+    const client = makeClient({
+      discover: () =>
+        Promise.resolve([
+          {
+            channel: 'ch-x',
+            fileKey: 'fk-x',
+            fileName: 'X',
+            connectedAt: 0,
+          } as ChannelInfo,
+        ]),
+      notifyMismatch: (c, p, s) => pushes.push([c, p, s]),
+    })
+    const r = await requireFile(client, 'fk-x')
+    expect(r.ok).toBe(false)
+    expect(pushes).toEqual([
+      ['ch-x', '(none)', APP_VERSION],
+    ])
+  })
+
+  it('does NOT push on a healthy (matching) file', async () => {
+    let pushed = false
+    const client = makeClient({
+      discover: () =>
+        Promise.resolve([info('ch-a', 'fk-a', 'A')]),
+      joinChannel: () => Promise.resolve('ok'),
+      notifyMismatch: () => {
+        pushed = true
+      },
+    })
+    // `info(...)` carries APP_VERSION by default — the healthy path.
+    await requireFile(client, 'fk-a')
+    expect(pushed).toBe(false)
   })
 
   // connection-liveness.md: the watchdog (L6) declares an unresponsive instance

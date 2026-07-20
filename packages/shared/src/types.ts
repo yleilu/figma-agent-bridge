@@ -88,6 +88,23 @@ export type AgentStatusSyncBroadcast = {
   records: StatusRecord[]
 }
 
+// server → relay: a plugin↔server major.minor skew for one channel
+// (version-handshake.md). Routed by `channel` to that channel's members — the
+// relay never computes the compare — the server (protocolMismatch) owns it (B1).
+export type VersionMismatchMessage = {
+  type: 'version-mismatch'
+  channel: string
+  plugin: string
+  server: string
+}
+
+// relay → plugin: the routed skew, channel dropped (mirrors AgentStatusBroadcast).
+export type VersionMismatchBroadcast = {
+  type: 'version-mismatch'
+  plugin: string
+  server: string
+}
+
 export type RelayIncoming =
   | JoinMessage
   | ChannelMessage
@@ -96,12 +113,14 @@ export type RelayIncoming =
   | LeaveMessage
   | AgentStatusMessage
   | StatusSyncMessage
+  | VersionMismatchMessage
 export type RelayOutgoing =
   | BroadcastMessage
   | SystemMessage
   | AgentStatusBroadcast
   | AgentStatusRemoveBroadcast
   | AgentStatusSyncBroadcast
+  | VersionMismatchBroadcast
 
 // --- Command types ---
 

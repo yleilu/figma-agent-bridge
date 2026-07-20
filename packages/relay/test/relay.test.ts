@@ -1529,6 +1529,86 @@ describe('relay', () => {
       }
     })
   })
+
+  describe('version-mismatch frame', () => {
+    it('routes to other members (channel dropped) and NOT the sender', async () => {
+      const server2 = await connect() // the "MCP server" socket
+      const plugin = await connect() // the "plugin" socket
+      const sQ = createMessageQueue(server2)
+      const pQ = createMessageQueue(plugin)
+      server2.send(
+        JSON.stringify({ type: 'join', channel: 'vm1' }),
+      )
+      await sQ()
+      plugin.send(
+        JSON.stringify({ type: 'join', channel: 'vm1' }),
+      )
+      await pQ()
+
+      let senderEcho = 0
+      server2.onmessage = () => {
+        senderEcho++
+      }
+      server2.send(
+        JSON.stringify({
+          type: 'version-mismatch',
+          channel: 'vm1',
+          plugin: '0.3.0',
+          server: '0.4.0',
+        }),
+      )
+      const got = await pQ()
+      expect(got).toEqual({
+        type: 'version-mismatch',
+        plugin: '0.3.0',
+        server: '0.4.0',
+      })
+      await Bun.sleep(50)
+      expect(senderEcho).toBe(0)
+
+      await closeWs(server2)
+      await closeWs(plugin)
+    })
+
+    it('is route-only: nothing is stored, status-sync replays empty', async () => {
+      const server2 = await connect()
+      const sQ = createMessageQueue(server2)
+      server2.send(
+        JSON.stringify({ type: 'join', channel: 'vm2' }),
+      )
+      await sQ()
+      server2.send(
+        JSON.stringify({
+          type: 'version-mismatch',
+          channel: 'vm2',
+          plugin: '0.3.0',
+          server: '0.4.0',
+        }),
+      )
+
+      const plugin = await connect()
+      const pQ = createMessageQueue(plugin)
+      plugin.send(
+        JSON.stringify({ type: 'join', channel: 'vm2' }),
+      )
+      await pQ() // join ack
+      plugin.send(
+        JSON.stringify({
+          type: 'status-sync',
+          channel: 'vm2',
+        }),
+      )
+      const sync = (await pQ()) as {
+        type: string
+        records: unknown[]
+      }
+      expect(sync.type).toBe('agent-status-sync')
+      expect(sync.records).toEqual([])
+
+      await closeWs(server2)
+      await closeWs(plugin)
+    })
+  })
 })
 
 const RELAY_VERSION_PORT = 18191

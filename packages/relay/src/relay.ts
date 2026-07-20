@@ -358,6 +358,32 @@ const handleStatusReplay = (
   send(ws, { type: 'agent-status-sync', records })
 }
 
+// version-handshake.md — route-only (B1): the relay forwards a server-detected
+// skew to the channel's members and stores NOTHING (unlike agent-status, this
+// is never a roster row and is never TTL-swept). The server owns the compare.
+const handleVersionMismatch = (
+  ctx: RelayContext,
+  ws: ServerWebSocket<WsData>,
+  channel: string,
+  plugin: string,
+  server: string,
+) => {
+  const members = ctx.channels.get(channel)
+  if (members === undefined) {
+    return
+  }
+  const payload = JSON.stringify({
+    type: 'version-mismatch',
+    plugin,
+    server,
+  } satisfies RelayOutgoing)
+  members.forEach(client => {
+    if (client !== ws) {
+      client.send(payload)
+    }
+  })
+}
+
 const broadcastToChannel = (
   ctx: RelayContext,
   channel: string,
@@ -596,6 +622,14 @@ export const startRelay = (
           )
         } else if (frame.type === 'status-sync') {
           handleStatusReplay(ctx, ws, frame.channel)
+        } else if (frame.type === 'version-mismatch') {
+          handleVersionMismatch(
+            ctx,
+            ws,
+            frame.channel,
+            frame.plugin,
+            frame.server,
+          )
         }
       },
       pong: ws => {
