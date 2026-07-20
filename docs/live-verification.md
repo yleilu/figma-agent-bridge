@@ -23,7 +23,7 @@ round-trip, real paint binding, `loadFontAsync`, real PNG bytes,
 This guide is the **LIVE twin**. Once a human has loaded the real plugin into
 Figma and clicked Connect, the harness in `packages/server/src/verify-live.ts`
 drives the **REAL plugin** through the **same server tool handlers** and asserts
-the documented contract from [[figma-bridge/docs/specs/tool-surface|the 47-tool
+the documented contract from [[figma-bridge/docs/specs/tool-surface|the 51-tool
 spec]]. It exports PNGs so an agent can _visually_ confirm, and it cleans up
 every node it creates.
 
@@ -231,4 +231,4 @@ design system:
 7. `export(PNG)` — capture the result and review it visually.
 
 If that flows without per-step friction and the exported PNG looks right, the
-47-tool surface is doing its job end-to-end.
+51-tool surface is doing its job end-to-end.

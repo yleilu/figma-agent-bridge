@@ -115,7 +115,7 @@ drives one specific file with no ambiguity (B3). The lifecycle contract:
   reopen` reload loop so new plugin code is picked up. It is **deliberately not** an MCP tool:
   unlike `connect`/`status` (which the agent uses to pair and read connection state), closing
   the plugin is a dev-workflow teardown, not a `figma.*` capability the agent composes during
-  design work — so the 47-tool surface stays unchanged.
+  design work — so the 51-tool surface stays unchanged.
 
 ## Tool contract (cross-cutting result / error shape)
 

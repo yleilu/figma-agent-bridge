@@ -19,7 +19,7 @@ related:
 # Claude Code Plugin & Zero-Config Distribution
 
 > **Status:** design (brainstorming output). Governs the packaging/distribution layer;
-> it does not change the 47-tool surface or the tool contract in
+> it does not change the 51-tool surface or the tool contract in
 > [[figma-bridge/docs/specs/overview|overview.md]] — it wraps them for install.
 
 ## 1. Goal & non-goals
@@ -254,7 +254,7 @@ floor → `figma-reviewer`; reporting tool friction → `figma-feedback`; connec
 
 ### 6.1 Skill — `figma-design`
 
-Purpose: teach the agent **how to operate** the 47-tool surface well. It deliberately does
+Purpose: teach the agent **how to operate** the 51-tool surface well. It deliberately does
 **not** encode visual taste or a house style — _how the outcome looks is the user's to
 specify, per request_. This keeps the skill durable: principles and mechanics age well;
 baked aesthetics don't. It covers the **full surface — create, inspect, and edit** (incl.
