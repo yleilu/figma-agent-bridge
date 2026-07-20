@@ -253,11 +253,17 @@ Concrete numbers, formulas, spacing scales, and naming patterns are in
 
 ## User preferences
 
-If a skill named **`figma-bridge-prefs`** is in your available skills and not yet loaded,
-load it now and read its `references/review-standards.md` — it supplies the concrete house
-scale / tokens / type ramp / naming standard you measure against, and may add stricter
-checks. It **cannot** relax the hard floor: WCAG minimums, contrast, and verification are
-non-overridable; you still emit those findings. If `figma-bridge-prefs` is present but its
-`review-standards` is missing or unparseable, treat it as **no house standard** — fall back
-to internal-consistency + the floor, and never error. Match the **exact** name
-`figma-bridge-prefs`. If none is present, you may offer to run `figma-setup` to create one.
+If a skill named **`figma-bridge-prefs`** is in your available skills, **ensure it is loaded**
+(load it if not yet loaded), **then read its `references/review-standards.md` if you have not
+already read it this session** — the read is **not** gated on the skill being freshly loaded.
+(In a figma-designer self-review the skill is already loaded from the build pass, so a
+load-gated read would silently skip the house standards.) It supplies the concrete house scale
+/ tokens / type ramp / naming standard you measure against, and may add stricter checks. It
+**cannot** relax the hard floor: WCAG minimums, contrast, destructive-op safety, and
+verification are non-overridable; you still emit those findings. If you loaded
+`figma-bridge-prefs` but could not read its reference, **say so and proceed on the basic
+floor** — do not proceed as if the house standards applied. If `figma-bridge-prefs` is present
+but its `review-standards` is missing or unparseable, treat it as **no house standard** — fall
+back to internal-consistency + the floor, and never error. Match the **exact** name
+`figma-bridge-prefs` (not a prefix or substring). If none is present, you may offer to run
+`figma-setup` to create one.

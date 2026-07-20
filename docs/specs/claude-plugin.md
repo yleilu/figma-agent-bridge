@@ -99,7 +99,7 @@ figma-agent-bridge/                       repo == marketplace
 │   │   ├── figma-feedback/SKILL.md       + references/ (§6.3)
 │   │   ├── figma-reviewer/SKILL.md       + references/ (§6.4)
 │   │   ├── figma-connection/SKILL.md     + references/ (§6.6)
-│   │   └── figma-setup/SKILL.md          + references/figma-bridge-prefs.template.md (§6.7)
+│   │   └── figma-setup/SKILL.md          + references/figma-bridge-prefs-template/ (SKILL.md.tmpl + references/) (§6.7)
 │   ├── agents/
 │   │   ├── figma-designer.md             frontmatter: tools:, model: (§6.2)
 │   │   └── figma-reviewer.md             (§6.5)
@@ -456,6 +456,8 @@ dashboards.
 4. **Layout & structure hygiene** — absolute positioning where auto-layout fits, default names
    ("Frame 42"), pile-ups at [0,0], missing constraints, redundant nesting, orphan/hidden nodes.
 5. **Fidelity to intent** — matches the request; nothing missing or extra.
+6. **Naming & context legibility** — meaningful, non-default node names (the naming floor; the
+   `/` taxonomy is a `figma-bridge-prefs` house preference) and well-formed `context` notes.
 
 **Output format** (per finding):
 
@@ -506,7 +508,8 @@ A shipped **helper** that authors the user's **`figma-bridge-prefs`** overlay �
 preference skill (**NOT shipped**) that holds taste, concrete values (tokens, spacing scale, type
 ramp, naming), and any stricter-than-basic standard, overriding the shipped skills' basic floor
 upward (P1). `figma-setup` instantiates it on explicit opt-in from a shipped, inert template
-(`references/figma-bridge-prefs.template.md`) and owns its later updates. The whole layer — the
+(`references/figma-bridge-prefs-template/`, whose skill file ships as `SKILL.md.tmpl` and is
+renamed to `SKILL.md` on copy) and owns its later updates. The whole layer — the
 partition, the load path, and the hard floor the reviewer enforces — is specced authoritatively in
 [[figma-bridge/docs/specs/customization|customization.md]] (its SSOT); this section only catalogs it.
 

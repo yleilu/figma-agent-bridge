@@ -45,14 +45,22 @@ Two places `figma-bridge-prefs` can live:
 | **User** (default)   | `~/.claude/skills/figma-bridge-prefs/`      | Always offered first — applies across all of this user's Figma work, per-machine.                                                                                                                                                                                 |
 | **Project** (opt-in) | `<repo>/.claude/skills/figma-bridge-prefs/` | Only when the session is inside a git repo that already uses a design system (tokens, styles, or components already in play) — a house style there is a team artifact worth committing and sharing, so offer this _in addition to_ user scope, not instead of it. |
 
-**Shadowing guard.** Claude Code resolves same-named skills personal (user) >
-project — a user-scope `figma-bridge-prefs` silently shadows a project-scope
-one. Before writing a **project**-scope copy, check whether
-`~/.claude/skills/figma-bridge-prefs/` already exists and, if it does, warn
-the user first: _"a user-scope figma-bridge-prefs will shadow this project
-one"_ — then let them choose whether to proceed anyway, edit the user-scope
-copy instead, or maintain both knowingly. Never write the skill under any
-name other than `figma-bridge-prefs`, in either scope.
+**Shadowing guard (bidirectional).** Claude Code resolves same-named skills
+personal (user) > project — a user-scope `figma-bridge-prefs` silently shadows
+a project-scope one. Guard **both** write directions:
+
+- **Before writing a project-scope copy**, check whether
+  `~/.claude/skills/figma-bridge-prefs/` already exists and, if it does, warn
+  the user first: _"a user-scope figma-bridge-prefs will shadow this project
+  one"_.
+- **Before writing a user-scope copy** (the default scope), detect an existing
+  `<repo>/.claude/skills/figma-bridge-prefs/` in the current git repo and, if
+  it exists, warn first: _"a user-scope figma-bridge-prefs will shadow this
+  project's committed one"_.
+
+Either way, let the user choose whether to proceed anyway, edit the
+other-scope copy instead, or maintain both knowingly. Never write the skill
+under any name other than `figma-bridge-prefs`, in either scope.
 
 ---
 

@@ -192,11 +192,15 @@ across all the user's Figma work, per-machine) or **project scope**
 - **Default: user scope**, offered up front. The helper is **context-aware**: inside a git repo
   that already uses a design system, it _offers_ project scope as well (a house style is a team
   artifact best shared via a committed skill).
-- **Shadowing guard.** Claude Code resolves same-named skills **personal (user) > project**, so a
-  user-scope `figma-bridge-prefs` **silently shadows** a project-scope one. Before writing a
-  project-scope file, `figma-setup` **detects an existing user-scope `figma-bridge-prefs` and
-  warns** ("a user-scope figma-bridge-prefs will shadow this project one") rather than producing a
-  silent wrong result. Documented here so the interaction is never a surprise.
+- **Shadowing guard (bidirectional).** Claude Code resolves same-named skills **personal (user) >
+  project**, so a user-scope `figma-bridge-prefs` **silently shadows** a project-scope one.
+  `figma-setup` guards **both** write directions rather than producing a silent wrong result:
+  before writing a **project**-scope file it detects an existing user-scope `figma-bridge-prefs`
+  and warns ("a user-scope figma-bridge-prefs will shadow this project one"); before writing a
+  **user**-scope file (the default) it detects an existing project-scope
+  `<repo>/.claude/skills/figma-bridge-prefs/` in the current git repo and warns ("a user-scope
+  figma-bridge-prefs will shadow this project's committed one"). Documented here so the
+  interaction is never a surprise.
 
 ## 9. Updates & the contract version
 

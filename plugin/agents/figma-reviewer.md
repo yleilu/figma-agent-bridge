@@ -63,7 +63,8 @@ Before checking any dimension, build a faithful picture of the target:
 0. **Load user preferences.** If a skill named `figma-bridge-prefs` is available, load it
    and read `references/review-standards.md` — measure the design against that house scale /
    tokens / ramp / naming standard. It cannot relax the WCAG / contrast / verification floor.
-   Match the exact name. Absent it, check the file against its own detected system + the floor.
+   Match the **exact** name `figma-bridge-prefs` (not a prefix or substring). Absent it, check
+   the file against its own detected system + the floor.
 
 1. **Identify the target.** Resolve **which file** and which node. For the file, use the
    `fileKey` figma-designer passed you (self-review); on a cold on-request review, resolve

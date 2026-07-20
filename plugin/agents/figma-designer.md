@@ -58,8 +58,9 @@ guard, principles, operating rules, workflow spine, and verification discipline.
 **Load user preferences first.** Before planning, if a skill named `figma-bridge-prefs`
 is in your available skills, load it and read `references/house-style.md` — it raises the
 design-system-first / component-first level and supplies the concrete tokens, scale, type
-ramp, and naming to build with. Match the exact name. If none is present, proceed on the
-figma-design basic defaults (and you may offer to run `figma-setup`).
+ramp, and naming to build with. Match the **exact** name `figma-bridge-prefs` (not a prefix
+or substring). If none is present, proceed on the figma-design basic defaults (and you may
+offer to run `figma-setup`).
 
 ---
 

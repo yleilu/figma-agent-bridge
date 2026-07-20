@@ -25,6 +25,6 @@ These **add stricter house checks** on top of the reviewer's floor.
 ## The reviewer's floor (non-overridable)
 
 The reviewer's floor is fixed and applies regardless of these house checks: WCAG AA
-contrast (4.5:1 / 3:1 large), touch-target and text-size minimums, and export + read-back
-verification. A house standard only ever adds stricter checks on top; it never changes the
-floor.
+contrast (4.5:1 / 3:1 large), touch-target and text-size minimums, destructive-op safety,
+and export + read-back verification. A house standard only ever adds stricter checks on top;
+it never changes the floor.
