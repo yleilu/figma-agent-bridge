@@ -68,6 +68,7 @@ import {
   reportStatusParamsSchema,
   listFeedbackParamsSchema,
   sendFeedbackParamsSchema,
+  discardFeedbackParamsSchema,
   githubAuthStartParamsSchema,
   githubAuthPollParamsSchema,
 } from '@figma-agent-bridge/shared/tool-params'
@@ -152,6 +153,7 @@ import { handleRecordFeedback } from './tools/feedback'
 import {
   handleListFeedback,
   handleSendFeedback,
+  handleDiscardFeedback,
 } from './tools/feedback-send'
 import {
   handleGithubAuthStart,
@@ -237,6 +239,13 @@ if (process.argv.includes('--relay')) {
     'send_feedback',
     sendFeedbackParamsSchema,
     p => handleSendFeedback(p),
+  )
+
+  registerSessionTool(
+    server,
+    'discard_feedback',
+    discardFeedbackParamsSchema,
+    p => handleDiscardFeedback(p),
   )
 
   registerSessionTool(

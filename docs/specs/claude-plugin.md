@@ -339,17 +339,26 @@ user's own invalid input), and continues the task (zero-friction, never derail).
 
 **Recording, then the end-of-work review.** `record_feedback` only _captures_ an item to the local
 backlog — mid-task, by whoever hits the friction (a `figma-designer` subagent, or the main agent).
-It **does not send**. The human gate is a selector the **top-level agent** raises at the end of a
-unit of work when the backlog is non-empty (`AskUserQuestion` is a main-agent affordance, so
-subagents only record):
+It **does not send**. The human gate is a whole-batch review the **top-level agent** raises at the
+end of a unit of work when the backlog is non-empty (`AskUserQuestion` is a main-agent affordance,
+so subagents only record) — the human is **never asked to triage issues one by one**:
 
-- **Identity (first time only).** Ask _Send anonymously_ vs _Log in with GitHub_; logging in runs
-  the device-flow handshake (`github_auth_start` / `github_auth_poll`, feedback-system.md). The
-  choice is **remembered** and skipped on later runs.
-- **Review the backlog.** `list_feedback` fetches all pending items; the selector is a multi-select
-  of them plus a free-text option for the human to describe an issue/opinion in their own words
-  (the agent classifies its category). **Checked → filed via `send_feedback`; unchecked → discarded;
-  dismiss → no-op** (backlog preserved). Nothing leaves the machine until the human picks it.
+- **Gate — one three-way choice on the whole batch** (always shown). _"I hit N tool limitation(s) —
+  ‹a few titles› — what should I do?"_ **Report → file all N**; **Defer (or dismiss) → stop:**
+  nothing is sent, nothing is deleted, the backlog is kept for later; **Discard → delete all N
+  unsent.** For a returning user the Report option carries the remembered attribution (_Report as
+  `name <email>`_ or _Report anonymously_) so they see whose account will author the comments.
+- **"Something else" — an add on any Report.** The gate always offers a free-text _"something else"_
+  so the human can add one issue in their own words on any Report, which the agent **investigates
+  and rewrites** into a proper bug/proposal (the raw text never leaves the machine), filed as
+  `send_feedback`'s `add` — independent of the first-run attribution step below.
+- **Attribution — first-time users only.** On the first **Report** (no identity remembered) the
+  human is asked _under my GitHub account_ vs _anonymously_; logging in runs the device-flow
+  handshake via `github_auth_start` / `github_auth_poll`. **Either choice is remembered**, so a
+  returning user skips this step and Reports straight through.
+- **Filing.** **Report** files every pending item (`send_feedback`) as a comment, the composed item
+  riding `add`; **Discard** hard-deletes every pending item (`discard_feedback`). The human chooses
+  once for the whole batch — no per-item selection.
 
 **BUG — something is broken or wrong.** Signals: a **silent no-op** (success result, nothing
 changed), an unexpected/confusing error, a result that **contradicts the spec**, or
@@ -539,21 +548,22 @@ partition, the load path, and the hard floor the reviewer enforces — is specce
 
 The feedback **mechanism** is specced authoritatively in
 [[figma-bridge/docs/specs/feedback-system|feedback-system.md]]: neutral **meta-tools**
-(`record_feedback` to capture, plus `list_feedback` / `send_feedback` / `github_auth_start` /
-`github_auth_poll` to review and file — their own `feedback` group), a
+(`record_feedback` to capture, plus `list_feedback` / `send_feedback` / `discard_feedback` /
+`github_auth_start` / `github_auth_poll` to review, file, and drop — their own `feedback` group), a
 **one-Markdown-file-per-item** store (**category = directory = one standing GitHub issue**), and an
-**agent-driven send flow** — at the end of a unit of work the top-level agent reviews the backlog
-with the human in a selector and files each chosen item as a **comment** on its category's standing
-issue, either **anonymously** via a **CloudFlare Worker** (holding a shared bot token) or **as the
-human's own GitHub account** (a token they authorize once, in-browser; on the public repo any
-authenticated user can comment). The human gate is the selector; nothing leaves the machine until
-the human picks it.
+**agent-driven send flow** — at the end of a unit of work the top-level agent runs a **fast
+three-way gate** with the human — **Report**, **Defer**, or **Discard** — and on **Report** files
+**every recorded item** as a **comment** on its category's standing issue, either **anonymously**
+via a **CloudFlare Worker** (holding a shared bot token) or **as the human's own GitHub account** (a
+token they authorize once, in-browser; on the public repo any authenticated user can comment).
+**Defer** keeps the backlog; **Discard** deletes it unsent. The human gate is that choice; nothing
+leaves the machine until the human picks **Report**.
 
 This milestone **packages** that mechanism and adds the plugin-layer pieces:
 
 > **Note:** there is **no in-plugin Feedback UI** — the panel is the agent status monitor
 > ([[figma-bridge/docs/specs/status-monitor|status-monitor.md]]), and the send flow is
-> **agent-driven** (the end-of-work selector), fully specced in
+> **agent-driven** (the end-of-work review), fully specced in
 > [[figma-bridge/docs/specs/feedback-system|feedback-system.md]]. `record_feedback` (the capture
 > path) is unchanged.
 

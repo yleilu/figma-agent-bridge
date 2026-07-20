@@ -17,16 +17,17 @@ related:
 # figma-agent-bridge — Feedback System
 
 > Defines a dogfooding loop: the agent **records** friction it hits while driving the MCP; at
-> the end of a unit of work the agent **reviews the backlog with the human** through a selector
-> and **files** each chosen item as a **comment** on one of two standing category issues (bugs,
-> proposals) — either **anonymously** (a shared bot identity, via a CloudFlare Worker) or **as
-> the human's own GitHub account** (a token the human authorizes once, in-browser). Governed by
-> `docs/principles.md`; transport reuses `docs/architecture.md`.
+> the end of a unit of work the agent runs a **fast three-way gate with the human** — **Report**,
+> **Defer**, or **Discard** — and on **Report** **files every recorded item** as a **comment** on
+> one of two standing category issues (bugs, proposals) — either **anonymously** (a shared bot
+> identity, via a CloudFlare Worker) or **as the human's own GitHub account** (a token the human
+> authorizes once, in-browser). Governed by `docs/principles.md`; transport reuses
+> `docs/architecture.md`.
 
-> **The agent records; the human decides what ships, and under whose name.** Nothing is filed
-> until the human picks it in the selector — that is the human gate. _When_ to record and _when_
-> to raise the selector is plugin-layer guidance (the `figma-feedback` skill, P1), never a tool
-> opinion — the tools themselves are neutral mechanisms.
+> **The agent records; the human decides whether to ship, and under whose name.** Nothing is
+> filed until the human picks **Report** at the end-of-work gate — that is the human gate. _When_
+> to record and _how_ to run the review is plugin-layer guidance (the `figma-feedback` skill, P1),
+> never a tool opinion — the tools themselves are neutral mechanisms.
 
 ## Purpose
 
@@ -40,9 +41,12 @@ The design goals, in priority order:
 1. **Zero-friction capture** — one neutral tool call (`record_feedback`) persists an item
    mid-task without derailing. The tool holds no opinion about _when_ to call it; that guidance
    is a plugin-layer skill (P1).
-2. **Human gate** — nothing is filed automatically. At the end of a unit of work the human
-   reviews the backlog in a selector, picks what to file, and **the items they do not pick are
-   discarded**. Dismissing the selector files and discards nothing (the backlog is preserved).
+2. **Human gate** — nothing is filed automatically. At the end of a unit of work the agent runs a
+   **fast three-way gate** on the whole batch: **Report** the recorded issues to the developer,
+   **Defer** them to a later review, or **Discard** them. **Defer or dismiss → nothing is sent and
+   nothing is deleted** (the backlog is kept); **Report files them as a batch**; **Discard deletes
+   the whole batch unsent** — the human is never asked to triage issues one by one. On **Report**, a
+   first-run user is then asked how to attribute it and may add one issue in their own words.
 3. **Attributable** — the human files either **anonymously** (a shared bot identity) or **as
    themselves** (their own GitHub account, so the comment is authored by them). The choice is
    made once and **remembered**.
@@ -58,22 +62,25 @@ The design goals, in priority order:
 The feature is divided across layers so no opinion leaks into the tools:
 
 - **Tool layer** — neutral capabilities: `record_feedback` (capture), and `list_feedback` /
-  `send_feedback` / `github_auth_start` / `github_auth_poll` (the review-and-file mechanism and
-  the identity handshake). None of them decide _when_ to fire or _what_ to send. They are
+  `send_feedback` / `discard_feedback` / `github_auth_start` / `github_auth_poll` (the
+  review-and-file mechanism and the identity handshake). None of them decide _when_ to fire or _what_ to send. They are
   **non-facade meta-tools** — the documented T6/T7 carve-out (see [Principle
   alignment](#principle-alignment)), siblings of `record_feedback` and `report_status`.
 - **Plugin layer** — the **`figma-feedback` skill** teaches the agent _when_ to record and
-  _when/how_ to raise the selector, triage the backlog, and resolve identity. This opinionated
-  workflow lives in [[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]] §6.3 (P1), never
-  in a tool description.
+  _when/how_ to run the end-of-work review (the three-way gate, the first-run form) and resolve
+  identity. This opinionated workflow lives in
+  [[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]] §6.3 (P1), never in a tool
+  description.
 
 ## Architecture
 
 The **record path** persists a `pending` item to a local store (below). The **send path** is
-**agent-driven**: at the end of a unit of work the agent reads the backlog (`list_feedback`),
-raises a selector (owned by the skill), and files the chosen items (`send_feedback`). Filing an
-item is a single GitHub call — a **comment** on the item's category issue. There are two identity
-paths, differing only in the comment's author:
+**agent-driven**: at the end of a unit of work the agent reads the backlog (`list_feedback`), runs
+the end-of-work review (owned by the skill), and — on **Report** — files the recorded issues as a
+batch (`send_feedback`), or on **Discard** deletes them unsent (`discard_feedback`). Filing an item
+is a single GitHub
+call — a **comment** on the item's category issue. There are two identity paths, differing only in
+the comment's author:
 
 - **Anonymous** → MCP server → **CloudFlare Worker** (holds the shared bot PAT) → the bot posts
   the comment.
@@ -104,37 +111,47 @@ sequenceDiagram
     Server->>Cred: read identity preference + cached identity
     Server-->>Agent: { pending[], identity }
 
-    alt no remembered identity, human chooses "Log in"
-        Agent->>Server: github_auth_start()
-        Server->>GH: POST /login/device/code (client_id, scope)
-        GH-->>Server: { user_code, verification_uri, expires_in, interval }
-        Server-->>Agent: { user_code, verification_uri, ... }
-        Note over Agent: shows code + URL to the human
-        Agent->>Server: github_auth_poll()
-        Server->>GH: POST /login/oauth/access_token (client_id, device_code)
-        GH-->>Server: { access_token }  (or authorization_pending / slow_down)
-        Server->>GH: GET /user  (fetch identity for display)
-        Server->>Cred: store token + identity, preference = github
-        Server-->>Agent: { status: authorized, identity }
-    end
-
-    Note over Agent: selector — human checks items to file, unchecked = discard
-    Agent->>Server: send_feedback({ send[], discard[], add?, identity })
-    loop each discarded
-        Server->>Store: delete file
-    end
-    loop each sent
-        alt anonymous
-            Server->>Worker: POST { category, title, body, version, secret }
-            Worker->>GH: POST /repos/:o/:r/issues/:n/comments (bot)
-        else logged-in
-            Server->>Cred: read user token
-            Server->>GH: POST /repos/:o/:r/issues/:n/comments (as the human)
+    Note over Agent: gate — Report · Defer · Discard (+ optional "something else" on Report; dismiss = Defer)
+    alt Report
+        opt first run — no remembered identity (Form)
+            Note over Agent: attribution — GitHub login vs anonymous
+            opt human chooses "Log in with GitHub"
+                Agent->>Server: github_auth_start()
+                Server->>GH: POST /login/device/code (client_id, scope)
+                GH-->>Server: { user_code, verification_uri, expires_in, interval }
+                Server-->>Agent: { user_code, verification_uri, ... }
+                Note over Agent: shows code + URL to the human
+                Agent->>Server: github_auth_poll()
+                Server->>GH: POST /login/oauth/access_token (client_id, device_code)
+                GH-->>Server: { access_token }  (or authorization_pending / slow_down)
+                Server->>GH: GET /user  (fetch identity for display)
+                Server->>Cred: store token + identity, preference = github
+                Server-->>Agent: { status: authorized, identity }
+            end
         end
-        GH-->>Server: { html_url }  (the new comment)
-        Server->>Store: frontmatter → status sent, sent_at, comment_url
+        Agent->>Server: send_feedback({ send[], add?, identity })
+        Server->>Cred: remember preference = identity (when explicitly chosen)
+        loop each sent
+            alt anonymous
+                Server->>Worker: POST { category, title, body, version, secret }
+                Worker->>GH: POST /repos/:o/:r/issues/:n/comments (bot)
+            else logged-in
+                Server->>Cred: read user token
+                Server->>GH: POST /repos/:o/:r/issues/:n/comments (as the human)
+            end
+            GH-->>Server: { html_url }  (the new comment)
+            Server->>Store: frontmatter → status sent, sent_at, comment_url
+        end
+        Server-->>Agent: { results[] }
+    else Discard
+        Agent->>Server: discard_feedback({ paths[] })
+        loop each path
+            Server->>Store: delete file
+        end
+        Server-->>Agent: { results[] }
+    else Defer or dismiss
+        Note over Agent: no-op — backlog kept
     end
-    Server-->>Agent: { results[] }
 ```
 
 ## Identity & authentication
@@ -168,7 +185,7 @@ in-browser.
 - **Identity for display.** `GET /user` yields `login`, `name`, and `email`. `email` is `null`
   when the human keeps it private; the display email then falls back to the GitHub noreply
   address `{id}+{login}@users.noreply.github.com`, and the display name falls back to `login`.
-  The selector shows `name <email>`.
+  The gate shows `name <email>`.
 - **No access.** A logged-in comment can still fail with `403`/`404` in edge cases (the user is
   blocked, the conversation is locked, or an interaction limit applies). The item is then kept and
   the human is offered the anonymous path instead.
@@ -181,8 +198,11 @@ Flow enabled (→ `client_id`); create the two standing category issues and set 
 
 A local store (`~/.figma-agent-bridge`, the same root as the feedback store) holds the identity
 **preference** (`anonymous` | `github`), the human's **OAuth token**, and the **cached identity**
-(`login`, `name`, `email`). It is the piece that lets the selector show `name <email>` across
-restarts and lets `send_feedback` reuse the remembered choice without re-asking.
+(`login`, `name`, `email`). It is the piece that lets the gate show `name <email>` across
+restarts and lets `send_feedback` reuse the remembered choice without re-asking. The **preference**
+is remembered once — set to `github` at login, or to the `identity` the human passes to
+`send_feedback` when they pick (so an **anonymous** choice sticks too) — the first-run attribution
+step never re-appears.
 
 - **Secure by default, with a fallback.** The token is written via **`Bun.secrets`** — Bun's
   built-in credential API, which maps to the macOS **Keychain**, Windows **Credential Manager**
@@ -195,7 +215,7 @@ restarts and lets `send_feedback` reuse the remembered choice without re-asking.
   authorized (never pasted, never a shared secret), and lives only on the human's machine. The
   **shared bot PAT stays in the Worker** and is used only for the anonymous path.
 - **Reset.** A send that returns `401` (revoked/invalid token) clears the stored token and marks
-  the identity unauthenticated, so the next selector re-offers login.
+  the identity unauthenticated, so the next review re-offers login.
 
 ## Data model — one item, one Markdown file
 
@@ -213,7 +233,7 @@ passes to `send_feedback`. There is no separate id field.
       2026-07-06T2030-batch-postop.md
 ```
 
-Frontmatter holds everything needed to **list** an item in the selector; the body is natural
+Frontmatter holds everything needed to **show** an item in the gate preview; the body is natural
 language for the human read and becomes the GitHub comment body, with the item's `title` as the
 comment heading.
 
@@ -234,7 +254,7 @@ Expected either a mutation or an explicit "node is locked" error.
 
 | Field | Source | Purpose |
 |---|---|---|
-| `title` | agent (`record_feedback`) | Selector label; the comment's heading |
+| `title` | agent (`record_feedback`) | Gate preview label; the comment's heading |
 | `status` | server | `pending` → `sent` \| `failed` |
 | `version` | server (`package.json`) | Ties the report to the build it came from |
 | `created` | server | Sort order |
@@ -247,8 +267,10 @@ The **category is the directory**, not a frontmatter field — routing is unambi
 `proposals` are the two categories to start; adding one is a new subdirectory + an issue mapping
 (see *Extending categories*).
 
-**Discard deletes the file.** An item the human does not pick in the selector is removed from the
-store entirely — it is not a status, it is gone.
+**Defer keeps, Discard deletes, Report files.** The gate acts on the whole batch: **Defer** (or
+dismiss) leaves every item `pending` for a later review; **Report** files each item and moves it to
+`sent`; **Discard** removes every pending item's file — it is not a status, it is gone. There is no
+_per-item_ discard; the human chooses once for the whole batch.
 
 ### Filename convention
 
@@ -269,8 +291,8 @@ owns filename generation.
   tool? }`.
 - **`feedback-store.ts`** — the only module that touches the feedback filesystem: create dirs,
   write an item, parse/serialize frontmatter, list `pending` (bounded), update status
-  (`markSent` / `markFailed`), and **`discard`** (delete a file). Frontmatter round-trips
-  losslessly.
+  (`markSent` / `markFailed`), and **`discard`** (hard-delete a file — the removal behind
+  `discard_feedback`). Frontmatter round-trips losslessly.
 - **`credential-store.ts`** (new) — the identity preference + OAuth token + cached identity,
   backed by `Bun.secrets` with a `0600`-file fallback (see [Credential &
   preference store](#credential--preference-store)).
@@ -286,12 +308,21 @@ owns filename generation.
   - `list_feedback({ cursor?, limit?=100 }) → { pending: FeedbackItem[], truncated, cursor?, identity: { preference, name?, login?, email? } | null }`
     — a bounded page of the pending backlog (Rule A, T10 — the skill drains the `cursor` until
     exhausted to present the whole backlog) plus the remembered identity, so the agent can build
-    the selector and decide whether to ask about identity.
-  - `send_feedback({ send: path[], discard: path[], add?: { title, description, category }, identity?: 'anonymous' | 'github' }) → { results: [...] }`
+    the gate and decide whether to ask about identity.
+  - `send_feedback({ send: path[], add?: { title, description, category }, identity?: 'anonymous' | 'github' }) → { results: { path, status: 'sent' | 'failed' | 'auth-required' | 'no-access', comment_url?, error? }[] }`
     — files each `send` item as a comment on its category issue (anonymous → Worker/bot; github →
-    direct as the human via `postIssueComment`), **deletes** each `discard` item, and, when `add`
-    is present, records that human-authored item and files it. `identity` defaults to the
-    remembered preference.
+    direct as the human via `postIssueComment`) and, when `add` is present, records that
+    human-authored item and files it too. Each result carries the item's `path`, its `status`, and
+    the `comment_url` on success or an `error` otherwise; a github `401` yields `auth-required` (the
+    token is cleared → re-offer login) and a `403`/`404` yields `no-access` (offer the anonymous
+    path), so the skill can report and recover per item. `identity` defaults to the remembered
+    preference; when the human passes it explicitly (first run) `send_feedback` persists it as the
+    preference, so an anonymous choice is remembered too.
+    On **Report** the review passes every pending path as `send`.
+  - `discard_feedback({ paths: path[] }) → { results: { path, ok, error? }[] }` — **hard-deletes**
+    each item's Markdown file from the store (no soft state, no network). Each result carries the
+    item's `path` and `ok`, or an `error` if the delete failed and the item was kept. On **Discard**
+    the review passes every pending path.
   - `github_auth_start() → { user_code, verification_uri, expires_in, interval }` — begins the
     device flow.
   - `github_auth_poll() → { status: 'pending' | 'authorized' | 'expired' | 'denied', identity?, interval? }`
@@ -311,35 +342,52 @@ owns filename generation.
   (`POST /repos/:o/:r/issues/:n/comments`) using `GITHUB_TOKEN` (a fine-grained bot PAT with
   issues:write, held as a Worker secret). Composes the comment body from `title`, `body`,
   `version`; returns `{ comment_url }`. Secrets: `GITHUB_TOKEN`, `SHARED_SECRET`. Vars: `REPO`,
-  `BUGS_ISSUE`, `PROPOSALS_ISSUE`. *(The Worker/anonymous path is deferred — the logged-in path is
-  built first.)*
+  `BUGS_ISSUE`, `PROPOSALS_ISSUE`.
 
-## The selector (plugin layer — `figma-feedback` skill, P1)
+## The end-of-work review (plugin layer — `figma-feedback` skill, P1)
 
-_When_ to raise the selector and _how_ to triage is opinion, owned by the `figma-feedback` skill
+_When_ to raise the review and _how_ to frame it is opinion, owned by the `figma-feedback` skill
 ([[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]] §6.3). Summarized here only to make
-the mechanism above legible; the skill is the source of truth:
+the mechanism above legible; the skill is the source of truth. The human is **never asked to triage
+issues one by one** — the choice is on the whole batch:
 
 - **When.** At the end of a unit of work, when the pending backlog is non-empty. The **top-level
-  agent** raises it (the selector is `AskUserQuestion`, a main-agent affordance; subagents only
-  `record_feedback`).
-- **Identity (first time only).** Ask _Send anonymously_ vs _Log in with GitHub_. Logging in runs
-  the device-flow handshake; the choice is then remembered and this question is skipped on later
-  runs.
-- **Issues.** A multi-select of **all** pending items, plus a free-text option to describe an
-  issue/opinion in the human's own words (the agent classifies its category and files it as the
-  `add` item). **Checked → filed; unchecked → discarded; dismiss → no-op** (backlog preserved).
+  agent** runs it (`AskUserQuestion` is a main-agent affordance; subagents only `record_feedback`).
+- **Gate — one three-way choice on the whole batch** (always shown). _"I hit N tool limitation(s)
+  — ‹a few titles› — what should I do?"_
+  - **Report them → file all N.** For a returning user the Report option carries the remembered
+    attribution — _Report as `name <email>`_ or _Report anonymously_ — so they see whose account
+    (or the bot) will author the comments before confirming.
+  - **Defer to next time → stop:** nothing is sent and **nothing is deleted**; the items are kept
+    for a later review. Dismissing the gate is treated as **Defer**.
+  - **Discard → delete all N unsent:** the backlog is cleared and nothing is filed.
+- **"Something else" — an add on any Report.** The gate always offers a free-text _"something else"_
+  so the human can add one issue in their own words on any Report, independent of the first-run
+  attribution step below.
+- **Attribution — first-time users only.** On the first **Report** (when `identity` is `null`) the
+  human is asked _under my GitHub account_ vs _anonymously_; logging in runs the device-flow
+  handshake. **Either choice is remembered** (github or anonymous), so a returning user skips this
+  step and Reports straight through under the remembered identity.
+- **"Something else" is composed, never raw.** For the free-text, the agent does **not** forward
+  the human's words. It investigates (reproduce, identify the tool + expected-vs-actual, gather
+  context), writes a proper bug or proposal, classifies it, and files that as `send_feedback`'s
+  `add`. The raw text never leaves the machine.
+- **Filing.** **Report** files all pending items via `send_feedback` (`send` = every pending path)
+  and the composed item, if any, rides `add`; `identity` is the resolved choice, which
+  `send_feedback` remembers as the preference. **Discard** passes every pending path to
+  `discard_feedback`, which hard-deletes the files. Either way the human chooses once for the whole
+  batch — there is no per-item selection.
 
 ## Error handling
 
 | Failure | Behaviour |
 |---|---|
 | Record — dir/write fails | `record_feedback` returns an error result; no file. |
-| Send (anonymous) — Worker unreachable / non-2xx / 401 secret | Item's frontmatter → `failed`; `send_feedback` reports it in `results`; the item is kept for a later selector. |
-| Send (logged-in) — GitHub `401` (revoked/invalid token) | Clear the stored token, mark identity unauthenticated; item kept; next selector re-offers login. |
+| Send (anonymous) — Worker unreachable / non-2xx / 401 secret | Item's frontmatter → `failed`; `send_feedback` reports it in `results`; the item is kept for a later review. |
+| Send (logged-in) — GitHub `401` (revoked/invalid token) | Clear the stored token, mark identity unauthenticated; item kept; next review re-offers login. |
 | Send (logged-in) — GitHub `403`/`404` (blocked / locked / interaction limit) | Item kept; the human is offered the anonymous path. |
-| Device flow — `access_denied` / `expired_token` / `slow_down` | Cancelled → stop; expired → restart `github_auth_start`; slow_down → adopt the new `interval`. |
-| Discard — delete fails | Reported in `results`; the item is kept. |
+| Device flow — `access_denied` / `expired_token` / `slow_down` | Cancelled → re-offer the attribution choice with the anonymous option (items stay pending, nothing filed); expired → restart `github_auth_start`; slow_down → adopt the new `interval`. |
+| Discard — delete fails | Reported in `results`; that item is kept in the backlog. |
 | Server not running | The agent cannot call the tools; nothing is filed. |
 
 The **shared bot secret never leaves the Worker**; the **human's own token never leaves their
@@ -349,12 +397,13 @@ the agent.
 ## Principle alignment
 
 - **T6 / T7 — non-facade meta-tools (documented exception).** `record_feedback`, `list_feedback`,
-  `send_feedback`, `github_auth_start`, and `github_auth_poll` are meta-tools about the bridge
+  `send_feedback`, `discard_feedback`, `github_auth_start`, and `github_auth_poll` are meta-tools
+  about the bridge
   experience, not Figma capabilities. They are admitted knowingly (the agent has no other channel
   to capture and file friction), quarantined in the `feedback` group, and recorded in
   [[figma-bridge/docs/specs/tool-surface|tool-surface.md]]'s count formula as non-facade —
   siblings of `report_status`. Precedent: `get_document_info` / `close_plugin`.
-- **P1 — no opinion in the tools.** _When_ to record and _when/how_ to raise the selector lives in
+- **P1 — no opinion in the tools.** _When_ to record and _when/how_ to raise the review lives in
   the `figma-feedback` skill. Every feedback tool description states only what the tool does.
 - **B1 — uniform contract; the relay stays dumb.** Every feedback tool uses the standard MCP
   result/error contract. Feedback carries **no relay frames at all** — it never touches the pipe,
@@ -375,19 +424,20 @@ standing issue + its `category → issue#` mapping — a `QUESTIONS_ISSUE` var i
 
 ## Testing
 
-- **server unit** — `feedback-store` frontmatter round-trip, status update, and `discard`
-  (delete); `credential-store` round-trip against a `Bun.secrets` mock **and** the `0600`-file
-  fallback (incl. feature-detect); `github-client` device flow (`start`/`poll`, including
-  `slow_down` / `expired_token` / `access_denied`), `fetchIdentity`, and **`postIssueComment`**
-  (success + `401`/`404`) against a mocked `fetch`; `send_feedback` triage — `send` (anonymous →
-  mocked Worker; github → mocked GitHub comment, authored), `discard` (file deleted), `add`
-  (created + filed).
-- **e2e (mock plugin) — N/A for these tools.** The four meta-tools are machine-global and never
+- **server unit** — `feedback-store` frontmatter round-trip, status update, and `discard` (delete);
+  `credential-store` round-trip against a `Bun.secrets` mock **and** the `0600`-file fallback (incl.
+  feature-detect); `github-client` device flow (`start`/`poll`, including `slow_down` /
+  `expired_token` / `access_denied`), `fetchIdentity`, and **`postIssueComment`** (success +
+  `401`/`404`) against a mocked `fetch`; `send_feedback` — `send` (anonymous → mocked Worker; github
+  → mocked GitHub comment, authored) and `add` (created + filed); `discard_feedback` — batch file
+  delete.
+- **e2e (mock plugin) — N/A for these tools.** The feedback meta-tools are machine-global and never
   round-trip through the Figma plugin, so the mock-plugin e2e harness does not apply; the handler
   tests above (real store + credential-store + mocked `fetch`) are the end-to-end coverage.
-- **live-verify** — the real `AskUserQuestion` selector; one real device-flow login; a real
-  comment posted **as the human** and **as the bot**; unchecked items discarded; a dismissed
-  selector leaves the backlog intact.
+- **live-verify** — the real three-way gate + first-run form; one real device-flow login; a real
+  comment posted **as the human** and **as the bot**; **Report** files every pending item; **Defer**
+  leaves the backlog intact; **Discard** clears it unsent; the free-text "something else" ships a
+  composed report (not the raw text).
 
 ## Out of scope (YAGNI)
 
@@ -395,7 +445,7 @@ standing issue + its `category → issue#` mapping — a `QUESTIONS_ISSUE` var i
   automatically on a `401`; a deliberate identity switch is deferred.
 - **A GitHub App / fine-grained least-privilege token.** The OAuth App device flow is the chosen
   mechanism; the repo is public, so `public_repo` suffices.
-- **Editing feedback bodies from the selector** — edit the Markdown file or the comment on GitHub.
-- **Auto-send** — the selector gate is the point.
+- **Editing feedback bodies from the review** — edit the Markdown file or the comment on GitHub.
+- **Auto-send** — the gate is the point.
 - **Reading GitHub comments back into the tool** — triage is a separate read of the two issues.
 - **Per-item arbitrary issue targeting** — category → standing issue is the routing model.

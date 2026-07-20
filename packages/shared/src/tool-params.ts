@@ -1570,9 +1570,6 @@ export const sendFeedbackParamsSchema = z.object({
   send: z
     .array(z.string())
     .describe('Backlog item paths to file to GitHub.'),
-  discard: z
-    .array(z.string())
-    .describe('Backlog item paths to delete unsent.'),
   add: z
     .object({
       category: z.enum(FEEDBACK_CATEGORIES),
@@ -1581,13 +1578,21 @@ export const sendFeedbackParamsSchema = z.object({
     })
     .optional()
     .describe(
-      "A new human-authored item (from the selector's free-text) to record and file.",
+      'A new human-authored item (the gate\'s free-text "something else") to record and file.',
     ),
   identity: z
     .enum(['anonymous', 'github'])
     .optional()
     .describe(
       'Override the remembered identity for this send.',
+    ),
+})
+
+export const discardFeedbackParamsSchema = z.object({
+  paths: z
+    .array(z.string())
+    .describe(
+      "Backlog item paths to hard-delete unsent (the gate's Discard).",
     ),
 })
 
