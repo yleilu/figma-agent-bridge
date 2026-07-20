@@ -105,6 +105,19 @@ export const agentStatusSyncBroadcastSchema = z.object({
   records: z.array(statusRecordSchema),
 })
 
+export const versionMismatchMessageSchema = z.object({
+  type: z.literal('version-mismatch'),
+  channel: z.string().min(1),
+  plugin: z.string(),
+  server: z.string(),
+})
+
+export const versionMismatchBroadcastSchema = z.object({
+  type: z.literal('version-mismatch'),
+  plugin: z.string(),
+  server: z.string(),
+})
+
 export const relayIncomingSchema = z.discriminatedUnion(
   'type',
   [
@@ -115,6 +128,7 @@ export const relayIncomingSchema = z.discriminatedUnion(
     leaveMessageSchema,
     agentStatusMessageSchema,
     statusSyncMessageSchema,
+    versionMismatchMessageSchema,
   ],
 )
 
@@ -136,5 +150,6 @@ export const relayOutgoingSchema = z.discriminatedUnion(
     agentStatusBroadcastSchema,
     agentStatusRemoveBroadcastSchema,
     agentStatusSyncBroadcastSchema,
+    versionMismatchBroadcastSchema,
   ],
 )

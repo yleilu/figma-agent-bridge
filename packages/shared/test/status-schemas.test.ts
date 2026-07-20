@@ -69,3 +69,34 @@ describe('status schemas', () => {
     ).toBe(false)
   })
 })
+
+describe('version-mismatch schemas', () => {
+  it('parses an incoming version-mismatch frame', () => {
+    expect(
+      relayIncomingSchema.safeParse({
+        type: 'version-mismatch',
+        channel: 'c',
+        plugin: '0.3.0',
+        server: '0.4.0',
+      }).success,
+    ).toBe(true)
+  })
+  it('parses an outgoing broadcast (no channel)', () => {
+    expect(
+      relayOutgoingSchema.safeParse({
+        type: 'version-mismatch',
+        plugin: '0.3.0',
+        server: '0.4.0',
+      }).success,
+    ).toBe(true)
+  })
+  it('rejects a frame missing `server`', () => {
+    expect(
+      relayIncomingSchema.safeParse({
+        type: 'version-mismatch',
+        channel: 'c',
+        plugin: '0.3.0',
+      }).success,
+    ).toBe(false)
+  })
+})
