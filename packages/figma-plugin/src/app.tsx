@@ -3,6 +3,7 @@ import { useRelay } from './hooks/useRelay'
 import { useDiscovery } from './hooks/useDiscovery'
 import { buildRoster, type RosterRow } from './roster'
 import { cx } from './cx'
+import { selectPanelView } from './panel-view'
 import type { StatusRecord } from '@figma-agent-bridge/shared'
 
 // busy wins while an action is in flight (spec: busy = "a Figma action is in flight";
@@ -137,11 +138,33 @@ const Idle = () => (
   </div>
 )
 
+const VersionMismatch = ({
+  plugin,
+  server,
+}: {
+  plugin: string
+  server: string
+}) => (
+  <div className="flex flex-col gap-1 p-3.5 text-11">
+    <div className="flex items-center gap-2">
+      <span className="inline-block w-2 h-2 rounded-full bg-figma-icon-danger" />
+      <span className="font-semibold text-figma-text">
+        Version mismatch
+      </span>
+    </div>
+    <div className="text-figma-text-secondary pl-4">
+      Your plugin (
+      <span className="text-figma-text">{plugin}</span>)
+      doesn't match the server (
+      <span className="text-figma-text">{server}</span>).
+      Update either side so they match.
+    </div>
+  </div>
+)
+
 export const App = () => {
-  const { status, connect, agentStatus } = useRelay()
-  // REUSE the existing discovery + auto-connect from the current app.tsx
-  // (its useDiscovery() usage + the auto-connect useEffect) VERBATIM — do
-  // not change the connect wiring, only the render.
+  const { status, connect, agentStatus, mismatch } =
+    useRelay()
   const { port } = useDiscovery()
   useEffect(() => {
     if (status === 'disconnected' && port !== null) {
@@ -150,28 +173,37 @@ export const App = () => {
   }, [status, port, connect])
 
   const rows = buildRoster(agentStatus)
+  const view = selectPanelView(
+    status,
+    mismatch,
+    rows.length,
+  )
 
   return (
     <div className="min-h-full max-h-screen overflow-y-auto bg-figma-bg text-figma-text">
-      {status === 'connecting' && (
+      {view.kind === 'connecting' && (
         <Fallback status="connecting" />
       )}
-      {status === 'disconnected' && (
+      {view.kind === 'offline' && (
         <Fallback status="disconnected" />
       )}
-      {status === 'connected' &&
-        (rows.length === 0 ? (
-          <Idle />
-        ) : (
-          <div className="py-1.5">
-            {rows.map(row => (
-              <Row
-                key={row.record.key}
-                row={row}
-              />
-            ))}
-          </div>
-        ))}
+      {view.kind === 'mismatch' && (
+        <VersionMismatch
+          plugin={view.plugin}
+          server={view.server}
+        />
+      )}
+      {view.kind === 'idle' && <Idle />}
+      {view.kind === 'roster' && (
+        <div className="py-1.5">
+          {rows.map(row => (
+            <Row
+              key={row.record.key}
+              row={row}
+            />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
