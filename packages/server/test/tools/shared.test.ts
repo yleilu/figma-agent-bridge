@@ -232,7 +232,7 @@ describe('requireFile', () => {
       version: '0.0.1', // ≠ APP_VERSION major.minor
     }
     let joinCalled = false
-    const pushes: Array<[string, string, string]> = []
+    const pushes: [string, string, string][] = []
     const client = makeClient({
       discover: () => Promise.resolve([skewed]),
       joinChannel: () => {
@@ -257,7 +257,7 @@ describe('requireFile', () => {
   })
 
   it('a plugin reporting NO version pushes plugin: "(none)"', async () => {
-    const pushes: Array<[string, string, string]> = []
+    const pushes: [string, string, string][] = []
     const client = makeClient({
       discover: () =>
         Promise.resolve([
