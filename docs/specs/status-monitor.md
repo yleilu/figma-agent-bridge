@@ -15,6 +15,7 @@ related:
   - "[[figma-bridge/docs/specs/plugin-presence]]"
   - "[[figma-bridge/docs/specs/claude-plugin]]"
   - "[[figma-bridge/docs/specs/design-system]]"
+  - "[[figma-bridge/docs/specs/version-handshake]]"
   - "[[figma-bridge/docs/principles]]"
 ---
 
@@ -25,7 +26,10 @@ related:
 > the panel degrades when no agent is talking. Identity headers are defined by
 > [[figma-bridge/docs/specs/request-envelope|request-envelope.md]] (the SSOT — this spec *consumes* them).
 > The agent-facing presence block (turn-start awareness for the agent) is a separate, opposite-direction
-> mechanism owned by [[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]].
+> mechanism owned by [[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]]. The panel's
+> version-mismatch banner (below) renders a frame whose compare and wire contract are owned by
+> [[figma-bridge/docs/specs/version-handshake|version-handshake.md]] — this spec covers only its
+> rendering and precedence among the panel's connection states.
 
 ## Why
 
@@ -39,13 +43,17 @@ agent itself, with a connection fallback for when nothing is talking.
 ## What it shows — the display model
 
 The panel renders in exactly one of two modes each frame — **strict either/or**: agent rows *or* a
-connection state, never both.
+connection/fallback state, never both. The connection/fallback mode itself covers several
+sub-states — connecting, offline, version mismatch, or no agent active — all of which render instead
+of the roster, never alongside it.
 
 ```mermaid
 flowchart TB
     Q1{"relay connected?"}
     Q1 -- no --> C1["Connecting… / Bridge offline"]
-    Q1 -- yes --> Q2{"any agent with a\nlive status?"}
+    Q1 -- yes --> Q0{"version mismatch?"}
+    Q0 -- yes --> VM["Version mismatch banner"]
+    Q0 -- no --> Q2{"any agent with a\nlive status?"}
     Q2 -- yes --> AG["Agent rows (Roster · Tree)\nno header — connected is implied"]
     Q2 -- no --> C3["No agent active"]
 ```
@@ -56,11 +64,23 @@ flowchart TB
 - **Connected is the gate.** Agent rows render only while the relay socket is up. If it drops, the panel
   switches to the fallback — agent rows are stale the moment fresh pushes can't arrive — which preserves
   the invariant **agent shown ⇒ connected**.
+- **Version mismatch pre-empts the roster.** A live plugin↔server `major.minor` skew is a peer
+  fallback state to **Bridge offline** — it renders in place of the roster even while agents are
+  live, because a skewed connection can't be trusted to carry fresh agent activity. It is **neutral**
+  (it names no stale side): a red dot, bold **"Version mismatch"**, and one sentence naming both
+  versions inline (e.g. "Your plugin (0.3.0) doesn't match the server (0.4.0). Update either side so
+  they match."). It **self-clears** the moment a (re)connect reports a matching `major.minor` — see
+  Degrade / fallback. The frame it renders — the compare and the wire contract — is owned by
+  [[figma-bridge/docs/specs/version-handshake|version-handshake.md]]; this spec only renders it,
+  and renders it without naming a stale side.
 - **Resolution, top-down:**
   1. **Not connected** → connection fallback: **Connecting…** (transient discovery/socket-open) or
      **Bridge offline** (relay/MCP unreachable — "start the MCP / relay to connect").
-  2. **Connected + ≥1 live agent** → the agent rows (roster below); this is the normal working state.
-  3. **Connected + no live agent** → **No agent active** ("waiting for an agent").
+  2. **Connected + version mismatch** → the **Version mismatch banner**, pre-empting the roster even
+     if agents are live.
+  3. **Connected + no mismatch + ≥1 live agent** → the agent rows (roster below); the normal working
+     state.
+  4. **Connected + no mismatch + no live agent** → **No agent active** ("waiting for an agent").
 
 ### The roster — adaptive Tree
 
@@ -260,6 +280,7 @@ updatedAt }` where `text` is `null` while the row is a skeleton (no narrative ye
 | `agent-status-remove` | relay → plugins | `{ sessionId, agentId? }` — remove matching rows |
 | `POST /agent-status/settle` | `Stop` hook → relay (HTTP) | `{ sessionId }` — busy → idle |
 | `POST /agent-status/remove` | `SubagentStop` / `SessionEnd` hooks → relay (HTTP) | `{ sessionId, agentId? }` — remove rows |
+| `version-mismatch` | relay → plugins (one channel) | `{ plugin, server }` — **route-only**: the relay stores nothing (unlike `agent-status`, it is never a roster row and is never TTL-swept). The frame, its server-side compare, and the `{ channel, plugin, server }` shape it arrives in are owned by [[figma-bridge/docs/specs/version-handshake|version-handshake.md]]. |
 
 These are new message types, not changes to existing command/reply framing, so they carry no version-skew
 risk beyond additive handling (an older plugin simply ignores an unknown broadcast type).
@@ -297,6 +318,11 @@ default (`agentType`) is unhelpful. This spec defines only the tool and the pane
   re-derivable from live agents.
 - **No agent ever pushes** (relay connected) → the panel sits in the "No agent active" resting state
   indefinitely; this is correct, not an error.
+- **Version mismatch** → the panel shows the banner instead of the roster, however many agents are
+  live. It **self-clears** on a matching (re)connect: the plugin resets its mismatch state on every
+  connect attempt and again on socket close, so the banner only persists while a fresh, skewed
+  connect keeps re-asserting it — the absence of a frame after a healthy reconnect *is* the clear, no
+  separate "matched" push is needed.
 
 ## Out of scope
 

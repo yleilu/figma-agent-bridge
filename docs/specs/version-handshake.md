@@ -12,6 +12,7 @@ related:
   - "[[figma-bridge/docs/principles]]"
   - "[[figma-bridge/docs/specs/overview]]"
   - "[[figma-bridge/docs/specs/claude-plugin]]"
+  - "[[figma-bridge/docs/specs/status-monitor]]"
 ---
 
 # Version / Protocol Handshake
@@ -19,7 +20,11 @@ related:
 > A **standalone** feature the Claude Code plugin milestone
 > ([[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]]) assumes is in place and only
 > *specializes* (the mismatch UX). It defines a **real** version check: the app-level Ping/Pong
-> carries `name`+`version` but is not wired to a handshake on its own; this wires one.
+> carries `name`+`version` but is not wired to a handshake on its own; this wires one. The skew this
+> handshake detects is surfaced **visually** in the Figma-plugin panel as a banner — the banner's
+> rendering and precedence are owned by
+> [[figma-bridge/docs/specs/status-monitor|status-monitor.md]]; this spec owns the compare and the
+> wire frame that feeds it.
 
 ## Purpose
 
@@ -45,7 +50,10 @@ diagnostic). A handshake flags both immediately.
   `APP_VERSION` on join/register.
 - **Server compares on connect** — the `connect` handler reads the reported version and compares
   it to its own `APP_VERSION` on **major + minor only** (patch ignored); the outcome is also
-  surfaced in `status`.
+  surfaced in `status`. In the auto-join model the compare + emit **chokepoint** is `requireFile`
+  (the B2 gate every file-addressed tool call flows through) plus the two `connect` branches
+  (explicit-channel and resolved-target) — not a single manual connect handler; every path that can
+  discover a skewed plugin runs the same compare and the same emit.
 - **Mismatch → actionable error** — naming the stale side: *"Agent Bridge plugin vX is incompatible
   with server vY — update the {plugin | server}."* Subsequent tool calls short-circuit with the
   same message until resolved.
@@ -71,6 +79,18 @@ diagnostic). A handshake flags both immediately.
   likewise a breaking wire change → **minor bump** (B2). The relay stays semantics-free — it stores
   `fileKey` in the availability registry but gains no logic (B1); the server owns targeting and the
   compare.
+- **On skew, the server pushes a `version-mismatch` frame** so the plugin can surface it visually
+  (the banner, owned by [[figma-bridge/docs/specs/status-monitor|status-monitor.md]]):
+  `{ channel, plugin, server }` server→relay, routed to `{ plugin, server }` relay→plugin (the
+  `channel` is stripped on the way out — the **same** server→plugin precedent as `agent-status`).
+  The **relay routes by `channel` and never interprets or stores** the frame (B1); the **server
+  owns** both the compare (`protocolMismatch`) and the emit.
+
+```mermaid
+flowchart LR
+    S["server\n(protocolMismatch compare)"] -->|"version-mismatch\n{ channel, plugin, server }"| R["relay\n(routes by channel, stores nothing)"]
+    R -->|"version-mismatch\n{ plugin, server }"| P["plugin panel\n(banner, see status-monitor.md)"]
+```
 
 ## Testing
 
@@ -79,6 +99,10 @@ diagnostic). A handshake flags both immediately.
 - **Relay schema** — assert `version` is present/validated on the `register` message.
 - **Mock fidelity** — the mock plugin (`packages/server/test/mocks/mock-plugin.ts`) reports the same
   `APP_VERSION` by default; assert it so server / plugin / mock drift is caught (mock-fidelity rule).
+- **Emit + route** — a skewed connect makes the server emit a `version-mismatch` frame (and a
+  matching connect emits none); the relay routes the frame to the channel's other members and
+  stores nothing; the shared schema validates both the `{ channel, plugin, server }` and
+  `{ plugin, server }` shapes and rejects a frame missing a required field.
 
 ## Relationship to the plugin milestone
 
@@ -87,8 +111,17 @@ This handshake ships **first** and is **self-contained**. The Claude Code plugin
 **decoupled** — it does not spec or depend on this mechanism. Its only version touch-point is a
 later, small **diagnosis / response skill**: when this handshake reports a mismatch, that skill
 guides the user through the fix (e.g. *reinstall the Figma plugin*, or diagnose a stale server).
+
+Separately, the **Figma-plugin panel itself** surfaces the skew **visually**, immediately, with no
+skill needed: a **banner** — a red dot, bold "Version mismatch", and one sentence naming both
+versions inline — that **pre-empts the roster** (peer to a "Bridge offline" fallback) and
+**self-clears** once a (re)connect reports a matching `major.minor`. The banner's rendering and
+precedence are owned by [[figma-bridge/docs/specs/status-monitor|status-monitor.md]]; it consumes
+the `version-mismatch` frame this spec defines.
+
 The version compare (major.minor), the wire change, and the actionable error all live **here**; the
-plugin only *responds*.
+plugin only *responds* — visually via the banner, and, for the Claude Code plugin milestone, via its
+later diagnosis skill.
 
 ## Out of scope
 
