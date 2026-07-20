@@ -233,6 +233,25 @@ forward-references the feedback/reviewer skills below:
 | Diagnose connection / version | `figma-connection` (§6.6) | — (main-agent guidance)                                        |
 | Customize house style         | `figma-setup` (§6.7)      | — (authors `figma-bridge-prefs`, not shipped)                  |
 
+### 6.0 Skill charter — what goes where
+
+The [[figma-bridge/docs/principles|P1]] partition, made concrete per skill — what each skill
+**holds** and what it must hand **off**. This is the boundary the other subsections implement.
+
+| Skill                                      | Purpose                               | Holds                                                                                                                                                                                                              | Never holds (→ goes to)                                                                                                                                                                 |
+| ------------------------------------------ | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `figma-design`                             | Build well                            | tool mechanics, call patterns, limits; the **basic** level of design-system-first + component-first; the naming **floor** (meaningful, non-default)                                                                | concrete values (tokens/scale/ramp/naming convention) + strict levels → `figma-bridge-prefs`                                                                                            |
+| `figma-reviewer`                           | Find issues                           | review _how-to_ (inspect/enumerate/report, the six dimensions' mechanics) + the non-overridable floor it owns: **verification discipline + destructive-op safety** + default-name detection + internal-consistency | all concrete standards — including the accessibility thresholds (WCAG/contrast/touch/text-size) — come from the loaded `figma-design` + `figma-bridge-prefs`; the reviewer defines none |
+| `figma-feedback`                           | Report _tool_ friction                | bug/proposal categories, formats, high-value litmus, `record_feedback` mapping; the fold-back fork                                                                                                                 | design critique → `figma-reviewer`; preference content → `figma-bridge-prefs` via `figma-setup`                                                                                         |
+| `figma-connection`                         | Diagnose/recover connection & version | symptoms → diagnosis → recovery                                                                                                                                                                                    | anything design/build/review                                                                                                                                                            |
+| `figma-setup`                              | Author + update `figma-bridge-prefs`  | the instantiate / tailor / update / scope flow                                                                                                                                                                     | the preference **values** (the user's, in `figma-bridge-prefs`)                                                                                                                         |
+| `figma-bridge-prefs` _(user, not shipped)_ | The user's durable preferences        | concrete values, the **strict** levels, house review standards, **the accessibility thresholds (WCAG AA default)**                                                                                                 | tool mechanics; the shipped floor (verification + destructive-op safety)                                                                                                                |
+
+Decision rule: _a concrete value / taste / strict standard (incl. accessibility thresholds) →
+`figma-bridge-prefs`; how-to-build → `figma-design`; how-to-review or the verification/destructive-op
+floor → `figma-reviewer`; reporting tool friction → `figma-feedback`; connection/version →
+`figma-connection`._
+
 ### 6.1 Skill — `figma-design`
 
 Purpose: teach the agent **how to operate** the 47-tool surface well. It deliberately does
@@ -451,8 +470,9 @@ dashboards.
 2. **Consistency** — off-scale spacing/padding, inconsistent radius, type off the ramp,
    misaligned / off-grid elements — measured against the file's **own** detected system (or the
    user's `figma-bridge-prefs` scale when installed), never a shipped baseline scale.
-3. **Accessibility** — text contrast vs WCAG AA (4.5:1 / 3:1 large), min text size, touch-target
-   size, meaning conveyed by colour alone.
+3. **Accessibility** — text contrast, min text size, touch-target size, meaning conveyed by colour
+   alone — checked against the accessibility thresholds in the user's `figma-bridge-prefs` (WCAG AA
+   is the shipped template default); unchecked when no prefs.
 4. **Layout & structure hygiene** — absolute positioning where auto-layout fits, default names
    ("Frame 42"), pile-ups at [0,0], missing constraints, redundant nesting, orphan/hidden nodes.
 5. **Fidelity to intent** — matches the request; nothing missing or extra.
@@ -475,11 +495,13 @@ after the report it offers to apply the fixes, and on the user's approval edits 
 design flaw) routes to `figma-feedback` (§6.3) instead of a fix.
 
 **Structure:** `SKILL.md` (dimensions, output format, flow) → `references/checks.md`, loaded when
-reviewing. `checks.md` ships **only the hard floor** — the WCAG ratios, verification discipline, and
-destructive-op safety — plus **internal-consistency** checks (does the file use its _own_ detected
-tokens / scale / ramp consistently). The concrete house scale, token set, type ramp, and naming
-rules are a **user preference** supplied by `figma-bridge-prefs/references/review-standards.md` when
-installed (P1) — see [[figma-bridge/docs/specs/customization|customization.md]].
+reviewing. `checks.md` ships **only the hard floor** — verification discipline and destructive-op
+safety — plus **internal-consistency** checks (does the file use its _own_ detected tokens / scale /
+ramp consistently) and the accessibility _how-to_ (the contrast-ratio formula, interactive-node
+detection). The concrete standards — the house scale, token set, type ramp, naming rules, **and the
+accessibility thresholds (WCAG/contrast/touch-target/text-size)** — are a **user preference** supplied
+by `figma-bridge-prefs/references/review-standards.md` when installed (P1) — see
+[[figma-bridge/docs/specs/customization|customization.md]].
 
 ### 6.5 Agent — `figma-reviewer`
 
