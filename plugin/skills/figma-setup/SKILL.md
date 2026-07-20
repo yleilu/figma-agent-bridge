@@ -94,8 +94,9 @@ whichever scope was chosen.
    edit the copied `references/*.md`
    files to match. **Preserve the floor-preserving header** in every file you
    touch: a tailoring edit may only _tighten_ (add a scale, a stricter rule);
-   it must never relax verification discipline, destructive-op safety, or
-   accessibility minimums. If a requested preference would cross that floor,
+   it must never relax verification discipline or destructive-op safety.
+   Accessibility thresholds are a preference you set here (the template ships
+   WCAG AA as the default). If a requested preference would cross that floor,
    say so plainly and keep the floor intact rather than encoding the
    relaxation.
 

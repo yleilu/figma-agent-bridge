@@ -102,21 +102,27 @@ Check regardless of whether a design system is present:
   or positions suggest manual override (check `layoutPositioning: ABSOLUTE` on
   children in a flow-mode frame).
 
-### 3. Accessibility
+### 3. Accessibility _(user preference — thresholds from `figma-bridge-prefs`)_
 
-Check regardless of design system:
+Accessibility standards are a **user preference** (customization.md §7). Check contrast,
+touch-target size, and text size against the thresholds in the loaded `figma-bridge-prefs`
+`review-standards.md`. **No `figma-bridge-prefs` (or no `review-standards`) → accessibility is
+unchecked** — you may compute the values, but do **not** assert a threshold; the reviewer
+defines none.
 
-- **Text contrast** — compare text `color` against the background `fills` of the
-  nearest ancestor frame. Apply WCAG AA thresholds:
-  - Normal text (< 18 pt, not bold; < 14 pt bold): contrast ratio ≥ 4.5:1
-  - Large text (≥ 18 pt regular, ≥ 14 pt bold): contrast ratio ≥ 3:1
-    (Thresholds and the contrast-ratio formula are in `references/checks.md`.)
-- **Minimum text size** — body / label text below 11 px is a nit; below 9 px is a
-  warning (unreadable at standard screen densities).
-- **Touch-target size** — interactive elements (buttons, icon buttons, links) whose
-  bounding box is smaller than 44 × 44 pt are a warning.
-- **Meaning by colour alone** — status indicators or data visualisation that conveys
-  meaning exclusively via hue (no label, icon, pattern, or shape difference).
+- **Text contrast** — compare text `color` against the background `fills` of the nearest
+  ancestor frame; compute the contrast ratio (formula in `references/checks.md`) and flag
+  against the user's contrast thresholds.
+- **Minimum text size** — read each text node's size and flag against the user's
+  minimum-text-size standard.
+- **Touch-target size** — measure interactive elements' (buttons, icon buttons, links)
+  bounding boxes and flag against the user's touch-target standard.
+- **Meaning by colour alone** — status indicators or data visualisation that conveys meaning
+  exclusively via hue (no label, icon, pattern, or shape difference); flag against the user's
+  accessibility standard.
+
+The _how-to_ (contrast formula, interactive-node detection) is in `references/checks.md`; the
+concrete numbers come only from `figma-bridge-prefs`.
 
 ### 4. Layout & structure hygiene
 
@@ -191,7 +197,8 @@ Emit one finding per line in this shape:
 Severity levels:
 
 - `blocker` — prevents the design from meeting its purpose or fails a hard
-  threshold (e.g. WCAG AA contrast fail, completely missing section).
+  threshold (e.g. a completely missing section, or an accessibility contrast fail
+  against the user's `figma-bridge-prefs` blocker threshold).
 - `warning` — degrades quality or maintainability; should be fixed before shipping.
 - `nit` — polish item; low urgency but worth noting.
 
@@ -275,7 +282,8 @@ proceed on the basic floor** — do not proceed as if its standards applied. If
 as **no house standard** — fall back to `figma-design` basics + internal-consistency + the
 floor, and never error.
 
-**The floor is non-overridable.** Neither loaded skill can relax it: WCAG minimums, contrast,
-destructive-op safety, and verification are yours alone; you still emit those findings. You
-measure the design against `figma-design` basics + `figma-bridge-prefs` preferences + this
-floor.
+**The floor is non-overridable.** Neither loaded skill can relax it: **verification (export +
+read-back) and destructive-op safety** are yours alone; you still emit those findings.
+Accessibility is **not** in this floor — it is a user preference: check it against the loaded
+`figma-bridge-prefs` thresholds, and with no prefs it is unchecked (assert no threshold). You
+measure the design against `figma-design` basics + `figma-bridge-prefs` preferences + this floor.

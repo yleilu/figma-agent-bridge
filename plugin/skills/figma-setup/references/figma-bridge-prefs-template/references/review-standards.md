@@ -22,9 +22,22 @@ These **add stricter house checks** on top of the reviewer's floor.
 - Descriptive PascalCase / Title-Case; flag opaque names beyond the shipped
   blank/default-name floor.
 
+## Accessibility standard (WCAG AA — the shipped default; edit to taste)
+
+Your editable accessibility standard. The reviewer measures contrast, text size, and
+touch-target size against these when this skill is installed; without it, accessibility is
+unchecked (the reviewer asserts no threshold of its own).
+
+- **Contrast (WCAG AA):** normal text ≥ 4.5:1; large text ≥ 3:1 (≥ 18 pt, or ≥ 14 pt bold);
+  UI components and graphical objects ≥ 3:1.
+- **Minimum text size:** body / label text ≥ 11 px (below 9 px is unreadable at standard
+  density).
+- **Touch-target size:** interactive elements ≥ 44 × 44 pt (≥ 24 × 24 pt in a compact /
+  dense layout).
+
 ## The reviewer's floor (non-overridable)
 
-The reviewer's floor is fixed and applies regardless of these house checks: WCAG AA
-contrast (4.5:1 / 3:1 large), touch-target and text-size minimums, destructive-op safety,
-and export + read-back verification. A house standard only ever adds stricter checks on top;
-it never changes the floor.
+The reviewer's floor is fixed and applies regardless of these house checks: destructive-op
+safety, and export + read-back verification. A house standard only ever adds stricter checks
+on top; it never changes the floor. Accessibility is **not** part of this floor — it is the
+editable standard above.

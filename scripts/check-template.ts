@@ -1,10 +1,11 @@
 // Safety-contract lint for the figma-bridge-prefs template (docs/specs/customization.md §6).
-// The template may only make the assistant STRICTER — it must never relax verification,
-// destructive-op safety, or accessibility. Runs in `bun run verify` via `check:template`.
+// The template may only make the assistant STRICTER — it must never relax verification or
+// destructive-op safety. (Accessibility is a user preference, not a floor — the template sets
+// its thresholds, WCAG AA by default.) Runs in `bun run verify` via `check:template`.
 const MAX_LINES = 400
 // A directive that RELAXES a floor: a relaxing verb (any inflection) within ~40 chars of a floor keyword.
 const RELAX =
-  /\b(?:skip|relax|disabl|ignor|bypass|suppress|omit|forego|forgo|avoid|leave out|no need to|don'?t (?:run|do|bother)|never (?:run|verify))\w*[^.\n]{0,40}\b(?:verif|read-?back|contrast|wcag|accessib|a11y|safety|destructiv|delete)/i
+  /\b(?:skip|relax|disabl|ignor|bypass|suppress|omit|forego|forgo|avoid|leave out|no need to|don'?t (?:run|do|bother)|never (?:run|verify))\w*[^.\n]{0,40}\b(?:verif|read-?back|safety|destructiv|delete)/i
 
 export type TFile = { path: string; content: string }
 
@@ -74,7 +75,7 @@ export function lintTemplateFiles(
     }
     if (RELAX.test(scanBody(f.content))) {
       v.push(
-        `${f.path}: contains a directive that relaxes a safety/verification/accessibility floor (forbidden — the template may only tighten)`,
+        `${f.path}: contains a directive that relaxes a safety/verification floor (forbidden — the template may only tighten)`,
       )
     }
   }
