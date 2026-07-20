@@ -28,10 +28,26 @@
   --color-figma-icon: var(--figma-color-icon);
   --color-figma-icon-secondary: var(--figma-color-icon-secondary);
   --color-figma-icon-brand: var(--figma-color-icon-brand);
-  --color-figma-icon-danger: var(--figma-color-icon-danger);
-  --color-figma-icon-success: var(--figma-color-icon-success);
+  /*
+   * Figma dark-theme token bug: --figma-color-icon-
+   * {danger,success,warning} are injected with the MUTED
+   * text-* value (color ramp-400) instead of the documented
+   * SATURATED icon value (ramp-500 = the bg-* value). Proof:
+   * Figma's own docs light theme defines icon-danger ==
+   * bg-danger (#f24822) and != text-danger, but the dark
+   * injection collapses icon onto text (#fca397). Alias each
+   * to bg-* — correct in BOTH themes (light #f24822 / dark
+   * #e03e1a for danger) — so status dots stay saturated
+   * signals. Neutral/brand/component/selected icons are
+   * INTENTIONALLY muted (icon==text in both themes) — do not
+   * add them here. Delete these three lines once Figma ships
+   * the documented icon values.
+   * https://developers.figma.com/docs/plugins/css-variables/
+   */
+  --color-figma-icon-danger: var(--figma-color-bg-danger);
+  --color-figma-icon-success: var(--figma-color-bg-success);
   --color-figma-icon-tertiary: var(--figma-color-icon-tertiary);
-  --color-figma-icon-warning: var(--figma-color-icon-warning);
+  --color-figma-icon-warning: var(--figma-color-bg-warning);
   --color-figma-icon-disabled: var(--figma-color-icon-disabled);
 
   --color-figma-border: var(--figma-color-border);
