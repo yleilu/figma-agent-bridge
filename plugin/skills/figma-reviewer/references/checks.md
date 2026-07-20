@@ -283,16 +283,6 @@ Severity:
 - Leaf content nodes inside a component → `nit`
 - Purely decorative or structural helpers → `nit`
 
-### Component `/` taxonomy _(house-preference, not a shipped floor)_
-
-Requiring a `/` taxonomy path on every `COMPONENT` / `COMPONENT_SET` (`Button/Primary`,
-`Icon/Chevron`) is a **stricter naming standard** that applies **only when a
-`figma-bridge-prefs` `review-standards` opts into it**. When opted in, a component whose
-`name` contains no `/` is a `warning`; **variant children** whose names contain `=`
-(`Size=Lg, State=Hover`) are exempt (variant-property form, not a taxonomy miss). Absent
-that opt-in, do **not** flag a missing `/` taxonomy — only the blank / default-name check
-is the shipped floor.
-
 ### Context well-formedness
 
 The full `context` value is on `get_node`; the `contextSummary` slice is on `inspect` /
@@ -315,11 +305,11 @@ Always `nit` / advisory — never a hard fail, since either field could be the s
 
 ## Quick-reference severity table
 
-| Dimension        | Blocker                                          | Warning                                                                                                               | Nit                                                              |
-| ---------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| DS adherence     | —                                                | Hardcoded color/text with matching token/style; detached instance                                                     | Near-match token candidate                                       |
-| Consistency      | —                                                | Off-scale spacing ≥ 4 px; > 4 type sizes; misaligned block                                                            | Off-scale ≤ 3 px; radius rounding; type size ±2 px               |
-| Accessibility    | WCAG AA text contrast fail; touch target < 24×24 | WCAG AA UI/graphic fail; touch target < 44×44; colour-alone signal; text < 9 px                                       | WCAG AAA near-miss; text 9–10 px                                 |
-| Layout hygiene   | —                                                | Pile-up at [0,0]                                                                                                      | Redundant nesting; hidden nodes; default constraints             |
-| Fidelity         | Missing named section or feature                 | Count mismatch; placeholder content                                                                                   | Extra elements not asked for                                     |
-| Naming & context | —                                                | Blank/default-named frames/components; component without `/` taxonomy _(house-preference)_; unclosed/over-cap context | Default-named leaves; missing `purpose`; name↔role contradiction |
+| Dimension        | Blocker                                          | Warning                                                                         | Nit                                                              |
+| ---------------- | ------------------------------------------------ | ------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| DS adherence     | —                                                | Hardcoded color/text with matching token/style; detached instance               | Near-match token candidate                                       |
+| Consistency      | —                                                | Off-scale spacing ≥ 4 px; > 4 type sizes; misaligned block                      | Off-scale ≤ 3 px; radius rounding; type size ±2 px               |
+| Accessibility    | WCAG AA text contrast fail; touch target < 24×24 | WCAG AA UI/graphic fail; touch target < 44×44; colour-alone signal; text < 9 px | WCAG AAA near-miss; text 9–10 px                                 |
+| Layout hygiene   | —                                                | Pile-up at [0,0]                                                                | Redundant nesting; hidden nodes; default constraints             |
+| Fidelity         | Missing named section or feature                 | Count mismatch; placeholder content                                             | Extra elements not asked for                                     |
+| Naming & context | —                                                | Blank/default-named frames/components; unclosed/over-cap context                | Default-named leaves; missing `purpose`; name↔role contradiction |

@@ -60,11 +60,15 @@ Sonnet handles most reviews. Escalate to opus when:
 
 Before checking any dimension, build a faithful picture of the target:
 
-0. **Load user preferences.** If a skill named `figma-bridge-prefs` is available, load it
-   and read `references/review-standards.md` — measure the design against that house scale /
-   tokens / ramp / naming standard. It cannot relax the WCAG / contrast / verification floor.
-   Match the **exact** name `figma-bridge-prefs` (not a prefix or substring). Absent it, check
-   the file against its own detected system + the floor.
+0. **Load the review basis.** Load **both** `figma-design` — the basic design doctrine
+   (design-system-first, component-first, the naming floor) — and, if a skill of that **exact**
+   name is available, `figma-bridge-prefs`, reading its `references/review-standards.md` for the
+   concrete house scale / tokens / ramp / naming _convention_. Measure the design against those
+   basics + preferences + the floor; neither loaded skill can relax the WCAG / contrast /
+   verification floor. Match the **exact** name `figma-bridge-prefs` (not a prefix or substring).
+   In a figma-designer self-review both are already loaded from the build pass — reuse, don't
+   reload. Absent `figma-bridge-prefs`, check the file against `figma-design` basics + its own
+   detected system + the floor.
 
 1. **Identify the target.** Resolve **which file** and which node. For the file, use the
    `fileKey` figma-designer passed you (self-review); on a cold on-request review, resolve

@@ -153,8 +153,10 @@ pure style audit), skip it.
 
 Audits the two hidden-in-plain-sight legibility surfaces: every node should carry a
 legible `name`, and any `context` note should be well-formed. (The naming _floor_ — a
-meaningful, non-default name — lives in the `figma-design` skill; the concrete naming
-convention is a `figma-bridge-prefs` preference. This dimension only audits.)
+meaningful, non-default name — comes from the loaded `figma-design` skill; the concrete
+naming _convention_, if any, comes from the loaded `figma-bridge-prefs`. The reviewer
+itself defines neither — this dimension only audits against what those supply plus the
+blank / default-name floor.)
 
 - **Blank or default name** — a `name` that is empty, whitespace-only, or matches
   Figma's default-name pattern (`Frame 12`, `Rectangle`, `Ellipse 3` — the full regex
@@ -162,11 +164,6 @@ convention is a `figma-bridge-prefs` preference. This dimension only audits.)
   - **Text-node exemption:** a text node's `name` may legitimately equal its
     `characters`, so a text node is flagged **only when its name is blank** — never for
     mirroring its own content or the default pattern.
-- **Component without a `/` taxonomy _(house-preference)_** — requiring a slash path
-  (`Button/Primary` rather than `Button`) is a **stricter standard that applies only when a
-  `figma-bridge-prefs` `review-standards` opts into it**; absent that opt-in, do not flag it.
-  **Variant children** (names containing `=`, e.g. `Size=Lg, State=Hover`) are exempt. The
-  **blank / default-name** check above remains the shipped floor.
 - **Malformed or oversized context** — a `context` value with an unclosed frontmatter
   fence (yields no `contextSummary`, so the note is invisible at a glance), or one that
   exceeds the 2 KB cap (only reachable via the `set_plugin_data` escape hatch).
@@ -251,19 +248,34 @@ doesn't exist), do **not** invent a workaround that breaks the design. Instead:
 Concrete numbers, formulas, spacing scales, and naming patterns are in
 `references/checks.md`. Load it when reviewing — it prevents guessing at thresholds.
 
-## User preferences
+## Review basis
 
-If a skill named **`figma-bridge-prefs`** is in your available skills, **ensure it is loaded**
-(load it if not yet loaded), **then read its `references/review-standards.md` if you have not
-already read it this session** — the read is **not** gated on the skill being freshly loaded.
-(In a figma-designer self-review the skill is already loaded from the build pass, so a
-load-gated read would silently skip the house standards.) It supplies the concrete house scale
-/ tokens / type ramp / naming standard you measure against, and may add stricter checks. It
-**cannot** relax the hard floor: WCAG minimums, contrast, destructive-op safety, and
-verification are non-overridable; you still emit those findings. If you loaded
-`figma-bridge-prefs` but could not read its reference, **say so and proceed on the basic
-floor** — do not proceed as if the house standards applied. If `figma-bridge-prefs` is present
-but its `review-standards` is missing or unparseable, treat it as **no house standard** — fall
-back to internal-consistency + the floor, and never error. Match the **exact** name
-`figma-bridge-prefs` (not a prefix or substring). If none is present, you may offer to run
-`figma-setup` to create one.
+Before checking any dimension, load what you measure against. The basis is three layers: the
+`figma-design` basic doctrine, the `figma-bridge-prefs` house preferences (when present), and
+your own non-overridable floor.
+
+**Load `figma-design`** — the basic design doctrine the designer built with (design-system-first,
+component-first, and the naming _floor_ of a meaningful, non-default name). **Ensure it is
+loaded** (load it if not yet loaded), **then read its references if you have not already read
+them this session** — the read is **not** gated on the skill being freshly loaded. This is the
+basic-rules layer you review the design against.
+
+**Load `figma-bridge-prefs` if present** — if a skill of that **exact** name (not a prefix or
+substring) is in your available skills, **ensure it is loaded** (load it if not yet loaded),
+**then read its `references/review-standards.md` if you have not already read it this session**
+— again the read is **not** gated on the skill being freshly loaded. (In a figma-designer
+self-review both skills are already loaded from the build pass, so a load-gated read would
+silently skip the house standards — reuse them, don't reload.) It supplies the concrete house
+scale / tokens / type ramp / naming _convention_ you measure against, and may add stricter
+checks. If none is present, you may offer to run `figma-setup` to create one.
+
+**Graceful degradation.** If you loaded a skill but could not read its reference, **say so and
+proceed on the basic floor** — do not proceed as if its standards applied. If
+`figma-bridge-prefs` is present but its `review-standards` is missing or unparseable, treat it
+as **no house standard** — fall back to `figma-design` basics + internal-consistency + the
+floor, and never error.
+
+**The floor is non-overridable.** Neither loaded skill can relax it: WCAG minimums, contrast,
+destructive-op safety, and verification are yours alone; you still emit those findings. You
+measure the design against `figma-design` basics + `figma-bridge-prefs` preferences + this
+floor.
