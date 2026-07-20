@@ -1,4 +1,7 @@
-import { COMMANDS } from '@figma-agent-bridge/shared'
+import {
+  APP_VERSION,
+  COMMANDS,
+} from '@figma-agent-bridge/shared'
 import type { ChannelInfo } from '@figma-agent-bridge/shared'
 import type { FigmaClient } from '../figma-client'
 import { discoverChannels } from '../figma-client'
@@ -149,6 +152,11 @@ export const handleConnect = async (
       if (info !== undefined) {
         const mismatch = protocolMismatch(info.version)
         if (mismatch !== null) {
+          client.notifyMismatch(
+            info.channel,
+            info.version ?? '(none)',
+            APP_VERSION,
+          )
           return textResult(mismatch)
         }
       }
@@ -207,6 +215,11 @@ export const handleConnect = async (
   const { info } = resolution
   const mismatch = protocolMismatch(info.version)
   if (mismatch !== null) {
+    client.notifyMismatch(
+      info.channel,
+      info.version ?? '(none)',
+      APP_VERSION,
+    )
     return textResult(mismatch)
   }
 

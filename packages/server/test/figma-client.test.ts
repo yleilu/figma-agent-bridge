@@ -651,6 +651,55 @@ describe('figma-client', () => {
     client.disconnect()
   })
 
+  it('notifyMismatch opens the ws (no prior join) and pushes to the target channel', async () => {
+    const client = createFigmaClient(WS_URL)
+
+    const peer = await connectRaw()
+    const qp = createMessageQueue(peer)
+    peer.send(
+      JSON.stringify({ type: 'join', channel: 'file-fkX' }),
+    )
+    await qp() // join ack
+
+    // NO client.joinChannel — proves the lazy connect() opens the socket
+    // WITHOUT joining (the cold first-touch skew path).
+    client.notifyMismatch('file-fkX', '0.0.1', '0.4.0')
+
+    const got = await qp()
+    expect(got).toEqual({
+      type: 'version-mismatch',
+      plugin: '0.0.1',
+      server: '0.4.0',
+    })
+    // The server socket opened but joined nothing.
+    expect(client.isConnected()).toBe(false)
+
+    await closeWs(peer)
+    client.disconnect()
+  })
+
+  it('a peer on a different channel does not receive the push', async () => {
+    const client = createFigmaClient(WS_URL)
+    const peer = await connectRaw()
+    const qp = createMessageQueue(peer)
+    peer.send(
+      JSON.stringify({
+        type: 'join',
+        channel: 'file-other',
+      }),
+    )
+    await qp()
+    let extra = 0
+    peer.onmessage = () => {
+      extra++
+    }
+    client.notifyMismatch('file-fkX', '0.0.1', '0.4.0')
+    await Bun.sleep(50)
+    expect(extra).toBe(0)
+    await closeWs(peer)
+    client.disconnect()
+  })
+
   it('ignores an inbound agent-status broadcast (no throw) and stays usable', async () => {
     const client = createFigmaClient(WS_URL)
     await client.joinChannel('file-fkG', 'fkG')

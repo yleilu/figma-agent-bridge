@@ -160,6 +160,11 @@ export const requireFile = async (
   // time; an already-joined file was checked when it joined.
   const skew = protocolMismatch(match.version)
   if (skew !== null) {
+    client.notifyMismatch(
+      match.channel,
+      match.version ?? '(none)',
+      APP_VERSION,
+    )
     return {
       ok: false,
       result: errorEnvelope('INCOMPATIBLE', skew),

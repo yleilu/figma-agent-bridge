@@ -70,6 +70,14 @@ export type FigmaClient = {
     fileKey: string,
     liveConnectedAt: number | undefined,
   ) => boolean
+  // version-handshake.md — push a plugin↔server major.minor skew to the file's
+  // channel so the plugin can show a banner. Fire-and-forget; opens the ws
+  // WITHOUT joining (see the impl comment). No-op-safe when the socket is up.
+  notifyMismatch: (
+    channel: string,
+    plugin: string,
+    server: string,
+  ) => void
 }
 
 // The watchdog (L6) throws this when an instance stops responding to liveness
@@ -422,6 +430,31 @@ export const createFigmaClient = (
     socket.send(JSON.stringify(frame))
   }
 
+  // version-handshake.md — the server owns the major.minor compare
+  // (protocolMismatch) and PUSHES this frame on skew. The relay routes it by
+  // its `channel` field to that channel's members (the plugin is always a
+  // member of its own channel), so the server need NOT be a member. connect()
+  // opens the ws WITHOUT joining — every skew path refuses BEFORE joinChannel,
+  // so on a cold first-touch the socket may not be up yet; joining here would
+  // poison requireFile's channelFor fast-path and let the next call dispatch
+  // into the skewed plugin. Fire-and-forget.
+  const notifyMismatch = (
+    channel: string,
+    plugin: string,
+    server: string,
+  ): void => {
+    void connect()
+      .then(() => {
+        sendToChannel(channel, {
+          type: 'version-mismatch',
+          channel,
+          plugin,
+          server,
+        })
+      })
+      .catch(() => undefined)
+  }
+
   const channelFor = (fileKey: string): string | null =>
     joined.get(fileKey) ?? null
 
@@ -722,6 +755,7 @@ export const createFigmaClient = (
     channelFor,
     discover,
     isInstanceDead,
+    notifyMismatch,
     // TEST-ONLY seam: the L6 watchdog now sets `deadInstances` directly via
     // this closure on a real death (covered end-to-end by the watchdog tests).
     // This seam is retained for the focused `isInstanceDead` unit tests, which
