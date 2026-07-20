@@ -13,6 +13,7 @@ import { writeCredentials } from '@figma-agent-bridge/server/credential-store'
 import {
   handleListFeedback,
   handleSendFeedback,
+  handleDiscardFeedback,
 } from '@figma-agent-bridge/server/tools/feedback-send'
 
 const ok = (body: unknown, status = 200) =>
@@ -201,5 +202,69 @@ describe('handleSendFeedback', () => {
     const { readCredentials } =
       await import('@figma-agent-bridge/server/credential-store')
     expect((await readCredentials()).token).toBeUndefined()
+  })
+
+  it('persists the anonymous preference when the human picks it', async () => {
+    const item = await recordFeedback(
+      { category: 'bugs', title: 'Pref', description: 'x' },
+      '0.0.0',
+    )
+    await handleSendFeedback(
+      { send: [item.path], identity: 'anonymous' },
+      ok({ comment_url: 'https://gh/c/1' }),
+    )
+    const { readCredentials } =
+      await import('@figma-agent-bridge/server/credential-store')
+    const stored = await readCredentials()
+    expect(stored.preference).toBe('anonymous')
+  })
+})
+
+describe('handleDiscardFeedback', () => {
+  it('hard-deletes each path and reports ok', async () => {
+    const a = await recordFeedback(
+      { category: 'bugs', title: 'A', description: 'x' },
+      '0.0.0',
+    )
+    const b = await recordFeedback(
+      {
+        category: 'proposals',
+        title: 'B',
+        description: 'y',
+      },
+      '0.0.0',
+    )
+    const res = await handleDiscardFeedback({
+      paths: [a.path, b.path],
+    })
+    const data = JSON.parse(res.content[0].text)
+    expect(data.results).toHaveLength(2)
+    expect(
+      data.results.every((r: { ok: boolean }) => r.ok),
+    ).toBe(true)
+    const list = JSON.parse(
+      (await handleListFeedback({})).content[0].text,
+    )
+    expect(list.pending).toHaveLength(0)
+  })
+
+  it('reports ok:false with an error for a missing path, and keeps the batch going', async () => {
+    const keep = await recordFeedback(
+      { category: 'bugs', title: 'Keep', description: 'z' },
+      '0.0.0',
+    )
+    const res = await handleDiscardFeedback({
+      paths: ['bugs/does-not-exist.md', keep.path],
+    })
+    const data = JSON.parse(res.content[0].text)
+    expect(data.results[0]).toMatchObject({
+      path: 'bugs/does-not-exist.md',
+      ok: false,
+    })
+    expect(typeof data.results[0].error).toBe('string')
+    expect(data.results[1]).toMatchObject({
+      path: keep.path,
+      ok: true,
+    })
   })
 })

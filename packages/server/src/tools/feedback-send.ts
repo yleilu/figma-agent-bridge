@@ -5,6 +5,7 @@ import {
 } from '@figma-agent-bridge/shared'
 import type { FeedbackCategory } from '@figma-agent-bridge/shared'
 import {
+  discard,
   listPending,
   markFailed,
   markSent,
@@ -196,6 +197,39 @@ export const handleSendFeedback = async (
             error: errorMessage(err),
           })
         }
+      }
+    }
+    return textResult(JSON.stringify({ results }))
+  } catch (err) {
+    return textResult(`Error: ${errorMessage(err)}`)
+  }
+}
+
+export interface DiscardFeedbackInput {
+  paths: string[]
+}
+
+interface DiscardResult {
+  path: string
+  ok: boolean
+  error?: string
+}
+
+export const handleDiscardFeedback = async (
+  params: DiscardFeedbackInput,
+): Promise<ToolResult> => {
+  try {
+    const results: DiscardResult[] = []
+    for (const path of params.paths) {
+      try {
+        await discard(path)
+        results.push({ path, ok: true })
+      } catch (err) {
+        results.push({
+          path,
+          ok: false,
+          error: errorMessage(err),
+        })
       }
     }
     return textResult(JSON.stringify({ results }))

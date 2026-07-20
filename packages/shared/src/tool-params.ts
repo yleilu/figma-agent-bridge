@@ -1588,6 +1588,14 @@ export const sendFeedbackParamsSchema = z.object({
     ),
 })
 
+export const discardFeedbackParamsSchema = z.object({
+  paths: z
+    .array(z.string())
+    .describe(
+      "Backlog item paths to hard-delete unsent (the gate's Discard).",
+    ),
+})
+
 export const githubAuthStartParamsSchema = z.object({})
 
 export const githubAuthPollParamsSchema = z.object({})
