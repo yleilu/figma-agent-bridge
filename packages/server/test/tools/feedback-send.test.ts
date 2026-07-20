@@ -92,7 +92,6 @@ describe('handleSendFeedback', () => {
     const res = await handleSendFeedback(
       {
         send: [it0.path],
-        discard: [],
         identity: 'anonymous',
       },
       ok({ comment_url: 'https://gh/c/1' }),
@@ -104,36 +103,10 @@ describe('handleSendFeedback', () => {
     )
   })
 
-  it('discards unselected items (deletes files)', async () => {
-    const keep = await recordFeedback(
-      { category: 'bugs', title: 'keep', description: 'd' },
-      '0.0.1',
-    )
-    const drop = await recordFeedback(
-      { category: 'bugs', title: 'drop', description: 'd' },
-      '0.0.1',
-    )
-    await handleSendFeedback(
-      {
-        send: [],
-        discard: [drop.path],
-        identity: 'anonymous',
-      },
-      ok({ comment_url: 'x' }),
-    )
-    const list = JSON.parse(
-      (await handleListFeedback({})).content[0].text,
-    )
-    expect(
-      list.pending.map((i: { path: string }) => i.path),
-    ).toEqual([keep.path])
-  })
-
   it('add: records a new item and files it', async () => {
     const res = await handleSendFeedback(
       {
         send: [],
-        discard: [],
         add: {
           category: 'proposals',
           title: 'user idea',
@@ -155,7 +128,6 @@ describe('handleSendFeedback', () => {
     const res = await handleSendFeedback(
       {
         send: ['bugs/missing.md', good.path],
-        discard: [],
         identity: 'anonymous',
       },
       ok({ comment_url: 'https://gh/c/3' }),
@@ -192,7 +164,7 @@ describe('handleSendFeedback', () => {
       html_url: 'https://gh/c/9',
     })
     const res = await handleSendFeedback(
-      { send: [it0.path], discard: [] },
+      { send: [it0.path] },
       fetchImpl,
     )
     const data = JSON.parse(res.content[0].text)
@@ -221,7 +193,7 @@ describe('handleSendFeedback', () => {
       '0.0.1',
     )
     const res = await handleSendFeedback(
-      { send: [it0.path], discard: [] }, // identity defaults to remembered 'github'
+      { send: [it0.path] }, // identity defaults to remembered 'github'
       ok({ message: 'Bad credentials' }, 401),
     )
     const data = JSON.parse(res.content[0].text)

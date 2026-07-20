@@ -5,7 +5,6 @@ import {
 } from '@figma-agent-bridge/shared'
 import type { FeedbackCategory } from '@figma-agent-bridge/shared'
 import {
-  discard,
   listPending,
   markFailed,
   markSent,
@@ -71,7 +70,6 @@ export const handleListFeedback = async (
 
 export interface SendFeedbackInput {
   send: string[]
-  discard: string[]
   add?: {
     category: FeedbackCategory
     title: string
@@ -105,16 +103,7 @@ export const handleSendFeedback = async (
     const identity =
       params.identity ?? cred.preference ?? 'anonymous'
 
-    // 1. discards first (deletes; already-gone is fine)
-    for (const path of params.discard) {
-      try {
-        await discard(path)
-      } catch {
-        // already gone — fine
-      }
-    }
-
-    // 2. build the send list, appending the free-text add item
+    // 1. build the send list, appending the free-text add item
     const toSend = [...params.send]
     if (params.add) {
       const created = await recordFeedback(
@@ -124,13 +113,13 @@ export const handleSendFeedback = async (
       toSend.push(created.path)
     }
 
-    // 3. remember the identity choice ONLY when the human
+    // 2. remember the identity choice ONLY when the human
     //    explicitly chose it (never persist the default)
     if (params.identity) {
       await setPreference(params.identity)
     }
 
-    // 4. file each — one bad item fails only itself
+    // 3. file each — one bad item fails only itself
     const results: SendResult[] = []
     for (const path of toSend) {
       try {
