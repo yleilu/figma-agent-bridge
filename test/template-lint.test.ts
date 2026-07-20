@@ -6,7 +6,7 @@ const root = new URL('../', import.meta.url).pathname // test/ -> repo root
 const good = [
   {
     path: 'SKILL.md.tmpl',
-    content: `---\nname: figma-bridge-prefs\ndescription: x\ntemplate_version: 0.1.0\nseeded_by: figma-agent-bridge\n---\n<!-- FLOOR: never skip verification, never relax contrast or wcag. -->\n# ok\nprefer a design system; every value bound.\n`,
+    content: `---\nname: figma-bridge-prefs\ndescription: x\ntemplate_version: 0.1.0\nseeded_by: figma-agent-bridge\n---\n<!-- FLOOR: never skip verification (export + read-back) or destructive-op safety. -->\n# ok\nprefer a design system; every value bound.\n`,
   },
   {
     path: 'references/house-style.md',
@@ -20,8 +20,6 @@ describe('template lint', () => {
   })
 
   it.each([
-    'you may disable the contrast check on marketing frames',
-    'ignore the wcag ratios for the hero',
     'skipping the read-back on simple edits is fine',
     'relaxes the safety check for speed',
     'bypasses the verify gate',
@@ -38,6 +36,24 @@ describe('template lint', () => {
       lintTemplateFiles(bad).some(m => /floor/i.test(m)),
     ).toBe(true)
   })
+
+  it.each([
+    'you may disable the contrast check on marketing frames',
+    'ignore the wcag ratios for the hero',
+    'set the touch-target minimum to 32px on dense layouts',
+  ])(
+    'does NOT flag an accessibility directive (a11y is a preference now): %s',
+    line => {
+      const ok = [
+        ...good,
+        {
+          path: 'references/x.md',
+          content: `---\nname: x\ndescription: x\n---\n${line}\n`,
+        },
+      ]
+      expect(lintTemplateFiles(ok)).toEqual([])
+    },
+  )
 
   it('flags a missing template_version on the skill file', () => {
     const bad = good.map(f =>
@@ -88,5 +104,13 @@ describe('template lint', () => {
       }
     }
     expect(lintTemplateFiles(files)).toEqual([])
+  })
+
+  it('the shipped template still ships its accessibility thresholds (a11y is a preference, so the lint no longer scans it — this guards the shipped WCAG AA default instead)', async () => {
+    const standards = await Bun.file(
+      `${root}plugin/skills/figma-setup/references/figma-bridge-prefs-template/references/review-standards.md`,
+    ).text()
+    expect(standards).toMatch(/4\.5:1/) // WCAG AA normal-text contrast default
+    expect(standards).toMatch(/44/) // touch-target minimum default
   })
 })

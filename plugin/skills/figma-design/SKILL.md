@@ -262,8 +262,14 @@ bugs, as appropriate) and continue with the best available workaround.
 
 ## User preferences
 
-If a skill named **`figma-bridge-prefs`** is in your available skills and not yet loaded,
-load it now and read its `references/house-style.md`. It raises the level of the defaults
-above and supplies concrete values; it may only make you stricter — it never relaxes the
-verification discipline. Match the **exact** name `figma-bridge-prefs` (not a prefix). If
-none is present, you may offer to run `figma-setup` to create one.
+If a skill named **`figma-bridge-prefs`** is in your available skills, **ensure it is loaded**
+(load it if not yet loaded), **then read its `references/house-style.md` if you have not
+already read it this session** — the read is **not** gated on the skill being freshly loaded.
+(The skill is often already loaded at build start, so a load-gated read would silently skip the
+house style.) It raises the level of the defaults above and supplies concrete values; it may
+only make you stricter — it never relaxes the verification discipline. If you loaded
+`figma-bridge-prefs` but could not read its reference, **say so and proceed on the basic
+floor** — do not proceed as if the house style applied. An absent or unreadable
+`house-style.md` simply means the basic floor — never an error. Match the **exact** name
+`figma-bridge-prefs` (not a prefix or substring). If none is present, you may offer to run
+`figma-setup` to create one.

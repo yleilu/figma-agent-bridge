@@ -75,7 +75,13 @@ The discriminator for **why the two practices may ship a default at all** (and a
 spacing scale may not): **a preference ships a default only if it has a universally-defensible
 floor.** Design-system-first and component-first do — a _mild_ "prefer systematic design" baseline
 no professional objects to. A brand colour or spacing scale has no universal default; any default
-there imposes one team's taste on all, so it ships nothing. This is the P1 rule, applied.
+there imposes one team's taste on all, so it ships nothing. This is the P1 rule, applied. The
+same test seems to admit accessibility — "text should be legible" is likewise
+universally-defensible — yet a11y still ships nothing, because the two practices are
+construction **discipline** (a directional "prefer systematic design" is actionable with no
+number), whereas an accessibility check is **inert without a concrete threshold** (you cannot
+flag contrast without a ratio), so it behaves like every other concrete value (tokens / scale /
+ramp) and ships nothing, not like a process floor.
 
 ## 3. The two levels
 
@@ -91,7 +97,9 @@ it **raises the level** and supplies concrete values.
 
 These are **defaults**, not hard floors — a user may tune them in any direction (e.g. relax
 design-system-first for a throwaway mockup). The **hard, non-overridable** floor is separate
-(§7): verification discipline, destructive-op safety, and accessibility minimums.
+(§7): verification discipline and destructive-op safety. Accessibility is **not** in the floor —
+it is a preference shipped as the template's WCAG AA default, so a user without `figma-bridge-prefs`
+has no accessibility check at all.
 
 ## 4. `figma-bridge-prefs` — the user skill (not shipped)
 
@@ -143,10 +151,14 @@ starter values (a spacing scale, a token set, a type ramp) — the user's editab
 **Safety contract on the template.**
 
 - **Additive / stricter-only.** The template may only _tighten_ — add a scale, a stricter
-  standard. It must **never** contain a directive that relaxes verification, destructive-op
-  safety, or accessibility. A floor-preserving header states this.
+  standard. It must **never** contain a directive that relaxes verification or destructive-op
+  safety. A floor-preserving header states this. (It **does** set accessibility thresholds — those
+  are a preference, shipped as the WCAG AA default the user then edits.)
 - **Lint-gated in CI.** Valid frontmatter, size under a cap, and a check that it introduces no
-  `skip`/`relax`/`disable` of verify/safety/a11y. Reviewed with the same rigor as a shipped skill.
+  `skip`/`relax`/`disable` of verify/safety. The lint intentionally **no longer scans the
+  accessibility thresholds** (they are a preference, not a floor); the shipped a11y default is
+  instead guaranteed by shipped-skill review rigor plus a positive lint assertion that the
+  template still ships its WCAG AA default. Reviewed with the same rigor as a shipped skill.
 - **Provenance stamped.** The instantiated file carries `seeded_by: figma-agent-bridge` and the
   `template_version` (§9), so it is identifiable for later update/repair and honest about origin.
 
@@ -157,8 +169,10 @@ inside the `figma-designer` / `figma-reviewer` subagents, where description-base
 not guaranteed. So the load path is explicit, not incidental:
 
 1. **Agent-def load (primary).** The `figma-designer` and `figma-reviewer` agent definitions load
-   `figma-bridge-prefs` as a **first step**, and list the `Skill` invocation in their `tools:`
-   whitelist so they _can_.
+   `figma-bridge-prefs` as a **first step**, then **read its `references/house-style.md` /
+   `review-standards.md`** for the concrete values. Both `Skill` (to load the skill) and `Read`
+   (to open its references — these agents are otherwise MCP-only, so without `Read` the overlay's
+   references are unreachable) are in their `tools:` whitelist so they _can_.
 2. **Extension-point backstop.** Each shipped build-loop skill that consumes an overlay
    (`figma-design`, `figma-reviewer`) ends with: _"If a skill named `figma-bridge-prefs` is in
    your available skills and not yet loaded, load it now; it raises the level of these defaults
@@ -171,15 +185,17 @@ not guaranteed. So the load path is explicit, not incidental:
 **Precedence — override upward, within a hard floor.**
 
 - `figma-bridge-prefs` **wins on taste, policy, and defaults**: it raises the level of
-  design-system-first / component-first and supplies the concrete values. Absent it, the shipped
-  basic floor is the default.
+  design-system-first / component-first, supplies the concrete values, **and sets the accessibility
+  thresholds** (the template ships WCAG AA as the default). Absent it, the shipped basic floor is
+  the default and accessibility is **unchecked**.
 - It **cannot cross the hard floor.** Verification discipline (export + read-back; never fabricate
-  a read-back), destructive-op safety, and **accessibility minimums** are non-overridable. A
-  customization may make a check **stricter**, never suppress it.
-- **The reviewer is the enforcer**, not skill-prose ordering. `figma-reviewer` flags a
-  contrast/verification violation regardless of what `figma-bridge-prefs` says. A WCAG finding may
-  at most be **down-ranked** on an explicit, acknowledged override token in `figma-bridge-prefs` —
-  it is **never skipped**, and the check always runs.
+  a read-back) and destructive-op safety are non-overridable. A customization may make any other
+  check **stricter**, never suppress the floor. Accessibility is **not** in this floor — it is a
+  preference the user sets, so with no prefs there is no accessibility check to suppress.
+- **The reviewer is the enforcer** of the floor, not skill-prose ordering. `figma-reviewer` flags a
+  verification / destructive-op violation regardless of what `figma-bridge-prefs` says. Accessibility
+  it checks against the **loaded `figma-bridge-prefs` thresholds** (WCAG AA by the template default);
+  with no prefs it asserts no threshold and the dimension is unchecked.
 
 ## 8. Scope & the shadowing guard
 
@@ -190,11 +206,15 @@ across all the user's Figma work, per-machine) or **project scope**
 - **Default: user scope**, offered up front. The helper is **context-aware**: inside a git repo
   that already uses a design system, it _offers_ project scope as well (a house style is a team
   artifact best shared via a committed skill).
-- **Shadowing guard.** Claude Code resolves same-named skills **personal (user) > project**, so a
-  user-scope `figma-bridge-prefs` **silently shadows** a project-scope one. Before writing a
-  project-scope file, `figma-setup` **detects an existing user-scope `figma-bridge-prefs` and
-  warns** ("a user-scope figma-bridge-prefs will shadow this project one") rather than producing a
-  silent wrong result. Documented here so the interaction is never a surprise.
+- **Shadowing guard (bidirectional).** Claude Code resolves same-named skills **personal (user) >
+  project**, so a user-scope `figma-bridge-prefs` **silently shadows** a project-scope one.
+  `figma-setup` guards **both** write directions rather than producing a silent wrong result:
+  before writing a **project**-scope file it detects an existing user-scope `figma-bridge-prefs`
+  and warns ("a user-scope figma-bridge-prefs will shadow this project one"); before writing a
+  **user**-scope file (the default) it detects an existing project-scope
+  `<repo>/.claude/skills/figma-bridge-prefs/` in the current git repo and warns ("a user-scope
+  figma-bridge-prefs will shadow this project's committed one"). Documented here so the
+  interaction is never a surprise.
 
 ## 9. Updates & the contract version
 
@@ -208,8 +228,10 @@ owns the reconciliation:
   edited) may be refreshed safely; an **edited** file is **never clobbered**.
 - **Graceful degradation.** The reviewer treats an absent or unparseable `review-standards` as
   _"no house standard"_ — it falls back to **internal consistency** (does the file use its own
-  detected tokens/scale/ramp consistently?) plus the hard floor (WCAG, verification), **never** a
-  shipped concrete scale (there is none). It never errors on a malformed or missing preference file.
+  detected tokens/scale/ramp consistently?) plus the hard floor (verification, destructive-op
+  safety), **never** a shipped concrete scale (there is none). Accessibility is **unchecked** in
+  that state (its thresholds live in `review-standards`). It never errors on a malformed or missing
+  preference file.
 
 ## 10. Onboarding
 
@@ -227,14 +249,16 @@ There is **no auto-seed**. Instead:
 - **[[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]]** — catalogs `figma-setup` and the
   user preference layer in §6 (§6.1 states the basic floor; §6.7 points here as SSOT).
 - **[[figma-bridge/docs/specs/feedback-system|feedback-system.md]]** — keeps opinion out of the
-  neutral meta-tools (its Layer split, P1). This spec adds the further guard (§below) that a
+  neutral meta-tools (its Layer split, P1). This spec adds the further guard (see Fold-back split, below) that a
   taste/preference correction routes to `figma-bridge-prefs`, never a shipped skill, and
   `figma-bridge-prefs` content **never** rides the feedback rail off-box.
-- `figma-reviewer`'s `references/checks.md` ships **only the hard floor** (WCAG ratios,
-  verification discipline, destructive-op safety) **and internal-consistency checks** (does the
-  file use its own detected system consistently) — **not** a concrete house scale / token set /
-  type ramp, which are preferences. `figma-bridge-prefs` `review-standards` supplies those when
-  installed; absent it, the reviewer checks internal consistency plus the floor.
+- `figma-reviewer`'s `references/checks.md` ships **only the hard floor** (verification discipline,
+  destructive-op safety) **and internal-consistency checks** (does the file use its own detected
+  system consistently), plus the accessibility _how-to_ (the contrast-ratio formula) — **not** a
+  concrete house scale / token set / type ramp / naming rule, **nor the accessibility thresholds**,
+  which are preferences. `figma-bridge-prefs` `review-standards` supplies those (including the WCAG
+  AA accessibility default) when installed; absent it, the reviewer checks internal consistency plus
+  the floor, and accessibility is unchecked.
 
 **Fold-back split (privacy + the maintenance guard).** The `figma-feedback` skill-correction /
 fold-back loop is scoped to **shipped skills only**: a _mechanics_ correction folds into the
@@ -252,13 +276,16 @@ user's private house style / tokens / client conventions off the machine.
       at the chosen scope, and tailors it by interview.
 - [ ] With `figma-bridge-prefs` present, `figma-designer` and `figma-reviewer` load it (agent-def
       step + exact-name backstop) and apply its strict levels + concrete values.
-- [ ] `figma-bridge-prefs` **raises** design-system-first / component-first and supplies values,
-      but cannot suppress verification, destructive-op safety, or a WCAG check; the reviewer still
-      emits accessibility findings.
+- [ ] `figma-bridge-prefs` **raises** design-system-first / component-first and supplies values
+      (including the accessibility thresholds), but cannot suppress verification or destructive-op
+      safety; the reviewer still emits those findings.
+- [ ] A user with **no** `figma-bridge-prefs` has accessibility **unchecked** — the reviewer asserts
+      no contrast / touch-target / text-size threshold — while the template ships WCAG AA as the
+      default the user adopts.
 - [ ] The exact-name backstop matches `figma-bridge-prefs` and never `figma-setup`.
 - [ ] `figma-setup` warns when a user-scope `figma-bridge-prefs` would shadow a project-scope one.
 - [ ] The template passes the CI lint (valid frontmatter, size cap, no relax/skip of
-      verify/safety/a11y) and carries provenance + `template_version`.
+      verify/safety) and carries provenance + `template_version`.
 - [ ] `figma-bridge-prefs` content never appears in a `record_feedback` / `send_feedback` body.
 - [ ] A missing or malformed `figma-bridge-prefs` degrades to shipped defaults, never an error.
 
@@ -266,6 +293,7 @@ user's private house style / tokens / client conventions off the machine.
 
 - **Concrete starter values.** The exact spacing scale / token set / type ramp the template ships
   is a design task for the template itself (built with shipped-skill review rigor).
-- **Description co-fire wording.** Whether `figma-bridge-prefs` carries a co-firing description
-  (best-effort) or relies solely on the agent-def + backstop load is settled at authoring time;
-  the load guarantee comes from the explicit paths (§7.1, §7.2), not the description.
+- **Trigger reliability (settled).** The load guarantee is the **explicit** agent-def load +
+  backstop (§7, paths 1–2); the `figma-bridge-prefs` description co-fire (§7, path 3) is a
+  supplementary best-effort. The agents carry `Read` so the read-the-reference step in paths 1–2
+  actually completes — without it the overlay's `references/*.md` would be unreachable.

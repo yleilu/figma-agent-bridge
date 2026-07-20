@@ -9,15 +9,16 @@ seeded_by: figma-agent-bridge
 ---
 
 <!-- FLOOR: This is a user preference skill. It may only make the assistant STRICTER.
-     It must NEVER instruct skipping verification (export + read-back), destructive-op
-     safety, or accessibility (WCAG) checks. The figma-reviewer enforces this floor. -->
+     It must NEVER instruct skipping verification (export + read-back) or destructive-op
+     safety. The figma-reviewer enforces this floor. -->
 
 # figma-bridge-prefs
 
 Your durable Figma preferences. These **override the shipped skills' basic defaults on
 taste, policy, and concrete values** — but only ever raise the bar. The reviewer still
-enforces verification, destructive-op safety, and WCAG minimums; these preferences may
-tighten a check, never loosen it.
+enforces verification and destructive-op safety; these preferences may tighten a check,
+never loosen it. Accessibility is one of the standards you set here (WCAG AA by default —
+see `references/review-standards.md`).
 
 - House style (build): `references/house-style.md` — loaded by figma-design.
 - Review standards: `references/review-standards.md` — loaded by figma-reviewer.

@@ -99,7 +99,7 @@ figma-agent-bridge/                       repo == marketplace
 │   │   ├── figma-feedback/SKILL.md       + references/ (§6.3)
 │   │   ├── figma-reviewer/SKILL.md       + references/ (§6.4)
 │   │   ├── figma-connection/SKILL.md     + references/ (§6.6)
-│   │   └── figma-setup/SKILL.md          + references/figma-bridge-prefs.template.md (§6.7)
+│   │   └── figma-setup/SKILL.md          + references/figma-bridge-prefs-template/ (SKILL.md.tmpl + references/) (§6.7)
 │   ├── agents/
 │   │   ├── figma-designer.md             frontmatter: tools:, model: (§6.2)
 │   │   └── figma-reviewer.md             (§6.5)
@@ -233,6 +233,25 @@ forward-references the feedback/reviewer skills below:
 | Diagnose connection / version | `figma-connection` (§6.6) | — (main-agent guidance)                                        |
 | Customize house style         | `figma-setup` (§6.7)      | — (authors `figma-bridge-prefs`, not shipped)                  |
 
+### 6.0 Skill charter — what goes where
+
+The [[figma-bridge/docs/principles|P1]] partition, made concrete per skill — what each skill
+**holds** and what it must hand **off**. This is the boundary the other subsections implement.
+
+| Skill                                      | Purpose                               | Holds                                                                                                                                                                                                              | Never holds (→ goes to)                                                                                                                                                                                                                                        |
+| ------------------------------------------ | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `figma-design`                             | Build well                            | tool mechanics, call patterns, limits; the **basic** level of design-system-first + component-first; the naming **floor** (meaningful, non-default)                                                                | concrete values (tokens/scale/ramp/naming convention) + strict levels → `figma-bridge-prefs`                                                                                                                                                                   |
+| `figma-reviewer`                           | Find issues                           | review _how-to_ (inspect/enumerate/report, the six dimensions' mechanics) + the non-overridable floor it owns: **verification discipline + destructive-op safety** + default-name detection + internal-consistency | all concrete standards come from the loaded `figma-design` + `figma-bridge-prefs`; the accessibility thresholds (WCAG/contrast/touch/text-size) specifically come from `figma-bridge-prefs` **only** (figma-design ships zero a11y); the reviewer defines none |
+| `figma-feedback`                           | Report _tool_ friction                | bug/proposal categories, formats, high-value litmus, `record_feedback` mapping; the fold-back fork                                                                                                                 | design critique → `figma-reviewer`; preference content → `figma-bridge-prefs` via `figma-setup`                                                                                                                                                                |
+| `figma-connection`                         | Diagnose/recover connection & version | symptoms → diagnosis → recovery                                                                                                                                                                                    | anything design/build/review                                                                                                                                                                                                                                   |
+| `figma-setup`                              | Author + update `figma-bridge-prefs`  | the instantiate / tailor / update / scope flow                                                                                                                                                                     | the preference **values** (the user's, in `figma-bridge-prefs`)                                                                                                                                                                                                |
+| `figma-bridge-prefs` _(user, not shipped)_ | The user's durable preferences        | concrete values, the **strict** levels, house review standards, **the accessibility thresholds (WCAG AA default)**                                                                                                 | tool mechanics; the shipped floor (verification + destructive-op safety)                                                                                                                                                                                       |
+
+Decision rule: _a concrete value / taste / strict standard (incl. accessibility thresholds) →
+`figma-bridge-prefs`; how-to-build → `figma-design`; how-to-review or the verification/destructive-op
+floor → `figma-reviewer`; reporting tool friction → `figma-feedback`; connection/version →
+`figma-connection`._
+
 ### 6.1 Skill — `figma-design`
 
 Purpose: teach the agent **how to operate** the 47-tool surface well. It deliberately does
@@ -302,8 +321,10 @@ A subagent that **consumes** `figma-design`. Loop: request → plan (DS → comp
 layout → content) → build via the MCP tools → `export` + read-back verify →
 **self-review (`figma-reviewer` skill, §6.4)** → iterate.
 Frontmatter declares the MCP tools it may call and `model:` (sonnet default, opus for
-complex compositions), and includes `Skill` so it **loads the user's `figma-bridge-prefs` overlay
-as a first step** when present (per [[figma-bridge/docs/specs/customization|customization.md]] §7).
+complex compositions), and includes `Skill` (to load the overlay) + `Read` (to open its
+references — the agent is otherwise MCP-only) so it **loads the user's `figma-bridge-prefs`
+overlay and reads its `house-style.md` as a first step** when present (per
+[[figma-bridge/docs/specs/customization|customization.md]] §7).
 Calls `record_feedback` (§7) when it hits a tool limit — guided by the
 `figma-feedback` skill (§6.3).
 
@@ -316,7 +337,7 @@ defines **two flows, one per category, each with a standardized `record_feedback
 a worked example.** It records **one item per distinct issue**, never records expected errors (the
 user's own invalid input), and continues the task (zero-friction, never derail).
 
-**Recording, then the end-of-work review.** `record_feedback` only *captures* an item to the local
+**Recording, then the end-of-work review.** `record_feedback` only _captures_ an item to the local
 backlog — mid-task, by whoever hits the friction (a `figma-designer` subagent, or the main agent).
 It **does not send**. The human gate is a selector the **top-level agent** raises at the end of a
 unit of work when the backlog is non-empty (`AskUserQuestion` is a main-agent affordance, so
@@ -449,11 +470,14 @@ dashboards.
 2. **Consistency** — off-scale spacing/padding, inconsistent radius, type off the ramp,
    misaligned / off-grid elements — measured against the file's **own** detected system (or the
    user's `figma-bridge-prefs` scale when installed), never a shipped baseline scale.
-3. **Accessibility** — text contrast vs WCAG AA (4.5:1 / 3:1 large), min text size, touch-target
-   size, meaning conveyed by colour alone.
+3. **Accessibility** — text contrast, min text size, touch-target size, meaning conveyed by colour
+   alone — checked against the accessibility thresholds in the user's `figma-bridge-prefs` (WCAG AA
+   is the shipped template default); unchecked when no prefs.
 4. **Layout & structure hygiene** — absolute positioning where auto-layout fits, default names
    ("Frame 42"), pile-ups at [0,0], missing constraints, redundant nesting, orphan/hidden nodes.
 5. **Fidelity to intent** — matches the request; nothing missing or extra.
+6. **Naming & context legibility** — meaningful, non-default node names (the naming floor; the
+   `/` taxonomy is a `figma-bridge-prefs` house preference) and well-formed `context` notes.
 
 **Output format** (per finding):
 
@@ -471,11 +495,13 @@ after the report it offers to apply the fixes, and on the user's approval edits 
 design flaw) routes to `figma-feedback` (§6.3) instead of a fix.
 
 **Structure:** `SKILL.md` (dimensions, output format, flow) → `references/checks.md`, loaded when
-reviewing. `checks.md` ships **only the hard floor** — the WCAG ratios, verification discipline, and
-destructive-op safety — plus **internal-consistency** checks (does the file use its *own* detected
-tokens / scale / ramp consistently). The concrete house scale, token set, type ramp, and naming
-rules are a **user preference** supplied by `figma-bridge-prefs/references/review-standards.md` when
-installed (P1) — see [[figma-bridge/docs/specs/customization|customization.md]].
+reviewing. `checks.md` ships **only the hard floor** — verification discipline and destructive-op
+safety — plus **internal-consistency** checks (does the file use its _own_ detected tokens / scale /
+ramp consistently) and the accessibility _how-to_ (the contrast-ratio formula, interactive-node
+detection). The concrete standards — the house scale, token set, type ramp, naming rules, **and the
+accessibility thresholds (WCAG/contrast/touch-target/text-size)** — are a **user preference** supplied
+by `figma-bridge-prefs/references/review-standards.md` when installed (P1) — see
+[[figma-bridge/docs/specs/customization|customization.md]].
 
 ### 6.5 Agent — `figma-reviewer`
 
@@ -483,9 +509,9 @@ A dedicated subagent consuming the `figma-reviewer` skill (§6.4) — matches th
 keeps a review's heavy read output out of the main context. Loop: read the target
 (`inspect`/`get_node`/`export`) → check each dimension → emit the standardized report → **offer to
 fix** → on approval apply edits (or route tool-gaps to `figma-feedback`). Frontmatter: `tools:`
-(read tools + the edit tools for the fix step + `record_feedback` + `Skill`, so it **loads the
-user's `figma-bridge-prefs` overlay as a first step** when present — per
-[[figma-bridge/docs/specs/customization|customization.md]] §7), `model:` (sonnet; opus for
+(read tools + the edit tools for the fix step + `record_feedback` + `Skill` + `Read`, so it
+**loads the user's `figma-bridge-prefs` overlay and reads its `review-standards.md` as a first
+step** when present — per [[figma-bridge/docs/specs/customization|customization.md]] §7), `model:` (sonnet; opus for
 large/complex reviews). Also invoked by `figma-designer` as its self-review gate.
 
 ### 6.6 Skill — `figma-connection`
@@ -504,7 +530,8 @@ A shipped **helper** that authors the user's **`figma-bridge-prefs`** overlay �
 preference skill (**NOT shipped**) that holds taste, concrete values (tokens, spacing scale, type
 ramp, naming), and any stricter-than-basic standard, overriding the shipped skills' basic floor
 upward (P1). `figma-setup` instantiates it on explicit opt-in from a shipped, inert template
-(`references/figma-bridge-prefs.template.md`) and owns its later updates. The whole layer — the
+(`references/figma-bridge-prefs-template/`, whose skill file ships as `SKILL.md.tmpl` and is
+renamed to `SKILL.md` on copy) and owns its later updates. The whole layer — the
 partition, the load path, and the hard floor the reviewer enforces — is specced authoritatively in
 [[figma-bridge/docs/specs/customization|customization.md]] (its SSOT); this section only catalogs it.
 
@@ -620,8 +647,8 @@ skill/agent content.
   path ([[figma-bridge/docs/specs/feedback-system|feedback-system.md]]). The Worker URL compiles
   in cleanly, but the **shared secret for a _distributed_ artifact is unresolved** — a distributed
   artifact can't safely embed it (extractable → Worker spam). Decide: per-install token,
-  Worker-side rate-limiting, or accept the risk. *(The **logged-in** send path is direct-to-GitHub
-  with the human's own device-flow token and does not use the Worker or this shared secret.)*
+  Worker-side rate-limiting, or accept the risk. _(The **logged-in** send path is direct-to-GitHub
+  with the human's own device-flow token and does not use the Worker or this shared secret.)_
 - **Windows/Linux designer-route binaries** — deferred; darwin-arm64 first. (The Claude Code
   bundle route has no per-platform binary; `bun` handles cross-platform.)
 - **One-click install** — not possible today (no official scheme); revisit if Claude Code

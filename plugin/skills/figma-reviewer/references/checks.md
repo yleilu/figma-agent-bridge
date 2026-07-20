@@ -118,6 +118,29 @@ intentional overlays:
 
 ## Dimension 3 — Accessibility
 
+Accessibility is a **user preference** ([[figma-bridge/docs/specs/customization|customization.md]]
+§7): the concrete standards — contrast ratios, minimum text size, touch-target size — live in the
+user's `figma-bridge-prefs` `references/review-standards.md`, **not** here. This section holds only
+the _how-to_ (what to look at, and how to compute contrast). **Load the thresholds from the
+`figma-bridge-prefs` `review-standards` before flagging.** With no `figma-bridge-prefs`
+`review-standards`, accessibility is **unchecked** — you may compute the ratios, but do **not**
+assert a threshold or fabricate a shipped minimum (there is none).
+
+### What to look at
+
+- **Text contrast** — compute the contrast ratio (formula below) of text against its nearest
+  background, then flag against the user's contrast thresholds.
+- **Minimum text size** — read each text node's size, then flag against the user's minimum-text-size
+  standard.
+- **Touch-target size** — measure the bounding box of interactive nodes, then flag against the
+  user's touch-target standard. "Interactive" in Figma context: nodes named with verb patterns
+  (`Button`, `Btn`, `CTA`, `Link`, `Toggle`, `Checkbox`, `Radio`, `Icon-*`), or nodes with
+  `reactions` set.
+- **Meaning by colour alone** — a status indicator (e.g. `type: ELLIPSE` or a solid `FRAME`) or a
+  data series that conveys state only through hue, with no accompanying text label, icon, or shape
+  change. Flag against the user's accessibility standard (this affects users with colour-vision
+  deficiency).
+
 ### Contrast ratio formula
 
 Relative luminance of an sRGB color `(R, G, B)` where each channel is 0–255:
@@ -146,46 +169,8 @@ When the background is a gradient, use the **darkest** stop for light text and t
 When the text or background has `opacity < 1`, apply the opacity to the alpha channel
 before computing luminance.
 
-### WCAG AA thresholds
-
-| Text type                                   | Minimum ratio | Severity if failing |
-| ------------------------------------------- | ------------- | ------------------- |
-| Normal text (< 18 pt regular; < 14 pt bold) | 4.5 : 1       | `blocker`           |
-| Large text (≥ 18 pt regular; ≥ 14 pt bold)  | 3.0 : 1       | `blocker`           |
-| UI components and graphical objects         | 3.0 : 1       | `warning`           |
-
-WCAG AAA thresholds (for reference — not required, flag as `nit` if near-miss):
-
-- Normal text: 7.0 : 1
-- Large text: 4.5 : 1
-
-### Text size thresholds
-
-| Size     | Severity                                          |
-| -------- | ------------------------------------------------- |
-| < 9 px   | `warning` — illegible at standard density         |
-| 9–10 px  | `nit` — very small; may be intentional (captions) |
-| 11–12 px | acceptable minimum for body                       |
-
-### Touch-target thresholds
-
-| Dimension                                | Threshold    | Severity  |
-| ---------------------------------------- | ------------ | --------- |
-| Interactive element bounding box         | < 44 × 44 pt | `warning` |
-| Interactive element (minimum acceptable) | < 24 × 24 pt | `blocker` |
-
-"Interactive" in Figma context: nodes named with verb patterns (`Button`, `Btn`, `CTA`,
-`Link`, `Toggle`, `Checkbox`, `Radio`, `Icon-*`), or nodes with `reactions` set.
-
-### Colour-alone signal
-
-Flag when:
-
-- A status indicator (e.g. `type: ELLIPSE` or a solid `FRAME`) uses only hue to convey
-  state (success/warning/error) with no accompanying text label, icon, or shape change.
-- A chart or data visualisation uses only colour to distinguish series.
-
-Severity: `warning` (affects users with colour-vision deficiency).
+The severity of each finding (blocker / warning / nit) is whatever the user's
+`figma-bridge-prefs` `review-standards` assigns; the reviewer ships none.
 
 ---
 
@@ -283,16 +268,6 @@ Severity:
 - Leaf content nodes inside a component → `nit`
 - Purely decorative or structural helpers → `nit`
 
-### Component `/` taxonomy _(house-preference, not a shipped floor)_
-
-Requiring a `/` taxonomy path on every `COMPONENT` / `COMPONENT_SET` (`Button/Primary`,
-`Icon/Chevron`) is a **stricter naming standard** that applies **only when a
-`figma-bridge-prefs` `review-standards` opts into it**. When opted in, a component whose
-`name` contains no `/` is a `warning`; **variant children** whose names contain `=`
-(`Size=Lg, State=Hover`) are exempt (variant-property form, not a taxonomy miss). Absent
-that opt-in, do **not** flag a missing `/` taxonomy — only the blank / default-name check
-is the shipped floor.
-
 ### Context well-formedness
 
 The full `context` value is on `get_node`; the `contextSummary` slice is on `inspect` /
@@ -315,11 +290,11 @@ Always `nit` / advisory — never a hard fail, since either field could be the s
 
 ## Quick-reference severity table
 
-| Dimension        | Blocker                                          | Warning                                                                                                               | Nit                                                              |
-| ---------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| DS adherence     | —                                                | Hardcoded color/text with matching token/style; detached instance                                                     | Near-match token candidate                                       |
-| Consistency      | —                                                | Off-scale spacing ≥ 4 px; > 4 type sizes; misaligned block                                                            | Off-scale ≤ 3 px; radius rounding; type size ±2 px               |
-| Accessibility    | WCAG AA text contrast fail; touch target < 24×24 | WCAG AA UI/graphic fail; touch target < 44×44; colour-alone signal; text < 9 px                                       | WCAG AAA near-miss; text 9–10 px                                 |
-| Layout hygiene   | —                                                | Pile-up at [0,0]                                                                                                      | Redundant nesting; hidden nodes; default constraints             |
-| Fidelity         | Missing named section or feature                 | Count mismatch; placeholder content                                                                                   | Extra elements not asked for                                     |
-| Naming & context | —                                                | Blank/default-named frames/components; component without `/` taxonomy _(house-preference)_; unclosed/over-cap context | Default-named leaves; missing `purpose`; name↔role contradiction |
+| Dimension        | Blocker                                                                                                                                    | Warning                                                           | Nit                                                              |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- | ---------------------------------------------------------------- |
+| DS adherence     | —                                                                                                                                          | Hardcoded color/text with matching token/style; detached instance | Near-match token candidate                                       |
+| Consistency      | —                                                                                                                                          | Off-scale spacing ≥ 4 px; > 4 type sizes; misaligned block        | Off-scale ≤ 3 px; radius rounding; type size ±2 px               |
+| Accessibility    | contrast / touch-target / text-size / colour-alone — severity per the user's `figma-bridge-prefs` thresholds (**unchecked** when no prefs) | —                                                                 | —                                                                |
+| Layout hygiene   | —                                                                                                                                          | Pile-up at [0,0]                                                  | Redundant nesting; hidden nodes; default constraints             |
+| Fidelity         | Missing named section or feature                                                                                                           | Count mismatch; placeholder content                               | Extra elements not asked for                                     |
+| Naming & context | —                                                                                                                                          | Blank/default-named frames/components; unclosed/over-cap context  | Default-named leaves; missing `purpose`; name↔role contradiction |
