@@ -3,8 +3,9 @@ name: figma-reviewer
 description: >-
   Use to review a Figma design — as figma-designer's own self-check before calling a
   build done, or an existing frame/file on request ("review my selection"). Checks
-  design-system adherence, consistency, accessibility, layout hygiene, and fidelity to
-  intent; emits a standardized report and then offers to fix (never auto-mutates).
+  design-system adherence, consistency, accessibility, layout hygiene, fidelity to
+  intent, and naming & context legibility; emits a standardized report and then offers to
+  fix (never auto-mutates).
 version: 0.1.0
 ---
 
@@ -263,9 +264,9 @@ your own non-overridable floor.
 
 **Load `figma-design`** — the basic design doctrine the designer built with (design-system-first,
 component-first, and the naming _floor_ of a meaningful, non-default name). **Ensure it is
-loaded** (load it if not yet loaded), **then read its references if you have not already read
-them this session** — the read is **not** gated on the skill being freshly loaded. This is the
-basic-rules layer you review the design against.
+loaded** (load it if not yet loaded); the review-relevant doctrine lives in the skill **body**,
+delivered on load, so **do not read its references** — `grammar.md` and `mechanics.md` are pure
+build mechanics with no review value. This is the basic-rules layer you review the design against.
 
 **Load `figma-bridge-prefs` if present** — if a skill of that **exact** name (not a prefix or
 substring) is in your available skills, **ensure it is loaded** (load it if not yet loaded),

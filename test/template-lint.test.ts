@@ -105,4 +105,12 @@ describe('template lint', () => {
     }
     expect(lintTemplateFiles(files)).toEqual([])
   })
+
+  it('the shipped template still ships its accessibility thresholds (a11y is a preference, so the lint no longer scans it — this guards the shipped WCAG AA default instead)', async () => {
+    const standards = await Bun.file(
+      `${root}plugin/skills/figma-setup/references/figma-bridge-prefs-template/references/review-standards.md`,
+    ).text()
+    expect(standards).toMatch(/4\.5:1/) // WCAG AA normal-text contrast default
+    expect(standards).toMatch(/44/) // touch-target minimum default
+  })
 })

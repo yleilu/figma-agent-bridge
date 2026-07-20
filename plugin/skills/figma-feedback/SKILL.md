@@ -33,7 +33,10 @@ Something is broken or wrong. File under **`category: 'bugs'`**.
   accepted shortcut). **If the miss is a taste / preference** (a house-style default, a
   threshold, a naming choice), capture it in the user's `figma-bridge-prefs` via
   `figma-setup` instead — never fold a preference into a shipped skill. Quote the
-  misleading line.
+  misleading line — but **never quote a line whose source is `figma-bridge-prefs`**
+  (house-style / review-standards); describe the miss abstractly and route it to
+  `figma-setup`. More broadly, never include house tokens, scales, client names, or naming
+  conventions in any `record_feedback` / `send_feedback` body.
 
 **Body format:**
 

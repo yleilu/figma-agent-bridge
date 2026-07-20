@@ -75,7 +75,13 @@ The discriminator for **why the two practices may ship a default at all** (and a
 spacing scale may not): **a preference ships a default only if it has a universally-defensible
 floor.** Design-system-first and component-first do — a _mild_ "prefer systematic design" baseline
 no professional objects to. A brand colour or spacing scale has no universal default; any default
-there imposes one team's taste on all, so it ships nothing. This is the P1 rule, applied.
+there imposes one team's taste on all, so it ships nothing. This is the P1 rule, applied. The
+same test seems to admit accessibility — "text should be legible" is likewise
+universally-defensible — yet a11y still ships nothing, because the two practices are
+construction **discipline** (a directional "prefer systematic design" is actionable with no
+number), whereas an accessibility check is **inert without a concrete threshold** (you cannot
+flag contrast without a ratio), so it behaves like every other concrete value (tokens / scale /
+ramp) and ships nothing, not like a process floor.
 
 ## 3. The two levels
 
@@ -149,7 +155,10 @@ starter values (a spacing scale, a token set, a type ramp) — the user's editab
   safety. A floor-preserving header states this. (It **does** set accessibility thresholds — those
   are a preference, shipped as the WCAG AA default the user then edits.)
 - **Lint-gated in CI.** Valid frontmatter, size under a cap, and a check that it introduces no
-  `skip`/`relax`/`disable` of verify/safety. Reviewed with the same rigor as a shipped skill.
+  `skip`/`relax`/`disable` of verify/safety. The lint intentionally **no longer scans the
+  accessibility thresholds** (they are a preference, not a floor); the shipped a11y default is
+  instead guaranteed by shipped-skill review rigor plus a positive lint assertion that the
+  template still ships its WCAG AA default. Reviewed with the same rigor as a shipped skill.
 - **Provenance stamped.** The instantiated file carries `seeded_by: figma-agent-bridge` and the
   `template_version` (§9), so it is identifiable for later update/repair and honest about origin.
 
@@ -240,7 +249,7 @@ There is **no auto-seed**. Instead:
 - **[[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]]** — catalogs `figma-setup` and the
   user preference layer in §6 (§6.1 states the basic floor; §6.7 points here as SSOT).
 - **[[figma-bridge/docs/specs/feedback-system|feedback-system.md]]** — keeps opinion out of the
-  neutral meta-tools (its Layer split, P1). This spec adds the further guard (§below) that a
+  neutral meta-tools (its Layer split, P1). This spec adds the further guard (see Fold-back split, below) that a
   taste/preference correction routes to `figma-bridge-prefs`, never a shipped skill, and
   `figma-bridge-prefs` content **never** rides the feedback rail off-box.
 - `figma-reviewer`'s `references/checks.md` ships **only the hard floor** (verification discipline,

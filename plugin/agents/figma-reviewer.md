@@ -36,8 +36,9 @@ model: sonnet # default; escalate to opus for large or complex reviews (many fra
 
 A dedicated subagent that performs a **design review** — reads a target frame or selection,
 checks it against six quality dimensions using the `figma-reviewer` skill, emits a
-standardized report, and then offers to apply fixes. Also invoked by `figma-designer` as its
-self-review gate before a build is called done.
+standardized report, and then offers to apply fixes. A `figma-designer` self-review does
+**not** dispatch this agent — the designer has no dispatch tool, so it runs the
+`figma-reviewer` **skill** in-session; this agent is the on-request review path.
 
 **Distinct from `figma-feedback`**: this agent critiques the _design artifact_; `figma-feedback`
 records friction with the _tools_.
@@ -61,14 +62,19 @@ Sonnet handles most reviews. Escalate to opus when:
 Before checking any dimension, build a faithful picture of the target:
 
 0. **Load the review basis.** Load **both** `figma-design` — the basic design doctrine
-   (design-system-first, component-first, the naming floor) — and, if a skill of that **exact**
-   name is available, `figma-bridge-prefs`, reading its `references/review-standards.md` for the
-   concrete house scale / tokens / ramp / naming _convention_. Measure the design against those
-   basics + preferences + the floor; neither loaded skill can relax the WCAG / contrast /
-   verification floor. Match the **exact** name `figma-bridge-prefs` (not a prefix or substring).
-   In a figma-designer self-review both are already loaded from the build pass — reuse, don't
-   reload. Absent `figma-bridge-prefs`, check the file against `figma-design` basics + its own
-   detected system + the floor.
+   (design-system-first, component-first, the naming floor), whose review-relevant doctrine is
+   delivered in the skill body on load (its references are pure build mechanics — do not read
+   them) — and, if a skill of that **exact** name is available, `figma-bridge-prefs`, reading
+   its `references/review-standards.md` for the concrete house scale / tokens / ramp / naming
+   _convention_ and the accessibility thresholds (WCAG contrast / touch-target / text-size).
+   Measure the design against those basics + preferences + the floor; neither loaded skill can
+   relax the **verification (export + read-back) and destructive-op safety floor**;
+   accessibility is a preference from `figma-bridge-prefs` (unchecked when none is present), not
+   part of the floor. Match the **exact** name `figma-bridge-prefs` (not a prefix or substring).
+   In a figma-designer self-review both are already loaded — reuse the load, but still **read**
+   `review-standards.md` if you have not already read it this session. Absent
+   `figma-bridge-prefs`, check the file against `figma-design` basics plus its own detected
+   system plus the floor.
 
 1. **Identify the target.** Resolve **which file** and which node. For the file, use the
    `fileKey` figma-designer passed you (self-review); on a cold on-request review, resolve
@@ -102,7 +108,9 @@ Before checking any dimension, build a faithful picture of the target:
 
 Use the **`figma-reviewer` skill** for this phase. The skill defines the six dimensions,
 their per-finding thresholds, and the output format. Load `references/checks.md` for the
-concrete numbers (WCAG ratios, spacing scales, naming patterns).
+mechanics it still holds — the contrast-ratio **formula**, the default-name **regex**, and the
+internal-consistency checks — **not** WCAG ratios, spacing scales, or naming conventions, which
+are preferences that come from `figma-bridge-prefs`.
 
 **The six dimensions (summary — authoritative detail is in the skill):**
 
@@ -113,8 +121,9 @@ concrete numbers (WCAG ratios, spacing scales, naming patterns).
 2. **Consistency** — off-scale spacing / padding, inconsistent corner radius, type off the
    ramp, misaligned or off-grid elements.
 
-3. **Accessibility** — text contrast (WCAG AA), minimum text size, touch-target size,
-   meaning conveyed by colour alone.
+3. **Accessibility** — text contrast, minimum text size, touch-target size, meaning
+   conveyed by colour alone. Checked against the loaded `figma-bridge-prefs` thresholds;
+   **unchecked when no prefs are present.**
 
 4. **Layout & structure hygiene** — absolute positioning where auto-layout fits, pile-up
    at [0,0], missing constraints, redundant nesting, orphan / hidden nodes.
@@ -224,13 +233,16 @@ If a finding **cannot be fixed** with the available tools (e.g. requires `delete
 
 ---
 
-## Self-review mode (invoked by `figma-designer`)
+## Self-review vs on-request
 
-When `figma-designer` calls this agent as its self-review gate:
+`figma-designer`'s self-review is **not** a dispatch of this agent — the designer has no
+dispatch tool, so it runs the `figma-reviewer` **skill** in-session against the frame it just
+built. This agent is the **on-request** review path ("review my selection", "audit this
+frame"). Both share the same `figma-reviewer` skill, so the six dimensions, the report format,
+and the read-first / report / offer-to-fix flow are identical; only the entry point differs.
 
-- The target is the frame just built — use the node id returned by the last build call,
-  and the `fileKey` figma-designer passed you — **do not re-resolve** either.
-- The design-system context is already established — do not re-scan.
-- Emit the full report (Phase 3); if blockers or warnings are found, report them back to
-  `figma-designer` for iteration before the build is called done.
-- `figma-designer` decides whether to iterate or surface the report to the user.
+The self-review flow (in the skill) reuses the build context rather than re-resolving it: the
+target is the frame just built (the node id returned by the last build call, and the `fileKey`
+from the build pass — **do not re-resolve** either), the design-system context is already
+established (**do not re-scan**), and `figma-designer` decides whether to iterate on any
+blockers/warnings or surface the report to the user.
