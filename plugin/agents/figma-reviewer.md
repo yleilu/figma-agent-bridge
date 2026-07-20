@@ -27,6 +27,7 @@ tools:
     record_feedback,
     report_status,
     Skill,
+    Read,
   ]
 model: sonnet # default; escalate to opus for large or complex reviews (many frames, deep nesting, or large component inventories)
 ---

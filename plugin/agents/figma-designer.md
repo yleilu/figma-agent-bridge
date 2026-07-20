@@ -44,6 +44,7 @@ tools:
     record_feedback,
     report_status,
     Skill,
+    Read,
   ]
 model: sonnet # default; the body instructs escalation to opus for large/complex compositions
 ---

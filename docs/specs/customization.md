@@ -157,8 +157,10 @@ inside the `figma-designer` / `figma-reviewer` subagents, where description-base
 not guaranteed. So the load path is explicit, not incidental:
 
 1. **Agent-def load (primary).** The `figma-designer` and `figma-reviewer` agent definitions load
-   `figma-bridge-prefs` as a **first step**, and list the `Skill` invocation in their `tools:`
-   whitelist so they _can_.
+   `figma-bridge-prefs` as a **first step**, then **read its `references/house-style.md` /
+   `review-standards.md`** for the concrete values. Both `Skill` (to load the skill) and `Read`
+   (to open its references — these agents are otherwise MCP-only, so without `Read` the overlay's
+   references are unreachable) are in their `tools:` whitelist so they _can_.
 2. **Extension-point backstop.** Each shipped build-loop skill that consumes an overlay
    (`figma-design`, `figma-reviewer`) ends with: _"If a skill named `figma-bridge-prefs` is in
    your available skills and not yet loaded, load it now; it raises the level of these defaults
@@ -266,6 +268,7 @@ user's private house style / tokens / client conventions off the machine.
 
 - **Concrete starter values.** The exact spacing scale / token set / type ramp the template ships
   is a design task for the template itself (built with shipped-skill review rigor).
-- **Description co-fire wording.** Whether `figma-bridge-prefs` carries a co-firing description
-  (best-effort) or relies solely on the agent-def + backstop load is settled at authoring time;
-  the load guarantee comes from the explicit paths (§7.1, §7.2), not the description.
+- **Trigger reliability (settled).** The load guarantee is the **explicit** agent-def load +
+  backstop (§7, paths 1–2); the `figma-bridge-prefs` description co-fire (§7, path 3) is a
+  supplementary best-effort. The agents carry `Read` so the read-the-reference step in paths 1–2
+  actually completes — without it the overlay's `references/*.md` would be unreachable.

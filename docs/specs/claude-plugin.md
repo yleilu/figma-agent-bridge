@@ -302,8 +302,10 @@ A subagent that **consumes** `figma-design`. Loop: request → plan (DS → comp
 layout → content) → build via the MCP tools → `export` + read-back verify →
 **self-review (`figma-reviewer` skill, §6.4)** → iterate.
 Frontmatter declares the MCP tools it may call and `model:` (sonnet default, opus for
-complex compositions), and includes `Skill` so it **loads the user's `figma-bridge-prefs` overlay
-as a first step** when present (per [[figma-bridge/docs/specs/customization|customization.md]] §7).
+complex compositions), and includes `Skill` (to load the overlay) + `Read` (to open its
+references — the agent is otherwise MCP-only) so it **loads the user's `figma-bridge-prefs`
+overlay and reads its `house-style.md` as a first step** when present (per
+[[figma-bridge/docs/specs/customization|customization.md]] §7).
 Calls `record_feedback` (§7) when it hits a tool limit — guided by the
 `figma-feedback` skill (§6.3).
 
@@ -316,7 +318,7 @@ defines **two flows, one per category, each with a standardized `record_feedback
 a worked example.** It records **one item per distinct issue**, never records expected errors (the
 user's own invalid input), and continues the task (zero-friction, never derail).
 
-**Recording, then the end-of-work review.** `record_feedback` only *captures* an item to the local
+**Recording, then the end-of-work review.** `record_feedback` only _captures_ an item to the local
 backlog — mid-task, by whoever hits the friction (a `figma-designer` subagent, or the main agent).
 It **does not send**. The human gate is a selector the **top-level agent** raises at the end of a
 unit of work when the backlog is non-empty (`AskUserQuestion` is a main-agent affordance, so
@@ -472,7 +474,7 @@ design flaw) routes to `figma-feedback` (§6.3) instead of a fix.
 
 **Structure:** `SKILL.md` (dimensions, output format, flow) → `references/checks.md`, loaded when
 reviewing. `checks.md` ships **only the hard floor** — the WCAG ratios, verification discipline, and
-destructive-op safety — plus **internal-consistency** checks (does the file use its *own* detected
+destructive-op safety — plus **internal-consistency** checks (does the file use its _own_ detected
 tokens / scale / ramp consistently). The concrete house scale, token set, type ramp, and naming
 rules are a **user preference** supplied by `figma-bridge-prefs/references/review-standards.md` when
 installed (P1) — see [[figma-bridge/docs/specs/customization|customization.md]].
@@ -483,9 +485,9 @@ A dedicated subagent consuming the `figma-reviewer` skill (§6.4) — matches th
 keeps a review's heavy read output out of the main context. Loop: read the target
 (`inspect`/`get_node`/`export`) → check each dimension → emit the standardized report → **offer to
 fix** → on approval apply edits (or route tool-gaps to `figma-feedback`). Frontmatter: `tools:`
-(read tools + the edit tools for the fix step + `record_feedback` + `Skill`, so it **loads the
-user's `figma-bridge-prefs` overlay as a first step** when present — per
-[[figma-bridge/docs/specs/customization|customization.md]] §7), `model:` (sonnet; opus for
+(read tools + the edit tools for the fix step + `record_feedback` + `Skill` + `Read`, so it
+**loads the user's `figma-bridge-prefs` overlay and reads its `review-standards.md` as a first
+step** when present — per [[figma-bridge/docs/specs/customization|customization.md]] §7), `model:` (sonnet; opus for
 large/complex reviews). Also invoked by `figma-designer` as its self-review gate.
 
 ### 6.6 Skill — `figma-connection`
@@ -620,8 +622,8 @@ skill/agent content.
   path ([[figma-bridge/docs/specs/feedback-system|feedback-system.md]]). The Worker URL compiles
   in cleanly, but the **shared secret for a _distributed_ artifact is unresolved** — a distributed
   artifact can't safely embed it (extractable → Worker spam). Decide: per-install token,
-  Worker-side rate-limiting, or accept the risk. *(The **logged-in** send path is direct-to-GitHub
-  with the human's own device-flow token and does not use the Worker or this shared secret.)*
+  Worker-side rate-limiting, or accept the risk. _(The **logged-in** send path is direct-to-GitHub
+  with the human's own device-flow token and does not use the Worker or this shared secret.)_
 - **Windows/Linux designer-route binaries** — deferred; darwin-arm64 first. (The Claude Code
   bundle route has no per-platform binary; `bun` handles cross-platform.)
 - **One-click install** — not possible today (no official scheme); revisit if Claude Code
