@@ -74,6 +74,15 @@ export const useRelay = () => {
     [],
   )
 
+  // Version handshake (version-handshake.md): the SERVER owns the major.minor
+  // compare and PUSHES a `version-mismatch` frame on skew. Mirror it into a
+  // state that PRE-EMPTS the roster. Reset on every (re)connect, so a
+  // compatible reconnect self-clears (no frame arrives => stays null).
+  const [mismatch, setMismatch] = useState<{
+    plugin: string
+    server: string
+  } | null>(null)
+
   // Plugin Presence (Task 8): best-effort clean-close signal. Sends a
   // `leave` frame so the relay drops the channel immediately instead of
   // waiting for the ~60s heartbeat timeout. Fired from the `leave` push
@@ -247,6 +256,7 @@ export const useRelay = () => {
         channel: null,
         error: null,
       })
+      setMismatch(null)
 
       void requestIdentity().then(() => {
         // Deterministic channel for a saved file; stable per-session
@@ -338,6 +348,21 @@ export const useRelay = () => {
             return
           }
 
+          if (
+            data.type === 'version-mismatch' &&
+            typeof data.server === 'string'
+          ) {
+            // [Review C2] Show the plugin's OWN version — it always knows
+            // APP_VERSION (imported above) — never the server's `data.plugin`
+            // view, which can be '(none)' for a version-less plugin. The
+            // frame only needs the server's version.
+            setMismatch({
+              plugin: APP_VERSION,
+              server: data.server,
+            })
+            return
+          }
+
           if (data.type === 'broadcast' && data.message) {
             const msg = data.message as Record<
               string,
@@ -424,6 +449,7 @@ export const useRelay = () => {
           // A dropped socket means the rows are stale -> fall to the
           // connection fallback (the invariant "agent shown => connected").
           setAgentStatus({})
+          setMismatch(null)
 
           setState({
             status: 'disconnected',
@@ -461,5 +487,6 @@ export const useRelay = () => {
     connect,
     disconnect,
     agentStatus,
+    mismatch,
   }
 }
