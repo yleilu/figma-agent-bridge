@@ -125,12 +125,12 @@ sequenceDiagram
                 Server->>GH: POST /login/oauth/access_token (client_id, device_code)
                 GH-->>Server: { access_token }  (or authorization_pending / slow_down)
                 Server->>GH: GET /user  (fetch identity for display)
-                Server->>Cred: store token + identity
+                Server->>Cred: store token + identity, preference = github
                 Server-->>Agent: { status: authorized, identity }
             end
         end
         Agent->>Server: send_feedback({ send[], add?, identity })
-        Server->>Cred: remember preference = identity (first run)
+        Server->>Cred: remember preference = identity (when explicitly chosen)
         loop each sent
             alt anonymous
                 Server->>Worker: POST { category, title, body, version, secret }
@@ -200,8 +200,9 @@ A local store (`~/.figma-agent-bridge`, the same root as the feedback store) hol
 **preference** (`anonymous` | `github`), the human's **OAuth token**, and the **cached identity**
 (`login`, `name`, `email`). It is the piece that lets the gate show `name <email>` across
 restarts and lets `send_feedback` reuse the remembered choice without re-asking. The **preference**
-is written from the `identity` passed to `send_feedback`, so an **anonymous** choice is remembered
-exactly like a GitHub login — the first-run attribution step never re-appears.
+is remembered once — set to `github` at login, or to the `identity` the human passes to
+`send_feedback` when they pick (so an **anonymous** choice sticks too) — the first-run attribution
+step never re-appears.
 
 - **Secure by default, with a fallback.** The token is written via **`Bun.secrets`** — Bun's
   built-in credential API, which maps to the macOS **Keychain**, Windows **Credential Manager**
@@ -308,13 +309,15 @@ owns filename generation.
     — a bounded page of the pending backlog (Rule A, T10 — the skill drains the `cursor` until
     exhausted to present the whole backlog) plus the remembered identity, so the agent can build
     the gate and decide whether to ask about identity.
-  - `send_feedback({ send: path[], add?: { title, description, category }, identity?: 'anonymous' | 'github' }) → { results: { path, status: 'sent' | 'failed', comment_url?, error? }[] }`
+  - `send_feedback({ send: path[], add?: { title, description, category }, identity?: 'anonymous' | 'github' }) → { results: { path, status: 'sent' | 'failed' | 'auth-required' | 'no-access', comment_url?, error? }[] }`
     — files each `send` item as a comment on its category issue (anonymous → Worker/bot; github →
     direct as the human via `postIssueComment`) and, when `add` is present, records that
-    human-authored item and files it too. Each result carries the item's `path`, its terminal
-    `status`, and the `comment_url` on success or an `error` on failure, so the skill can report
-    partial outcomes. `identity` defaults to the remembered preference, and `send_feedback` persists
-    the `identity` it used as the remembered preference (so an anonymous choice is remembered too).
+    human-authored item and files it too. Each result carries the item's `path`, its `status`, and
+    the `comment_url` on success or an `error` otherwise; a github `401` yields `auth-required` (the
+    token is cleared → re-offer login) and a `403`/`404` yields `no-access` (offer the anonymous
+    path), so the skill can report and recover per item. `identity` defaults to the remembered
+    preference; when the human passes it explicitly (first run) `send_feedback` persists it as the
+    preference, so an anonymous choice is remembered too.
     On **Report** the review passes every pending path as `send`.
   - `discard_feedback({ paths: path[] }) → { results: { path, ok, error? }[] }` — **hard-deletes**
     each item's Markdown file from the store (no soft state, no network). Each result carries the
