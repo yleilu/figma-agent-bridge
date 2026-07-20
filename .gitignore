@@ -10,3 +10,6 @@ verify-output/
 
 # Visual brainstorming companion (not durable)
 .superpowers/
+
+# Local deploy credentials — never commit
+.credentials
