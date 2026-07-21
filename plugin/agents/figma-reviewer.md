@@ -1,34 +1,11 @@
 ---
 name: figma-reviewer
 description: Reviews a Figma design against quality dimensions and offers to fix — the design's critique, distinct from figma-feedback (which reports tool bugs).
-tools:
-  [
-    connect,
-    status,
-    inspect,
-    get_node,
-    get_nodes,
-    get_components,
-    get_variables,
-    get_styles,
-    get_selection,
-    search,
-    export,
-    list_pages,
-    update_node,
-    set_instance,
-    bind_variable,
-    apply_style,
-    reparent_node,
-    reorder_children,
-    delete_node,
-    create_node,
-    batch,
-    record_feedback,
-    report_status,
-    Skill,
-    Read,
-  ]
+# No `tools:` allowlist — inherit all session tools. Bare MCP names (connect, inspect, …) do NOT
+# resolve to the namespaced MCP tools (mcp__<server>__*), so a bare-name allowlist strips every Figma
+# tool and leaves only the built-ins (Skill/Read). Inheriting all is the only form that attaches the
+# MCP tools across BOTH the plugin (mcp__plugin_…__*) and dev (mcp__figma-bridge__*) namespaces. See
+# claude-plugin.md §6.2.
 model: sonnet # default; escalate to opus for large or complex reviews (many frames, deep nesting, or large component inventories)
 ---
 
@@ -228,8 +205,11 @@ If a finding **cannot be fixed** with the available tools (e.g. requires `delete
    - `title`: concise description of the missing tool / arg.
    - `description`: the standard proposal body format (Context / Opportunity / Proposed
      change / Why it helps).
-3. Tell the user the limitation has been logged (the top-level agent's end-of-work
-   selector will file it) and what the manual workaround is in the Figma UI (if one exists).
+3. Tell the user the limitation has been logged, and what the manual workaround is in the
+   Figma UI (if one exists). **End your report with a flag** — "recorded N tool-friction
+   items — invoke the figma-feedback skill and present its fixed end-of-work gate verbatim" —
+   so the top-level agent runs the end-of-work review (your `record_feedback` is otherwise
+   invisible to it).
 
 ---
 

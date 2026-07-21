@@ -1,51 +1,11 @@
 ---
 name: figma-designer
 description: Builds and edits Figma designs from a request — plans, builds via the MCP, self-reviews, and iterates.
-tools:
-  [
-    connect,
-    status,
-    create_tree,
-    create_node,
-    create_page,
-    create_component,
-    create_variables,
-    create_styles,
-    combine_variants,
-    bind_variable,
-    apply_style,
-    update_node,
-    update_component,
-    update_variables,
-    update_styles,
-    set_instance,
-    swap_component,
-    clone_node,
-    reparent_node,
-    reorder_children,
-    delete_node,
-    boolean_op,
-    flatten,
-    create_image,
-    create_from_svg,
-    get_node,
-    get_nodes,
-    inspect,
-    get_components,
-    get_variables,
-    get_styles,
-    get_selection,
-    set_selection,
-    set_current_page,
-    set_focus,
-    list_pages,
-    list_fonts,
-    export,
-    record_feedback,
-    report_status,
-    Skill,
-    Read,
-  ]
+# No `tools:` allowlist — inherit all session tools. Bare MCP names (connect, create_node, …) do NOT
+# resolve to the namespaced MCP tools (mcp__<server>__*), so a bare-name allowlist strips every Figma
+# tool and leaves only the built-ins (Skill/Read). Inheriting all is the only form that attaches the
+# MCP tools across BOTH the plugin (mcp__plugin_…__*) and dev (mcp__figma-bridge__*) namespaces. See
+# claude-plugin.md §6.2.
 model: sonnet # default; the body instructs escalation to opus for large/complex compositions
 ---
 
@@ -161,7 +121,10 @@ figma-feedback skill (see §6 below) — route them as tool issues, not design f
 After fixing blockers:
 
 - If the result is clean, present it to the user with a brief summary of what was
-  built, what tokens/components were used, and what the self-review found.
+  built, what tokens/components were used, and what the self-review found. **If you
+  recorded any feedback this task, end the summary with a flag** — "recorded N tool-friction
+  items — invoke the figma-feedback skill and present its fixed end-of-work gate verbatim" —
+  so the top-level agent runs the review (your `record_feedback` is otherwise invisible to it).
 - If the user requests changes, loop from step 2 (re-plan as needed) or step 3
   (direct edit if the change is clear and scoped).
 
@@ -180,7 +143,7 @@ the exact body format, and the correct `record_feedback` parameter mapping
 (`category`, `title`, `description`, optional `tool`).
 
 After recording, tell the user the issue is noted, then continue the task — do not send
-it yourself. The top-level agent runs the end-of-work feedback selector (see the
+it yourself. The top-level agent runs the end-of-work review (see the
 figma-feedback skill) once you return. Never derail the build over a tool limitation;
 work around it and keep going.
 
@@ -198,5 +161,5 @@ work around it and keep going.
 - Do not call the build done without running the figma-reviewer skill self-check.
 - Do not auto-mutate during self-review — report first, then fix with user awareness.
 - Do not record feedback for the user's own invalid input (expected errors).
-- Do not run the feedback selector or send feedback yourself — you are a subagent; the
+- Do not run the end-of-work review or send feedback yourself — you are a subagent; the
   top-level agent files the backlog at end of work.

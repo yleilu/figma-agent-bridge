@@ -3,9 +3,11 @@ name: figma-feedback
 description: >-
   Use while driving the Figma MCP when you hit friction — a tool that silently no-ops,
   errors confusingly, contradicts the spec, is missing a capability, or MISLEADS ("I
-  thought I could do X but I can't") — OR when the user asks to file feedback. Teaches
-  when and how to record a bug or proposal via record_feedback (standardized formats),
-  and how the end-of-work review (a three-way Report / Defer / Discard gate) files or drops the backlog.
+  thought I could do X but I can't") — OR when the user asks to file feedback, OR when
+  wrapping up Figma work whose task recorded friction (including a subagent's report that
+  it recorded feedback). Teaches when and how to record a bug or proposal via record_feedback
+  (standardized formats), and how the end-of-work review (a three-way Report / Defer / Discard
+  gate) files or drops the backlog.
 version: 0.1.0
 ---
 
@@ -176,35 +178,42 @@ agent call.
 
 ## The end-of-work review (the human gate)
 
-At the end of a unit of work, if the pending backlog is non-empty, the **top-level
-agent** runs the review with the human. (`AskUserQuestion` is a main-agent affordance, so
-subagents only record — the top-level agent runs this step after they return.) The human is
+When the top-level agent **finishes a unit of work and reports the result to the user**, and
+**this unit recorded new tool friction** (its own `record_feedback`, or a subagent that flagged
+the recording in its report), it offers this review — as its own wrap-up step, by its own
+judgment; **no hook forces it.** It's an **optional courtesy, not mandatory:** offer it once,
+keep it low-friction, and if the moment's wrong, skip it. Trigger only on **new friction this
+unit** — a purely-deferred older backlog (no new friction this time) does not re-raise on its own
+and may linger, which is acceptable. When it does fire it acts on the **whole pending backlog** in
+one batch (new items plus anything deferred). (`AskUserQuestion` is a main-agent affordance, so
+subagents only `record_feedback` — the top-level agent runs this after they return.) The human is
 **never asked to triage issues one by one** — every choice is on the whole batch.
 
 1. **Read the backlog.** Call `list_feedback` (page the `cursor` until exhausted) to get
    every pending item and the remembered `identity`.
-2. **Gate — one three-way choice.** Ask, e.g. _"I hit N tool limitation(s) — ‹up to 3 titles,
-   then "…and K more"› — what should I do?"_ with three options:
-   - **Report them** — file all N to the developer.
-   - **Defer to next time** — do nothing; the backlog is kept. **Dismissing the question is
-     Defer.**
-   - **Discard** — drop them unsent.
-   For a returning (remembered) user, label the Report option with the attribution —
-   _Report as `name <email>`_ or _Report anonymously_ — so they see who authors the comments.
-3. **On Report — attribution (first run only).** If `identity` is null, ask _under my GitHub
+2. **Gate — one three-way choice, FIXED presentation.** Raise `AskUserQuestion` with **exactly**
+   this shape. Do **not** reword, reorder, or re-default it — the human must see the same gate
+   every time, and the destructive option must never be first or default:
+   - **header:** `Send feedback?`
+   - **question:** `I captured N tool-friction note(s): "‹title 1›"[, "‹title 2›"][, …and K more]. Send them to the developer?` — fill `N` and up to 3 real titles from `list_feedback`; append `…and K more` only when more than 3 remain.
+   - **options, in THIS order — option 1 is the default:**
+     1. **`Yes, send`** — `File all N to the developer` + attribution: remembered github → `, as <name> <login>`; remembered anonymous → `, anonymously via the bot`; first run (`identity` null) → `— I'll ask how to attribute first`.
+     2. **`Not now`** — `Keep them in the backlog.`
+     3. **`Delete`** — `Discard them unsent.`
+   Dismissing the question (Esc) counts as **Not now**. **Never** put `Delete` first or make it the
+   default.
+3. **On "Yes, send" — attribution (first run only).** If `identity` is null, ask _under my GitHub
    account_ vs _anonymously_. To log in: `github_auth_start`, show the `user_code` +
    `verification_uri`, then `github_auth_poll` (re-call while `pending`) until
-   `authorized`/`denied`/`expired`; if the human cancels, fall back to the anonymous option
-   (items stay pending, nothing filed). The choice is remembered — skip this on later runs.
-4. **On Report — "something else" (any run).** Independently of step 3, offer a free-text
-   "describe an issue or opinion in your own words". If given, **do not forward the raw text**:
-   investigate it (reproduce, identify the tool + expected-vs-actual), write a proper bug or
-   proposal in the standard format, classify it `bugs` vs `proposals`, and pass it as
-   `send_feedback`'s `add`.
-5. **File / drop.**
-   - **Report →** `send_feedback({ send: <every pending path>, add?, identity? })`. Pass
-     `identity` explicitly the first time (so the choice is remembered). Then **report the
-     per-item results**: on `auth-required` offer to log in again; on `no-access` offer the
-     anonymous path.
-   - **Discard →** `discard_feedback({ paths: <every pending path> })` (hard delete).
-   - **Defer / dismiss →** do nothing; the backlog is preserved.
+   `authorized`/`denied`/`expired`; if the human cancels, fall back to anonymous (nothing filed
+   yet). The choice is remembered — skip this on later runs.
+4. **Custom add via the built-in free-text.** If the human picks the built-in **"Type something"**
+   and describes an issue in their own words, **do not forward the raw text**: investigate it
+   (reproduce, identify the tool + expected-vs-actual), write a proper bug or proposal in the
+   standard format, classify it `bugs` vs `proposals`, and pass it as `send_feedback`'s `add`.
+5. **Send / keep / drop.**
+   - **Yes, send →** `send_feedback({ send: <every pending path>, add?, identity? })`. Pass
+     `identity` explicitly the first time (so the choice is remembered). Then **report the per-item
+     results**: on `auth-required` offer to log in again; on `no-access` offer the anonymous path.
+   - **Delete →** `discard_feedback({ paths: <every pending path> })` (hard delete).
+   - **Not now / dismiss →** do nothing; the backlog is preserved.

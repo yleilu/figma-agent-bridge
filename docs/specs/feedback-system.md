@@ -351,8 +351,18 @@ _When_ to raise the review and _how_ to frame it is opinion, owned by the `figma
 the mechanism above legible; the skill is the source of truth. The human is **never asked to triage
 issues one by one** — the choice is on the whole batch:
 
-- **When.** At the end of a unit of work, when the pending backlog is non-empty. The **top-level
-  agent** runs it (`AskUserQuestion` is a main-agent affordance; subagents only `record_feedback`).
+- **When.** The **top-level agent**, when it **finishes a unit of work and reports the result to
+  the user**, offers the review — but only when **this unit recorded new tool friction** (its own
+  `record_feedback`, or a subagent that flagged the recording in its report). It's the agent's own
+  wrap-up step, by its own judgment: **no hook forces it**, and it is an **optional courtesy, not
+  mandatory** — offered once, low-friction, skipped if the moment's wrong. Because the trigger is
+  *new friction this unit*, a purely-deferred older backlog (no new friction this time) does **not**
+  re-raise on its own and may linger until the next unit that records friction — an accepted
+  trade-off for keeping the review unobtrusive. When it does fire it acts on the **whole pending
+  backlog** in one batch (new items plus anything deferred), and `AskUserQuestion` (a main-agent
+  affordance; subagents only `record_feedback`, then flag it in their report) never asks the human
+  to triage issues one by one. The `figma-design` skill carries this finish-step; there is **no
+  `Stop` hook**.
 - **Gate — one three-way choice on the whole batch** (always shown). _"I hit N tool limitation(s)
   — ‹a few titles› — what should I do?"_
   - **Report them → file all N.** For a returning user the Report option carries the remembered

@@ -17,8 +17,11 @@ that works, the form that doesn't (when relevant), and why.
 ## Instance text override — compound child id
 
 **The problem.** `set_instance` sets a component property value on an instance, but
-if `update_component` created the TEXT property without binding it to a text node,
-the instance's text doesn't change. The property is inert.
+if `update_component` created the TEXT property **without** a `targetNodeId` (leaving
+it unbound), the instance's text doesn't change. The property is inert. (Pass
+`targetNodeId` at creation time instead and the bind works — see **Limits** below;
+this section is the fallback for properties left unbound, or for one-off content not
+modeled as a property at all.)
 
 **The fix.** Update the text node directly via `update_node`, using its compound id:
 
@@ -132,15 +135,34 @@ components already have `variantProperties` set, `combine_variants` merges them.
 
 ## Limits
 
-### `update_component` TEXT property is inert
+### `update_component` TEXT property binding — pass `targetNodeId`
 
 `update_component` with `add: [{type: "TEXT", name: "Label", defaultValue: "x"}]`
-creates the property definition on the component, but it is **not bound** to any
-specific text node. Consequently `set_instance({ fileKey, nodeId, properties: {Label: "Revenue"} })`
+(no `targetNodeId`) creates the property definition but leaves it **unbound** to any
+text node — `set_instance({ fileKey, nodeId, properties: {Label: "Revenue"} })` then
 sets the property value on the instance object but no text node changes.
 
-**Workaround:** use the compound-id override path described above. File the binding
-gap as a bug via `figma-feedback` so it can be addressed in the tool.
+**Fix: bind it at creation.** Add `targetNodeId: "<masterTextNodeId>"` (and optionally
+`field`, defaults to `characters` for TEXT) to the `add` entry:
+
+```json
+{ "name": "Label", "type": "TEXT", "defaultValue": "x", "targetNodeId": "<masterTextNodeId>" }
+```
+
+Verified live: with `targetNodeId` supplied, the property genuinely binds via
+`componentPropertyReferences`, and `set_instance({ properties: { Label: "Revenue" } })`
+updates the actual rendered text on every instance — both the bare property name and
+the full `Name#id` key work as the properties-object key.
+
+**Verifying the bind.** `get_node(masterTextNodeId, { profile: "full" })` currently
+does **not** surface `componentPropertyReferences` (a known `full`-profile gap, filed
+as a bug) — request it explicitly: `get_node(masterTextNodeId, { fields: ["componentPropertyReferences"] })`.
+A `full` read that appears to lack the binding is not proof it's missing; re-check with
+explicit `fields`.
+
+**If you truly need it unbound** (or already have a component whose TEXT property was
+added without `targetNodeId`), fall back to the compound-id override path described
+above.
 
 ### No `delete_variables` / `delete_styles`
 

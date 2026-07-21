@@ -231,6 +231,28 @@ whether the tool call succeeded silently with a wrong result — file a bug via 
 
 ---
 
+## Wrapping up — offer the feedback review
+
+The gate is raised by the **main agent** (`AskUserQuestion` only works at the top level),
+but the trigger flows through the whole chain — and covers both ways work reaches you:
+
+- **You built directly** (this skill is loaded): when you finish and report the result to
+  the user, if **this task recorded new friction**, offer the **end-of-work review** — the
+  fixed three-way gate from the `figma-feedback` skill.
+- **A `figma-designer` / `figma-reviewer` subagent built** (it loaded this skill; the main
+  agent may not): the subagent records friction and **flags it in its report back** —
+  "recorded N tool-friction items — invoke the figma-feedback skill and present its fixed
+  end-of-work gate verbatim." Act on that flag: load `figma-feedback` and run the gate.
+
+Either way the gate files the **whole pending backlog** in one batch (new items plus anything
+deferred earlier). Trigger only on **new friction this task** — if nothing new was recorded,
+say nothing, even if an older backlog exists (it rides along the next time friction is filed;
+a purely-deferred backlog may linger, which is acceptable). This is an **optional courtesy,
+not a required step:** offer it once as you wrap up, never mid-build, never twice. If the
+moment isn't right, skip it. Don't nag.
+
+---
+
 ## Fiddly mechanics
 
 The calls that get wrong most often are documented with exact patterns in
@@ -248,9 +270,15 @@ are in `references/grammar.md`. Load it when writing or reading any atom value.
 
 ## Limits (know before hitting them)
 
-- `update_component` can **add** a TEXT component property but does **not bind** it
-  to any text node — `set_instance` setting that property is therefore inert. Use the
-  compound-id override path instead (see `references/mechanics.md`).
+- `update_component`'s `add` entries bind a TEXT property to a text node **only when
+  you pass `targetNodeId`** — done that way, the bind is real: `set_instance` on that
+  property genuinely updates the instance's rendered text (verified live). Omit
+  `targetNodeId` and the property is added unbound — `set_instance` is then inert, and
+  the compound-id override path is the fallback (see `references/mechanics.md`).
+- To verify a `componentPropertyReferences` bind, request it explicitly —
+  `get_node(nodeId, { fields: ['componentPropertyReferences'] })`. `profile: 'full'`
+  currently drops it silently (filed as a bug); don't trust a `full` read-back as proof
+  a bind failed.
 - No `delete_variables` or `delete_styles` — reuse rather than clean up.
 - `get_node` on a rotated frame returns the bounding-box size, not the frame's own
   width/height — account for this when checking dimensions.

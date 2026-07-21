@@ -101,7 +101,7 @@ figma-agent-bridge/                       repo == marketplace
 │   │   ├── figma-connection/SKILL.md     + references/ (§6.6)
 │   │   └── figma-setup/SKILL.md          + references/figma-bridge-prefs-template/ (SKILL.md.tmpl + references/) (§6.7)
 │   ├── agents/
-│   │   ├── figma-designer.md             frontmatter: tools:, model: (§6.2)
+│   │   ├── figma-designer.md             frontmatter: model: (no tools: — inherit all, §6.2)
 │   │   └── figma-reviewer.md             (§6.5)
 │   ├── hooks/
 │   │   ├── hooks.json                    PreToolUse → inject session_id (+ agent_id/agent_type on subagent calls); UserPromptSubmit → presence status block (§ plugin-presence.md)
@@ -118,8 +118,9 @@ figma-agent-bridge/                       repo == marketplace
 Conventions confirmed from real plugins: MCP config lives in `.mcp.json` at plugin root
 (never inline in `plugin.json`); `plugin.json` sets only
 `name, description, version, author, homepage, repository, license, keywords`; skills are
-`skills/<name>/SKILL.md`; agents are flat `agents/<name>.md` with `tools:`/`model:`
-frontmatter; hooks are `hooks/hooks.json` + sibling scripts (extensionless to avoid
+`skills/<name>/SKILL.md`; agents are flat `agents/<name>.md` with a `model:` frontmatter (and
+**no `tools:`** — inherit all; a bare-name allowlist doesn't resolve MCP tools, §6.2); hooks are
+`hooks/hooks.json` + sibling scripts (extensionless to avoid
 Windows auto-`bash` mangling). `hooks.json` holds two **core** hooks (feature specs add more — see end of
 section): (1) a **`PreToolUse`** hook,
 matcher scoped to the figma-bridge MCP tools across both install namespaces
@@ -134,7 +135,10 @@ availability and pending user edits (passive plugin/file awareness) — which us
 [[figma-bridge/docs/specs/change-feed|change-feed.md]]). Beyond these two core hooks, the **status
 monitor** ([[figma-bridge/docs/specs/status-monitor|status-monitor.md]]) registers three more
 `hooks.json` entries — `Stop`, `SubagentStop`, `SessionEnd` — for per-agent status lifecycle (owned by
-that spec).
+that spec). The **feedback system** ([[figma-bridge/docs/specs/feedback-system|feedback-system.md]])
+adds **no hooks**: its end-of-work review is an **agent-driven finish-step** carried by the
+`figma-design` skill (the main agent offers the review when a unit of work recorded new friction),
+not a `Stop` hook — see [[figma-bridge/docs/specs/feedback-system|feedback-system.md]].
 
 **Dev-mode fallback.** The plugin-distributed `PreToolUse` hook is scoped to the
 plugin-install tool namespace, so it is inert on the dev/manual (`.mcp.json`) route, where the
@@ -320,10 +324,14 @@ defers to `figma-bridge-prefs` when installed — see
 A subagent that **consumes** `figma-design`. Loop: request → plan (DS → components →
 layout → content) → build via the MCP tools → `export` + read-back verify →
 **self-review (`figma-reviewer` skill, §6.4)** → iterate.
-Frontmatter declares the MCP tools it may call and `model:` (sonnet default, opus for
-complex compositions), and includes `Skill` (to load the overlay) + `Read` (to open its
-references — the agent is otherwise MCP-only) so it **loads the user's `figma-bridge-prefs`
-overlay and reads its `house-style.md` as a first step** when present (per
+Frontmatter sets **`model:`** (sonnet default, opus for complex compositions) and **omits
+`tools:`** so the subagent **inherits all session tools**. A bare-name `tools:` allowlist
+(`connect`, `create_node`, …) does **not** resolve to the namespaced MCP tools
+(`mcp__<server>__*`) — it strips every Figma tool and leaves only the built-ins — and inheriting
+all is the only form that attaches the MCP tools across **both** the plugin (`mcp__plugin_…__*`)
+and dev (`mcp__figma-bridge__*`) namespaces. Inheriting keeps `Skill` (to load the overlay) +
+`Read` (to open references), so it **loads the user's `figma-bridge-prefs` overlay and reads its
+`house-style.md` as a first step** when present (per
 [[figma-bridge/docs/specs/customization|customization.md]] §7).
 Calls `record_feedback` (§7) when it hits a tool limit — guided by the
 `figma-feedback` skill (§6.3).
@@ -339,15 +347,21 @@ user's own invalid input), and continues the task (zero-friction, never derail).
 
 **Recording, then the end-of-work review.** `record_feedback` only _captures_ an item to the local
 backlog — mid-task, by whoever hits the friction (a `figma-designer` subagent, or the main agent).
-It **does not send**. The human gate is a whole-batch review the **top-level agent** raises at the
-end of a unit of work when the backlog is non-empty (`AskUserQuestion` is a main-agent affordance,
-so subagents only record) — the human is **never asked to triage issues one by one**:
+It **does not send**. The human gate is a whole-batch review the **top-level agent** raises as a
+wrap-up finish-step (carried by the `figma-design` skill, **not** a hook) when **the unit of work
+recorded new friction** — an optional courtesy, not mandatory; a purely-deferred older backlog does
+not re-raise on its own (`AskUserQuestion` is a main-agent affordance, so subagents only record then
+flag it in their report) — the human is **never asked to triage issues one by one**:
 
 - **Gate — one three-way choice on the whole batch** (always shown). _"I hit N tool limitation(s) —
   ‹a few titles› — what should I do?"_ **Report → file all N**; **Defer (or dismiss) → stop:**
   nothing is sent, nothing is deleted, the backlog is kept for later; **Discard → delete all N
   unsent.** For a returning user the Report option carries the remembered attribution (_Report as
-  `name <email>`_ or _Report anonymously_) so they see whose account will author the comments.
+  `name <email>`_ or _Report anonymously_) so they see whose account will author the comments. The
+  user-facing presentation is a **fixed `AskUserQuestion` template** owned by the skill — labels
+  _Yes, send_ / _Not now_ / _Delete_ (= Report / Defer / Discard), in that order, with **_Yes, send_
+  the default and Delete never the default** — so the gate is identical every run and a destructive
+  option can't be fat-fingered (the agent must not reword or reorder it).
 - **"Something else" — an add on any Report.** The gate always offers a free-text _"something else"_
   so the human can add one issue in their own words on any Report, which the agent **investigates
   and rewrites** into a proper bug/proposal (the raw text never leaves the machine), filed as
@@ -517,10 +531,11 @@ by `figma-bridge-prefs/references/review-standards.md` when installed (P1) — s
 A dedicated subagent consuming the `figma-reviewer` skill (§6.4) — matches the delegate model and
 keeps a review's heavy read output out of the main context. Loop: read the target
 (`inspect`/`get_node`/`export`) → check each dimension → emit the standardized report → **offer to
-fix** → on approval apply edits (or route tool-gaps to `figma-feedback`). Frontmatter: `tools:`
-(read tools + the edit tools for the fix step + `record_feedback` + `Skill` + `Read`, so it
-**loads the user's `figma-bridge-prefs` overlay and reads its `review-standards.md` as a first
-step** when present — per [[figma-bridge/docs/specs/customization|customization.md]] §7), `model:` (sonnet; opus for
+fix** → on approval apply edits (or route tool-gaps to `figma-feedback`). Frontmatter **omits
+`tools:`** (inherits all session tools — §6.2 — which keeps the read/edit tools + `record_feedback`
++ `Skill` + `Read`, so it **loads the user's `figma-bridge-prefs` overlay and reads its
+`review-standards.md` as a first step** when present — per
+[[figma-bridge/docs/specs/customization|customization.md]] §7), `model:` (sonnet; opus for
 large/complex reviews). Also invoked by `figma-designer` as its self-review gate.
 
 ### 6.6 Skill — `figma-connection`
@@ -551,8 +566,8 @@ The feedback **mechanism** is specced authoritatively in
 (`record_feedback` to capture, plus `list_feedback` / `send_feedback` / `discard_feedback` /
 `github_auth_start` / `github_auth_poll` to review, file, and drop — their own `feedback` group), a
 **one-Markdown-file-per-item** store (**category = directory = one standing GitHub issue**), and an
-**agent-driven send flow** — at the end of a unit of work the top-level agent runs a **fast
-three-way gate** with the human — **Report**, **Defer**, or **Discard** — and on **Report** files
+**agent-driven send flow** — when a unit of work recorded new friction, the top-level agent runs a
+**fast three-way gate** with the human — **Report**, **Defer**, or **Discard** — and on **Report** files
 **every recorded item** as a **comment** on its category's standing issue, either **anonymously**
 via a **CloudFlare Worker** (holding a shared bot token) or **as the human's own GitHub account** (a
 token they authorize once, in-browser; on the public repo any authenticated user can comment).
