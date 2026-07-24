@@ -7,6 +7,8 @@ import { buildRoster } from './roster'
 import { selectPanelView } from './panel-view'
 import { AnimatedRoster } from './roster-list'
 import { PulseDot } from './row'
+import { MAX_WINDOW_HEIGHT } from './spring-height'
+import { cx } from './cx'
 
 const Fallback = ({
   status,
@@ -100,9 +102,15 @@ export const App = () => {
 
   const [contentRef, target] = useContentHeight()
   useWindowResize(target)
+  const atCap = target >= MAX_WINDOW_HEIGHT
 
   return (
-    <div className="max-h-screen overflow-y-auto bg-figma-bg text-figma-text">
+    <div
+      className={cx(
+        'max-h-screen bg-figma-bg text-figma-text',
+        atCap ? 'overflow-y-auto' : 'overflow-hidden',
+      )}
+    >
       <div ref={contentRef}>
         {view.kind === 'connecting' && (
           <Fallback status="connecting" />
