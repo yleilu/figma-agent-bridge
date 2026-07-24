@@ -1,6 +1,8 @@
+import { useSpring, animated } from '@react-spring/web'
 import { cx } from './cx'
 import { StatusText } from './status-text'
 import { TypingDots } from './typing-dots'
+import { PULSE_SPRING } from './springs'
 import type { RosterRow } from './roster'
 import type { StatusRecord } from '@figma-agent-bridge/shared'
 
@@ -23,13 +25,41 @@ const timeAgo = (t: number): string => {
   return m < 60 ? `${m}m` : `${Math.round(m / 60)}h`
 }
 
+// A status dot that breathes (opacity loop) while `busy` and
+// rests fully opaque otherwise. Replaces the Tailwind pulse
+// keyframe with a react-spring loop so every panel animation
+// runs on one engine. Shared by the roster Dot and the Fallback
+// "connecting" state.
+export const PulseDot = ({
+  busy,
+  className,
+}: {
+  busy: boolean
+  className?: string
+}) => {
+  const style = useSpring({
+    opacity: 1, // target; busy loops back from 0.4
+    from: { opacity: busy ? 0.4 : 1 },
+    loop: busy ? { reverse: true } : false,
+    reset: busy, // restart the pulse when it goes busy
+    immediate: !busy, // idle: snap opaque, no residual pulse
+    config: PULSE_SPRING,
+  })
+  return (
+    <animated.span
+      style={{ opacity: style.opacity }}
+      className={cx(
+        'inline-block w-2 h-2 rounded-full',
+        className,
+      )}
+    />
+  )
+}
+
 const Dot = ({ record }: { record: StatusRecord }) => (
-  <span
-    className={cx(
-      'inline-block w-2 h-2 rounded-full shrink-0',
-      dotClass(record),
-      record.activity === 'busy' && 'animate-pulse',
-    )}
+  <PulseDot
+    busy={record.activity === 'busy'}
+    className={cx('shrink-0', dotClass(record))}
   />
 )
 

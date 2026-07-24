@@ -4,35 +4,33 @@ import { useDiscovery } from './hooks/useDiscovery'
 import { useContentHeight } from './hooks/useContentHeight'
 import { useWindowResize } from './hooks/useWindowResize'
 import { buildRoster } from './roster'
-import { cx } from './cx'
 import { selectPanelView } from './panel-view'
 import { AnimatedRoster } from './roster-list'
+import { PulseDot } from './row'
 
 const Fallback = ({
   status,
 }: {
   status: 'connecting' | 'disconnected'
 }) => {
-  const [dot, title, sub] =
-    status === 'connecting'
-      ? [
-          'bg-figma-icon-warning animate-pulse',
-          'Connecting…',
-          'reaching the bridge',
-        ]
-      : [
-          'bg-figma-icon-danger',
-          'Bridge offline',
-          'start the MCP / relay to connect',
-        ]
+  const connecting = status === 'connecting'
+  const [dot, title, sub] = connecting
+    ? [
+        'bg-figma-icon-warning',
+        'Connecting…',
+        'reaching the bridge',
+      ]
+    : [
+        'bg-figma-icon-danger',
+        'Bridge offline',
+        'start the MCP / relay to connect',
+      ]
   return (
     <div className="flex flex-col gap-1 p-3.5 text-11">
       <div className="flex items-center gap-2">
-        <span
-          className={cx(
-            'inline-block w-2 h-2 rounded-full',
-            dot,
-          )}
+        <PulseDot
+          busy={connecting}
+          className={dot}
         />
         <span className="font-semibold text-figma-text">
           {title}

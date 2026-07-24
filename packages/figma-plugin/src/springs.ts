@@ -29,3 +29,10 @@ export const DOTS_SPRING: SpringConfig = {
   tension: 250,
   friction: 12,
 }
+
+// Busy-dot breathing pulse (opacity loop). A soft, slow spring
+// so the dot "breathes" rather than blinks.
+export const PULSE_SPRING: SpringConfig = {
+  tension: 120,
+  friction: 14,
+}
