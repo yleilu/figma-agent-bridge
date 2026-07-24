@@ -1,10 +1,12 @@
 import { useEffect } from 'react'
 import { useRelay } from './hooks/useRelay'
 import { useDiscovery } from './hooks/useDiscovery'
+import { useContentHeight } from './hooks/useContentHeight'
+import { useWindowResize } from './hooks/useWindowResize'
 import { buildRoster } from './roster'
 import { cx } from './cx'
 import { selectPanelView } from './panel-view'
-import { Row } from './row'
+import { AnimatedRoster } from './roster-list'
 
 const Fallback = ({
   status,
@@ -98,31 +100,29 @@ export const App = () => {
     rows.length,
   )
 
+  const [contentRef, target] = useContentHeight()
+  useWindowResize(target)
+
   return (
-    <div className="min-h-full max-h-screen overflow-y-auto bg-figma-bg text-figma-text">
-      {view.kind === 'connecting' && (
-        <Fallback status="connecting" />
-      )}
-      {view.kind === 'offline' && (
-        <Fallback status="disconnected" />
-      )}
-      {view.kind === 'mismatch' && (
-        <VersionMismatch
-          plugin={view.plugin}
-          server={view.server}
-        />
-      )}
-      {view.kind === 'idle' && <Idle />}
-      {view.kind === 'roster' && (
-        <div className="py-1.5">
-          {rows.map(row => (
-            <Row
-              key={row.record.key}
-              row={row}
-            />
-          ))}
-        </div>
-      )}
+    <div className="max-h-screen overflow-y-auto bg-figma-bg text-figma-text">
+      <div ref={contentRef}>
+        {view.kind === 'connecting' && (
+          <Fallback status="connecting" />
+        )}
+        {view.kind === 'offline' && (
+          <Fallback status="disconnected" />
+        )}
+        {view.kind === 'mismatch' && (
+          <VersionMismatch
+            plugin={view.plugin}
+            server={view.server}
+          />
+        )}
+        {view.kind === 'idle' && <Idle />}
+        {view.kind === 'roster' && (
+          <AnimatedRoster rows={rows} />
+        )}
+      </div>
     </div>
   )
 }
