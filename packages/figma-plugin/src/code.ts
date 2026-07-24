@@ -7,10 +7,15 @@ import {
   isTargetMismatch,
   targetGuardError,
 } from './file-channel'
+import {
+  WINDOW_WIDTH,
+  MIN_WINDOW_HEIGHT,
+  MAX_WINDOW_HEIGHT,
+} from './spring-height'
 
 figma.showUI(__html__, {
-  width: 340,
-  height: 400,
+  width: WINDOW_WIDTH,
+  height: MIN_WINDOW_HEIGHT,
   title: 'Agent Bridge',
   themeColors: true,
 })
@@ -113,6 +118,7 @@ type PluginMessage =
   | { type: 'storage-get'; key: string }
   | { type: 'storage-set'; key: string; value: unknown }
   | { type: 'storage-delete'; key: string }
+  | { type: 'resize'; height: number }
 
 const summarizeChildren = (
   node: BaseNode & { children?: readonly BaseNode[] },
@@ -5309,5 +5315,14 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
 
   if (msg.type === 'storage-delete') {
     await figma.clientStorage.deleteAsync(msg.key)
+  }
+
+  if (msg.type === 'resize') {
+    const height = Math.max(
+      MIN_WINDOW_HEIGHT,
+      Math.min(MAX_WINDOW_HEIGHT, Math.round(msg.height)),
+    )
+    figma.ui.resize(WINDOW_WIDTH, height)
+    return
   }
 }
