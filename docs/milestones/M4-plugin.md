@@ -20,16 +20,22 @@ related:
 relay, channels, or ports. Governed by [[figma-bridge/docs/principles|the principles]] (esp.
 **B2**); specced in [[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]].
 
-**Status:** **implementation shipped on `dev`** (merge `d095fab`, 2026-07-08) — dual-mode binary,
-manifests, SHA-256 bootstrap, release CI, 4 skills + 2 agents; lint + full suite green, and the
-install *mechanism* validated locally with a real compiled binary. **Deferred** (see below): the
-GitHub Release + CI run + VM clean-room install and the `skill-creator` agent evals.
+**This page is the historical record of M4** — it describes the milestone as it was scoped and
+delivered, not the current design. Where the two differ, the specs govern
+([[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]] for packaging,
+[[figma-bridge/docs/specs/dev-ops|dev-ops.md]] for the install routes and the Figma leg).
+
+**Status:** **implementation shipped on `dev`** (merge `d095fab`, 2026-07-08) — the dual-mode
+server bundle, manifests, the npm-sourced marketplace entry, release CI, 4 skills + 2 agents;
+lint + full suite green, and the install *mechanism* validated locally against a packed tarball
+of the plugin package. **Deferred** (see below): the GitHub Release + CI run + VM clean-room
+install and the `skill-creator` agent evals.
 
 ## Scope — two plans
 
-- **Plan A — Packaging, binary & bootstrap.** Repo-as-marketplace, a **dual-mode compiled
-  binary** (`--relay` self-spawns the shared relay), guarded SHA-256 `SessionStart` bootstrap
-  into `${CLAUDE_PLUGIN_DATA}/bin/`, release CI, and a VM clean-room install test.
+- **Plan A — Packaging & delivery.** Repo-as-marketplace with an **npm-sourced plugin entry**, a
+  **dual-mode server bundle** (`--relay` self-spawns the shared relay) shipped inside the
+  published plugin package, release CI, and a VM clean-room install test.
   → `docs/scratch/plans/2026-07-08-plugin-packaging.md`
 - **Plan B — Skills & agents.** The `figma-design`, `figma-feedback`, `figma-reviewer`, and
   `figma-connection` skills, plus the `figma-designer` and `figma-reviewer` agents (authored
@@ -46,26 +52,18 @@ GitHub Release + CI run + VM clean-room install and the `skill-creator` agent ev
 
 - The **feedback mechanism** (`record_feedback` tool, plugin Feedback UI, CloudFlare Worker —
   [[figma-bridge/docs/specs/feedback-system|feedback-system.md]]) is built; M4 **packages** it and
-  compiles in the Worker URL. Plan B adds the plugin-layer *when-to-record* skill on top.
+  bakes in the Worker URL. Plan B adds the plugin-layer *when-to-record* skill on top.
 
 ## Out of scope (deferred)
 
-- **Release + CI + VM validation** — cutting the GitHub Release (the CI builds binaries on a
-  `v*` tag), the clean-VM install test (incl. the `SessionStart`-hook-vs-MCP-launch ordering
-  check), and the `skill-creator` agent evals. **Deferred with the dev-workflow / CI overhaul**
-  (to be sorted separately). The install *mechanism* is already validated locally with a real binary.
-- **Install flow & binary-hosting design (revisit with the CI overhaul).** The flow: `/plugin
-  marketplace add` + `install` pulls the plugin *content* (skills/agents/hooks/`.mcp.json`) from
-  the GitHub repo → on first session the `SessionStart` bootstrap **downloads the compiled MCP
-  binary from a GitHub Release** (SHA-256-verified) into `${CLAUDE_PLUGIN_DATA}/bin` → `.mcp.json`
-  starts the server, which self-spawns the relay → the user imports the Figma plugin manifest,
-  which connects to the relay. **Why GitHub:** the server is a compiled ~59 MB standalone binary
-  (chosen so the user needs no Bun/Node — zero-config), too big to bundle in the plugin/repo, so
-  it's hosted as a **Release asset** the bootstrap fetches. When sorting the dev-workflow/CI,
-  reconsider the host — keep GitHub Releases vs bundle-in-repo / require-Bun-from-source /
-  S3·R2·self-hosted CDN — the choice is coupled to the release-CI design.
-- Windows/Linux binaries; the live Worker **Send** path (the URL compiles in, but the
-  distributed-binary shared-secret is unresolved — see claude-plugin.md §11).
+- **Release + CI + VM validation** — cutting the GitHub Release (the CI builds and publishes the
+  plugin package on a `v*` tag), the clean-VM install test, and the `skill-creator` agent evals.
+  **Deferred with the dev-workflow / CI overhaul** (to be sorted separately). The install
+  *mechanism* is already validated locally.
+- The live Worker **Send** path — the Worker URL is a build-time constant of the server bundle,
+  but the shared secret for a *distributed* artifact is unresolved (see claude-plugin.md §10).
 
-The Figma plugin ships by **manifest import** — this is the permanent distribution path; Figma
-Community publish is **not pursued**.
+M4 packaged the Figma plugin as a **manifest-import payload** and scoped a Figma Community publish
+out of the milestone. The Figma-leg options and their support status are owned by
+[[figma-bridge/docs/specs/dev-ops|dev-ops.md]] §3.8, and the deferred plan for Community
+distribution is tracked in [[figma-bridge/docs/deferred-capabilities|deferred-capabilities.md]].

@@ -708,50 +708,136 @@ describe('relay', () => {
   })
 
   it('token-bucket rate limiter silently drops frames when bucket is empty', async () => {
-    const ws = await connect()
-    const nextMessage = createMessageQueue(ws)
+    // The bucket refills off the wall clock, so the first version of this test
+    // raced it: draining the production bucket (100 tokens @ 50/s) took ~100
+    // round-trips, and 20ms of scheduler jitter anywhere in that loop refilled
+    // a token — the probe frame was then answered instead of dropped
+    // (`Expected: 0  Received: 1`, reproduced ~1 run in 50).
+    // Fix: a dedicated relay with an injected, frozen clock. Bucket time moves
+    // only when this test moves it, so a drained bucket stays drained however
+    // slow the run is, and no assertion depends on real elapsed time.
+    const RATE_PORT = 3150
+    const RATE_BURST = 5
+    const DRAIN_CH = 'rate-ch'
+    const RECOVER_CH = 'rate-ch-recovered'
+    let fakeNow = 1_000_000
+    const rateServer = startRelay(RATE_PORT, {
+      rateBurst: RATE_BURST,
+      rateTokensPerSec: 5,
+      rateNow: () => fakeNow,
+    })
 
-    // Join the channel once — costs 1 token (99 remaining from RATE_BURST=100)
-    ws.send(
-      JSON.stringify({ type: 'join', channel: 'rate-ch' }),
-    )
-    await nextMessage()
+    const connectRate = (): Promise<WebSocket> =>
+      new Promise((resolve, reject) => {
+        const socket = new WebSocket(
+          `ws://localhost:${RATE_PORT}`,
+        )
+        socket.onopen = () => resolve(socket)
+        socket.onerror = () =>
+          reject(new Error('WebSocket connection failed'))
+      })
 
-    // Send 99 idempotent re-joins — each costs 1 token, draining the bucket to 0
-    for (let i = 0; i < 99; i++) {
+    const joinFrame = (channel: string) =>
+      JSON.stringify({ type: 'join', channel })
+
+    try {
+      const ws = await connectRate() // the socket being drained
+      const observer = await connectRate() // its own, untouched bucket
+      const nextMessage = createMessageQueue(ws)
+      const nextObserved = createMessageQueue(observer)
+
+      observer.send(joinFrame(DRAIN_CH))
+      await nextObserved()
+
+      // Drain the bucket: every idempotent re-join costs 1 token, and the
+      // frozen clock refills none of them back.
+      for (let i = 0; i < RATE_BURST; i++) {
+        ws.send(joinFrame(DRAIN_CH))
+        await nextMessage()
+      }
+
+      // Collect everything the relay sends to `ws` from here on.
+      const received: SystemMessage[] = []
+      const recoveredAck = new Promise<void>(resolve => {
+        ws.onmessage = event => {
+          const msg = JSON.parse(
+            event.data as string,
+          ) as SystemMessage
+          received.push(msg)
+          if (
+            msg.message.result ===
+            `Connected to channel: ${RECOVER_CH}`
+          ) {
+            resolve()
+          }
+        }
+      })
+
+      // Bucket is empty — this frame must be silently dropped (no reply).
+      ws.send(joinFrame(DRAIN_CH))
+
+      // Barrier: agent-status frames are exempt from the bucket, so this one
+      // IS handled and is broadcast to `observer`. One socket's frames are
+      // handled in order, so `observer` seeing it proves the relay has already
+      // reached (and dropped) the probe above. That is what makes advancing
+      // the clock safe: `ws.send` only queues a frame, so bumping the clock on
+      // the test's own timeline could land before the relay ever read the
+      // probe — and would hand it the token it must not have.
+      const record = {
+        key: 'rate-barrier',
+        sessionId: 'rate',
+        level: 'normal',
+        text: 'barrier',
+        activity: 'busy',
+        updatedAt: 1,
+      }
       ws.send(
         JSON.stringify({
-          type: 'join',
-          channel: 'rate-ch',
+          type: 'agent-status',
+          channel: DRAIN_CH,
+          record,
         }),
       )
-      await nextMessage()
+      expect(await nextObserved()).toEqual({
+        type: 'agent-status',
+        record,
+      })
+
+      // Connection is still alive — after a refill it is answered again.
+      fakeNow += 1_000 // 5 tokens refilled at 5/s
+      ws.send(joinFrame(RECOVER_CH))
+
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error(
+                'recovery frame was never answered',
+              ),
+            ),
+          2_000,
+        )
+      })
+      try {
+        await Promise.race([recoveredAck, timeout])
+      } finally {
+        clearTimeout(timer)
+      }
+
+      // Exactly one reply: the recovery ack. The probe got none — replies on
+      // one socket arrive in order, so a probe ack would already be here.
+      expect(received).toHaveLength(1)
+      expect(received[0]?.type).toBe('system')
+      expect(received[0]?.message.result).toBe(
+        `Connected to channel: ${RECOVER_CH}`,
+      )
+
+      await closeWs(ws)
+      await closeWs(observer)
+    } finally {
+      stopRelay(rateServer)
     }
-
-    // Count messages received within the drop window.
-    // 101st frame: bucket is now empty — must be silently dropped (no reply).
-    let extraMessages = 0
-    ws.onmessage = event => {
-      void event
-      extraMessages++
-    }
-    ws.send(
-      JSON.stringify({ type: 'join', channel: 'rate-ch' }),
-    )
-    await Bun.sleep(200)
-    expect(extraMessages).toBe(0)
-
-    // Connection is still alive — a new frame after token refill works
-    await Bun.sleep(100) // ~5 tokens refilled at 50/s
-    const nextMessage2 = createMessageQueue(ws)
-    ws.send(
-      JSON.stringify({ type: 'join', channel: 'rate-ch' }),
-    )
-    const recovered =
-      (await nextMessage2()) as SystemMessage
-    expect(recovered.type).toBe('system')
-
-    await closeWs(ws)
   })
 
   it('evicts a client that misses a heartbeat', async () => {
@@ -1369,10 +1455,37 @@ describe('relay', () => {
 
     it('fades a busy row to idle after idleMs and removes it after ttlMs', async () => {
       const IDLE_PORT = 3130
+      // Two independent races made this test hang to its 5s timeout (~1 run in
+      // 50, reproducible at HEAD too — it is not new to this branch):
+      //
+      // 1. The observer used to join AFTER the busy row was created. The row
+      //    ages from its own `updatedAt`, so a slow connect+join could land
+      //    past idleMs (observer misses the fade and sees the remove where it
+      //    expected idle) or past ttlMs (row already gone, nothing is ever
+      //    broadcast). Fixed by subscribing the observer FIRST, so it is a
+      //    member for every broadcast the row will ever produce and reads them
+      //    in order: busy → idle → remove.
+      //
+      // 2. startRelay drives heartbeat EVICTION and the idle/TTL sweep from a
+      //    single timer, so `heartbeatInterval` is both "how often the sweep
+      //    runs" and "how long a client has to answer a ping". At 15ms any
+      //    client whose pong missed one tick was closed mid-test; an
+      //    instrumented run caught exactly that (observer got the join ack and
+      //    the busy frame, then BOTH sockets closed with code 1000, and the
+      //    idle broadcast never arrived).
+      //
+      // So the sweep is no longer made fast by shortening the tick. The tick is
+      // 150ms — 10x more pong headroom — and promptness comes from backdating
+      // `updatedAt` instead: the row is already idle-eligible when it is
+      // created, so the FIRST tick fades it whatever the tick's phase, and
+      // ttlMs stays far enough above that starting age that no single tick can
+      // skip the idle state and go straight to remove.
+      const IDLE_TICK = 150
+      const IDLE_START_AGE = 50 // > idleMs on arrival: first tick fades it
       const idleServer = startRelay(IDLE_PORT, {
-        idleMs: 30,
-        ttlMs: 80,
-        heartbeatInterval: 15,
+        idleMs: 10,
+        ttlMs: 800,
+        heartbeatInterval: IDLE_TICK,
       })
 
       const connectIdle = (): Promise<WebSocket> =>
@@ -1386,6 +1499,15 @@ describe('relay', () => {
         })
 
       try {
+        // Observer first: joined before the row exists, so no broadcast
+        // predates its membership.
+        const p = await connectIdle()
+        const pQ = createMessageQueue(p)
+        p.send(
+          JSON.stringify({ type: 'join', channel: 'cx' }),
+        )
+        await pQ()
+
         const s = await connectIdle()
         const sQ = createMessageQueue(s)
         s.send(
@@ -1402,17 +1524,18 @@ describe('relay', () => {
               level: 'normal',
               text: 'x',
               activity: 'busy',
-              updatedAt: Date.now(),
+              updatedAt: Date.now() - IDLE_START_AGE,
             },
           }),
         )
 
-        const p = await connectIdle()
-        const pQ = createMessageQueue(p)
-        p.send(
-          JSON.stringify({ type: 'join', channel: 'cx' }),
-        )
-        await pQ()
+        // The row's own creation is broadcast to the observer first (the
+        // sender is excluded from its own agent-status broadcast).
+        const busy = await pQ()
+        expect(busy).toMatchObject({
+          type: 'agent-status',
+          record: { key: 'k', activity: 'busy' },
+        })
 
         const idle = await pQ()
         expect(idle).toMatchObject({

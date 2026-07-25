@@ -206,8 +206,8 @@ step never re-appears.
 
 - **Secure by default, with a fallback.** The token is written via **`Bun.secrets`** — Bun's
   built-in credential API, which maps to the macOS **Keychain**, Windows **Credential Manager**
-  (DPAPI-encrypted), and Linux **libsecret**, and works inside a `bun build --compile` binary
-  with no native addon. `Bun.secrets` is feature-detected (it is recent and experimental); when
+  (DPAPI-encrypted), and Linux **libsecret**, and needs no native addon, so it works inside the
+  deps-inlined server bundle. `Bun.secrets` is feature-detected (it is recent and experimental); when
   it is unavailable the store falls back to a **`0600` file** at
   `~/.figma-agent-bridge/credentials.json` (POSIX perms are a no-op on Windows — a DPAPI-encrypted
   file is the Windows hardening option).

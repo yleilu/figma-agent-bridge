@@ -19,8 +19,8 @@ related:
 
 > **Status:** design. Defines the user-authored **preference layer** that sits on top of the
 > shipped plugin skills — the sanctioned home for taste, concrete values, and stricter-than-basic
-> standards. Governs a **new user skill** (`figma-bridge-prefs`), a **shipped helper**
-> (`figma-setup`), and a **shipped, inert template**. It changes no tool in
+> standards. Governs a **new user skill** (`figma-bridge-prefs`), the **customization half of the
+> shipped helper** `figma-setup`, and a **shipped, inert template**. It changes no tool in
 > [[figma-bridge/docs/specs/overview|overview.md]]; it partitions the _plugin_ layer per
 > [[figma-bridge/docs/principles|P1]].
 
@@ -29,7 +29,8 @@ related:
 **Goal.** Give every user's — and every team's — durable Figma preferences a **single, owned,
 editable home** that overrides the shipped skills where opinions legitimately differ, while the
 shipped skills stay universal. A user who customizes nothing still gets a professional baseline;
-a user who runs one helper gets their house style applied to both building **and** review.
+a user who spends one interview with `figma-setup` gets their house style applied to both building
+**and** review.
 
 **The partition (from [[figma-bridge/docs/principles|P1]]).** A shipped skill carries only
 **tool usage** and a **basic level of the two universal professional practices**
@@ -38,9 +39,12 @@ user skill `figma-bridge-prefs`: all concrete values, and any stricter-than-basi
 
 **Non-goals.**
 
-- **No auto-seed / no install-time write.** Nothing is written into the user's config until they
-  explicitly run the helper (see §6, §10). There is no `SessionStart` hook — this layer adds no
-  hook at all.
+- **No auto-seed of preferences.** No preference file is written into the user's skills directory
+  until they explicitly ask for one (see §6, §10). There is no `SessionStart` hook — this layer adds
+  no hook at all. (The helper that authors the overlay, `figma-setup`, is itself run by every user
+  and does write outside the plugin directory, because it also materialises the Figma plugin payload
+  — [[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]] §5.1. That write carries no
+  preferences and is out of scope here; see §5.)
 - **No new tool.** This is a skills/template layer over the existing surface.
 - **The dev/test instance** used to exercise this layer is not shipped and is out of scope here.
 
@@ -122,8 +126,15 @@ overlays the **two build-loop skills** — `figma-design` and `figma-reviewer`.
 ## 5. `figma-setup` — the shipped helper
 
 A lightweight, Figma-specific skill-creator shipped in the plugin
-(`plugin/skills/figma-setup/`). It **authors and updates** `figma-bridge-prefs` — the user skill
-is never written by any other path.
+(`plugin/skills/figma-setup/`). The skill carries **two responsibilities**, and **every user runs
+it**: materialising the Figma plugin payload and reporting the manifest path to import — a mandatory
+install step, specced in [[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]] §5.1 — and the
+one this spec owns, below. The two are independent: the payload half carries no preferences, and
+running the helper to install the Figma plugin seeds nothing.
+
+**The customization half.** It **authors and updates** `figma-bridge-prefs` — the user skill is never
+written by any other path — and stays **opt-in**: a user may run the helper, get the Figma plugin
+installed, and customize nothing.
 
 - **Instantiate on opt-in.** On the user's explicit request, it reads the shipped template (§6),
   writes `figma-bridge-prefs` to the chosen scope (§8), then tailors it by interview.
@@ -235,11 +246,13 @@ owns the reconciliation:
 
 ## 10. Onboarding
 
-There is **no auto-seed**. Instead:
+Every user already meets `figma-setup` while installing, since it is what materialises the Figma
+plugin payload (§5). That encounter seeds **no preferences** — there is **no auto-seed**. Instead:
 
 - The shipped build-loop skills' extension-point line adds: _"if no `figma-bridge-prefs` exists,
-  offer to run `figma-setup`."_ — zero-config discovery, no filesystem side effects.
-- The README documents `figma-setup` as the way to set house style.
+  offer to run `figma-setup`."_ — zero-config discovery, no preference written.
+- The README documents `figma-setup` — the helper the user has already run to install the Figma
+  plugin — as the way to set house style too.
 
 ## 11. Relationship to other specs
 
@@ -247,7 +260,8 @@ There is **no auto-seed**. Instead:
   usage + basic professional-practice floor ship; all else is a preference in the user skill).
   This spec is the mechanism; P1 is the rule. T6/T9 (tool layer) are unaffected.
 - **[[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]]** — catalogs `figma-setup` and the
-  user preference layer in §6 (§6.1 states the basic floor; §6.7 points here as SSOT).
+  user preference layer in §6 (§6.1 states the basic floor; §6.7 points here as SSOT), and owns
+  `figma-setup`'s other, mandatory half — materialising the Figma plugin payload (§5.1).
 - **[[figma-bridge/docs/specs/feedback-system|feedback-system.md]]** — keeps opinion out of the
   neutral meta-tools (its Layer split, P1). This spec adds the further guard (see Fold-back split, below) that a
   taste/preference correction routes to `figma-bridge-prefs`, never a shipped skill, and
@@ -271,7 +285,8 @@ user's private house style / tokens / client conventions off the machine.
 ## 12. Acceptance criteria
 
 - [ ] A user with no `figma-bridge-prefs` gets the **basic** design-system-first / component-first
-      floor from `figma-design`, and nothing writes into their config.
+      floor from `figma-design`, and no preference file exists in their skills directory — including
+      after running `figma-setup` for the Figma plugin install and declining to customize.
 - [ ] `figma-setup` instantiates `figma-bridge-prefs` from the template only on explicit request,
       at the chosen scope, and tailors it by interview.
 - [ ] With `figma-bridge-prefs` present, `figma-designer` and `figma-reviewer` load it (agent-def

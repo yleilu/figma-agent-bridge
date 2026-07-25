@@ -38,6 +38,8 @@ type RelayContext = {
   /** Per-relay token-bucket sizing (defaults to the module constants). */
   rateBurst: number
   rateTokensPerSec: number
+  /** Time source for the token bucket only (defaults to Date.now). */
+  rateNow: () => number
   /** channel → key → record (status-monitor.md) */
   agentStatus: Map<string, Map<string, StatusRecord>>
   /** Per-relay idle-fade / backstop-TTL sizing (defaults to the module constants). */
@@ -57,6 +59,7 @@ const createContext = (): RelayContext => ({
   heartbeatTimer: null,
   rateBurst: RATE_BURST,
   rateTokensPerSec: RATE_TOKENS_PER_SEC,
+  rateNow: Date.now,
   agentStatus: new Map(),
   idleMs: DEFAULT_IDLE_MS,
   ttlMs: DEFAULT_TTL_MS,
@@ -78,7 +81,7 @@ const consumeToken = (
     // Bucket must always be seeded in `open`; missing state is a bug.
     return false
   }
-  const now = Date.now()
+  const now = ctx.rateNow()
   const elapsed = (now - state.last) / 1000
   state.tokens = Math.min(
     ctx.rateBurst,
@@ -461,6 +464,12 @@ export type StartRelayOptions = {
   rateBurst?: number
   /** Token refill rate per second (default RATE_TOKENS_PER_SEC). */
   rateTokensPerSec?: number
+  /** Time source for the token bucket only, in ms (default Date.now).
+   * Injectable so a test can freeze/advance bucket time explicitly instead of
+   * racing the wall clock: with a frozen clock a drained bucket stays drained
+   * no matter how long the real round-trips take. Does not affect heartbeats,
+   * connectedAt, or the status idle/TTL sweep. */
+  rateNow?: () => number
   /** Idle-fade threshold in ms (default DEFAULT_IDLE_MS): a busy row with no
    * activity for this long is broadcast as idle. */
   idleMs?: number
@@ -477,6 +486,7 @@ export const startRelay = (
   ctx.rateBurst = opts.rateBurst ?? RATE_BURST
   ctx.rateTokensPerSec =
     opts.rateTokensPerSec ?? RATE_TOKENS_PER_SEC
+  ctx.rateNow = opts.rateNow ?? Date.now
   ctx.idleMs = opts.idleMs ?? DEFAULT_IDLE_MS
   ctx.ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS
   const hostname =
@@ -557,7 +567,7 @@ export const startRelay = (
         ctx.alive.set(ws, true)
         ctx.rate.set(ws, {
           tokens: ctx.rateBurst,
-          last: Date.now(),
+          last: ctx.rateNow(),
         })
       },
       message: (ws, raw) => {

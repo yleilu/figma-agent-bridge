@@ -28,8 +28,9 @@ related:
 ## What it is
 
 A bun monorepo (`figma-agent-bridge`, npm workspaces over `packages/*`) realizing the
-three principle layers as five packages. Layer detail and data flow live in
-[[figma-bridge/docs/architecture|architecture.md]]; this is the at-a-glance map.
+three principle layers. Layer detail and data flow live in
+[[figma-bridge/docs/architecture|architecture.md]]; this is the at-a-glance map of the
+workspaces.
 
 | Package | npm name | Layer | Role |
 |---|---|---|---|
@@ -38,6 +39,8 @@ three principle layers as five packages. Layer detail and data flow live in
 | `figma-plugin` | `@figma-agent-bridge/figma-plugin` | bridge | The Figma plugin (React UI + sandbox `code`). Executes commands inside Figma; the only layer that touches `figma.*`. Built with Vite (two configs: `ui`, `code`). |
 | `server` | `@figma-agent-bridge/server` | tool | The MCP server — the agent-facing tool surface. Parses expressions, owns the typed error envelope, sends commands over the relay. |
 | `cli` | `@figma-agent-bridge/cli` | — | CLI entry (scaffold). |
+| `branding` | `@figma-agent-bridge/branding` | — | Source of truth for the brand mark; source-only (no build), consumed as TypeScript. |
+| `worker` | `@figma-agent-bridge/worker` | — | CloudFlare Worker behind the feedback send-flow's anonymous filing path ([[figma-bridge/docs/specs/feedback-system\|feedback-system.md]] is authoritative). |
 
 Server consumes `shared`; relay consumes `shared`; server dev-depends on `relay`.
 
@@ -66,7 +69,8 @@ drives one specific file with no ambiguity (B3). The lifecycle contract:
 
 - **File identity (B3).** Each file is identified by its **`fileKey`** (`figma.fileKey`), a
   stable per-file id. `figma.fileKey` requires **`"enablePrivatePluginApi": true`** in the
-  manifest and resolves for dev-loaded / private-org installs (our distribution); it is
+  manifest and resolves for dev-loaded (manifest-imported) plugins — the project's
+  distribution ([[figma-bridge/docs/specs/dev-ops|dev-ops.md]] §3.8); it is
   expected to be `undefined` for a never-saved file (untested edge — see the reference §5). `fileName` (`figma.root.name`) is the human-readable
   label and the **fallback** identity when `fileKey` is absent. *(There is no Figma API for
   "which file is frontmost/active" — verified; see
@@ -115,12 +119,13 @@ drives one specific file with no ambiguity (B3). The lifecycle contract:
   reopen` reload loop so new plugin code is picked up. It is **deliberately not** an MCP tool:
   unlike `connect`/`status` (which the agent uses to pair and read connection state), closing
   the plugin is a dev-workflow teardown, not a `figma.*` capability the agent composes during
-  design work — so the 51-tool surface stays unchanged.
+  design work — so the tool surface stays unchanged
+  ([[figma-bridge/docs/specs/tool-surface|tool-surface.md]] is authoritative for its count).
 
 ## Tool contract (cross-cutting result / error shape)
 
 The principles demote the *mechanism* of B1's "uniform contract" to the specs. This is it —
-the shape **every** tool obeys, so the agent learns one envelope, not 47. It is normative for
+the shape **every** tool obeys, so the agent learns one envelope, not one per tool. It is normative for
 all tools; [[figma-bridge/docs/specs/tool-surface|tool-surface.md]] is authoritative for what
 each individual tool returns within these rules, and
 [[figma-bridge/docs/specs/expression-formats|expression-formats.md]] for the value grammar

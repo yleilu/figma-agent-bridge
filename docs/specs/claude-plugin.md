@@ -13,34 +13,40 @@ related:
   - '[[figma-bridge/docs/specs/tool-surface]]'
   - '[[figma-bridge/docs/specs/feedback-system]]'
   - '[[figma-bridge/docs/specs/plugin-presence]]'
+  - '[[figma-bridge/docs/specs/dev-ops]]'
   - '[[figma-bridge/docs/deferred-capabilities]]'
 ---
 
 # Claude Code Plugin & Zero-Config Distribution
 
-> **Status:** design (brainstorming output). Governs the packaging/distribution layer;
-> it does not change the 51-tool surface or the tool contract in
-> [[figma-bridge/docs/specs/overview|overview.md]] — it wraps them for install.
+This spec governs the packaging/distribution layer; it does not change the tool surface
+([[figma-bridge/docs/specs/tool-surface|tool-surface.md]] — authoritative for its count) or the
+tool contract in [[figma-bridge/docs/specs/overview|overview.md]] — it wraps them for install.
 
 ## 1. Goal & non-goals
 
 **Goal.** A user installs one **Claude Code plugin** and opens the Figma plugin — and
 everything works. They never learn what "MCP", "relay", "channel", or "port" mean and never
-edit a config. **Bun is the one prerequisite** for the Claude Code (developer) route — the
-README documents a one-line check-install; the plugin does not auto-install a runtime. The
-designer routes (Claude Desktop, Figma download) require no runtime at all: they use a
-self-contained compiled binary.
+edit a config. **Bun is the one prerequisite** — the README documents a one-line check-install;
+the plugin does not auto-install a runtime. `npm` is needed only at **install time**, to fetch
+the published package (§5).
 
 **The two things a user does:**
 
 1. Install the Claude Code plugin (`/plugin install figma-agent-bridge@figma-agent-bridge`; see §3).
-2. Import + open the Figma plugin in Figma desktop (auto-connects).
+2. Import the Figma plugin manifest `figma-setup` points at — **once** (§5.1) — then open the
+   plugin in Figma desktop (auto-connects).
 
-**Non-goals (this milestone).** Windows/Linux binaries (macOS-arm64 first); the live **anonymous
-Send → GitHub** path (its CloudFlare Worker is deferred — local capture built first, per
+**Non-goals.** A **toolchain-free route** — Bun is a prerequisite of every route, and the
+trade-off that follows is stated where the routes and their prerequisites are introduced
+([[figma-bridge/docs/specs/dev-ops|dev-ops.md]] §3.1). Also out of scope:
+the live **anonymous Send → GitHub** path (its CloudFlare Worker is deferred — local capture is
+the built-in path, per
 [[figma-bridge/docs/specs/feedback-system|feedback-system.md]]); a true one-click `claude://`
-install (no such scheme exists — see §3). _(The Figma plugin ships by **manifest import** — this
-is the permanent path; Figma Community publish is **not pursued**.)_
+install (no such scheme exists — see §3). _(A **Figma Community publish** is **not offered**: the
+Figma plugin arrives by **manifest import** on every route. The option set and the reason are
+[[figma-bridge/docs/specs/dev-ops|dev-ops.md]] §3.8; the plan that would lift the constraint is
+tracked in [[figma-bridge/docs/deferred-capabilities|deferred-capabilities.md]].)_
 
 ## 2. End-user experience
 
@@ -48,7 +54,7 @@ is the permanent path; Figma Community publish is **not pursued**.)_
 flowchart TB
     subgraph Once["One-time"]
         direction LR
-        A["/plugin install<br/>figma-agent-bridge"] --> B["bundle + skills arrive<br/>(via git, no download)"]
+        A["/plugin install<br/>figma-agent-bridge"] --> B["npm package fetched<br/>server + skills + Figma payload"]
         B --> C["import Figma<br/>plugin manifest"]
     end
     subgraph Every["Every use"]
@@ -65,35 +71,66 @@ flowchart TB
 The existing repo `yleilu/figma-agent-bridge` doubles as a Claude Code **marketplace**
 (the pattern `anthropics/claude-plugins-official` uses for its first-party plugins).
 
-- `.claude-plugin/marketplace.json` at repo root lists one plugin with
-  `"source": "./plugin"` (monorepo-subdir style — keeps the plugin cleanly out of the Bun
-  workspace under `packages/*`).
-- **Install commands** (what the README documents; there is **no** official `claude://`
-  one-click deep link — verified against the docs). A README badge may _link_ to these two
-  lines, but the click itself does not install:
+**The marketplace is git-sourced.** `.claude-plugin/marketplace.json` at repo root is a
+git/GitHub-sourced Claude Code marketplace — the only kind the platform supports (a
+_marketplace_ cannot be npm-sourced; only a plugin **entry** can). It lists one plugin.
+
+**The plugin entry is npm-sourced.** The entry names the published package and the exact
+version to install. `source` is an **object**, not a bare string — the source kind is a `source`
+field _within_ it, and `package` is meaningful only inside that object:
+
+```json
+{
+  "name": "figma-agent-bridge",
+  "displayName": "Agent Bridge",
+  "description": "Build and review Figma designs with an AI agent.",
+  "source": {
+    "source": "npm",
+    "package": "figma-agent-bridge",
+    "version": "<version>"
+  },
+  "version": "<version>"
+}
+```
+
+The entry's own `version` sits alongside the source's, and both carry the version-of-record
+(§5) — the source's version is what npm resolves, the entry's is what the plugin manifest is
+checked against when a release is tagged.
+
+Claude Code resolves that entry at **install time** — it runs npm to fetch the package, then
+copies it into its own per-version plugin cache. The delivery mechanism, and everything the
+package carries, is §5.
+
+**Install commands** (what the README documents; there is **no** official `claude://`
+one-click deep link — verified against the docs). A README badge may _link_ to these two lines,
+but the click itself does not install:
 
 ```
 /plugin marketplace add yleilu/figma-agent-bridge
 /plugin install figma-agent-bridge@figma-agent-bridge
 ```
 
-The `figma-agent-bridge@figma-agent-bridge` slug is `<plugin-name>@<marketplace-name>` — both
-derive from this repo (it is the marketplace **and** the plugin), hence the repeat.
+The `figma-agent-bridge@figma-agent-bridge` slug is `<plugin-name>@<marketplace-name>` — the
+marketplace name comes from this repo's `marketplace.json` and the plugin name from the
+package's `plugin.json`; both are `figma-agent-bridge`, hence the repeat.
 
 ## 4. Directory layout
 
-Two artifacts in one repo, joined by a **committed Bun JS bundle** (see §5):
+**Nothing that is built is committed.** The server bundle and the Figma plugin payload are
+produced at release and travel inside the **published package** (§5), so the repo tree and the
+package tree differ — both are given here.
+
+**(a) The repo.**
 
 ```
 figma-agent-bridge/                       repo == marketplace
 ├── .claude-plugin/
-│   └── marketplace.json                  lists the plugin, source: "./plugin"
-├── plugin/                               THE Claude Code plugin (NOT a Bun workspace pkg)
+│   └── marketplace.json                  lists the plugin, source: "npm"
+├── plugin/                               the package source (NOT a Bun workspace pkg)
 │   ├── .claude-plugin/
-│   │   └── plugin.json                   name (required) + version/description/author/…
-│   ├── .mcp.json                         mcpServers → the committed bundle, run with bun
-│   ├── bin/
-│   │   └── server.js                     committed Bun JS bundle (deps inlined, ~1.1 MB)
+│   │   └── plugin.json                   name + version (both required) + description/author/…
+│   ├── package.json                      npm metadata — name + version + bin; no deps, no scripts (§5)
+│   ├── .mcp.json                         mcpServers → bin/server.js, run with bun
 │   ├── skills/
 │   │   ├── figma-design/SKILL.md         + references/ (§6.1)
 │   │   ├── figma-feedback/SKILL.md       + references/ (§6.3)
@@ -105,19 +142,53 @@ figma-agent-bridge/                       repo == marketplace
 │   │   └── figma-reviewer.md             (§6.5)
 │   ├── hooks/
 │   │   ├── hooks.json                    PreToolUse → inject session_id (+ agent_id/agent_type on subagent calls); UserPromptSubmit → presence status block (§ plugin-presence.md)
+│   │   └── identity, presence, …         the hook scripts (extensionless)
 │   └── README.md                         install + bun prerequisite check + Figma-plugin-import steps
-├── packages/                             the Bun monorepo — UNCHANGED except build target
+├── packages/                             the Bun monorepo
 │   ├── server/                           → MCP stdio server
-│   └── relay/                            → shared relay (§8, option c)
+│   ├── relay/                            → shared relay (§8)
+│   └── figma-plugin/                     → the Figma plugin: manifest + code/UI build
 ├── scripts/
-│   ├── build-binary.sh                   bun build --compile → designer-route release artifact
-│   └── build-bundle.sh                   bun build --target=bun → committed plugin/bin/server.js
-└── .github/workflows/release.yml         tag → build designer binaries → GitHub Release
+│   ├── build-bundle.sh                   bun build --target=bun → the package's bin/server.js
+│   └── stamp-version.ts                  stamps the one version of record into every artifact
+├── .github/workflows/release.yml         tag → gate → build → publish the package + the fig-plugin archive
+└── LICENSE                               the project's licence — source of truth for the packaged copy
+```
+
+The package's `bin/server.js` and `figma-plugin/` have no counterpart in this tree: they are
+build outputs, added when the package is assembled at release. The package's `LICENSE` is a build
+output too, but a copied one: the repo-root `LICENSE` is the single source of truth, and package
+assembly copies it to `plugin/LICENSE` so the tree carries no duplicate.
+
+**(b) The published package** — what the registry serves, and what Claude Code copies into its
+per-version plugin cache; `${CLAUDE_PLUGIN_ROOT}` resolves to its root:
+
+```
+figma-agent-bridge/                       == the installed plugin root
+├── .claude-plugin/
+│   └── plugin.json                       name + version (version REQUIRED — §5, lockstep)
+├── package.json                          name + version + a `bin` entry → bin/server.js;
+│                                         no dependencies, no scripts (§5)
+├── .mcp.json                             mcpServers → bin/server.js, run with bun
+├── bin/
+│   └── server.js                         deps-inlined Bun JS bundle of the server + relay
+├── skills/                               the five skills (§6)
+├── agents/                               figma-designer, figma-reviewer
+├── hooks/                                hooks.json + its scripts
+├── figma-plugin/                         the built Figma plugin payload (§5.1)
+│   ├── manifest.json
+│   └── dist/
+│       ├── code.js
+│       └── ui.html
+├── README.md
+└── LICENSE
 ```
 
 Conventions confirmed from real plugins: MCP config lives in `.mcp.json` at plugin root
 (never inline in `plugin.json`); `plugin.json` sets only
-`name, description, version, author, homepage, repository, license, keywords`; skills are
+`name, description, version, author, homepage, repository, license, keywords` (**`version` is
+required**, not optional — §5); the plugin ships **no `commands/`** — its surfaces are skills,
+agents, and hooks; skills are
 `skills/<name>/SKILL.md`; agents are flat `agents/<name>.md` with a `model:` frontmatter (and
 **no `tools:`** — inherit all; a bare-name allowlist doesn't resolve MCP tools, §6.2); hooks are
 `hooks/hooks.json` + sibling scripts (extensionless to avoid
@@ -164,12 +235,34 @@ if they don't, the reserved `sessionId`/`agentId`/`agentType` fields simply stay
 }
 ```
 
-## 5. The MCP server — JS bundle for the developer route
+## 5. Packaging & delivery — the npm-published plugin
 
-**Claude Code (developer route).** The plugin ships a **committed Bun JS bundle**
-(`plugin/bin/server.js`, ~1.1 MB) — the server and relay entrypoint built with
-`bun build --target=bun` so all dependencies are inlined. The bundle is present the moment
-the marketplace plugin is installed (it arrives via git), so there is **no runtime download**.
+**The plugin ships from npm.** The marketplace's plugin entry is npm-sourced (§3), and Claude
+Code resolves it at **install time**: it runs npm to fetch the package, then copies the package
+into its own per-version plugin cache. The built server therefore never lives in git — it is
+published to the registry as part of the plugin package and arrives when the user installs.
+
+**The package carries the whole agent-side product** (tree: §4b) — `plugin.json` (name +
+version), `package.json`, `.mcp.json`, `bin/server.js` (the deps-inlined Bun JS bundle of the
+server + relay, built with `bun build --target=bun`), the five `skills/`, the two `agents/`,
+`hooks/` (`hooks.json` + its scripts), the built `figma-plugin/` payload (§5.1), `README.md`,
+and `LICENSE`. One install delivers every agent-side piece.
+
+**`package.json` declares a `bin` entry** pointing at `bin/server.js`, so the server can also be
+launched straight from the registry by a package runner — the standalone-server route. The `bin`
+key carries the **package's own name**, `figma-agent-bridge`, so a package runner resolves the
+command from the package name alone and there is no second name to learn. The bundle is built
+`--target=bun`, so that runner must be **Bun's**; a Node-based runner cannot execute it. A `bin`
+entry is neither a dependency nor an install script, so it does not touch the inert constraint
+below.
+
+**The package is inert: no dependencies, no `optionalDependencies`, no install scripts, no
+lockfile.** This is a deliberate constraint, not an accident. A package that carries
+dependencies or a lockfile invokes Claude Code's post-copy dependency-install step, whose
+behaviour varies with the user's npm version and whose failure is **silent** — the plugin
+installs and enables, but its server never starts. An inert package has no such failure mode.
+Inlining every dependency into `bin/server.js` at build time is what earns the package the
+right to declare none.
 
 **`.mcp.json`** launches the bundle with the user's `bun`:
 
@@ -187,42 +280,94 @@ the marketplace plugin is installed (it arrives via git), so there is **no runti
 `.mcp.json` at plugin root is the **one reliable location**: inline `mcpServers` in
 `plugin.json` (Claude Code #16143) and `mcpServers` in `.claude/settings.json` (#32145) are
 both dropped by the platform. `${CLAUDE_PLUGIN_ROOT}` resolves to the installed plugin
-directory; the bundle lives there and is never wiped independently of the plugin.
+directory — the per-version cache copy of the package — where the bundle sits; it is never
+wiped independently of the plugin.
 
-**Bun is a documented prerequisite.** The plugin does not auto-install a runtime —
-auto-installing inside a hook is a cross-platform minefield (especially on Windows). Instead,
-the README documents a one-line check-install (`curl -fsSL https://bun.sh/install | bash` or
-equivalent), and the plugin surfaces a clear error if `bun` is not on the PATH. Developers
-using this route already work in a Bun project and are expected to have it; this keeps the
-developer route on the same runtime used in development and testing.
+**Bun is a documented prerequisite; npm is needed only at install time.** The plugin does not
+auto-install a runtime — auto-installing inside a hook is a cross-platform minefield
+(especially on Windows). Instead, the README documents a one-line check-install
+(`curl -fsSL https://bun.sh/install | bash` or equivalent), and the plugin surfaces a clear
+error if `bun` is not on the PATH. Every route runs on the user's own Bun
+([[figma-bridge/docs/specs/dev-ops|dev-ops.md]] §3.1), so the shipped server always executes on
+the same runtime it is built and tested against. `npm` is not a runtime
+dependency: it runs once, when Claude Code resolves the npm-sourced entry, and is never invoked
+again.
 
-**No `SessionStart` download bootstrap.** There is no `hooks/bootstrap` script and no binary
-fetch on first run. The `SessionStart` hook used in the old design is removed; the only
-packaged **core** hooks are the `PreToolUse` identity injector (`session_id` + subagent `agent_id`/
-`agent_type`) and the `UserPromptSubmit` presence hook; the status monitor adds `Stop`/`SubagentStop`/
-`SessionEnd` (see §4 / `hooks.json` and [[figma-bridge/docs/specs/status-monitor|status-monitor.md]]).
+**Version lockstep.** There is one version of record: `plugin.json`'s version, the npm package
+version, and the marketplace entry's version are **always equal**. `plugin.json` **must** carry
+a version — Claude Code derives the plugin's cache directory from it, so a missing version
+collapses every release into a single directory. The plugin↔server match is therefore
+_structural_: the server bundle and the plugin metadata are the same artifact, shipped
+together. The Figma-plugin↔server match is enforced at connect time by the version handshake
+(principle B2 — [[figma-bridge/docs/specs/version-handshake|version-handshake.md]]). The
+pipeline that stamps that version, builds the artifacts, and publishes them at a tag is
+[[figma-bridge/docs/specs/dev-ops|dev-ops.md]].
 
-**Production config.** The feedback Worker URL is compiled into the bundle as a build-time
-constant via `bun build --define`. **Nothing else** accompanies it: a distributed artifact can't
+**No bootstrap hook.** Nothing is fetched at session start or on first run: resolution happens
+once, at install time. The only packaged **core** hooks are the `PreToolUse` identity injector
+(`session_id` + subagent `agent_id`/`agent_type`) and the `UserPromptSubmit` presence hook; the
+status monitor adds `Stop`/`SubagentStop`/`SessionEnd` (see §4 / `hooks.json` and
+[[figma-bridge/docs/specs/status-monitor|status-monitor.md]]).
+
+**Production config.** The feedback Worker URL is a build-time constant of the **server bundle**,
+baked in via `bun build --define`. **Nothing else** accompanies it: a distributed artifact can't
 safely hold a shared secret (extractable), so the anonymous path ships **no client credential at
 all** and the Worker gates itself with per-IP rate limiting instead — see
 [[figma-bridge/docs/specs/feedback-system|feedback-system.md]].
 
-**Designer routes retain the self-contained binary.** A compiled standalone binary (one file,
-no toolchain) remains the right choice for the **Claude Desktop extension** (bundles the
-binary) and the **Figma download** (hands the user the binary directly). These users are
-designers who install without a development toolchain. The binary is built via
-`bun build --compile` and cross-compiled per platform (macOS, Windows); a git tag triggers CI
-to build the binaries and attach them to a GitHub Release. The committed JS bundle and the
-compiled binary are independent outputs of the same source — they are not the same artifact.
+**Install routes are not specified here.** The route set, what each route delivers, its
+prerequisites, and its steps are owned by
+[[figma-bridge/docs/specs/dev-ops|dev-ops.md]] §3. This spec owns only the **packaging
+mechanism** the routes consume: what the package carries, the inert constraint, the npm source,
+and the Figma payload.
 
-**Integrity & trust.** The bundle ships _inside_ the marketplace-installed plugin — it is
-not a repo-controlled `.claude/settings.json` hook (the RCE vector in CVE-2025-59536).
-The bundle is source-equivalent to the repo at the tagged version; its integrity is guaranteed
-by the plugin install mechanism (marketplace → git), not by a separate checksum step.
+One packaging fact the routes depend on: **the from-source path touches no package.** Nothing
+described in this section reaches it — it runs the server from the repository under Bun.
+
+**Integrity & trust.** The server ships _inside_ the installed plugin — it is not a
+repo-controlled `.claude/settings.json` hook (the RCE vector in CVE-2025-59536). Its integrity
+comes from the **registry**: the published package is immutable at its version, the marketplace
+entry pins that exact version, and that same version is what the plugin metadata and the
+handshake report — so there is no separate checksum step to get wrong.
 **Reference plugins to model after:** `confluentinc/claude-code-confluent-plugin` (local
 server + env expansion in `.mcp.json`), `slackapi/slack-mcp-plugin` (official plugin
 structure).
+
+### 5.1 The Figma plugin payload
+
+The package carries the **built Figma plugin** — `manifest.json` plus `dist/code.js` and
+`dist/ui.html`. `figma-setup` (§6.7) materialises it at a stable, **user-owned** location,
+because the plugin's own install directory is version-keyed and ephemeral while Figma stores
+absolute paths to the files it imports:
+
+```
+~/.figma-agent-bridge/
+├── versions/<version>/     manifest.json + dist/{code.js, ui.html} — per-version copy: history, rollback
+└── figma-plugin/           a REAL directory holding the active version's files
+    ├── manifest.json
+    └── dist/
+        ├── code.js
+        └── ui.html
+```
+
+The user imports `~/.figma-agent-bridge/figma-plugin/manifest.json` into Figma **once**. On
+upgrade, `figma-setup` copies the new version's files over those same paths; because Figma
+re-reads its registered files on each run, the new code is picked up **without a re-import**.
+
+The shape follows from four constraints:
+
+1. Figma persists **absolute paths** — the manifest plus the code and UI files, resolved at
+   import time.
+2. Figma **re-reads** those files on each plugin run, so overwriting content at a stable path
+   upgrades the plugin in place.
+3. `figma-plugin/` is a **real directory, not a symlink**: whether Figma records a symlink's
+   own path or its resolved target is unspecified, and a resolved target would silently defeat
+   the indirection.
+4. The files are **copied**, never symlinked into the plugin's install directory, which is
+   ephemeral and reclaimed.
+
+A stale payload is safe: the version handshake refuses a mismatched Figma plugin loudly
+(principle B2 — [[figma-bridge/docs/specs/version-handshake|version-handshake.md]]).
 
 ## 6. Components
 
@@ -236,7 +381,7 @@ forward-references the feedback/reviewer skills below:
 | Report _tool_ friction        | `figma-feedback` (§6.3)   | — (mechanics fold into the skill; taste → figma-bridge-prefs)  |
 | Review the _design_           | `figma-reviewer` (§6.4)   | `figma-reviewer` (§6.5)                                        |
 | Diagnose connection / version | `figma-connection` (§6.6) | — (main-agent guidance)                                        |
-| Customize house style         | `figma-setup` (§6.7)      | — (authors `figma-bridge-prefs`, not shipped)                  |
+| Set up Figma; customize style | `figma-setup` (§6.7)      | — (materialises the Figma payload; authors `figma-bridge-prefs`, not shipped) |
 
 ### 6.0 Skill charter — what goes where
 
@@ -249,7 +394,7 @@ The [[figma-bridge/docs/principles|P1]] partition, made concrete per skill — w
 | `figma-reviewer`                           | Find issues                           | review _how-to_ (inspect/enumerate/report, the six dimensions' mechanics) + the non-overridable floor it owns: **verification discipline + destructive-op safety** + default-name detection + internal-consistency | all concrete standards come from the loaded `figma-design` + `figma-bridge-prefs`; the accessibility thresholds (WCAG/contrast/touch/text-size) specifically come from `figma-bridge-prefs` **only** (figma-design ships zero a11y); the reviewer defines none |
 | `figma-feedback`                           | Report _tool_ friction                | bug/proposal categories, formats, high-value litmus, `record_feedback` mapping; the fold-back fork                                                                                                                 | design critique → `figma-reviewer`; preference content → `figma-bridge-prefs` via `figma-setup`                                                                                                                                                                |
 | `figma-connection`                         | Diagnose/recover connection & version | symptoms → diagnosis → recovery                                                                                                                                                                                    | anything design/build/review                                                                                                                                                                                                                                   |
-| `figma-setup`                              | Author + update `figma-bridge-prefs`  | the instantiate / tailor / update / scope flow                                                                                                                                                                     | the preference **values** (the user's, in `figma-bridge-prefs`)                                                                                                                                                                                                |
+| `figma-setup`                              | Set up Figma; author + update `figma-bridge-prefs` | materialising the packaged Figma plugin payload + the import path (§5.1); the instantiate / tailor / update / scope flow                                                                               | the preference **values** (the user's, in `figma-bridge-prefs`)                                                                                                                                                                                                |
 | `figma-bridge-prefs` _(user, not shipped)_ | The user's durable preferences        | concrete values, the **strict** levels, house review standards, **the accessibility thresholds (WCAG AA default)**                                                                                                 | tool mechanics; the shipped floor (verification + destructive-op safety)                                                                                                                                                                                       |
 
 Decision rule: _a concrete value / taste / strict standard (incl. accessibility thresholds) →
@@ -259,7 +404,7 @@ floor → `figma-reviewer`; reporting tool friction → `figma-feedback`; connec
 
 ### 6.1 Skill — `figma-design`
 
-Purpose: teach the agent **how to operate** the 51-tool surface well. It deliberately does
+Purpose: teach the agent **how to operate** the tool surface well. It deliberately does
 **not** encode visual taste or a house style — _how the outcome looks is the user's to
 specify, per request_. This keeps the skill durable: principles and mechanics age well;
 baked aesthetics don't. It covers the **full surface — create, inspect, and edit** (incl.
@@ -542,16 +687,23 @@ large/complex reviews). Also invoked by `figma-designer` as its self-review gate
 ### 6.6 Skill — `figma-connection`
 
 Main-agent guidance for **diagnosing and recovering the connection** — a stale or mismatched
-server/plugin, a failed handshake, or a "reinstall the Figma plugin" situation. Unlike the three
+server/plugin, a failed handshake, or a Figma payload that needs refreshing (§5.1). Unlike the three
 build-loop skills (§6.1/§6.3/§6.4) it is **not** part of the design loop; the **main agent** invokes
 it when a call can't reach Figma or the version handshake reports a mismatch. The connection and
 handshake **mechanism** it wraps is specced authoritatively in §8 (app-semver major.minor per B2);
 this skill is the _when + how to react_ layer over it. **Structure:** `SKILL.md` (symptoms →
 diagnosis → recovery) → `references/` as needed.
 
-### 6.7 Skill — `figma-setup` (customization layer)
+### 6.7 Skill — `figma-setup` (Figma plugin setup + customization layer)
 
-A shipped **helper** that authors the user's **`figma-bridge-prefs`** overlay — the user-authored
+A shipped **helper** with **two responsibilities**:
+
+1. **Materialise the Figma plugin payload** — copy the packaged `figma-plugin/` files to
+   `~/.figma-agent-bridge/` and tell the user the exact manifest path to import into Figma
+   (§5.1). On an upgrade it overwrites the same paths, so no re-import is needed.
+2. **Author and update the user's `figma-bridge-prefs` overlay** (below).
+
+**The overlay.** `figma-bridge-prefs` is the user-authored
 preference skill (**NOT shipped**) that holds taste, concrete values (tokens, spacing scale, type
 ramp, naming), and any stricter-than-basic standard, overriding the shipped skills' basic floor
 upward (P1). `figma-setup` instantiates it on explicit opt-in from a shipped, inert template
@@ -575,7 +727,7 @@ token they authorize once, in-browser; on the public repo any authenticated user
 **Defer** keeps the backlog; **Discard** deletes it unsent. The human gate is that choice; nothing
 leaves the machine until the human picks **Report**.
 
-This milestone **packages** that mechanism and adds the plugin-layer pieces:
+The plugin package carries that mechanism and adds the plugin-layer pieces:
 
 > **Note:** there is **no in-plugin Feedback UI** — the panel is the agent status monitor
 > ([[figma-bridge/docs/specs/status-monitor|status-monitor.md]]), and the send flow is
@@ -585,33 +737,30 @@ This milestone **packages** that mechanism and adds the plugin-layer pieces:
 
 - `record_feedback` and the send-flow meta-tools ship **inside the MCP server**; there is no
   figma-plugin feedback surface. All are bundled by the plugin install.
-- **The production Worker URL is a build-time constant baked into the compiled binary** (designer
-  routes), so the endpoint needs no user config; the Claude Code bundle reads it from the
-  environment (feedback is off if unset), and env may override for dev. **No client credential
-  accompanies the URL** — a distributed artifact can't safely embed a shared secret (extractable),
-  so the Worker is openly reachable and protects itself with per-IP rate limiting
+- **The production Worker URL is a build-time constant** baked into the packaged server bundle,
+  so the endpoint needs no user config; a from-source run reads it from the environment (feedback
+  is off if unset). **No client credential accompanies the URL** — a distributed artifact can't
+  safely embed a shared secret (extractable), so the Worker is openly reachable and protects
+  itself with per-IP rate limiting
   ([[figma-bridge/docs/specs/feedback-system|feedback-system.md]]).
-- **`figma-feedback` skill (§6.3)** — new: the plugin-layer _when + how to report_ guidance
+- **`figma-feedback` skill (§6.3)** — the plugin-layer _when + how to report_ guidance
   (bugs + proposals formats), used by `figma-designer` (auto) and the main agent (manual). It
-  folds in what would otherwise be a separate feedback agent. **This skill is in scope for this
-  milestone** — it supersedes feedback-system.md's _Out of scope_ note that deferred the
-  when-to-record skill (updated there).
+  folds in what would otherwise be a separate feedback agent, and is part of the packaging layer
+  rather than the feedback mechanism itself.
 
 Local Markdown capture is always available; **filing to GitHub** has two paths — the **anonymous**
-path via the Worker (goes live when the Worker is deployed; URL already compiled in) and the
+path via the Worker (goes live when the Worker is deployed; URL already baked in) and the
 **logged-in** path direct to GitHub with the human's own token (no Worker). Neither path puts a
 shared credential on the client.
 
 ## 8. Connection lifecycle
 
-**Already-built plumbing** (plus one prerequisite change) — this is why "open plugin + talk"
-is most of what remains after install (see [[figma-bridge/docs/specs/overview|overview.md]] →
-Connection lifecycle):
+Connection plumbing is why "open plugin + talk" is all a user does after install (see
+[[figma-bridge/docs/specs/overview|overview.md]] → Connection lifecycle):
 
 - The Figma plugin **auto-connects** on launch and rejoins its own channel, so a reload is
-  deterministic. *(The plugin persists a `channel-id`. **Per-file channels** — a prerequisite
-  change landing with this work — bind that channel to `fileKey` instead; a breaking wire
-  change that bumps the minor, see overview *Connection lifecycle* / version-handshake.md.)*
+  deterministic. *(The channel is bound to the file's `fileKey` — **per-file channels**, see
+  overview *Connection lifecycle* / version-handshake.md.)*
 - The MCP server **auto-discovers the relay port** and **auto-starts a shared relay** if none
   is running — a **detached singleton** on `:18080` that **outlives any single session**, so
   many Figma files (each plugin on its own channel) and many Claude Code sessions all pair
@@ -619,58 +768,53 @@ Connection lifecycle):
 Set<client>>`). The **target file/channel is chosen explicitly by the agent** (`connect` by
   `fileKey` → server resolves `fileKey`→channel), never auto-guessed (B3).
 
-**Dual-mode server — the relay ships in the same artifact (resolves a distribution blocker).**
-`ensure-relay.ts` originally spawned `Bun.spawn(['bun','run', relayPath])`, which is **broken for a
-compiled binary** (no `bun`, no embedded relay source). Fix: make the server **dual-mode** — invoked
-with `--relay` it runs the relay entrypoint, otherwise the MCP stdio server — and self-launch the
-detached, shared relay by re-invoking its **own entrypoint** with `--relay`: the compiled binary
-re-invokes itself (`process.execPath --relay`), the Claude Code bundle re-invokes via `bun` (the
-same code path). One artifact per route; no separate relay to bootstrap; the multi-file /
-multi-session shared-relay model is preserved.
+**Dual-mode server.** The server and the relay ship in the **same artifact**. Invoked with
+`--relay` the entrypoint runs the relay; otherwise it runs the MCP stdio server. To bring up the
+detached, shared relay the server re-invokes its **own entrypoint** with `--relay` under `bun` —
+the same code path whether that entrypoint is the packaged bundle or the repository source. One
+artifact; no separate relay to bootstrap; the multi-file / multi-session shared-relay model is
+preserved.
 
-**Version / connection diagnosis (a later skill — decoupled).** The version handshake is a
-**separate, prerequisite spec** ([[figma-bridge/docs/specs/version-handshake|version-handshake.md]])
-built **first**; this milestone **does not depend on its mechanism** and doesn't spec it. The
-plugin's only version touch-point is a small, later **diagnosis / response skill**: when the
-handshake reports a mismatch (or a connection is off), the skill guides the user through the fix
-(_reinstall the Figma plugin_, diagnose a stale server). The handshake is a prerequisite spec (app-semver, major.minor per B2), so this skill is authored as `figma-connection` in the skills/agents plan (Plan B) — not deferred.
+**Version / connection diagnosis — decoupled.** The version handshake is specified separately
+([[figma-bridge/docs/specs/version-handshake|version-handshake.md]]: app-semver, major.minor per
+B2); the packaging layer does not restate its mechanism. The plugin's only version touch-point is a
+**diagnosis / response skill** — `figma-connection` (§6.6): when the handshake reports a mismatch
+(or a connection is off), the skill guides the user through the fix (_update the plugin and re-run
+`figma-setup`_, which replaces the Figma payload's contents at its stable path — §5.1, no re-import
+— or diagnose a stale server).
 
 ## 9. Testing — remote-VM clean room
 
 The claim under test is "a developer who installs the plugin and has `bun` succeeds." Prove
-it on a **fresh remote VM** with `bun` installed but no other dev tools:
+it on a **fresh remote VM** with `bun` installed but no other dev tools. The gate is an
+**install assertion**: install from a clean state and assert the MCP server connects — that is
+what proves a release actually works.
 
-1. Install the plugin from the marketplace (`/plugin marketplace add` + `/plugin install`).
-2. Assert the committed bundle is present at `${CLAUDE_PLUGIN_ROOT}/bin/server.js` and the
-   MCP server starts via `bun` — verify there is no download step and no ordering race.
-3. Assert the skills + agents **load** and a headless-mock tool round-trip succeeds (the MCP
+**This section owns _what_ is asserted**; _where_ the assertion runs and _what it installs from_
+are owned by [[figma-bridge/docs/specs/dev-ops|dev-ops.md]] §4.2, which runs it in two forms — from
+a locally packed tarball before publication, and from the **published** package after it. The list
+below is written for the published form; on the tarball form assertion 1's **entry-resolution**
+check does not apply, because nothing is on the registry yet. Every other assertion holds on both.
+
+1. Install the plugin from the marketplace (`/plugin marketplace add` + `/plugin install`)
+   against the **published** package, from a plugin cache with no prior copy.
+2. Assert Claude Code resolved the npm-sourced entry, that `${CLAUDE_PLUGIN_ROOT}/bin/server.js`
+   exists in the per-version cache copy, and that the **MCP server connects** when launched
+   with `bun`.
+3. Assert the package installed **inert** — it declares no dependencies and no install scripts,
+   so no post-copy dependency-install step ran.
+4. Assert the skills + agents **load** and a headless-mock tool round-trip succeeds (the MCP
    starts + tools respond). **Not a live design test** — real skill/agent behaviour in Figma
    still needs live-verify per the plugin-side rule; the VM clean-room proves _install_, not
    _design quality_.
-4. Assert `record_feedback` writes a well-formed Markdown item to the store.
+5. Assert `figma-setup` materialises `~/.figma-agent-bridge/figma-plugin/` (§5.1) with a
+   manifest and both `dist/` files at the paths it reports.
+6. Assert `record_feedback` writes a well-formed Markdown item to the store.
 
 Headless-testable in CI: the feedback harness (schema validation + sink routing) and the
-`build-bundle.sh` script.
+package build (server bundle + Figma payload assembly).
 
-## 10. Milestone build order
+## 10. Open items & deferred
 
-1. **Packaging skeleton** — `marketplace.json`, `plugin/.claude-plugin/plugin.json`,
-   `.mcp.json`, `scripts/build-bundle.sh` (Claude Code route) and `scripts/build-binary.sh`
-   (designer routes), `release.yml`. Bundle and binary build; `.mcp.json` launches the bundle
-   with `bun`; the MCP server starts.
-2. **VM clean-room test** (§9) — prove install-from-nothing (with `bun` present); verify no
-   download step, no ordering race.
-3. **Skills + agents** — author the `figma-design`, `figma-feedback`, and `figma-reviewer`
-   skills (§6.1, §6.3, §6.4), then the `figma-designer` and `figma-reviewer` agents. The
-   feedback meta-tools (`record_feedback` + the send flow) and Worker are feedback-system.md's
-   build; this milestone bundles them and compiles in the Worker URL.
-
-Rationale: front-load the _novel_ packaging risk and prove it clean-room before investing in
-skill/agent content.
-
-## 11. Open items & deferred
-
-- **Windows/Linux designer-route binaries** — deferred; darwin-arm64 first. (The Claude Code
-  bundle route has no per-platform binary; `bun` handles cross-platform.)
 - **One-click install** — not possible today (no official scheme); revisit if Claude Code
   adds one.

@@ -221,5 +221,10 @@ Handlers never touch addressing or identity — the wrapper reads them and scope
   `PreToolUse` hook injecting them into the call** (`updatedInput`, which propagates to MCP tools). No
   file, no correlation. A `SessionStart`/`SubagentStart` hook cannot substitute: neither can rewrite a
   per-call argument, which is the only channel that reaches an MCP tool.
-- **Reuse the existing store root.** All server-side state lives under `~/.figma-agent-bridge/`
-  (alongside `component-index/`, `feedbacks/`, change-feed `changes/`) — no new storage convention.
+- **Reuse the existing store root.** `~/.figma-agent-bridge/` is the project's shared per-user root,
+  not a server-private one. The server's own state (`component-index/`, `feedbacks/`, change-feed
+  `changes/`) sits there beside the presence hook's state (`hook/`,
+  [[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]]) and the Figma plugin payload
+  (`versions/`, `figma-plugin/`, [[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]] §5.1).
+  Whatever this spec persists joins them under that root — each owner keeping to its own
+  subdirectory, and no new storage convention.
