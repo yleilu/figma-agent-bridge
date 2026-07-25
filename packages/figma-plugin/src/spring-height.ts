@@ -27,6 +27,11 @@ export const MAX_WINDOW_HEIGHT = Math.round(
   WINDOW_WIDTH * PORTRAIT_RATIO,
 )
 
+// The selection strip: one 24px design-system control-height line
+// above the roster. Named here with the other box-model constants so
+// the collapse animation and the CSS agree on one number.
+export const SELECTION_BAR_HEIGHT = 24
+
 export const clamp = (h: number) =>
   Math.max(
     MIN_WINDOW_HEIGHT,

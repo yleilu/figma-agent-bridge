@@ -1,13 +1,22 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
+import { useTransition, animated } from '@react-spring/web'
 import { useRelay } from './hooks/useRelay'
 import { useDiscovery } from './hooks/useDiscovery'
 import { useContentHeight } from './hooks/useContentHeight'
 import { useWindowResize } from './hooks/useWindowResize'
 import { buildRoster } from './roster'
-import { selectPanelView } from './panel-view'
+import {
+  selectPanelView,
+  showSelectionBar,
+} from './panel-view'
 import { AnimatedRoster } from './roster-list'
+import { SelectionBar } from './selection-bar'
 import { PulseDot } from './row'
-import { MAX_WINDOW_HEIGHT } from './spring-height'
+import { ITEM_SPRING } from './springs'
+import {
+  MAX_WINDOW_HEIGHT,
+  SELECTION_BAR_HEIGHT,
+} from './spring-height'
 import { cx } from './cx'
 
 const Fallback = ({
@@ -84,8 +93,13 @@ const VersionMismatch = ({
 )
 
 export const App = () => {
-  const { status, connect, agentStatus, mismatch } =
-    useRelay()
+  const {
+    status,
+    connect,
+    agentStatus,
+    mismatch,
+    selection,
+  } = useRelay()
   const { port } = useDiscovery()
   useEffect(() => {
     if (status === 'disconnected' && port !== null) {
@@ -100,6 +114,23 @@ export const App = () => {
     rows.length,
   )
 
+  const barShown = showSelectionBar(view, selection.count)
+  const firstBar = useRef(true)
+  const barTransitions = useTransition(
+    barShown ? [true] : [],
+    {
+      from: { opacity: 0, height: 0 },
+      enter: { opacity: 1, height: SELECTION_BAR_HEIGHT },
+      leave: { opacity: 0, height: 0 },
+      config: ITEM_SPRING,
+      // a bar already due at first paint appears settled
+      immediate: firstBar.current,
+    },
+  )
+  useEffect(() => {
+    firstBar.current = false
+  }, [])
+
   const [contentRef, target] = useContentHeight()
   useWindowResize(target)
   const atCap = target >= MAX_WINDOW_HEIGHT
@@ -112,6 +143,21 @@ export const App = () => {
       )}
     >
       <div ref={contentRef}>
+        {barTransitions(style => (
+          <animated.div
+            className="sticky top-0 z-10 overflow-hidden bg-figma-bg"
+            style={{
+              opacity: style.opacity,
+              height: style.height,
+            }}
+          >
+            <SelectionBar
+              count={selection.count}
+              kind={selection.kind}
+              page={selection.currentPage}
+            />
+          </animated.div>
+        ))}
         {view.kind === 'connecting' && (
           <Fallback status="connecting" />
         )}
