@@ -23,8 +23,8 @@ round-trip, real paint binding, `loadFontAsync`, real PNG bytes,
 This guide is the **LIVE twin**. Once a human has loaded the real plugin into
 Figma and clicked Connect, the harness in `packages/server/src/verify-live.ts`
 drives the **REAL plugin** through the **same server tool handlers** and asserts
-the documented contract from [[figma-bridge/docs/specs/tool-surface|the 51-tool
-spec]]. It exports PNGs so an agent can _visually_ confirm, and it cleans up
+the documented contract from
+[[figma-bridge/docs/specs/tool-surface|the tool-surface spec]]. It exports PNGs so an agent can _visually_ confirm, and it cleans up
 every node it creates.
 
 > [!important] The Figma desktop plugin cannot run headless
@@ -207,8 +207,11 @@ and confirming the expected result. The harness ids (`T1.a`, …) match
       `swap_component` remote is **SKIP** by design (needs a published library).
 
 > [!note] Coverage
-> The check list touches **all 47** registered tools (`connect` via the harness
-> connect step; `delete_node` via cleanup). Deliberate SKIPs:
+> The check list touches **every facade tool** — the coverage denominator is
+> `ALL_TOOLS` in `packages/server/src/verify-checks.ts`, and
+> [[figma-bridge/docs/specs/tool-surface|tool-surface.md]] is authoritative for
+> the count (`connect` is touched via the harness connect step; `delete_node` via
+> cleanup). The non-facade meta-tools are out of scope here. Deliberate SKIPs:
 > `swap_component` remote (needs a library) and `create_image(url)` (needs
 > `networkAccess` + network) — both reported honestly, never false-passed.
 
@@ -231,4 +234,4 @@ design system:
 7. `export(PNG)` — capture the result and review it visually.
 
 If that flows without per-step friction and the exported PNG looks right, the
-51-tool surface is doing its job end-to-end.
+tool surface is doing its job end-to-end.

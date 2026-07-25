@@ -202,8 +202,15 @@ The availability registry's removal triggers — socket `close`, a missed heartb
 
 **`recently_offline` is a one-turn transition.** The hook keeps `last-online.json` — the `{fileKey, name}`
 of each file online at the previous `UserPromptSubmit` (an **absent** baseline, e.g. on the first turn,
-counts as empty). Each turn: `recently_offline` = the previous set minus the current online `fileKey`s,
-carrying each dropped file's stored `name` so the block can render it (the file is already gone from
+counts as empty). It lives in the hook's own state directory under the shared per-user root —
+`$HOME/.figma-agent-bridge/hook/` by default, overridable via `PRESENCE_STATE_DIR` — and **never inside
+the Claude Code plugin's install directory**, which is version-keyed and reclaimed on upgrade: a
+baseline parked there would be wiped by every plugin update, silently reading as empty on the next
+turn and swallowing the very transition it exists to report. The location must therefore be one that
+outlives a plugin update.
+
+Each turn: `recently_offline` = the previous set minus the current online `fileKey`s, carrying each
+dropped file's stored `name` so the block can render it (the file is already gone from
 `/channels`, so its name survives only in this baseline); then the hook rewrites the file with the current
 set. A file therefore appears in `recently_offline`
 for **exactly the one turn** after it drops (a heads-up: *"the file you were using is gone"*), then falls
@@ -266,7 +273,7 @@ flowchart TB
     end
     subgraph CC["Claude Code plugin"]
         HK["UserPromptSubmit hook"]
-        LO["last-online.json"]
+        LO["last-online.json\n(hook state dir, outside the plugin install)"]
     end
     RG --> REG
     PR --> REG

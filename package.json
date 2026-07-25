@@ -7,14 +7,13 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "bun run build:bundle && bun run build:plugin && bun run build:binaries && bun run build:mcpb",
-    "build:binaries": "bash scripts/build-binaries.sh",
+    "build": "bun run build:plugin && bun run build:package",
     "build:bundle": "bash scripts/build-bundle.sh",
-    "build:mcpb": "bash scripts/build-mcpbs.sh",
+    "build:package": "bun run build:bundle && bun run build:payload",
+    "build:payload": "bash scripts/build-payload.sh",
     "build:plugin": "bun run --filter @figma-agent-bridge/figma-plugin build",
-    "check:bundle": "bash scripts/check-bundle-fresh.sh",
     "check:template": "bun run scripts/check-template.ts",
-    "clean": "rm -rf dist",
+    "clean": "rm -rf dist plugin/bin plugin/figma-plugin plugin/LICENSE",
     "dev": "concurrently -n ui,code,relay -c blue,cyan,green 'cd packages/figma-plugin && bunx vite build --watch -c vite.config.ui.ts' 'cd packages/figma-plugin && bunx vite build --watch -c vite.config.code.ts' 'bun run packages/relay/src/index.ts'",
     "dev:mcp": "bash scripts/start-mcp.sh",
     "dev:relay": "bun --silent run --filter @figma-agent-bridge/relay start",
@@ -29,7 +28,7 @@
     "test": "bun --filter '@figma-agent-bridge/*' test && (cd test && bun test)",
     "test:watch": "bun --filter '@figma-agent-bridge/*' test --watch",
     "typecheck": "bun --filter '@figma-agent-bridge/*' typecheck",
-    "verify": "bun run lint && bun run typecheck && bun run test && bun run check:bundle && bun run check:template",
+    "verify": "bun run lint && bun run typecheck && bun run test && bun run check:template",
     "verify:live": "bun run packages/server/src/verify-live.ts"
   },
   "devDependencies": {

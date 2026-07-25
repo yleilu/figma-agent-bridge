@@ -37,9 +37,9 @@ related:
 | M1 | Foundation | Three-layer architecture (server ↔ relay ↔ plugin) + test infra — **kept** by the clean start. | **done** | [[figma-bridge/docs/milestones/M1-foundation\|M1-foundation]] |
 | M2 | Parse, Read & Simple Write | Parsers + read-model + all reads + simple single-target writes + the round-trip-proof slice. | **done** | [[figma-bridge/docs/milestones/M2-read-write\|M2-read-write]] |
 | M3 | Compose, Edit & Batch | `create_tree`/clone/structure, `batch`, design-system authoring, components/instances. | **done** | [[figma-bridge/docs/milestones/M3-compose-edit\|M3-compose-edit]] |
-| M4 | Plugin & Distribution | One-install Claude Code plugin — marketplace + compiled binary + skills/agents; the user installs + opens the Figma plugin and everything works. | **in progress** | [[figma-bridge/docs/milestones/M4-plugin\|M4-plugin]] |
+| M4 | Plugin & Distribution | One-install Claude Code plugin — marketplace + published plugin package (server bundle + skills/agents/hooks + Figma payload); the user installs + opens the Figma plugin and everything works. | **in progress** | [[figma-bridge/docs/milestones/M4-plugin\|M4-plugin]] |
 
-**M1–M3 complete — the full 47-tool clean-start surface ships on `dev`.** Remaining before a release: live-Figma manual verification (the suite is mock-plugin-over-real-relay / headless) and the Variables runtime re-introspection.
+**M1–M3 complete — the full clean-start surface shipped.** *Record at M3 close: the surface was 47 facade tools, with live-Figma manual verification (the suite is mock-plugin-over-real-relay / headless) and the Variables runtime re-introspection still outstanding.* The surface has grown since; [[figma-bridge/docs/specs/tool-surface|tool-surface.md]] is authoritative for the facade count and for what is exposed.
 
 ## Superseded (old-spec lineage)
 

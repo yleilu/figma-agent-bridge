@@ -53,9 +53,10 @@ the **bridge** is the server transport + relay + Figma plugin (B1); the **tool**
 layer is the server's MCP tools (T1–T8); the **plugin** layer (skills/agents/commands)
 sits above the agent and is out of band of this request path (P1).
 
-## The five packages
+## The packages
 
-A Bun monorepo, `packages/*`. Each package has one responsibility.
+A Bun monorepo, `packages/*`. Each package has one responsibility, and the directory is the
+roster — a package exists here iff it exists there.
 
 | Package | Layer | Responsibility |
 |---|---|---|
@@ -63,6 +64,8 @@ A Bun monorepo, `packages/*`. Each package has one responsibility.
 | `server` | tool + bridge (transport) | The MCP server — the brain. Registers the tool surface, validates params, **parses all expressions** (`parser.ts` / `expression-parser.ts`), and owns the WebSocket client to the relay (`figma-client.ts`) plus relay bootstrap (`ensure-relay.ts`). |
 | `relay` | bridge | A minimal WebSocket pub/sub. Tracks channels; broadcasts each message to all clients on that channel. Holds no design semantics and no request state — it only routes. |
 | `figma-plugin` | bridge | The Figma plugin (Vite + React UI iframe, plain-TS `code.ts` main thread). The UI is the WebSocket client to the relay and the channel pairer; `code.ts` is a thin executor that calls the Figma API and assigns parsed values. |
+| `branding` | — | Single source of truth for the visual identity — the generated logo (SVG + data URIs), brand colour, icon sizes. Every surface that renders or packages the mark imports it, so no artwork is hand-copied. |
+| `worker` | — | A Cloudflare Worker fronting the feedback rail: it holds the GitHub credential so a filed bug/proposal needs no token on the user's machine. Contract in [[figma-bridge/docs/specs/feedback-system|feedback-system.md]]. |
 | `cli` | — | Cloud/headless client. Stub for now. |
 
 > Note the deliberate naming split from the principles: the **Figma plugin** here is

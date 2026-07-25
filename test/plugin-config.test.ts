@@ -1,14 +1,34 @@
 import { describe, it, expect } from 'bun:test'
 const root = new URL('../', import.meta.url).pathname // test/ → repo root
 const read = (p: string) => Bun.file(`${root}${p}`).json()
+const exists = (p: string) =>
+  Bun.file(`${root}${p}`).exists()
+
+// A non-path plugin source is a nested OBJECT carrying its own
+// `source` discriminator. The flat form (`source: 'npm'` with
+// sibling package/version) is rejected by the host —
+// `claude plugin validate` reports
+// "plugins.0.source: Invalid input" and warns that the sibling
+// `package` field is ignored — so the shape is asserted, not
+// merely tolerated.
+const sourceOf = (entry: any) => {
+  expect(typeof entry.source).toBe('object')
+  return entry.source
+}
+
+const pluginEntry = (m: any) =>
+  m.plugins.find(
+    (p: any) => p.name === 'figma-agent-bridge',
+  ) ?? m.plugins[0]
 
 describe('plugin config', () => {
-  it('marketplace lists the plugin at ./plugin', async () => {
+  it('marketplace sources the plugin from npm', async () => {
     const m = await read('.claude-plugin/marketplace.json')
     expect(m.name).toBe('figma-agent-bridge')
-    expect(
-      m.plugins.some((p: any) => p.source === './plugin'),
-    ).toBe(true)
+    const src = sourceOf(pluginEntry(m))
+    expect(src.source).toBe('npm')
+    expect(src.package).toBe('figma-agent-bridge')
+    expect(src.version).toMatch(/^\d+\.\d+\.\d+/)
   })
   it('plugin.json has a name + version', async () => {
     const p = await read(
@@ -25,12 +45,40 @@ describe('plugin config', () => {
       '${CLAUDE_PLUGIN_ROOT}/bin/server.js',
     ])
   })
-  it('marketplace + plugin versions agree (bump together)', async () => {
+  it('plugin.json, package.json + marketplace versions agree (one version of record)', async () => {
     const m = await read('.claude-plugin/marketplace.json')
     const p = await read(
       'plugin/.claude-plugin/plugin.json',
     )
-    expect(m.plugins[0].version).toBe(p.version)
+    // root package.json is the version-of-record everything
+    // else is stamped from (release:stamp)
+    const rootPkg = await read('package.json')
+    expect(p.version).toBe(rootPkg.version)
+    const entry = pluginEntry(m)
+    expect(entry.version).toBe(p.version)
+    // the npm source pins the exact version to fetch
+    expect(sourceOf(entry).version).toBe(p.version)
+    // the published package's npm metadata — the fourth leg of
+    // the lockstep
+    const npmPkg = await read('plugin/package.json')
+    expect(npmPkg.version).toBe(p.version)
+  })
+  it('the published package is inert (no deps, no install scripts, no lockfile)', async () => {
+    const npmPkg = await read('plugin/package.json')
+    // deps or a lockfile trigger the host's post-copy
+    // dependency install, whose failure is silent
+    expect(npmPkg.dependencies).toBeUndefined()
+    expect(npmPkg.optionalDependencies).toBeUndefined()
+    expect(npmPkg.peerDependencies).toBeUndefined()
+    expect(npmPkg.scripts).toBeUndefined()
+    expect(await exists('plugin/bun.lock')).toBe(false)
+    expect(await exists('plugin/package-lock.json')).toBe(
+      false,
+    )
+    // a bin entry is only a symlink — it triggers nothing
+    expect(npmPkg.bin).toEqual({
+      'figma-agent-bridge': 'bin/server.js',
+    })
   })
   it('registers the PreToolUse identity hook for both tool namespaces', async () => {
     const hooks = await read('plugin/hooks/hooks.json')

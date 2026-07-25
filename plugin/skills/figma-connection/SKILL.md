@@ -5,7 +5,8 @@ description: >-
   target, driving multiple files at once, or a WRONG_FILE / DISCONNECTED / INCOMPATIBLE
   response — or when the version handshake says the plugin and server are incompatible, or
   tools time out / say disconnected. Carries the fileKey addressing doctrine and guides the
-  fix: reinstall/update the Figma plugin, or diagnose a stale server, and how to confirm it.
+  fix: refresh the Figma plugin (re-run figma-setup), or update a stale server, and how to
+  confirm it.
 version: 0.1.0
 ---
 
@@ -29,8 +30,8 @@ file-addressed call — the server never guesses which file (B3).
 - **`INCOMPATIBLE`** = plugin↔server version skew (reconnecting won't help — update the
   older side; see below).
 
-*(`connect` / `status` / `record_feedback` are the exceptions — they take no per-call
-`fileKey`.)*
+_(`connect` / `status` / `record_feedback` are the exceptions — they take no per-call
+`fileKey`.)_
 
 ---
 
@@ -41,7 +42,7 @@ handshake (principle B2, see `version-handshake.md`) compares the plugin's repor
 version to the server's on connect. Patch differences are ignored; a minor or major
 difference trips the error:
 
-> *"Agent Bridge plugin vX is incompatible with server vY — update the {plugin | server}."*
+> _"Agent Bridge plugin vX is incompatible with server vY — update the {plugin | server}."_
 
 The two sides only differ when they were built from different releases. Same-build
 plugin + server always match.
@@ -50,29 +51,51 @@ plugin + server always match.
 
 ## Usual cause: stale Figma plugin
 
-The Figma plugin is **manually imported** (Plugins → Development → Import plugin from
-manifest), so it does **not** auto-update when the server binary is refreshed.
+The Figma plugin is **imported by hand** (Plugins → Development → Import plugin from
+manifest), and Figma re-reads whatever files sit at the path it imported. Nothing refreshes
+those files on its own, so once the server side moves forward the Figma side stays on the
+old build until someone updates it.
 
-**Fix — reinstall the Figma plugin:**
+**Fix — refresh the files at the path Figma already imported.** Which files depends on how
+the user installed:
 
-1. In Figma desktop, go to **Plugins → Development → Manage plugins in development**.
-2. Remove the current `figma-agent-bridge` entry.
-3. Re-import the manifest: **Plugins → Development → Import plugin from manifest** →
-   select `packages/figma-plugin/manifest.json` from the repo (or the installed plugin
-   directory — see the README Install § 2).
-4. Open the plugin from the Figma canvas. It auto-connects on launch.
+- **Claude Code plugin (the usual case).** In this order: refresh the marketplace, update
+  the plugin, reload or restart Claude Code, then **ask the agent to run the `figma-setup`
+  skill** — it replaces the payload's contents at
+  `~/.figma-agent-bridge/figma-plugin/`. Run `figma-setup` before the plugin is updated and
+  the host reloaded and it just re-copies the old version.
+- **From a clone.** Pull, rebuild the Figma plugin (`bun run build:plugin`), and reopen it —
+  the import points into `packages/figma-plugin/`, which the build rewrites in place.
+- **Hand-imported release archive.** Download `figma-plugin.zip` from the GitHub release at
+  the version the server reports, and unzip it **over the same directory** that was
+  imported from.
+
+Then **close and reopen the plugin in Figma** — it re-reads its files on each run and
+auto-connects on launch.
+
+**No re-import** in any of those cases: the path Figma stored is unchanged. Re-importing is
+for a **broken** import only — the manifest or its sibling `dist/` was moved or deleted, so
+the stored path resolves to nothing. Repair that by importing again from the new location
+(**Plugins → Development → Import plugin from manifest…**, selecting the `manifest.json`
+`figma-setup` reported, or the one in the clone / unzipped archive), never by reinstalling
+the server side.
 
 ---
 
 ## Less common: stale server
 
 If the plugin version is **newer** than the server (the error names the server as stale),
-the binary needs to be updated or rebuilt:
+it is the **server side** that has to move forward. There is no binary to refresh — the
+server is a JavaScript bundle run with `bun`, shipped inside whatever installed it:
 
-- **Installed plugin:** wait for the next release — the `SessionStart` bootstrap
-  re-downloads the binary when its `--version` differs from `$EXPECTED_VERSION`.
-- **Local dev:** rebuild — `bun run build` in `packages/server`, then restart the MCP
-  server (`/mcp restart` or start a new Claude Code session).
+- **Claude Code plugin:** the server bundle and the plugin metadata are the same package,
+  so a stale server means a stale _plugin_. Refresh the marketplace, update the plugin,
+  then reload or restart Claude Code (`/mcp restart` or a new session). Finish by re-running
+  `figma-setup`, so both sides land on the same version.
+- **Standalone MCP entry** (`bunx figma-agent-bridge@<version>`): the entry pins an exact
+  version — bump it to the version the Figma plugin reports, then restart the MCP client.
+- **Local dev:** the server runs from the clone's source, so there is nothing to rebuild —
+  pull, then restart the MCP server (`/mcp restart` or start a new Claude Code session).
 
 ---
 

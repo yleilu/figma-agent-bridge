@@ -27,21 +27,28 @@ related:
 > **Count is a formula, not a hand-summed aggregate (stops silent rot).** The one
 > hand-maintained number is the **facade group-sum = 51** (the Tool catalogue below is the one
 > place it is summed). The exposed MCP surface is then **`51 facade + K non-facade meta-tools`**,
-> where the non-facade meta-tools are
-> `record_feedback`, `search_components`, `reindex`, `pull_changes` (change-feed.md),
-> `report_status` (status-monitor.md), the three registry tools `register_library` /
-> `unregister_library` / `list_libraries` (team-library-registry.md), and the five feedback
-> send-flow tools `list_feedback` / `send_feedback` / `discard_feedback` / `github_auth_start` /
-> `github_auth_poll` (feedback-system.md). Do not restate a hardcoded total (a bare "51" already wrongly omits
+> where **K counts the meta-tools the server registers** — a *registration*, not a mention in a
+> spec, is what puts a tool on the surface, so the formula is checkable against
+> `packages/server/src/index.ts`, whose `registerFileTool` + `registerSessionTool` calls **are**
+> the exposed surface. **K = 9**: `search_components` and `reindex` (component-index.md),
+> `report_status` (status-monitor.md), `record_feedback` and the five send-flow tools
+> `list_feedback` / `send_feedback` / `discard_feedback` / `github_auth_start` /
+> `github_auth_poll` (feedback-system.md). So the exposed surface is **`51 + 9` = 60**, which the
+> code splits as **52 file-addressed + 8 session-addressed** (49 facade + 3 meta take a `fileKey`;
+> the facade's `connect`/`status` and the six machine-global feedback tools do not).
+> A meta-tool a feature spec designs but the server does not register — `pull_changes`
+> (change-feed.md), and the registry trio `register_library` / `unregister_library` /
+> `list_libraries` (team-library-registry.md) — is in neither K nor the exposed total; registering
+> it is what adds it. Do not restate a hardcoded total (a bare "51" already wrongly omits
 > `record_feedback`).
 >
-> The **change feed** (docs/specs/change-feed.md) adds one non-facade meta-tool
+> The **change feed** (docs/specs/change-feed.md) specifies one non-facade meta-tool
 > `pull_changes({fileKey}) → {changes, state}` — a destructive buffer **drain**
 > (deliberately **not** `get_*`; non-idempotent; codes `INVALID_PARAM` own, plus the
 > file-gate's `DISCONNECTED` / `WRONG_FILE` / `INCOMPATIBLE`). It must **not** inflate
 > the facade count.
 >
-> The **team-library registry** (docs/specs/team-library-registry.md) adds three
+> The **team-library registry** (docs/specs/team-library-registry.md) specifies three
 > non-facade meta-tools — `register_library`, `unregister_library`, `list_libraries`
 > (all take `fileKey`) — outside the `figma.*` facade count.
 >
@@ -63,8 +70,11 @@ related:
 
 ## Overview
 
-The surface is **51 tools**: read/write pairs over five concept groups (session, nodes,
-structure, design-system, handoff) **+ one generic `batch`**. It is the lean facade base plus
+The **facade** is **51 tools**: read/write pairs over five concept groups (session, nodes,
+structure, design-system, handoff) **+ one generic `batch`**. The **exposed MCP surface is larger**
+— the facade plus every non-facade meta-tool the feature specs add, per the formula above — so a
+document quoting one number for "the tool surface" is quoting that total, never this facade sum.
+It is the lean facade base plus
 the capabilities the coverage verify pass proved were over-deferred — reactions,
 boolean/flatten, image fill, plugin-data, page tools, variable-mode lifecycle, viewport focus.
 Not the 56-tool dump: every tool maps to one distinct `figma.*` capability, no convenience

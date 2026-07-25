@@ -14,6 +14,7 @@ export default [
       'packages/figma-plugin/**',
       '.claude/**',
       'plugin/bin/**',
+      'plugin/figma-plugin/**',
     ],
   },
   plugins.stylistic,

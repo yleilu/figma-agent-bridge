@@ -110,7 +110,10 @@ This handshake ships **first** and is **self-contained**. The Claude Code plugin
 ([[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]]) is built **after** and stays
 **decoupled** — it does not spec or depend on this mechanism. Its only version touch-point is a
 later, small **diagnosis / response skill**: when this handshake reports a mismatch, that skill
-guides the user through the fix (e.g. *reinstall the Figma plugin*, or diagnose a stale server).
+guides the user through the fix — update the Claude Code plugin and **re-run `figma-setup`**, which
+replaces the Figma payload's contents at its stable path so Figma picks up the new code with **no
+re-import** (§5.1 there) — or diagnose a stale server. A re-import repairs a payload directory the
+user *moved or deleted*; it is never the remedy for a version skew.
 
 Separately, the **Figma-plugin panel itself** surfaces the skew **visually**, immediately, with no
 skill needed: a **banner** — a red dot, bold "Version mismatch", and one sentence naming both
@@ -126,5 +129,6 @@ later diagnosis skill.
 ## Out of scope
 
 - Auto-updating either side — the handshake only **detects** and **instructs**.
-- The plugin-distribution UX (compiled-in version, "reinstall the Figma plugin") — the plugin
-  milestone's specialization.
+- The plugin-distribution UX (compiled-in version; how the Figma payload is materialised and
+  refreshed in place) — the plugin milestone's specialization
+  ([[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]] §5.1).

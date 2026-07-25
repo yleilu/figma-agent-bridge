@@ -16,9 +16,21 @@ const version = pkg.version as string
 const stampJson = async (
   relPath: string,
   mutate: (o: Record<string, unknown>) => void,
+  { optional = false }: { optional?: boolean } = {},
 ) => {
   const p = join(root, relPath)
-  const o = JSON.parse(await readFile(p, 'utf8'))
+  let raw: string
+  try {
+    raw = await readFile(p, 'utf8')
+  } catch (err) {
+    const { code } = err as NodeJS.ErrnoException
+    if (optional && code === 'ENOENT') {
+      console.log(`skipped ${relPath} (absent)`)
+      return
+    }
+    throw err
+  }
+  const o = JSON.parse(raw)
   mutate(o)
   await writeFile(p, JSON.stringify(o, null, 2) + '\n')
   console.log(`stamped ${relPath} -> ${version}`)
@@ -27,10 +39,29 @@ const stampJson = async (
 await stampJson('plugin/.claude-plugin/plugin.json', o => {
   o.version = version
 })
+// The published package's npm metadata. Optional so the stamp
+// still runs on a tree that predates it.
+await stampJson(
+  'plugin/package.json',
+  o => {
+    o.version = version
+  },
+  { optional: true },
+)
 await stampJson('.claude-plugin/marketplace.json', o => {
   const plugins = o.plugins as Record<string, unknown>[]
   for (const pl of plugins) {
     pl.version = version
+    // `source` is either a bare path/URL string (nothing of
+    // its own to stamp) or a source object — the npm form
+    // pins the exact package version to fetch.
+    const src = pl.source
+    if (src && typeof src === 'object') {
+      const s = src as Record<string, unknown>
+      if (s.source === 'npm') {
+        s.version = version
+      }
+    }
   }
 })
 console.log(`version-of-record: ${version}`)

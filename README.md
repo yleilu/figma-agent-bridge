@@ -26,6 +26,19 @@ MCP to a server, the server relays commands over a WebSocket to the **Agent Brid
 Figma plugin, and the plugin executes them against the live document — then returns
 results back up the same pipe.
 
+## Install
+
+Three routes. All of them run the server on your own [Bun](https://bun.sh) — **there is no
+toolchain-free route** — and all of them need the Figma **desktop** app, because the Figma plugin
+arrives by manifest import. Prerequisites, steps, verification, and teardown for each are in
+[docs/specs/dev-ops.md](docs/specs/dev-ops.md) §3.
+
+| Route                             | Who it is for                                             | What you install                                                                                                            |
+| --------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **Claude Code plugin** _(primary)_ | anyone driving Figma from Claude Code                     | the marketplace plugin — server bundle, skills, agents, hooks, and the Figma plugin payload ([plugin/README.md](plugin/README.md)) |
+| **Manual / from source**          | contributors working on this repository                   | a clone, built and registered by hand — see [Quickstart](#quickstart)                                                       |
+| **Standalone MCP server**         | any other MCP client, or a hand-wired Claude Code entry    | the published `figma-agent-bridge` package's `bin` entry, run with `bunx` — the raw tool surface, no skills or agents        |
+
 ## Three layers
 
 The whole discipline is that concerns never leak across them ([principles](docs/principles.md), [architecture](docs/architecture.md)):

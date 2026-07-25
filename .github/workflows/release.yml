@@ -3,29 +3,95 @@ on:
   push:
     tags: ['v*']
 permissions:
-  contents: write
+  contents: write # the GitHub release
+  id-token: write # npm publish --provenance
 jobs:
   release:
-    runs-on: macos-14
+    # ubuntu-latest is enough: with the compiled binaries and .mcpb bundles retired there is no
+    # macOS cross-compilation left — the release only runs `bun build --target=bun`, zips the
+    # fig-plugin payload, and publishes to npm. macos-14 is no longer required.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9 # pinned; keep in lockstep with .bun-version — Bun builds the published bundle
+      # Node is here only to provide a compliant `npm`: `bun publish` has no OIDC support
+      # (oven-sh/bun#22423), and trusted publishing needs npm >= 11.5.1. Node 22 ships npm 10.x,
+      # which fails with a misleading E404 (npm/cli#9088) — hence Node 24 *and* the explicit
+      # upgrade below, so a runner-image change can never drop us under the floor.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Ensure npm supports trusted publishing
+        run: |
+          npm install -g npm@latest
+          npm --version
       - run: bun install --frozen-lockfile
+
+      # The tag is the version-of-record: the stamp must already be committed (§6.1, §6.3) and
+      # the tag must name that same version — before anything is built or published.
+      - name: Assert the version is stamped and matches the tag
+        run: |
+          bun run release:stamp
+          git diff --exit-code
+          VERSION="$(bun -e "console.log(require('./package.json').version)")"
+          if [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
+            echo "ERROR: tag $GITHUB_REF_NAME does not name the version-of-record ($VERSION)" >&2
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >>"$GITHUB_ENV"
+
       - name: Verify gate
         run: bun run verify
-      - name: Build server binaries + .mcpb bundles
+
+      - name: Build the plugin package + the fig-plugin archive
         env:
+          # Baked into the server bundle so the published package can file anonymous feedback
+          # through the Worker. Release-only: from-source builds leave it unset and the server
+          # reads process.env at runtime instead.
           WORKER_URL: ${{ secrets.FEEDBACK_WORKER_URL }}
-        run: bun run build:mcpb
-      - name: Build + package the Figma plugin
         run: |
-          bun run build:plugin
-          ( cd packages/figma-plugin && zip -qr "$GITHUB_WORKSPACE/dist/figma-plugin.zip" manifest.json dist )
-      - uses: softprops/action-gh-release@v2
+          bun run build # build:plugin, then build:package (server bundle + payload into plugin/)
+          bash scripts/build-figma-plugin-zip.sh
+
+      # Packaging defects are invisible to the test suite and total for the user (§4.2).
+      - name: Assert the install (packed-tarball form)
+        run: bash scripts/assert-install.sh
+
+      # Authentication is OIDC trusted publishing — the `id-token: write` permission above is the
+      # whole credential. No token is stored anywhere. NODE_AUTH_TOKEN must stay UNSET: a value
+      # (even an empty one from a missing secret) makes npm use the .npmrc token path instead and
+      # OIDC is never attempted.
+      - name: Publish the plugin package to npm
+        run: |
+          # `npm view pkg@missing-version` exits 0 with EMPTY output when the package exists, so
+          # test the output, not the exit code.
+          if [ -n "$(npm view "figma-agent-bridge@$VERSION" version 2>/dev/null || true)" ]; then
+            echo "figma-agent-bridge@$VERSION is already published — skipping so a re-run does not 403."
+            exit 0
+          fi
+          # publish the exact tarball the install assertion just installed
+          ( cd plugin && npm publish "$GITHUB_WORKSPACE/dist/figma-agent-bridge-$VERSION.tgz" --provenance --access public )
+
+      - name: Publish the GitHub release
+        uses: softprops/action-gh-release@v2
         with:
           fail_on_unmatched_files: true
           generate_release_notes: true
-          files: |
-            dist/figma-mcp-*
-            dist/*.mcpb
-            dist/figma-plugin.zip
+          files: dist/figma-plugin.zip
+
+      # The published form (§4.2) — the only gate that can prove registry resolution. It installs
+      # the published package with npm, the same fetcher Claude Code runs for an npm-sourced
+      # entry. GAP: the last mile — Claude Code resolving the marketplace ENTRY, and its skills /
+      # agents / figma-setup loading in a real session — needs an authenticated Claude Code and is
+      # not scriptable here; it stays a human post-release check (claude-plugin.md §9.1/§9.4/§9.5).
+      - name: Assert the install (published form)
+        run: |
+          for i in 1 2 3 4 5 6; do
+            [ -n "$(npm view "figma-agent-bridge@$VERSION" version 2>/dev/null || true)" ] && break
+            echo "waiting for the registry to serve $VERSION ($i)…"
+            sleep 10
+          done
+          bash scripts/assert-install.sh --registry "$VERSION"
