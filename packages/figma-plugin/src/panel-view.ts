@@ -36,3 +36,12 @@ export const selectPanelView = (
     ? { kind: 'idle' }
     : { kind: 'roster' }
 }
+
+// The selection bar is roster-scoped context, not a connection
+// signal: it renders ONLY over the roster, and only with a live
+// selection. Kept here (pure) so both rules are unit-tested rather
+// than living as an inline JSX condition.
+export const showSelectionBar = (
+  view: PanelView,
+  count: number,
+): boolean => view.kind === 'roster' && count > 0

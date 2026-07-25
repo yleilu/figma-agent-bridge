@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'bun:test'
-import { selectPanelView } from './panel-view'
+import { describe, expect, it, test } from 'bun:test'
+import {
+  selectPanelView,
+  showSelectionBar,
+} from './panel-view'
 
 describe('selectPanelView', () => {
   it('connecting pre-empts everything', () => {
@@ -41,5 +44,42 @@ describe('selectPanelView', () => {
     expect(selectPanelView('connected', null, 0).kind).toBe(
       'idle',
     )
+  })
+})
+
+describe('showSelectionBar', () => {
+  test('roster + a live selection → shown', () => {
+    expect(showSelectionBar({ kind: 'roster' }, 2)).toBe(
+      true,
+    )
+    expect(showSelectionBar({ kind: 'roster' }, 1)).toBe(
+      true,
+    )
+  })
+  test('nothing selected → hidden', () => {
+    expect(showSelectionBar({ kind: 'roster' }, 0)).toBe(
+      false,
+    )
+  })
+  test('never outside the roster', () => {
+    expect(showSelectionBar({ kind: 'idle' }, 2)).toBe(
+      false,
+    )
+    expect(
+      showSelectionBar({ kind: 'connecting' }, 2),
+    ).toBe(false)
+    expect(showSelectionBar({ kind: 'offline' }, 2)).toBe(
+      false,
+    )
+    expect(
+      showSelectionBar(
+        {
+          kind: 'mismatch',
+          plugin: '0.3.0',
+          server: '0.4.0',
+        },
+        2,
+      ),
+    ).toBe(false)
   })
 })
