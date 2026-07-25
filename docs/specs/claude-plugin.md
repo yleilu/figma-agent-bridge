@@ -203,9 +203,10 @@ packaged **core** hooks are the `PreToolUse` identity injector (`session_id` + s
 `SessionEnd` (see §4 / `hooks.json` and [[figma-bridge/docs/specs/status-monitor|status-monitor.md]]).
 
 **Production config.** The feedback Worker URL is compiled into the bundle as a build-time
-constant via `bun build --define`. The Worker **secret is _not_ compiled in** — a distributed
-artifact can't safely embed a shared secret (extractable); it is resolved at runtime (env /
-per-install token / another mitigation — §11).
+constant via `bun build --define`. **Nothing else** accompanies it: a distributed artifact can't
+safely hold a shared secret (extractable), so the anonymous path ships **no client credential at
+all** and the Worker gates itself with per-IP rate limiting instead — see
+[[figma-bridge/docs/specs/feedback-system|feedback-system.md]].
 
 **Designer routes retain the self-contained binary.** A compiled standalone binary (one file,
 no toolchain) remains the right choice for the **Claude Desktop extension** (bundles the
@@ -586,9 +587,10 @@ This milestone **packages** that mechanism and adds the plugin-layer pieces:
   figma-plugin feedback surface. All are bundled by the plugin install.
 - **The production Worker URL is a build-time constant baked into the compiled binary** (designer
   routes), so the endpoint needs no user config; the Claude Code bundle reads it from the
-  environment (feedback is off if unset), and env may override for dev. **The Worker
-  _secret_ is NOT embedded** — a distributed artifact can't safely embed a shared secret
-  (extractable); it's resolved at runtime (env / per-install token / another mitigation — §11).
+  environment (feedback is off if unset), and env may override for dev. **No client credential
+  accompanies the URL** — a distributed artifact can't safely embed a shared secret (extractable),
+  so the Worker is openly reachable and protects itself with per-IP rate limiting
+  ([[figma-bridge/docs/specs/feedback-system|feedback-system.md]]).
 - **`figma-feedback` skill (§6.3)** — new: the plugin-layer _when + how to report_ guidance
   (bugs + proposals formats), used by `figma-designer` (auto) and the main agent (manual). It
   folds in what would otherwise be a separate feedback agent. **This skill is in scope for this
@@ -597,8 +599,8 @@ This milestone **packages** that mechanism and adds the plugin-layer pieces:
 
 Local Markdown capture is always available; **filing to GitHub** has two paths — the **anonymous**
 path via the Worker (goes live when the Worker is deployed; URL already compiled in) and the
-**logged-in** path direct to GitHub with the human's own token (no Worker). The shared-**secret**
-handling for the Worker path in a _distributed_ artifact is the open piece — see §11.
+**logged-in** path direct to GitHub with the human's own token (no Worker). Neither path puts a
+shared credential on the client.
 
 ## 8. Connection lifecycle
 
@@ -668,12 +670,6 @@ skill/agent content.
 
 ## 11. Open items & deferred
 
-- **Anonymous Feedback Send (Worker → GitHub)** — deferred; local Markdown capture is the built-in
-  path ([[figma-bridge/docs/specs/feedback-system|feedback-system.md]]). The Worker URL compiles
-  in cleanly, but the **shared secret for a _distributed_ artifact is unresolved** — a distributed
-  artifact can't safely embed it (extractable → Worker spam). Decide: per-install token,
-  Worker-side rate-limiting, or accept the risk. _(The **logged-in** send path is direct-to-GitHub
-  with the human's own device-flow token and does not use the Worker or this shared secret.)_
 - **Windows/Linux designer-route binaries** — deferred; darwin-arm64 first. (The Claude Code
   bundle route has no per-platform binary; `bun` handles cross-platform.)
 - **One-click install** — not possible today (no official scheme); revisit if Claude Code

@@ -17,7 +17,7 @@ import {
   clearToken,
   setPreference,
 } from '../credential-store'
-import { postFeedback } from '../worker-client'
+import { WorkerError, postFeedback } from '../worker-client'
 import {
   GithubError,
   postIssueComment,
@@ -95,6 +95,14 @@ const composeBody = (item: {
 }): string =>
   `## ${item.title}\n\n${item.description}\n\n_filed via figma-agent-bridge ${item.version}_`
 
+const failItem = async (path: string): Promise<void> => {
+  try {
+    await markFailed(path)
+  } catch {
+    // best-effort; a missing/stale path stays failed
+  }
+}
+
 export const handleSendFeedback = async (
   params: SendFeedbackInput,
   fetchImpl: typeof fetch = fetch,
@@ -122,7 +130,20 @@ export const handleSendFeedback = async (
 
     // 3. file each — one bad item fails only itself
     const results: SendResult[] = []
+    // ...except a 429: the whole batch shares one IP, so
+    // every remaining send would be refused too. Stop
+    // calling and mark the rest failed; they stay pending.
+    let throttled = ''
     for (const path of toSend) {
+      if (throttled) {
+        await failItem(path)
+        results.push({
+          path,
+          status: 'failed',
+          error: throttled,
+        })
+        continue
+      }
       try {
         const item = await readItem(path)
         let commentUrl: string
@@ -149,7 +170,6 @@ export const handleSendFeedback = async (
           const r = await postFeedback(
             {
               workerUrl: process.env.WORKER_URL ?? '',
-              secret: process.env.WORKER_SECRET ?? '',
               category: item.category,
               title: item.title,
               body: item.description,
@@ -186,11 +206,13 @@ export const handleSendFeedback = async (
             error: err.message,
           })
         } else {
-          try {
-            await markFailed(path)
-          } catch {
-            // best-effort; a missing/stale path stays failed
+          if (
+            err instanceof WorkerError &&
+            err.status === 429
+          ) {
+            throttled = errorMessage(err)
           }
+          await failItem(path)
           results.push({
             path,
             status: 'failed',
