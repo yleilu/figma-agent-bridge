@@ -46,14 +46,12 @@ beforeEach(async () => {
   process.env.CREDENTIALS_DIR = cred
   process.env.FIGMA_BRIDGE_NO_KEYCHAIN = '1'
   process.env.WORKER_URL = 'https://worker.test'
-  process.env.WORKER_SECRET = 'sek'
 })
 afterEach(async () => {
   delete process.env.FEEDBACK_DIR
   delete process.env.CREDENTIALS_DIR
   delete process.env.FIGMA_BRIDGE_NO_KEYCHAIN
   delete process.env.WORKER_URL
-  delete process.env.WORKER_SECRET
   await rm(dir, { recursive: true, force: true })
   await rm(cred, { recursive: true, force: true })
 })
@@ -145,6 +143,45 @@ describe('handleSendFeedback', () => {
     )
     expect(byPath['bugs/missing.md']).toBe('failed')
     expect(byPath[good.path]).toBe('sent')
+  })
+
+  it('a Worker 429 stops the batch instead of hammering the endpoint', async () => {
+    const one = {
+      category: 'bugs' as const,
+      description: 'd',
+    }
+    const a = await recordFeedback(
+      { ...one, title: 't1' },
+      '0.0.1',
+    )
+    const b = await recordFeedback(
+      { ...one, title: 't2' },
+      '0.0.1',
+    )
+    const c = await recordFeedback(
+      { ...one, title: 't3' },
+      '0.0.1',
+    )
+    const items = [a, b, c]
+    let calls = 0
+    const throttling = (async () => {
+      calls += 1
+      return new Response('slow down', { status: 429 })
+    }) as unknown as typeof fetch
+    const res = await handleSendFeedback(
+      {
+        send: items.map(i => i.path),
+        identity: 'anonymous',
+      },
+      throttling,
+    )
+    const data = JSON.parse(res.content[0].text)
+    expect(calls).toBe(1)
+    expect(
+      data.results.map((r: { status: string }) => r.status),
+    ).toEqual(['failed', 'failed', 'failed'])
+    expect(data.results[0].error).toMatch(/429/)
+    expect(data.results[2].error).toMatch(/429/)
   })
 
   it('github: posts a comment carrying the title heading, marks sent', async () => {

@@ -10495,7 +10495,7 @@ var init_schemas = __esm(() => {
 });
 
 // packages/shared/src/ws-schemas.ts
-var metaSchema, commandMessageSchema, joinMessageSchema, channelMessageSchema, registerMessageSchema, presenceMessageSchema, leaveMessageSchema, statusRecordSchema, agentStatusMessageSchema, statusSyncMessageSchema, agentStatusBroadcastSchema, agentStatusRemoveBroadcastSchema, agentStatusSyncBroadcastSchema, relayIncomingSchema, broadcastMessageSchema, systemMessageSchema, relayOutgoingSchema;
+var metaSchema, commandMessageSchema, joinMessageSchema, channelMessageSchema, registerMessageSchema, presenceMessageSchema, leaveMessageSchema, statusRecordSchema, agentStatusMessageSchema, statusSyncMessageSchema, agentStatusBroadcastSchema, agentStatusRemoveBroadcastSchema, agentStatusSyncBroadcastSchema, versionMismatchMessageSchema, versionMismatchBroadcastSchema, relayIncomingSchema, broadcastMessageSchema, systemMessageSchema, relayOutgoingSchema;
 var init_ws_schemas = __esm(() => {
   init_zod();
   metaSchema = exports_external.object({
@@ -10575,6 +10575,17 @@ var init_ws_schemas = __esm(() => {
     type: exports_external.literal("agent-status-sync"),
     records: exports_external.array(statusRecordSchema)
   });
+  versionMismatchMessageSchema = exports_external.object({
+    type: exports_external.literal("version-mismatch"),
+    channel: exports_external.string().min(1),
+    plugin: exports_external.string(),
+    server: exports_external.string()
+  });
+  versionMismatchBroadcastSchema = exports_external.object({
+    type: exports_external.literal("version-mismatch"),
+    plugin: exports_external.string(),
+    server: exports_external.string()
+  });
   relayIncomingSchema = exports_external.discriminatedUnion("type", [
     joinMessageSchema,
     channelMessageSchema,
@@ -10582,7 +10593,8 @@ var init_ws_schemas = __esm(() => {
     presenceMessageSchema,
     leaveMessageSchema,
     agentStatusMessageSchema,
-    statusSyncMessageSchema
+    statusSyncMessageSchema,
+    versionMismatchMessageSchema
   ]);
   broadcastMessageSchema = exports_external.object({
     type: exports_external.literal("broadcast"),
@@ -10597,7 +10609,8 @@ var init_ws_schemas = __esm(() => {
     systemMessageSchema,
     agentStatusBroadcastSchema,
     agentStatusRemoveBroadcastSchema,
-    agentStatusSyncBroadcastSchema
+    agentStatusSyncBroadcastSchema,
+    versionMismatchBroadcastSchema
   ]);
 });
 
@@ -10622,7 +10635,7 @@ var name = "figma-agent-bridge", version2 = "0.3.0";
 var init_package = () => {};
 
 // packages/shared/src/constants.ts
-var APP_NAME, APP_VERSION, DEFAULT_PORT = 18080, majorMinor = (v) => v.split(".").slice(0, 2).join("."), CONTEXT_MAX_BYTES = 2048, CONTEXT_SUMMARY_MAX_BYTES = 512;
+var APP_NAME, APP_VERSION, DEFAULT_PORT = 18080, majorMinor = (v) => v.split(".").slice(0, 2).join("."), CONTEXT_MAX_BYTES = 2048, CONTEXT_SUMMARY_MAX_BYTES = 512, REPO = "yleilu/figma-agent-bridge", BUGS_ISSUE = 1, PROPOSALS_ISSUE = 2, OAUTH_CLIENT_ID = "Ov23li2wE2mr9sLPX6dP", OAUTH_SCOPE = "public_repo", issueForCategory = (category) => category === "bugs" ? BUGS_ISSUE : PROPOSALS_ISSUE;
 var init_constants = __esm(() => {
   init_package();
   APP_NAME = name;
@@ -17834,11 +17847,12 @@ var exports_relay = {};
 __export(exports_relay, {
   stopRelay: () => stopRelay,
   startRelay: () => startRelay,
+  DONE_TEXT: () => DONE_TEXT,
   DEFAULT_TTL_MS: () => DEFAULT_TTL_MS,
   DEFAULT_IDLE_MS: () => DEFAULT_IDLE_MS,
   DEFAULT_HEARTBEAT_INTERVAL: () => DEFAULT_HEARTBEAT_INTERVAL
 });
-var MAX_CHANNELS_PER_CONNECTION = 32, MAX_MEMBERS_PER_CHANNEL = 64, MAX_TOTAL_CHANNELS = 1024, MAX_PAYLOAD_BYTES, RATE_TOKENS_PER_SEC = 50, RATE_BURST = 100, DEFAULT_HEARTBEAT_INTERVAL = 1e4, DEFAULT_IDLE_MS = 50000, DEFAULT_TTL_MS = 300000, contexts, createContext = () => ({
+var MAX_CHANNELS_PER_CONNECTION = 32, MAX_MEMBERS_PER_CHANNEL = 64, MAX_TOTAL_CHANNELS = 1024, MAX_PAYLOAD_BYTES, RATE_TOKENS_PER_SEC = 50, RATE_BURST = 100, DEFAULT_HEARTBEAT_INTERVAL = 1e4, DEFAULT_IDLE_MS = 50000, DEFAULT_TTL_MS = 300000, DONE_TEXT = "Done", contexts, createContext = () => ({
   channels: new Map,
   clientChannels: new Map,
   channelRegistry: new Map,
@@ -18015,10 +18029,14 @@ var MAX_CHANNELS_PER_CONNECTION = 32, MAX_MEMBERS_PER_CHANNEL = 64, MAX_TOTAL_CH
     byKey = new Map;
     ctx.agentStatus.set(channel, byKey);
   }
+  const prev = byKey.get(record3.key);
   const merged = {
-    ...byKey.get(record3.key),
+    ...prev,
     ...record3
   };
+  if (record3.text === null && prev?.text !== undefined && prev.text !== null) {
+    merged.text = prev.text;
+  }
   byKey.set(record3.key, merged);
   const payload = JSON.stringify({
     type: "agent-status",
@@ -18033,6 +18051,21 @@ var MAX_CHANNELS_PER_CONNECTION = 32, MAX_MEMBERS_PER_CHANNEL = 64, MAX_TOTAL_CH
   const byKey = ctx.agentStatus.get(channel);
   const records = byKey ? Array.from(byKey.values()) : [];
   send(ws, { type: "agent-status-sync", records });
+}, handleVersionMismatch = (ctx, ws, channel, plugin, server) => {
+  const members = ctx.channels.get(channel);
+  if (members === undefined) {
+    return;
+  }
+  const payload = JSON.stringify({
+    type: "version-mismatch",
+    plugin,
+    server
+  });
+  members.forEach((client) => {
+    if (client !== ws) {
+      client.send(payload);
+    }
+  });
 }, broadcastToChannel = (ctx, channel, msg) => {
   const members = ctx.channels.get(channel);
   if (members === undefined) {
@@ -18040,11 +18073,15 @@ var MAX_CHANNELS_PER_CONNECTION = 32, MAX_MEMBERS_PER_CHANNEL = 64, MAX_TOTAL_CH
   }
   const payload = JSON.stringify(msg);
   members.forEach((client) => client.send(payload));
-}, settleSession = (ctx, sessionId) => {
+}, toIdle = (rec) => ({
+  ...rec,
+  activity: "idle",
+  text: rec.text ?? DONE_TEXT
+}), settleSession = (ctx, sessionId) => {
   for (const [channel, byKey] of ctx.agentStatus) {
     for (const rec of byKey.values()) {
       if (rec.sessionId === sessionId && rec.activity !== "idle") {
-        const idle = { ...rec, activity: "idle" };
+        const idle = toIdle(rec);
         byKey.set(rec.key, idle);
         broadcastToChannel(ctx, channel, {
           type: "agent-status",
@@ -18157,6 +18194,8 @@ var MAX_CHANNELS_PER_CONNECTION = 32, MAX_MEMBERS_PER_CHANNEL = 64, MAX_TOTAL_CH
           handleAgentStatus(ctx, ws, frame.channel, frame.record);
         } else if (frame.type === "status-sync") {
           handleStatusReplay(ctx, ws, frame.channel);
+        } else if (frame.type === "version-mismatch") {
+          handleVersionMismatch(ctx, ws, frame.channel, frame.plugin, frame.server);
         }
       },
       pong: (ws) => {
@@ -18194,7 +18233,7 @@ var MAX_CHANNELS_PER_CONNECTION = 32, MAX_MEMBERS_PER_CHANNEL = 64, MAX_TOTAL_CH
             key: rec.key
           });
         } else if (age >= ctx.idleMs && rec.activity === "busy") {
-          const idle = { ...rec, activity: "idle" };
+          const idle = toIdle(rec);
           byKey.set(rec.key, idle);
           broadcastToChannel(ctx, channel, {
             type: "agent-status",
@@ -27641,6 +27680,23 @@ var recordFeedbackParamsSchema = exports_external.object({
   description: exports_external.string().describe("What happened, in natural language \u2014 what you did, what you expected, what you got."),
   tool: exports_external.string().optional().describe('The tool/command involved, if this is tool-specific (e.g. "resize_node").')
 });
+var listFeedbackParamsSchema = exports_external.object({
+  ...listPaginationParamsSchema.shape
+});
+var sendFeedbackParamsSchema = exports_external.object({
+  send: exports_external.array(exports_external.string()).describe("Backlog item paths to file to GitHub."),
+  add: exports_external.object({
+    category: exports_external.enum(FEEDBACK_CATEGORIES),
+    title: exports_external.string(),
+    description: exports_external.string()
+  }).optional().describe(`A new human-authored item (the gate's free-text "something else") to record and file.`),
+  identity: exports_external.enum(["anonymous", "github"]).optional().describe("Override the remembered identity for this send.")
+});
+var discardFeedbackParamsSchema = exports_external.object({
+  paths: exports_external.array(exports_external.string()).describe("Backlog item paths to hard-delete unsent (the gate's Discard).")
+});
+var githubAuthStartParamsSchema = exports_external.object({});
+var githubAuthPollParamsSchema = exports_external.object({});
 
 // packages/server/src/figma-client.ts
 init_src();
@@ -27859,6 +27915,18 @@ var createFigmaClient = (relayUrl, joinTimeoutMs = JOIN_TIMEOUT_MS, watchdog) =>
     }
     socket.send(JSON.stringify(frame));
   };
+  const notifyMismatch = (channel, plugin, server) => {
+    connect().then(() => {
+      sendToChannel(channel, {
+        type: "version-mismatch",
+        channel,
+        plugin,
+        server
+      });
+    }).catch(() => {
+      return;
+    });
+  };
   const channelFor = (fileKey) => joined.get(fileKey) ?? null;
   const dispatch = (fileKey, command, params, timeoutMs, identity) => {
     if (ws === null || ws.readyState !== WebSocket.OPEN) {
@@ -28037,6 +28105,7 @@ var createFigmaClient = (relayUrl, joinTimeoutMs = JOIN_TIMEOUT_MS, watchdog) =>
     channelFor,
     discover,
     isInstanceDead,
+    notifyMismatch,
     __markDeadForTest: (fileKey, connectedAt) => {
       deadInstances.set(fileKey, connectedAt);
     }
@@ -28101,6 +28170,7 @@ var requireFile = async (client, fileKey) => {
   }
   const skew = protocolMismatch(match.version);
   if (skew !== null) {
+    client.notifyMismatch(match.channel, match.version ?? "(none)", APP_VERSION);
     return {
       ok: false,
       result: errorEnvelope("INCOMPATIBLE", skew)
@@ -28265,6 +28335,7 @@ var handleConnect = async (params, client, relayHttpUrl, port) => {
       if (info2 !== undefined) {
         const mismatch2 = protocolMismatch(info2.version);
         if (mismatch2 !== null) {
+          client.notifyMismatch(info2.channel, info2.version ?? "(none)", APP_VERSION);
           return textResult(mismatch2);
         }
       }
@@ -28305,6 +28376,7 @@ var handleConnect = async (params, client, relayHttpUrl, port) => {
   const { info } = resolution;
   const mismatch = protocolMismatch(info.version);
   if (mismatch !== null) {
+    client.notifyMismatch(info.channel, info.version ?? "(none)", APP_VERSION);
     return textResult(mismatch);
   }
   try {
@@ -32072,6 +32144,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  unlink,
   writeFile
 } from "fs/promises";
 import { homedir } from "os";
@@ -32136,9 +32209,15 @@ var readItem = async (relPath) => {
   const raw = await readFile(join(resolveFeedbackDir(), relPath), "utf8");
   return parse6(relPath, raw);
 };
-var listPending = async (limit) => {
+var sortKey = (i) => `${i.created} ${i.path}`;
+var encodeCursor2 = (key) => Buffer.from(key).toString("base64url");
+var decodeCursor2 = (c) => Buffer.from(c, "base64url").toString();
+var listPending = async ({
+  limit = 100,
+  cursor
+} = {}) => {
   const root = resolveFeedbackDir();
-  const items = [];
+  const all = [];
   for (const category of FEEDBACK_CATEGORIES) {
     let files;
     try {
@@ -32153,12 +32232,25 @@ var listPending = async (limit) => {
       const relPath = `${category}/${file}`;
       const item = parse6(relPath, await readFile(join(root, relPath), "utf8"));
       if (item.status === "pending") {
-        items.push(item);
+        all.push(item);
       }
     }
   }
-  items.sort((a, b) => b.created.localeCompare(a.created));
-  return items.slice(0, limit);
+  all.sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
+  const after = cursor ? decodeCursor2(cursor) : null;
+  const rest = after ? all.filter((i) => sortKey(i).localeCompare(after) < 0) : all;
+  const items = rest.slice(0, limit);
+  const truncated = rest.length > limit;
+  return {
+    items,
+    truncated,
+    ...truncated && items.length ? {
+      cursor: encodeCursor2(sortKey(items[items.length - 1]))
+    } : {}
+  };
+};
+var discard = async (relPath) => {
+  await unlink(join(resolveFeedbackDir(), relPath));
 };
 var rewrite = async (relPath, patch) => {
   const absPath = join(resolveFeedbackDir(), relPath);
@@ -32183,17 +32275,112 @@ var markSent = (relPath, commentUrl) => rewrite(relPath, {
 var markFailed = (relPath) => rewrite(relPath, { status: "failed" });
 
 // packages/server/src/tools/feedback.ts
-var handleRecordFeedback = async (params, client, version3 = APP_VERSION) => {
+var handleRecordFeedback = async (params, version3 = APP_VERSION) => {
   try {
     const item = await recordFeedback(params, version3);
-    client.notify("feedback-added", { item });
     return textResult(`Recorded feedback (${item.category}): ${item.title}`);
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`);
   }
 };
 
+// packages/server/src/tools/feedback-send.ts
+init_src();
+
+// packages/server/src/credential-store.ts
+import {
+  chmod,
+  mkdir as mkdir2,
+  readFile as readFile2,
+  writeFile as writeFile2
+} from "fs/promises";
+import { homedir as homedir2 } from "os";
+import { dirname, join as join2 } from "path";
+var SERVICE = "figma-agent-bridge";
+var SECRET_NAME = "credentials";
+var secretsOverride = null;
+var credentialsFile = () => join2(process.env.CREDENTIALS_DIR ?? join2(homedir2(), ".figma-agent-bridge"), "credentials.json");
+var useKeychain = () => {
+  if (process.env.FIGMA_BRIDGE_NO_KEYCHAIN) {
+    return false;
+  }
+  if (secretsOverride !== null) {
+    return true;
+  }
+  if (typeof Bun === "undefined") {
+    return false;
+  }
+  const bunSecrets = Bun.secrets;
+  return bunSecrets !== null && bunSecrets !== undefined;
+};
+var secrets = () => secretsOverride ?? Bun.secrets;
+var readCredentials = async () => {
+  let raw = null;
+  if (useKeychain()) {
+    raw = await secrets().get({
+      service: SERVICE,
+      name: SECRET_NAME
+    });
+  } else {
+    try {
+      raw = await readFile2(credentialsFile(), "utf8");
+    } catch {
+      raw = null;
+    }
+  }
+  if (!raw) {
+    return {};
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+};
+var writeCredentials = async (c) => {
+  const value = JSON.stringify(c);
+  if (useKeychain()) {
+    await secrets().set({
+      service: SERVICE,
+      name: SECRET_NAME,
+      value
+    });
+    return;
+  }
+  const file = credentialsFile();
+  await mkdir2(dirname(file), { recursive: true });
+  await writeFile2(file, value, { mode: 384 });
+  if (process.platform !== "win32") {
+    await chmod(file, 384);
+  }
+};
+var setToken = async (token, identity) => {
+  const c = await readCredentials();
+  await writeCredentials({
+    ...c,
+    preference: "github",
+    token,
+    identity
+  });
+};
+var clearToken = async () => {
+  const c = await readCredentials();
+  await writeCredentials({ preference: c.preference });
+};
+var setPreference = async (preference) => {
+  const c = await readCredentials();
+  await writeCredentials({ ...c, preference });
+};
+
 // packages/server/src/worker-client.ts
+class WorkerError extends Error {
+  status;
+  constructor(status, message) {
+    super(message);
+    this.name = "WorkerError";
+    this.status = status;
+  }
+}
 var postFeedback = async (args, fetchImpl = fetch) => {
   if (!args.workerUrl) {
     throw new Error("WORKER_URL is not configured");
@@ -32201,8 +32388,7 @@ var postFeedback = async (args, fetchImpl = fetch) => {
   const res = await fetchImpl(args.workerUrl, {
     method: "POST",
     headers: {
-      "content-type": "application/json",
-      "x-feedback-secret": args.secret
+      "content-type": "application/json"
     },
     body: JSON.stringify({
       category: args.category,
@@ -32212,7 +32398,8 @@ var postFeedback = async (args, fetchImpl = fetch) => {
     })
   });
   if (!res.ok) {
-    throw new Error(`Worker responded ${res.status}`);
+    const detail = (await res.text()).trim().slice(0, 200);
+    throw new WorkerError(res.status, detail ? `Worker responded ${res.status}: ${detail}` : `Worker responded ${res.status}`);
   }
   const data = await res.json();
   if (!data.comment_url) {
@@ -32221,48 +32408,336 @@ var postFeedback = async (args, fetchImpl = fetch) => {
   return { commentUrl: data.comment_url };
 };
 
-// packages/server/src/feedback-wiring.ts
-var FEEDBACK_HYDRATE_LIMIT = 50;
-var buildFeedbackHandlers = (notify, fetchImpl = fetch) => ({
-  sync: async () => ({
-    items: await listPending(FEEDBACK_HYDRATE_LIMIT)
-  }),
-  send: async (params) => {
-    const rawPath = params.path;
-    if (typeof rawPath !== "string" || !rawPath) {
-      throw new Error("send-feedback: path is required");
-    }
-    const path = rawPath;
-    const item = await readItem(path);
-    if (item.status === "sent") {
-      notify("feedback-updated", { item });
-      return { item };
-    }
-    try {
-      const { commentUrl } = await postFeedback({
-        workerUrl: process.env.WORKER_URL ?? "",
-        secret: process.env.WORKER_SECRET ?? "",
-        category: item.category,
-        title: item.title,
-        body: item.description,
-        version: item.version
-      }, fetchImpl);
-      const updated = await markSent(path, commentUrl);
-      notify("feedback-updated", { item: updated });
-      return { item: updated };
-    } catch (err) {
-      try {
-        const failed = await markFailed(path);
-        notify("feedback-updated", { item: failed });
-      } catch {}
-      throw err;
-    }
+// packages/server/src/github-client.ts
+var DEVICE_CODE_URL = "https://github.com/login/device/code";
+var TOKEN_URL = "https://github.com/login/oauth/access_token";
+var API = "https://api.github.com";
+var UA = "figma-agent-bridge";
+
+class GithubError extends Error {
+  code;
+  constructor(code, message) {
+    super(message);
+    this.code = code;
   }
-});
-var wireFeedback = (client, fetchImpl = fetch) => {
-  const handlers = buildFeedbackHandlers((command, params) => client.notify(command, params), fetchImpl);
-  client.onRequest("feedback-sync", handlers.sync);
-  client.onRequest("send-feedback", handlers.send);
+}
+var startDeviceAuth = async (clientId, scope, fetchImpl = fetch) => {
+  const res = await fetchImpl(DEVICE_CODE_URL, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({ client_id: clientId, scope })
+  });
+  if (!res.ok) {
+    throw new GithubError("http", `device/code responded ${res.status}`);
+  }
+  const d = await res.json();
+  return {
+    deviceCode: d.device_code,
+    userCode: d.user_code,
+    verificationUri: d.verification_uri,
+    expiresIn: d.expires_in,
+    interval: d.interval
+  };
+};
+var pollDeviceAuth = async (clientId, deviceCode, fetchImpl = fetch) => {
+  const res = await fetchImpl(TOKEN_URL, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({
+      client_id: clientId,
+      device_code: deviceCode,
+      grant_type: "urn:ietf:params:oauth:grant-type:device_code"
+    })
+  });
+  const d = await res.json();
+  if (d.access_token) {
+    return {
+      status: "authorized",
+      accessToken: d.access_token
+    };
+  }
+  switch (d.error) {
+    case "authorization_pending":
+      return { status: "pending" };
+    case "slow_down":
+      return { status: "slow_down", interval: d.interval };
+    case "access_denied":
+      return { status: "denied" };
+    case "expired_token":
+      return { status: "expired" };
+    default:
+      throw new GithubError("http", `token endpoint error: ${d.error ?? "unknown"}`);
+  }
+};
+var fetchIdentity = async (token, fetchImpl = fetch) => {
+  const res = await fetchImpl(`${API}/user`, {
+    headers: {
+      authorization: `Bearer ${token}`,
+      accept: "application/vnd.github+json",
+      "user-agent": UA
+    }
+  });
+  if (!res.ok) {
+    throw new GithubError(res.status === 401 ? "auth" : "http", `GET /user responded ${res.status}`);
+  }
+  const u = await res.json();
+  const email2 = u.email ?? `${u.id}+${u.login}@users.noreply.github.com`;
+  return {
+    login: u.login,
+    ...u.name ? { name: u.name } : {},
+    email: email2
+  };
+};
+var ghSend = async (fetchImpl, method, url, token, body) => {
+  const res = await fetchImpl(url, {
+    method,
+    headers: {
+      authorization: `Bearer ${token}`,
+      accept: "application/vnd.github+json",
+      "content-type": "application/json",
+      "user-agent": UA
+    },
+    body: JSON.stringify(body)
+  });
+  if (res.status === 401) {
+    throw new GithubError("auth", "GitHub token rejected (401)");
+  }
+  if (res.status === 403 || res.status === 404) {
+    throw new GithubError("access", `No repo write access (${res.status})`);
+  }
+  if (!res.ok) {
+    throw new GithubError("http", `${method} ${url} responded ${res.status}`);
+  }
+  return res.status === 204 ? {} : res.json();
+};
+var postIssueComment = async (args, fetchImpl = fetch) => {
+  const d = await ghSend(fetchImpl, "POST", `${API}/repos/${args.repo}/issues/${args.issueNumber}/comments`, args.token, { body: args.body });
+  if (!d.html_url) {
+    throw new GithubError("http", "comment response missing html_url");
+  }
+  return { commentUrl: d.html_url };
+};
+
+// packages/server/src/tools/feedback-send.ts
+var handleListFeedback = async (params) => {
+  try {
+    const page = await listPending({
+      limit: params.limit ?? 100,
+      cursor: params.cursor
+    });
+    const c = await readCredentials();
+    const identity = c.preference ? {
+      preference: c.preference,
+      ...c.identity?.login ? { login: c.identity.login } : {},
+      ...c.identity?.name ? { name: c.identity.name } : {},
+      ...c.identity?.email ? { email: c.identity.email } : {}
+    } : null;
+    return textResult(JSON.stringify({
+      pending: page.items,
+      truncated: page.truncated,
+      ...page.cursor ? { cursor: page.cursor } : {},
+      identity
+    }));
+  } catch (err) {
+    return textResult(`Error: ${errorMessage(err)}`);
+  }
+};
+var composeBody = (item) => `## ${item.title}
+
+${item.description}
+
+_filed via figma-agent-bridge ${item.version}_`;
+var failItem = async (path) => {
+  try {
+    await markFailed(path);
+  } catch {}
+};
+var handleSendFeedback = async (params, fetchImpl = fetch) => {
+  try {
+    const cred = await readCredentials();
+    const identity = params.identity ?? cred.preference ?? "anonymous";
+    const toSend = [...params.send];
+    if (params.add) {
+      const created = await recordFeedback(params.add, APP_VERSION);
+      toSend.push(created.path);
+    }
+    if (params.identity) {
+      await setPreference(params.identity);
+    }
+    const results = [];
+    let throttled = "";
+    for (const path of toSend) {
+      if (throttled) {
+        await failItem(path);
+        results.push({
+          path,
+          status: "failed",
+          error: throttled
+        });
+        continue;
+      }
+      try {
+        const item = await readItem(path);
+        let commentUrl;
+        if (identity === "github") {
+          if (!cred.token) {
+            results.push({
+              path,
+              status: "auth-required",
+              error: "not logged in"
+            });
+            continue;
+          }
+          const r = await postIssueComment({
+            repo: REPO,
+            issueNumber: issueForCategory(item.category),
+            body: composeBody(item),
+            token: cred.token
+          }, fetchImpl);
+          commentUrl = r.commentUrl;
+        } else {
+          const r = await postFeedback({
+            workerUrl: process.env.WORKER_URL ?? "",
+            category: item.category,
+            title: item.title,
+            body: item.description,
+            version: item.version
+          }, fetchImpl);
+          commentUrl = r.commentUrl;
+        }
+        const updated = await markSent(path, commentUrl);
+        results.push({
+          path,
+          status: "sent",
+          commentUrl: updated.commentUrl
+        });
+      } catch (err) {
+        if (err instanceof GithubError && err.code === "auth") {
+          await clearToken();
+          results.push({
+            path,
+            status: "auth-required",
+            error: err.message
+          });
+        } else if (err instanceof GithubError && err.code === "access") {
+          results.push({
+            path,
+            status: "no-access",
+            error: err.message
+          });
+        } else {
+          if (err instanceof WorkerError && err.status === 429) {
+            throttled = errorMessage(err);
+          }
+          await failItem(path);
+          results.push({
+            path,
+            status: "failed",
+            error: errorMessage(err)
+          });
+        }
+      }
+    }
+    return textResult(JSON.stringify({ results }));
+  } catch (err) {
+    return textResult(`Error: ${errorMessage(err)}`);
+  }
+};
+var handleDiscardFeedback = async (params) => {
+  try {
+    const results = [];
+    for (const path of params.paths) {
+      try {
+        await discard(path);
+        results.push({ path, ok: true });
+      } catch (err) {
+        results.push({
+          path,
+          ok: false,
+          error: errorMessage(err)
+        });
+      }
+    }
+    return textResult(JSON.stringify({ results }));
+  } catch (err) {
+    return textResult(`Error: ${errorMessage(err)}`);
+  }
+};
+
+// packages/server/src/tools/github-auth.ts
+var pending = null;
+var POLL_BUDGET_MS = 45000;
+var realSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+var handleGithubAuthStart = async (clientId, scope, fetchImpl = fetch) => {
+  if (!clientId) {
+    return textResult("Error: GitHub login is not configured (no OAuth client id). Use anonymous.");
+  }
+  try {
+    const d = await startDeviceAuth(clientId, scope, fetchImpl);
+    pending = {
+      deviceCode: d.deviceCode,
+      clientId,
+      intervalSec: d.interval,
+      expiresAt: Date.now() + d.expiresIn * 1000
+    };
+    return textResult(JSON.stringify({
+      user_code: d.userCode,
+      verification_uri: d.verificationUri,
+      expires_in: d.expiresIn,
+      interval: d.interval
+    }));
+  } catch (err) {
+    return textResult(`Error: ${errorMessage(err)}`);
+  }
+};
+var handleGithubAuthPoll = async (fetchImpl = fetch, sleep = realSleep) => {
+  if (!pending) {
+    return textResult(JSON.stringify({
+      status: "error",
+      message: "No login in progress \u2014 call github_auth_start first."
+    }));
+  }
+  const deadline = Date.now() + POLL_BUDGET_MS;
+  let intervalMs = pending.intervalSec * 1000;
+  try {
+    while (Date.now() < deadline) {
+      if (Date.now() > pending.expiresAt) {
+        pending = null;
+        return textResult(JSON.stringify({ status: "expired" }));
+      }
+      const r = await pollDeviceAuth(pending.clientId, pending.deviceCode, fetchImpl);
+      if (r.status === "authorized" && r.accessToken) {
+        const identity = await fetchIdentity(r.accessToken, fetchImpl);
+        await setToken(r.accessToken, identity);
+        pending = null;
+        return textResult(JSON.stringify({
+          status: "authorized",
+          identity
+        }));
+      }
+      if (r.status === "denied") {
+        pending = null;
+        return textResult(JSON.stringify({ status: "denied" }));
+      }
+      if (r.status === "expired") {
+        pending = null;
+        return textResult(JSON.stringify({ status: "expired" }));
+      }
+      if (r.status === "slow_down" && r.interval) {
+        intervalMs = r.interval * 1000;
+      }
+      await sleep(intervalMs);
+    }
+    return textResult(JSON.stringify({ status: "pending" }));
+  } catch (err) {
+    return textResult(`Error: ${errorMessage(err)}`);
+  }
 };
 
 // node_modules/.bun/minisearch@7.2.0/node_modules/minisearch/dist/es/index.js
@@ -33409,23 +33884,23 @@ var recordsFromGetComponents = (reply, fileKey) => {
 
 // packages/server/src/component-index/store.ts
 import {
-  mkdir as mkdir2,
-  readFile as readFile2,
-  writeFile as writeFile2
+  mkdir as mkdir3,
+  readFile as readFile3,
+  writeFile as writeFile3
 } from "fs/promises";
-import { homedir as homedir2 } from "os";
-import { join as join2 } from "path";
-var resolveIndexDir = () => process.env.COMPONENT_INDEX_DIR ?? join2(homedir2(), ".figma-agent-bridge", "component-index");
+import { homedir as homedir3 } from "os";
+import { join as join3 } from "path";
+var resolveIndexDir = () => process.env.COMPONENT_INDEX_DIR ?? join3(homedir3(), ".figma-agent-bridge", "component-index");
 var fileName = (fileKey) => `${fileKey.replace(/[^a-zA-Z0-9_-]/g, "_")}.json`;
 var saveIndex = async (fileKey, payload) => {
   const dir = resolveIndexDir();
-  await mkdir2(dir, { recursive: true });
-  await writeFile2(join2(dir, fileName(fileKey)), JSON.stringify(payload), "utf8");
+  await mkdir3(dir, { recursive: true });
+  await writeFile3(join3(dir, fileName(fileKey)), JSON.stringify(payload), "utf8");
 };
 var loadCachedIndex = async (fileKey, currentVersion) => {
   let raw;
   try {
-    raw = await readFile2(join2(resolveIndexDir(), fileName(fileKey)), "utf8");
+    raw = await readFile3(join3(resolveIndexDir(), fileName(fileKey)), "utf8");
   } catch {
     return null;
   }
@@ -33571,7 +34046,6 @@ if (process.argv.includes("--relay")) {
   const relayUrl = process.env.RELAY_URL ?? `ws://localhost:${port}`;
   const relayHttpUrl = toHttpUrl(relayUrl);
   const client = createFigmaClient(relayUrl);
-  wireFeedback(client);
   const indexManager = new IndexManager;
   client.onRequest(COMMANDS.DOCUMENT_CHANGED, (params) => {
     const { fileId } = params;
@@ -33582,7 +34056,12 @@ if (process.argv.includes("--relay")) {
   });
   registerSessionTool(server, "connect", connectParamsSchema, (p) => handleConnect(p, client, relayHttpUrl, port));
   registerSessionTool(server, "status", statusParamsSchema, () => handleStatus(client, relayHttpUrl));
-  registerSessionTool(server, "record_feedback", recordFeedbackParamsSchema, (p) => handleRecordFeedback(p, client));
+  registerSessionTool(server, "record_feedback", recordFeedbackParamsSchema, (p) => handleRecordFeedback(p));
+  registerSessionTool(server, "list_feedback", listFeedbackParamsSchema, (p) => handleListFeedback(p));
+  registerSessionTool(server, "send_feedback", sendFeedbackParamsSchema, (p) => handleSendFeedback(p));
+  registerSessionTool(server, "discard_feedback", discardFeedbackParamsSchema, (p) => handleDiscardFeedback(p));
+  registerSessionTool(server, "github_auth_start", githubAuthStartParamsSchema, () => handleGithubAuthStart(OAUTH_CLIENT_ID, OAUTH_SCOPE));
+  registerSessionTool(server, "github_auth_poll", githubAuthPollParamsSchema, () => handleGithubAuthPoll());
   registerFileTool(server, client, "inspect", inspectParamsSchema, handleInspect);
   registerFileTool(server, client, "get_styles", getStylesParamsSchema, handleGetStyles);
   registerFileTool(server, client, "get_components", getComponentsParamsSchema, handleGetComponents);

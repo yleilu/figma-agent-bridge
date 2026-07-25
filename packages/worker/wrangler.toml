@@ -2,7 +2,26 @@ name = "figma-agent-bridge-feedback"
 main = "src/index.ts"
 compatibility_date = "2026-01-01"
 
-# Set with: wrangler secret put GITHUB_TOKEN ; wrangler secret put SHARED_SECRET
+# GITHUB_TOKEN is this Worker's only secret — the client sends no credential.
+# Set with: wrangler secret put GITHUB_TOKEN
+
+# Per-client-IP flood gate. namespace_id is an account-wide identifier
+# (bindings sharing an id share counters) and must stay unique to this Worker.
+# period must be exactly 10 or 60; the window is per key per Cloudflare location.
+#
+# The client sends ONE request PER ITEM, and the end-of-work review files a
+# whole pending backlog in a single batch — so the limit must sit comfortably
+# above one honest batch, not above one honest request. The `simple` limiter
+# has no burst-vs-sustained shape, so 60/60s is the whole budget: it never
+# refuses a real send, and still stops a runaway loop or a script.
+[[ratelimits]]
+name = "FEEDBACK_LIMITER"
+namespace_id = "7301"
+
+  [ratelimits.simple]
+  limit = 60
+  period = 60
+
 [vars]
 REPO = "yleilu/figma-agent-bridge"
 BUGS_ISSUE = "1"       # issue number for bug reports
