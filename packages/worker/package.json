@@ -4,13 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "bun test",
-    "typecheck": "tsc --noEmit",
     "deploy": "wrangler deploy",
-    "dev": "wrangler dev"
+    "dev": "wrangler dev",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "wrangler": "^3.0.0",
-    "@cloudflare/workers-types": "^4.0.0"
+    "@cloudflare/workers-types": "^4.0.0",
+    "wrangler": "^4.36.0"
   }
 }

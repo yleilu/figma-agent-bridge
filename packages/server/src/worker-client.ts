@@ -2,11 +2,23 @@ import type { FeedbackCategory } from '@figma-agent-bridge/shared'
 
 export interface PostFeedbackArgs {
   workerUrl: string
-  secret: string
   category: FeedbackCategory
   title: string
   body: string
   version: string
+}
+
+// A non-2xx from the Worker, carrying the status so the
+// caller can tell a throttled batch (429) from a one-off
+// failure and stop hammering the endpoint.
+export class WorkerError extends Error {
+  readonly status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'WorkerError'
+    this.status = status
+  }
 }
 
 export const postFeedback = async (
@@ -20,7 +32,6 @@ export const postFeedback = async (
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-feedback-secret': args.secret,
     },
     body: JSON.stringify({
       category: args.category,
@@ -30,7 +41,13 @@ export const postFeedback = async (
     }),
   })
   if (!res.ok) {
-    throw new Error(`Worker responded ${res.status}`)
+    const detail = (await res.text()).trim().slice(0, 200)
+    throw new WorkerError(
+      res.status,
+      detail
+        ? `Worker responded ${res.status}: ${detail}`
+        : `Worker responded ${res.status}`,
+    )
   }
   const data = (await res.json()) as {
     comment_url?: string

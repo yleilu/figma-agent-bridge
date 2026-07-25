@@ -310,9 +310,10 @@ status monitor adds `Stop`/`SubagentStop`/`SessionEnd` (see §4 / `hooks.json` a
 [[figma-bridge/docs/specs/status-monitor|status-monitor.md]]).
 
 **Production config.** The feedback Worker URL is a build-time constant of the **server bundle**,
-baked in via `bun build --define`. The Worker **secret is _not_ baked in** — a distributed
-artifact can't safely embed a shared secret (extractable); it is resolved at runtime (env /
-per-install token / another mitigation — §10).
+baked in via `bun build --define`. **Nothing else** accompanies it: a distributed artifact can't
+safely hold a shared secret (extractable), so the anonymous path ships **no client credential at
+all** and the Worker gates itself with per-IP rate limiting instead — see
+[[figma-bridge/docs/specs/feedback-system|feedback-system.md]].
 
 **Install routes are not specified here.** The route set, what each route delivers, its
 prerequisites, and its steps are owned by
@@ -737,10 +738,11 @@ The plugin package carries that mechanism and adds the plugin-layer pieces:
 - `record_feedback` and the send-flow meta-tools ship **inside the MCP server**; there is no
   figma-plugin feedback surface. All are bundled by the plugin install.
 - **The production Worker URL is a build-time constant** baked into the packaged server bundle,
-  so the endpoint needs no user config; env may override for dev, and a from-source run reads it
-  from the environment (feedback is off if unset). **The Worker
-  _secret_ is NOT embedded** — a distributed artifact can't safely embed a shared secret
-  (extractable); it's resolved at runtime (env / per-install token / another mitigation — §10).
+  so the endpoint needs no user config; a from-source run reads it from the environment (feedback
+  is off if unset). **No client credential accompanies the URL** — a distributed artifact can't
+  safely embed a shared secret (extractable), so the Worker is openly reachable and protects
+  itself with per-IP rate limiting
+  ([[figma-bridge/docs/specs/feedback-system|feedback-system.md]]).
 - **`figma-feedback` skill (§6.3)** — the plugin-layer _when + how to report_ guidance
   (bugs + proposals formats), used by `figma-designer` (auto) and the main agent (manual). It
   folds in what would otherwise be a separate feedback agent, and is part of the packaging layer
@@ -748,8 +750,8 @@ The plugin package carries that mechanism and adds the plugin-layer pieces:
 
 Local Markdown capture is always available; **filing to GitHub** has two paths — the **anonymous**
 path via the Worker (goes live when the Worker is deployed; URL already baked in) and the
-**logged-in** path direct to GitHub with the human's own token (no Worker). The shared-**secret**
-handling for the Worker path in a _distributed_ artifact is the open piece — see §10.
+**logged-in** path direct to GitHub with the human's own token (no Worker). Neither path puts a
+shared credential on the client.
 
 ## 8. Connection lifecycle
 
@@ -814,11 +816,5 @@ package build (server bundle + Figma payload assembly).
 
 ## 10. Open items & deferred
 
-- **Anonymous Feedback Send (Worker → GitHub)** — deferred; local Markdown capture is the built-in
-  path ([[figma-bridge/docs/specs/feedback-system|feedback-system.md]]). The Worker URL bakes into
-  the bundle cleanly, but the **shared secret for a _distributed_ artifact is unresolved** — a
-  distributed artifact can't safely embed it (extractable → Worker spam). Decide: per-install token,
-  Worker-side rate-limiting, or accept the risk. _(The **logged-in** send path is direct-to-GitHub
-  with the human's own device-flow token and does not use the Worker or this shared secret.)_
 - **One-click install** — not possible today (no official scheme); revisit if Claude Code
   adds one.

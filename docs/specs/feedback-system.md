@@ -133,7 +133,7 @@ sequenceDiagram
         Server->>Cred: remember preference = identity (when explicitly chosen)
         loop each sent
             alt anonymous
-                Server->>Worker: POST { category, title, body, version, secret }
+                Server->>Worker: POST { category, title, body, version }
                 Worker->>GH: POST /repos/:o/:r/issues/:n/comments (bot)
             else logged-in
                 Server->>Cred: read user token
@@ -301,8 +301,9 @@ owns filename generation.
   **`postIssueComment`** — posts a comment on the category's issue
   (`POST /repos/:o/:r/issues/:n/comments`) and returns its `html_url`.
 - **`worker-client.ts`** — the anonymous path: an HTTPS POST to the CloudFlare Worker sending
-  `{ category, title, body, version, secret }`, returning `{ comment_url }` (the bot's comment
-  URL).
+  `{ category, title, body, version }`, returning `{ comment_url }` (the bot's comment URL). The
+  request carries **no credential** — the Worker's gate is per-IP rate limiting, not a shared
+  secret.
 - **The review-and-file meta-tools** — global (machine-scoped, no `fileKey`): they do **not**
   spread the `fileTargetParamsSchema` mixin, exactly like `record_feedback`.
   - `list_feedback({ cursor?, limit?=100 }) → { pending: FeedbackItem[], truncated, cursor?, identity: { preference, name?, login?, email? } | null }`
@@ -327,8 +328,8 @@ owns filename generation.
     device flow.
   - `github_auth_poll() → { status: 'pending' | 'authorized' | 'expired' | 'denied', identity?, interval? }`
     — polls for the token; on `authorized`, the token + identity are stored and returned.
-- **Config:** `FEEDBACK_DIR` (default `~/.figma-agent-bridge/feedbacks`); `WORKER_URL`,
-  `WORKER_SECRET` (anonymous path); `REPO`, `BUGS_ISSUE`, `PROPOSALS_ISSUE` (the standing category
+- **Config:** `FEEDBACK_DIR` (default `~/.figma-agent-bridge/feedbacks`); `WORKER_URL` (anonymous
+  path — the endpoint only, no credential); `REPO`, `BUGS_ISSUE`, `PROPOSALS_ISSUE` (the standing category
   issue numbers, required client-side for the direct logged-in path); `OAUTH_CLIENT_ID`,
   `OAUTH_SCOPE` (device flow).
 
@@ -337,12 +338,44 @@ owns filename generation.
   is agent-driven and never reaches the iframe. `code.ts` is not involved.
 
 ### `packages/worker` (CloudFlare Worker — anonymous path)
-- Validates the shared secret (`SHARED_SECRET`), maps `category → issue#` by convention
-  (`<CATEGORY>_ISSUE`), and files a **comment** via the GitHub API
-  (`POST /repos/:o/:r/issues/:n/comments`) using `GITHUB_TOKEN` (a fine-grained bot PAT with
-  issues:write, held as a Worker secret). Composes the comment body from `title`, `body`,
-  `version`; returns `{ comment_url }`. Secrets: `GITHUB_TOKEN`, `SHARED_SECRET`. Vars: `REPO`,
+- Maps `category → issue#` by convention (`<CATEGORY>_ISSUE`) and files a **comment** via the
+  GitHub API (`POST /repos/:o/:r/issues/:n/comments`) using `GITHUB_TOKEN` (a fine-grained bot PAT
+  with issues:write, held as a Worker secret). Composes the comment body from `title`, `body`,
+  `version`; returns `{ comment_url }`. Its **only secret is `GITHUB_TOKEN`**. Vars: `REPO`,
   `BUGS_ISSUE`, `PROPOSALS_ISSUE`.
+- **Openly reachable, self-protecting.** The endpoint accepts an uncredentialed request: the client
+  is a published, publicly downloadable artifact, so any value shipped to it is readable by anyone
+  and gates nothing. The Worker protects itself instead — **per-client-IP rate limiting** (below),
+  a **payload size cap** (an oversized body is a `413`), and **input validation**: a body that is
+  not a JSON object is a `400`, an unknown `category` is a `400`, and a missing or non-string
+  `title`/`body` is a `400` (`version` is optional and stamped `unknown` when absent). Every one of
+  these refusals happens **before any GitHub call** — nothing reachable by an anonymous caller can
+  spend the bot PAT on a malformed or empty request.
+
+#### Rate limiting (the anonymous path's gate)
+
+- **Keyed on the client IP** (`CF-Connecting-IP`) — the request carries no per-install identity, so
+  the address is the only handle available.
+- **Sized for a whole batch, not a single send.** The client posts **one request per item**, and the
+  end-of-work review files an entire pending backlog in one go, so the budget is set well above any
+  honest batch (60 per 60 s) rather than above one honest request. A real user never meets it; a
+  runaway loop or a script does.
+- **Over the limit → `429`**, refused **before any GitHub call is made**, so a flooding client can
+  never spend the bot PAT. The response carries a short, human-legible reason; the server surfaces
+  it as the item's `error` so the human learns the send was throttled rather than lost.
+- **One `429` stops the batch.** Every item in a batch shares one address, so once the server is
+  refused it stops calling the Worker: the remaining items are marked `failed` with the throttling
+  reason without a further request. They stay pending and can be re-sent later.
+- **Fail closed if the gate itself is unavailable.** If the limiter binding is missing or its call
+  throws, the Worker returns a `503` with a legible reason rather than filing ungated — the bot PAT
+  is never spent on a request that was not gated, and the client shows why instead of an opaque
+  `500`.
+- **What it does and does not prevent.** It stops **casual and accidental flooding** — a runaway
+  loop, a stuck retry, a script pointed at the endpoint. It does **not** stop a determined abuser
+  who rotates addresses; nothing keyed on IP can, and this is not claimed as security. The
+  backstops for that case are outside the request path: the bot PAT is **fine-grained** (issues:write
+  on one repo) and **rotatable**, and the two standing issues can be **locked** — either ends the
+  abuse without shipping anything new to any client.
 
 ## The end-of-work review (plugin layer — `figma-feedback` skill, P1)
 
@@ -393,16 +426,18 @@ issues one by one** — the choice is on the whole batch:
 | Failure | Behaviour |
 |---|---|
 | Record — dir/write fails | `record_feedback` returns an error result; no file. |
-| Send (anonymous) — Worker unreachable / non-2xx / 401 secret | Item's frontmatter → `failed`; `send_feedback` reports it in `results`; the item is kept for a later review. |
+| Send (anonymous) — Worker unreachable / non-2xx | Item's frontmatter → `failed`; `send_feedback` reports it in `results`; the item is kept for a later review. |
+| Send (anonymous) — Worker `429` (rate limited) | Item's frontmatter → `failed` with the throttling reason as its `error`, **and the rest of the batch is abandoned without further requests** (same address, same answer) — every remaining item is reported `failed` with that reason. All are kept, so the batch can be re-sent later. Nothing is filed. |
+| Send (anonymous) — Worker `503` (gate unavailable) | Same as any non-2xx: item → `failed` with the Worker's reason; kept for a later review. Nothing is filed. |
 | Send (logged-in) — GitHub `401` (revoked/invalid token) | Clear the stored token, mark identity unauthenticated; item kept; next review re-offers login. |
 | Send (logged-in) — GitHub `403`/`404` (blocked / locked / interaction limit) | Item kept; the human is offered the anonymous path. |
 | Device flow — `access_denied` / `expired_token` / `slow_down` | Cancelled → re-offer the attribution choice with the anonymous option (items stay pending, nothing filed); expired → restart `github_auth_start`; slow_down → adopt the new `interval`. |
 | Discard — delete fails | Reported in `results`; that item is kept in the backlog. |
 | Server not running | The agent cannot call the tools; nothing is filed. |
 
-The **shared bot secret never leaves the Worker**; the **human's own token never leaves their
-machine** (server env + OS keychain). No shared credential is ever shipped in the build or sent to
-the agent.
+The **bot PAT never leaves the Worker**; the **human's own token never leaves their machine**
+(server env + OS keychain). No shared credential exists on the client side at all — none is shipped
+in the build, held in config, sent to the agent, or put on the wire.
 
 ## Principle alignment
 
@@ -421,9 +456,13 @@ the agent.
 - **T10 — bounded by default.** `list_feedback` returns a bounded page of pending items, never an
   unbounded flush of a large backlog.
 - **No shared secret on the client (a design property; principles.md is silent on credentials).**
-  No _shared_ secret ever reaches the client — the bot PAT stays in the Worker (anonymous path).
-  The only client-side credential is the **human's own** token: device-flow-authorized (no client
-  secret shipped, nothing pasted), minimally scoped, OS-keychain-stored, on the human's own machine.
+  **No shared secret exists anywhere on the client side** — not in the build, not in config, not in
+  the request to the Worker. The bot PAT stays in the Worker, and the anonymous endpoint is gated by
+  per-IP rate limiting rather than a credential: a credential that must reach a publicly
+  downloadable client is readable by anyone who wants it, so it buys no security while costing a
+  secret to manage. The **only** client-side credential is the **human's own** token:
+  device-flow-authorized (no client secret shipped, nothing pasted), minimally scoped,
+  OS-keychain-stored, on the human's own machine.
 
 ## Extending categories
 
@@ -439,8 +478,15 @@ standing issue + its `category → issue#` mapping — a `QUESTIONS_ISSUE` var i
   feature-detect); `github-client` device flow (`start`/`poll`, including `slow_down` /
   `expired_token` / `access_denied`), `fetchIdentity`, and **`postIssueComment`** (success +
   `401`/`404`) against a mocked `fetch`; `send_feedback` — `send` (anonymous → mocked Worker; github
-  → mocked GitHub comment, authored) and `add` (created + filed); `discard_feedback` — batch file
-  delete.
+  → mocked GitHub comment, authored) and `add` (created + filed), plus a mocked Worker `429`
+  proving the batch stops after one refusal (one request, every item `failed`); `discard_feedback`
+  — batch file delete.
+- **worker unit** — against an injected `fetch` and a fake limiter (no real network): an
+  uncredentialed well-formed request files a comment on the category's issue; the limiter is keyed
+  on `CF-Connecting-IP`; a key the limiter refuses gets a `429` with no GitHub call while a key it
+  allows is filed in the same run; a throwing or unbound limiter fails closed with a `503`; an
+  unknown category, a malformed body, and a missing/non-string `title`/`body` are each a `400`; an
+  oversized payload is a `413` — and none of the refusals calls GitHub.
 - **e2e (mock plugin) — N/A for these tools.** The feedback meta-tools are machine-global and never
   round-trip through the Figma plugin, so the mock-plugin e2e harness does not apply; the handler
   tests above (real store + credential-store + mocked `fetch`) are the end-to-end coverage.

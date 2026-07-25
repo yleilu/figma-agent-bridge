@@ -12,6 +12,7 @@ import {
   MIN_WINDOW_HEIGHT,
   MAX_WINDOW_HEIGHT,
 } from './spring-height'
+import { homogeneousKind } from './selection-label'
 
 figma.showUI(__html__, {
   width: WINDOW_WIDTH,
@@ -31,27 +32,41 @@ const fileIdentity = () => ({
   fileName: figma.root.name,
   currentPage: figma.currentPage.name,
   selected: figma.currentPage.selection.length,
+  selectedKind: homogeneousKind(
+    figma.currentPage.selection,
+  ),
 })
 
 figma.ui.postMessage(fileIdentity())
 
-// Presence (Plugin Presence): the current page name + selection count,
-// pushed to the UI (debounced) so the relay's channel registry can enrich
-// discovery — mirrors the index-stale debounce below, just on different
-// trigger events (currentpagechange / selectionchange instead of
-// documentchange).
+// Presence: current page + selection (count and common kind), pushed
+// to the UI so the panel can render a selection bar and the relay's
+// channel registry can enrich discovery.
+// Leading + trailing: the FIRST change of a burst posts immediately,
+// so a marquee drag never leaves a stale count on screen; the
+// trailing edge settles the final value.
+const PRESENCE_DEBOUNCE_MS = 300
 let presenceTimer: ReturnType<typeof setTimeout> | undefined
+const postPresence = () => {
+  figma.ui.postMessage({
+    type: 'presence',
+    currentPage: figma.currentPage.name,
+    selected: figma.currentPage.selection.length,
+    selectedKind: homogeneousKind(
+      figma.currentPage.selection,
+    ),
+  })
+}
 const pushPresence = () => {
+  const leading = presenceTimer === undefined
   if (presenceTimer !== undefined) {
     clearTimeout(presenceTimer)
   }
+  if (leading) postPresence()
   presenceTimer = setTimeout(() => {
-    figma.ui.postMessage({
-      type: 'presence',
-      currentPage: figma.currentPage.name,
-      selected: figma.currentPage.selection.length,
-    })
-  }, 300)
+    presenceTimer = undefined
+    postPresence()
+  }, PRESENCE_DEBOUNCE_MS)
 }
 figma.on('currentpagechange', pushPresence)
 figma.on('selectionchange', pushPresence)

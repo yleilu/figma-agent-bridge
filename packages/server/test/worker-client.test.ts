@@ -3,7 +3,6 @@ import { postFeedback } from '@figma-agent-bridge/server/worker-client'
 
 const args = {
   workerUrl: 'https://worker.example.com',
-  secret: 's3cret',
   category: 'bugs' as const,
   title: 'A bug',
   body: 'body',
@@ -11,7 +10,7 @@ const args = {
 }
 
 describe('postFeedback', () => {
-  it('POSTs the payload with the secret header and returns the comment url', async () => {
+  it('POSTs the payload with no credential header and returns the comment url', async () => {
     let captured: {
       url: string
       init: RequestInit
@@ -29,11 +28,10 @@ describe('postFeedback', () => {
     const result = await postFeedback(args, fakeFetch)
     expect(result.commentUrl).toBe('https://gh/c/1')
     expect(captured!.url).toBe('https://worker.example.com')
-    expect(
-      (captured!.init.headers as Record<string, string>)[
-        'x-feedback-secret'
-      ],
-    ).toBe('s3cret')
+    // the only header is content-type — no credential of any kind
+    expect(captured!.init.headers).toEqual({
+      'content-type': 'application/json',
+    })
     expect(
       JSON.parse(captured!.init.body as string),
     ).toMatchObject({ category: 'bugs', title: 'A bug' })
@@ -51,6 +49,16 @@ describe('postFeedback', () => {
     await expect(
       postFeedback(args, fakeFetch),
     ).rejects.toThrow(/401/)
+  })
+  it('carries the worker reason into the error on a 429', async () => {
+    const fakeFetch = (async () =>
+      new Response(
+        'Too many feedback sends from this address — try again in a minute.',
+        { status: 429 },
+      )) as unknown as typeof fetch
+    await expect(
+      postFeedback(args, fakeFetch),
+    ).rejects.toThrow(/429.*try again in a minute/)
   })
   it('throws when comment_url is missing', async () => {
     const fakeFetch = (async () =>
