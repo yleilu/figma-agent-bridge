@@ -37,7 +37,9 @@ export const useRelay = () => {
   // identity listener and requestIdentity's one-shot handler — the latter is
   // load-bearing because the register frame (sent from the ws 'system'
   // branch) reads these refs before the persistent listener would otherwise
-  // have populated them.
+  // have populated them. State is lifted only in the persistent listener —
+  // the one-shot handler sees the same event, and the refs are what the
+  // register frame needs synchronously.
   const currentPageRef = useRef<string | null>(null)
   const selectedRef = useRef<number | null>(null)
   // Per-session channel for a never-saved file (no stable fileKey).
@@ -83,6 +85,35 @@ export const useRelay = () => {
     server: string
   } | null>(null)
 
+  // Selection bar (status-monitor.md): the panel-local view of the
+  // user's current page + selection, lifted out of the presence refs
+  // so it can be rendered.
+  const [selection, setSelection] = useState<{
+    currentPage: string | null
+    count: number
+    kind: string | null
+  }>({ currentPage: null, count: 0, kind: null })
+
+  // Selection pushes are high-frequency and user-driven. Bail out when
+  // nothing rendered actually changed, so clicking between two frames
+  // doesn't re-render App and restart the busy dot's pulse loop.
+  const setSelectionIfChanged = useCallback(
+    (next: {
+      currentPage: string | null
+      count: number
+      kind: string | null
+    }) => {
+      setSelection(prev =>
+        prev.currentPage === next.currentPage &&
+        prev.count === next.count &&
+        prev.kind === next.kind
+          ? prev
+          : next,
+      )
+    },
+    [],
+  )
+
   // Plugin Presence (Task 8): best-effort clean-close signal. Sends a
   // `leave` frame so the relay drops the channel immediately instead of
   // waiting for the ~60s heartbeat timeout. Fired from the `leave` push
@@ -117,6 +148,14 @@ export const useRelay = () => {
           typeof msg.selected === 'number'
             ? msg.selected
             : null
+        setSelectionIfChanged({
+          currentPage: msg.currentPage ?? null,
+          count:
+            typeof msg.selected === 'number'
+              ? msg.selected
+              : 0,
+          kind: msg.selectedKind ?? null,
+        })
         return
       }
 
@@ -132,6 +171,16 @@ export const useRelay = () => {
           typeof msg.selected === 'number'
             ? msg.selected
             : null
+        // State mirror for the selection bar. Above the ws guard: the
+        // bar must track the selection even while the socket is down.
+        setSelectionIfChanged({
+          currentPage: msg.currentPage ?? null,
+          count:
+            typeof msg.selected === 'number'
+              ? msg.selected
+              : 0,
+          kind: msg.selectedKind ?? null,
+        })
         const presenceWs = wsRef.current
         const presenceChannel = channelRef.current
         if (presenceWs && presenceChannel) {
@@ -488,5 +537,6 @@ export const useRelay = () => {
     disconnect,
     agentStatus,
     mismatch,
+    selection,
   }
 }
