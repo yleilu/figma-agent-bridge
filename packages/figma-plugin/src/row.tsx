@@ -2,7 +2,7 @@ import { useSpring, animated } from '@react-spring/web'
 import { cx } from './cx'
 import { StatusText } from './status-text'
 import { TypingDots } from './typing-dots'
-import { PULSE_SPRING } from './springs'
+import { LOOP_SPRING } from './springs'
 import type { RosterRow } from './roster'
 import type { StatusRecord } from '@figma-agent-bridge/shared'
 
@@ -43,7 +43,7 @@ export const PulseDot = ({
     loop: busy ? { reverse: true } : false,
     reset: busy, // restart the pulse when it goes busy
     immediate: !busy, // idle: snap opaque, no residual pulse
-    config: PULSE_SPRING,
+    config: LOOP_SPRING,
   })
   return (
     <animated.span

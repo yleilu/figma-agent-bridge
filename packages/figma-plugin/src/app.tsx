@@ -12,7 +12,7 @@ import {
 import { AnimatedRoster } from './roster-list'
 import { SelectionBar } from './selection-bar'
 import { PulseDot } from './row'
-import { ITEM_SPRING } from './springs'
+import { MOTION_SPRING } from './springs'
 import {
   MAX_WINDOW_HEIGHT,
   SELECTION_BAR_HEIGHT,
@@ -122,7 +122,7 @@ export const App = () => {
       from: { opacity: 0, height: 0 },
       enter: { opacity: 1, height: SELECTION_BAR_HEIGHT },
       leave: { opacity: 0, height: 0 },
-      config: ITEM_SPRING,
+      config: MOTION_SPRING,
       // a bar already due at first paint appears settled
       immediate: firstBar.current,
     },

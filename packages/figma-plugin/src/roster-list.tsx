@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useTransition, animated } from '@react-spring/web'
-import { ITEM_SPRING } from './springs'
+import { MOTION_SPRING } from './springs'
 import { Row } from './row'
 import type { RosterRow } from './roster'
 
@@ -37,7 +37,7 @@ export const AnimatedRoster = ({
       })
     },
     leave: { opacity: 0, height: 0 },
-    config: ITEM_SPRING,
+    config: MOTION_SPRING,
     // Rows already present when the panel opens appear settled —
     // only later add/remove animates.
     immediate: first.current,
