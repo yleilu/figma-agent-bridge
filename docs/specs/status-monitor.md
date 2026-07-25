@@ -36,13 +36,14 @@ related:
 The plugin panel today is an operator console: a status pill, a connect/port form, a disconnect button, a
 channel readout, and a feedback list with per-item **Send** buttons. That surface assumes a human drives
 the bridge. The bridge is now agent-driven and always-on, so the panel should instead answer the one
-question a human actually has while an agent builds in their file: **who is working, and what are they
-doing right now?** The panel becomes a live **status monitor** — one row per active agent, driven by the
-agent itself, with a connection fallback for when nothing is talking.
+question a human actually has while an agent builds in their file: **who is working, what are they doing
+right now** — and **what am I pointing at while they do it**, since the human keeps selecting in the same
+file the agent is editing. The panel becomes a live **status monitor** — one row per active agent, driven
+by the agent itself, with a connection fallback for when nothing is talking.
 
 ## What it shows — the display model
 
-The panel renders in exactly one of two modes each frame — **strict either/or**: agent rows *or* a
+The panel renders in exactly one of two modes each frame — **strict either/or**: the roster *or* a
 connection/fallback state, never both. The connection/fallback mode itself covers several
 sub-states — connecting, offline, version mismatch, or no agent active — all of which render instead
 of the roster, never alongside it.
@@ -54,13 +55,14 @@ flowchart TB
     Q1 -- yes --> Q0{"version mismatch?"}
     Q0 -- yes --> VM["Version mismatch banner"]
     Q0 -- no --> Q2{"any agent with a\nlive status?"}
-    Q2 -- yes --> AG["Agent rows (Roster · Tree)\nno header — connected is implied"]
+    Q2 -- yes --> AG["Roster (Tree) + selection bar\nno connection header — connected is implied"]
     Q2 -- no --> C3["No agent active"]
 ```
 
-- **No persistent connection header.** When agents are shown, the panel shows *only* the agent rows —
-  their presence **is** the "connected" signal, so no separate connection line is drawn. A connection
-  state is surfaced **only** in the fallback, when there is nothing else to show.
+- **No persistent connection header.** The panel never draws a *connection* line above the roster —
+  the agents' presence **is** the "connected" signal. A connection state is surfaced **only** in the
+  fallback, when there is nothing else to show. The only chrome that precedes the rows is the
+  **selection bar** (below): Figma-local context, never connection state.
 - **Connected is the gate.** Agent rows render only while the relay socket is up. If it drops, the panel
   switches to the fallback — agent rows are stale the moment fresh pushes can't arrive — which preserves
   the invariant **agent shown ⇒ connected**.
@@ -118,6 +120,36 @@ A row shows **two signals that mean different things**, so neither is overloaded
 A **busy** row is emphasised so that a run of adjacent busy rows reads as **one continuous band**, not
 separate pills. The exact treatment (a full-width, no-radius fill in Figma's layers-panel style) is owned
 by the design system, not restated here.
+
+### Selection bar — roster-scoped context
+
+Above the roster — and **only** the roster — a thin one-line **selection bar** names what the user
+currently has selected, with the **current page** at the right. It is **Figma-local context, not a
+connection signal**, so it is not the connection header rejected above:
+
+- **Roster-scoped.** It renders only in the roster mode — never over Connecting / Bridge offline /
+  Version mismatch / No agent active. It is part of the roster mode, not a third display mode; the
+  strict either/or of the fallback states is unchanged.
+- **Hidden when empty.** With nothing selected there is no bar — it is present only when it has
+  something to say.
+- **The noun is the selection's kind.** A selection whose nodes are all one type reads as that type's
+  friendly plural — "2 frames selected"; singular at one — "1 text layer selected". A mixed selection,
+  **and any type with no friendly noun**, reads as "N nodes selected". The friendly-noun vocabulary is
+  UI copy owned by this spec; an unlisted type is never an error, only generic.
+- **De-emphasised.** No dot, no icon, no emphasised count — the bar must never compete with a row's
+  progress dot. Its treatment is owned by [[figma-bridge/docs/specs/design-system|design-system.md]].
+- **Pinned.** When the roster is long enough to scroll, the bar stays pinned at the top while the rows
+  scroll beneath it — it is context for the whole panel, not the first row.
+- **One line.** A long label or page name truncates; the page yields before the selection label does.
+- **Context, not a control.** Nothing in the bar is clickable. It follows the user's selection and page
+  as they change, coalesced over a short window, so it may briefly lag a rapid drag-selection.
+
+The panel reads this from the plugin's own main-thread report to the iframe: the current page, the number
+of selected nodes, and their common kind (or mixed). This is a **panel-local** signal. It is *not* the
+availability registry's presence fields — `ChannelInfo`'s `currentPage` / `selected`
+([[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]],
+[[figma-bridge/docs/specs/overview|overview.md]]) stay agent-facing, shallow and count-only, and gain no
+kind.
 
 ### Styling
 

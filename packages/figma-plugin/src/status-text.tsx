@@ -1,6 +1,6 @@
 import { useTransition, animated } from '@react-spring/web'
 import { cx } from './cx'
-import { TEXT_SPRING } from './springs'
+import { MOTION_SPRING } from './springs'
 
 // Enter/exit crossfade+slide keyed on the status string: a new
 // text mounts a fresh item while the old one leaves. Items are
@@ -11,7 +11,7 @@ export const StatusText = ({ text }: { text: string }) => {
     from: { opacity: 0, y: 6 },
     enter: { opacity: 1, y: 0 },
     leave: { opacity: 0, y: -6 },
-    config: TEXT_SPRING,
+    config: MOTION_SPRING,
   })
 
   return (

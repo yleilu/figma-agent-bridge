@@ -1,6 +1,6 @@
 import { useTrail, animated } from '@react-spring/web'
 import { cx } from './cx'
-import { DOTS_SPRING } from './springs'
+import { LOOP_SPRING } from './springs'
 
 const DOTS = [0, 1, 2]
 
@@ -12,7 +12,7 @@ export const TypingDots = () => {
     loop: { reverse: true },
     from: { opacity: 0.3, y: 2 },
     to: { opacity: 1, y: -2 },
-    config: DOTS_SPRING,
+    config: LOOP_SPRING,
   })
 
   return (

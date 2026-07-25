@@ -67,6 +67,8 @@ can be used directly as `var(--figma-color-…)` — the Tailwind mapping is a c
 - **One step up:** 12px for the occasional larger line (e.g. a headline); never 14px in plugin chrome.
 - **Labels** are 11px body text in a secondary/tertiary color (optionally 600) — Figma does **not** use
   small-caps / letter-spaced labels.
+- **Metadata:** 10px tertiary is allowed for *trailing metadata only* — a row's relative timestamp, a
+  strip's page name. It is never used for a primary label or body copy.
 
 ## Spacing, size, radius
 
@@ -74,6 +76,9 @@ can be used directly as `var(--figma-color-…)` — the Tailwind mapping is a c
 - **Controls:** 24px height (buttons, inputs). Panel padding 8–12px.
 - **Radius:** window/panel **8px**; inputs **4px**; buttons **6px**. **Rows do not round** — see
   interaction.
+- **Section strip:** a full-width 24px context line above a list (e.g. the status monitor's selection
+  bar), separated by a single `-border` bottom hairline, square like a row. Panel padding applies
+  horizontally; it carries no fill of its own beyond the panel background.
 
 ## Interaction & row emphasis
 
@@ -89,8 +94,22 @@ Follow Figma's **layers-panel** interaction, not a card/pill style:
 
 Restrained, matching Figma's own chrome:
 
-- Micro-state toggles: `0.1s ease-out`. Panel-level reveals: up to `0.3s ease`. Spinner: `linear`.
-- **No spring / bounce** — plain `ease` / `ease-out`, sub-300ms.
+- **Springs are the panel's motion system, and there are exactly two of them.** Motion is physical —
+  react-spring, named centrally, never tuned per component. Two configs, because there are two kinds of
+  motion: **one transition spring** shared by everything that eases from one state to another (row
+  enter/exit, the selection bar, the status-text crossfade), so no two elements move at subtly different
+  speeds; and **one loop spring** for the looping indicators (the busy pulse, the typing dots), where the
+  config sets a *tempo* rather than the feel of a change — on the transition curve a pulse cycles in
+  ~0.6s and reads as blinking rather than breathing.
+- **The window frame follows its content 1:1 — it is never animated separately.** The window is always
+  exactly the size of what it holds; when content eases, the frame eases with it because it is *tracking*
+  it, not because it has motion of its own. A spring on the frame chases a target that is still moving,
+  so it settles after the content does and visibly lags. Anything that should ease animates its own
+  height instead.
+- **Never bouncy — every panel spring is clamped.** A spring stops at its target; it does not overshoot
+  and swing back. This is a hard rule, not a tuning preference: bounce reads as toy-like in Figma chrome.
+  It is enforced by clamping centrally rather than by hand-damping each config, so the rule survives
+  retuning. Non-spring micro-state toggles stay `0.1s ease-out`.
 - The few looping animations the UI uses (a busy pulse, a loading/skeleton, a "connecting" pulse) stay
   subtle: ≤1.8s loops, low-contrast.
 
@@ -100,4 +119,5 @@ Restrained, matching Figma's own chrome:
 - **Do** default text to 11px and weights 400/600; **don't** reach for `text-sm`/`text-xs` or 500-medium.
 - **Do** use full-width square row fills; **don't** give rows their own rounded pill (they seam when
   stacked).
-- **Do** keep motion sub-300ms and plain-eased; **don't** add spring/bounce or hover elevation.
+- **Do** use the named springs for panel motion and keep them clamped; **don't** hand-roll per-component
+  tuning, add visible bounce, or put elevation on hover.
