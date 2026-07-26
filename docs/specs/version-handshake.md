@@ -13,6 +13,7 @@ related:
   - "[[figma-bridge/docs/specs/overview]]"
   - "[[figma-bridge/docs/specs/claude-plugin]]"
   - "[[figma-bridge/docs/specs/status-monitor]]"
+  - "[[figma-bridge/docs/specs/change-feed]]"
 ---
 
 # Version / Protocol Handshake
@@ -79,6 +80,13 @@ diagnostic). A handshake flags both immediately.
   likewise a breaking wire change → **minor bump** (B2). The relay stays semantics-free — it stores
   `fileKey` in the availability registry but gains no logic (B1); the server owns targeting and the
   compare.
+- **The change-feed push frame extends it again.** The
+  [[figma-bridge/docs/specs/change-feed|change feed]] moves the push's file identity out of
+  `params.fileId` into **`meta.fileKey`**, adds **`meta.epoch`** and **`meta.seq`** to the envelope
+  and **`params.indexStale`** to the push body, and adds **`epoch`** to `registerMessageSchema` — the
+  same class of **breaking wire change** as the `meta{}` wrapping and the per-file-channel additions
+  above, so it too **bumps the minor** (B2) and trips *this* handshake on a mixed-version
+  plugin/server. Both sides adopt the new push shape atomically; the relay still only routes it (B1).
 - **On skew, the server pushes a `version-mismatch` frame** so the plugin can surface it visually
   (the banner, owned by [[figma-bridge/docs/specs/status-monitor|status-monitor.md]]):
   `{ channel, plugin, server }` server→relay, routed to `{ plugin, server }` relay→plugin (the

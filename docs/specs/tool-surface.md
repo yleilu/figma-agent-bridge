@@ -12,6 +12,7 @@ related:
   - "[[figma-bridge/docs/milestones/README]]"
   - "[[figma-bridge/docs/specs/self-describing-nodes]]"
   - "[[figma-bridge/docs/specs/component-index]]"
+  - "[[figma-bridge/docs/specs/change-feed]]"
 ---
 
 # figma-agent-bridge — Tool Surface
@@ -29,13 +30,14 @@ related:
 > place it is summed). The exposed MCP surface is then **`51 facade + K non-facade meta-tools`**,
 > where **K counts the meta-tools the server registers** — a *registration*, not a mention in a
 > spec, is what puts a tool on the surface, so the formula is checkable against
-> `packages/server/src/index.ts`, whose `registerFileTool` + `registerSessionTool` calls **are**
-> the exposed surface. **K = 9**: `search_components` and `reindex` (component-index.md),
-> `report_status` (status-monitor.md), `record_feedback` and the five send-flow tools
-> `list_feedback` / `send_feedback` / `discard_feedback` / `github_auth_start` /
-> `github_auth_poll` (feedback-system.md). So the exposed surface is **`51 + 9` = 60**, which the
-> code splits as **52 file-addressed + 8 session-addressed** (49 facade + 3 meta take a `fileKey`;
-> the facade's `connect`/`status` and the six machine-global feedback tools do not).
+> `packages/server/src/index.ts`, whose `registerFileTool` + `registerSessionTool` +
+> `registerBufferTool` calls **are** the exposed surface. **K = 9**: `search_components` and
+> `reindex` (component-index.md), `report_status` (status-monitor.md), `record_feedback` and
+> the five send-flow tools `list_feedback` / `send_feedback` / `discard_feedback` /
+> `github_auth_start` / `github_auth_poll` (feedback-system.md). So the exposed surface is
+> **`51 + 9` = 60**, which the code splits as **52 file-addressed + 8 session-addressed**
+> (49 facade + 3 meta take a `fileKey`; the facade's `connect`/`status` and the six
+> machine-global feedback tools do not).
 > A meta-tool a feature spec designs but the server does not register — `pull_changes`
 > (change-feed.md), and the registry trio `register_library` / `unregister_library` /
 > `list_libraries` (team-library-registry.md) — is in neither K nor the exposed total; registering
@@ -43,10 +45,15 @@ related:
 > `record_feedback`).
 >
 > The **change feed** (docs/specs/change-feed.md) specifies one non-facade meta-tool
-> `pull_changes({fileKey}) → {changes, state}` — a destructive buffer **drain**
-> (deliberately **not** `get_*`; non-idempotent; codes `INVALID_PARAM` own, plus the
-> file-gate's `DISCONNECTED` / `WRONG_FILE` / `INCOMPATIBLE`). It must **not** inflate
-> the facade count.
+> `pull_changes({fileKey, limit?}) → {changes, truncated, state}` — a destructive buffer **drain**
+> (deliberately **not** `get_*`; non-idempotent; bounded by `limit` + `truncated` and carrying
+> **no cursor** — the third output shape under D1). Its codes are `INVALID_PARAM` (own) and
+> `WRONG_FILE` only: it dispatches nothing to Figma — it drains the server's own memory — so it
+> does **not** inherit the file gate's `DISCONNECTED` / `INCOMPATIBLE`. It therefore reaches
+> `server.tool` through **`registerBufferTool`**, a third registration wrapper alongside the file
+> and session wrappers, carrying the same identity handling (`fileKey` plus the reserved headers)
+> behind a different gate. It must **not** inflate the facade count; registering it raises the
+> exposed surface to **`51 + 10` = 61**.
 >
 > The **team-library registry** (docs/specs/team-library-registry.md) specifies three
 > non-facade meta-tools — `register_library`, `unregister_library`, `list_libraries`
@@ -102,7 +109,7 @@ Separate tools, not one tool with a `format` flag — different jobs, different 
 separate name makes intent explicit and the round-trip contract auditable. A view stub at a
 depth boundary keeps its `id`, so drilling deep = re-`inspect` that id.
 
-### The two reading rules (D1 — one rule per output shape, applied to every API of that shape)
+### The three reading rules (D1 — one rule per output shape, applied to every API of that shape)
 
 **Rule A — every list-returning read is bounded (T10) → one uniform `{results, truncated, cursor?}`
 shape.** Any read returning a **flat list** (`search`, `list_pages`, `get_styles`,
@@ -154,6 +161,16 @@ edit reader returns the faithful spec, it does not filter at the source). For a 
 the agent raises `depth` deliberately; the read never drops a field behind the agent's back. They
 still satisfy T10: the default `depth=0` bounds the call to a single node, deeper children are
 id-stubs, and breadth is the agent's explicit choice — no unbounded scan, so no cursor.
+
+**Rule C — a destructive event drain → `limit` + `truncated`, no cursor (bounded, T10).** A read
+that **consumes** what it returns (exemplar `pull_changes`, the change-feed buffer drain —
+[[figma-bridge/docs/specs/change-feed|change-feed.md]]) is bounded exactly as Rule A is: a default
+**`limit`** caps what one call returns and a **`truncated`** flag says whether more remain. It
+carries **no cursor**, because *consumption is the position* — what a call returns it also removes,
+so the unretrieved remainder **is** the continuation and calling again resumes by definition. There
+is no resume token to pass back verbatim and no tree-version hash that could go stale under it. The
+payload is named for what it carries (`changes`, not `results`), because a drain returns **events**,
+not query results.
 
 **Projection (D2), on any node-returning read** — `fields: [...]` allow-list (precise
 token-saver) **+ presets** `profile: "minimal"|"layout"|"style"|"text"|"full"` for common
@@ -352,7 +369,7 @@ Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle
 
 ## Resolved decisions
 
-- **D1 — Reading bounded by default (T10), one rule per output shape.** List reads → uniform `{results, truncated, cursor?}`: **every** list read is bounded with a default **`limit` (100)**, a `truncated` flag, and an opaque self-contained cursor token returned when truncated — the agent continues by passing the token back verbatim. Tree reads → **depth + always-on budget + truncation receipt + drill-by-id stubs** (no cursor — already bounded, the continuation handle is drill-by-id). `get_node`/`get_nodes` are the **fidelity-first exception** (bounded by `depth=0`, never budget-truncated, no budget/match/cursor, T2). Uniform across every API of its shape — learned once. **`get_components` additionally gates its expensive scan**: remote/library discovery is opt-in (`includeRemote=false` by default skips the O(document) all-instances scan — the live timeout fix), and the resulting list is then paged server-side by `limit`/`cursor` like every other list read (a remote-component cache is the future fix). *(Re-alignment: an earlier reconciliation had dropped the cursor from the naturally-bounded readers as an "improvement"; T10 reverses that and restores the cursor on every list read — the original Rule-A contract, not a new divergence.)*
+- **D1 — Reading bounded by default (T10), one rule per output shape.** List reads → uniform `{results, truncated, cursor?}`: **every** list read is bounded with a default **`limit` (100)**, a `truncated` flag, and an opaque self-contained cursor token returned when truncated — the agent continues by passing the token back verbatim. Tree reads → **depth + always-on budget + truncation receipt + drill-by-id stubs** (no cursor — already bounded, the continuation handle is drill-by-id). `get_node`/`get_nodes` are the **fidelity-first exception** (bounded by `depth=0`, never budget-truncated, no budget/match/cursor, T2). Destructive event drains → **`limit` + `truncated`, no cursor** (exemplar `pull_changes` — [[figma-bridge/docs/specs/change-feed|change-feed.md]]): consumption is the position, so the unretrieved remainder is the continuation and there is nothing a resume token could resume from; the payload is named `changes`, not `results`, because these are events. Uniform across every API of its shape — learned once. **`get_components` additionally gates its expensive scan**: remote/library discovery is opt-in (`includeRemote=false` by default skips the O(document) all-instances scan — the live timeout fix), and the resulting list is then paged server-side by `limit`/`cursor` like every other list read (a remote-component cache is the future fix). *(Re-alignment: an earlier reconciliation had dropped the cursor from the naturally-bounded readers as an "improvement"; T10 reverses that and restores the cursor on every list read — the original Rule-A contract, not a new divergence.)*
 - **D2 — Projection.** `fields:[...]` allow-list **+ presets** (`minimal/layout/style/text/full`); no deny-list. Same param on every node-returning read.
 - **D3 — Batch.** One `batch` tool, one shape `{op?, ops:[{op?,…}]}` — top-level `op` default (homogeneous, compact) or per-entry `op` (heterogeneous); in-order, partial-success, best-effort; ordering guarantees are within-op only (cross-entry deps are the agent's to sequence); entries warn like single calls. Scope is WRITE ops over existing targets (create-* excluded).
 - **D4 — Defaults.** `get_node`/`get_nodes` depth=0 (fidelity-first); `inspect` budget-adaptive level-fill (no budget → depth=0; `depth=-1` → all). Same rule, job-tuned defaults.

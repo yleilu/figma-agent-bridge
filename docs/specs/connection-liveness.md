@@ -142,19 +142,32 @@ without waiting for the relay's heartbeat to reap the entry from `/channels`. Th
 `/channels` each call (there is no availability cache), so the marker lives beside it.
 
 - On a watchdog death, the server records the **dead instance's identity** — the `/channels` entry's
-  **`connectedAt`** (a fresh value minted by every `register`/reconnect) — as **declared-dead**, and drops
-  the file from its joined set. The **file gate** then returns **`DISCONNECTED`** for that file — the
-  plugin *was* live and died (not `WRONG_FILE`, which is for a `fileKey` that was never available) —
-  **only while the current `/channels` entry's `connectedAt` still matches the declared-dead value** (no
-  auto-join, no re-probe). (`connectedAt` is a real `ChannelInfo`/`/channels` field the gate reads; the
-  connection `epoch` is **not** — it rides only on frame `meta` — so the marker keys on `connectedAt`.)
-- **Keyed on the instance's `connectedAt`, not the channel — this is load-bearing.** A saved file's
+  **`epoch`**, the connection nonce the plugin mints on each `register`/reconnect
+  ([[figma-bridge/docs/specs/request-envelope|request-envelope.md]]) and the registry republishes on
+  the entry at **every** register ([[figma-bridge/docs/specs/overview|overview.md]]) — as
+  **declared-dead**, and drops the file from its joined set. The **file gate** then returns
+  **`DISCONNECTED`** for that file — the plugin *was* live and died (not `WRONG_FILE`, which is for a
+  `fileKey` that was never available) — **only while the current `/channels` entry's `epoch` still
+  matches the declared-dead value** (no auto-join, no re-probe). Both `epoch` and `connectedAt` are
+  `ChannelInfo` fields on the entry the gate reads; the marker keys on `epoch` because a *register* is
+  exactly what refreshes it.
+- **Keyed on the instance's connection, not the channel — this is load-bearing.** A saved file's
   channel id is deterministic (`file-<fileKey>`), so a reconnect reuses the **same** channel and
   overwrites the `/channels` entry **in place** — the entry never *disappears*, so a channel-string
-  marker would stick and wrongly `DISCONNECTED` the healthy reopened plugin. A reconnect mints a fresh
-  `connectedAt`, so the overwritten entry no longer matches the declared-dead value → the marker
-  **self-clears the instant a fresher instance registers**. For an *idle* death with no reconnect, the
-  entry is simply reaped by the heartbeat and the marker becomes moot.
+  marker would stick and wrongly `DISCONNECTED` the healthy reopened plugin.
+- **What clears it.** Three paths, all of them a change in the published connection identity:
+  - **Reconnect.** The returning plugin re-registers and publishes a fresh `epoch`, so the entry no
+    longer matches the declared-dead value → the marker **self-clears the instant a fresher instance
+    registers**, whether that register creates the entry or rebinds one the server was still holding
+    open.
+  - **Clean close.** The registry entry is bound to the registering plugin's socket
+    ([[figma-bridge/docs/specs/overview|overview.md]]), so a `leave` frame or a socket `close` removes
+    the entry outright — nothing is left to match.
+  - **Heartbeat reap.** For an *idle* death with no reconnect the entry is reaped, and the marker
+    becomes moot.
+
+  A declared-dead `epoch` that matches no current entry is inert rather than a false positive: with no
+  entry the file is not available at all, and the gate answers on that basis.
 - The server **does not tell the relay to reap.** The relay's heartbeat owns its own registry (clean
   layering — **B1**); the marker is purely the server's fast-fail bridge between *watchdog detection*
   (instant) and either *reconnect* (marker clears) or *heartbeat reap* (~one interval).

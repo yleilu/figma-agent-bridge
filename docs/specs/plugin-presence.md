@@ -43,7 +43,8 @@ The block combines **two reads**:
 
 - **Presence** — the relay's **availability registry**, read over HTTP at `GET /channels`. This read also
   tells the hook which `fileKey`s to look up pending-edit counts for.
-- **Pending edits** — the per-file change count, read from the Change Feed's on-disk count mirror
+- **Pending edits** — the per-file change count *and* the state of the baseline it was counted against,
+  read from the Change Feed's on-disk count mirror
   ([[figma-bridge/docs/specs/change-feed|change-feed.md]]).
 
 It is a **hint, not a guarantee (T7).** The registry can briefly list a plugin that crashed (it rides
@@ -61,12 +62,13 @@ transition.
 
 **Does not cover:**
 - **The availability registry's existence, identity fields, and removal lifecycle** (`channel`,
-  `fileName`, `fileKey`, `connectedAt`; add-on-`register`, remove-on-`leave`/`close`/heartbeat) — owned by
-  [[figma-bridge/docs/specs/overview|overview.md]]; this spec adds the presence *fields* and the
-  plugin-side frames that feed them.
+  `fileName`, `fileKey`, `connectedAt`, `epoch`; add-on-`register`,
+  remove-on-`leave`/`close`/heartbeat) — owned by [[figma-bridge/docs/specs/overview|overview.md]];
+  this spec adds the presence *fields* and the plugin-side frames that feed them.
 - **The change records themselves** (which node changed, how) — owned by
   [[figma-bridge/docs/specs/change-feed|change-feed.md]] and delivered by `pull_changes`. This spec
-  surfaces only the *count* (`pending_edits`), never the records.
+  surfaces only the *count* and its baseline *state* (`pending_edits` / `pending_edits_state`), never
+  the records.
 - **On-demand status reads** — `status()` remains the agent-pull view of the same availability data
   ([[figma-bridge/docs/specs/tool-surface|tool-surface.md]]); the block is its passive, turn-start
   counterpart (see Relationship to `status()`).
@@ -100,16 +102,18 @@ figma_bridge:
       version: "0.2.0"
       current_page: "Icons"        # where the user is now
       selected: 2                  # count of nodes selected now
-      pending_edits: 3             # user node/style edits since your last pull_changes (0 = none)
+      pending_edits: 3             # user node/style edits since your last pull_changes
+      pending_edits_state: gap     # only when the baseline is not ok (no_baseline | gap)
     - name: "(unsaved)"
       fileKey: sess-9f2c8d…        # unsaved file → fileKey is the channel (synthKey)
       version: "0.2.0"
       current_page: "Page 1"
       selected: 0
-      pending_edits: 0
+      pending_edits: 0             # 0 and no state field → baseline intact, no user edits
   recently_offline:                # online the previous turn, gone now — calls fail DISCONNECTED
     - name: Mockups
       fileKey: fk-c
+      pending_edits: 5             # captured before it went offline; still drainable
 ```
 
 ### Field sourcing
@@ -120,16 +124,27 @@ figma_bridge:
 | `online[]` · `name` · `fileKey` · `version` | `/channels` (`ChannelInfo`) | current state |
 | `current_page` · `selected` | `/channels` (`ChannelInfo`, **enriched** — see below) | current state |
 | `pending_edits` | Change Feed count mirror, keyed by the file's address + `sessionId` | folded-in count |
+| `pending_edits_state` | the same count file's baseline `state`, rendered only when it is not `ok` | folded-in count |
 | `recently_offline[]` | previous online set minus current (hook's `last-online.json`) | one-turn transition |
 
-- **Unsaved files:** `fileKey` is `null` in the registry; the block uses the entry's `channel` (the
-  `synthKey` — the per-session channel an unsaved file registers under, per
-  [[figma-bridge/docs/specs/overview|overview.md]]) as both the address **and** the `pending_edits`
-  count-file key — consistent with how unsaved files are addressed everywhere; the Change Feed keys that
-  file's buffer and count by the same `synthKey`.
-- **`pending_edits` counts mutations only** (nodes + styles), never selection/page navigation — a `0`
-  means "no user *edits*," so navigation alone never inflates it (**T4/T7**), matching the count mirror's
-  own rule.
+- **Unsaved files:** `fileKey` is `null` in the registry; the block uses the entry's `channel` — the
+  `synthKey`, the addressable file identity defined by
+  [[figma-bridge/docs/specs/overview|overview.md]] — as both the address **and** the count-file key,
+  consistent with how unsaved files are addressed everywhere. That key is **per plugin session**: it
+  survives reconnects but not a plugin reload, so an unsaved file's counts do not carry across one.
+- **`pending_edits` counts mutations only** (nodes + styles), never selection/page navigation, matching
+  the count mirror's own rule — so navigation alone never inflates it (**T4/T7**). A `0` with **no**
+  `pending_edits_state` means "no user *edits*"; a `0` alongside a `pending_edits_state` means the
+  baseline is not trustworthy, not that nothing happened.
+- **Three states, not two — and absent is not `0`.** The count file carries a count *and* a baseline
+  state ([[figma-bridge/docs/specs/change-feed|change-feed.md]]), and the block renders the same
+  distinction: **no count file** → both fields **omitted** ("unknown, no signal"); **`state: ok`** →
+  `pending_edits` alone; **`no_baseline` or `gap`** → `pending_edits` plus `pending_edits_state` naming
+  which. Rendering an absent count as `0` would assert a continuous baseline the hook has no evidence
+  for.
+- **Both fields also render under `recently_offline[]`.** A file's buffer outlives its connection — the
+  drain does not require liveness — and its count file still exists, so surfacing the count only while
+  online would strand those records. This is a hook read of the same mirror, not a wire change.
 - **The block never carries change *records*.** `pending_edits: N` is a signal; the records come from
   the agent's own `pull_changes({fileKey})` call (see Two tiers).
 
@@ -142,6 +157,49 @@ figma_bridge:
 - **Relay up, no plugins** → `relay: connected`, `online: []`. Still injected — "nothing connected" is
   itself the passive awareness the agent needs.
 
+### Reading the count files
+
+The counts are not in the `/channels` payload; the hook resolves them itself from the Change Feed's
+on-disk mirror. Both processes read the same setting: **`$FIGMA_BRIDGE_CHANGES_DIR`** (default
+`~/.figma-agent-bridge/changes/`) is honoured by the server that **writes** the files and by the hook
+that **reads** them — a hardcoded directory on one side of a two-process path contract is drift waiting
+to happen.
+
+**Sanitizer parity.** A file's count directory is the `sanitizeKey` of its address, and the file inside
+it the `sanitizeKey` of the session id — one function, defined by
+[[figma-bridge/docs/specs/change-feed|change-feed.md]] as `key.replace(/[^A-Za-z0-9_-]/g, '_')`,
+returning a path **segment** with no extension. The hook cannot import TypeScript, so its equivalent is
+the pinned `LC_ALL=C sed 's/[^A-Za-z0-9_-]/_/g'`. The locale is pinned because the two implementations
+agree only over an **ASCII** input alphabet: the regex iterates UTF-16 code units while `sed` iterates
+characters or bytes depending on locale, so a non-ASCII key can sanitize to different lengths on the two
+sides. The real alphabet is ASCII by construction — a Figma-issued file key, a random channel token, a
+UUID session id — and the fixture table that pins the pair is drawn from that alphabet and from nothing
+else:
+
+| Input | Both sides produce | What it pins |
+|---|---|---|
+| `Yv8QhK2nRb0aC1dE3fG4hJ` | `Yv8QhK2nRb0aC1dE3fG4hJ` | a Figma-issued file key passes through untouched |
+| `sess-9f2c8d7a_b1` | `sess-9f2c8d7a_b1` | `-` and `_` are inside the kept set, so a channel token is stable |
+| `4b8e1f60-2c3a-4d5e-8f01-9ab2cd3ef456` | `4b8e1f60-2c3a-4d5e-8f01-9ab2cd3ef456` | a UUID session id keeps its hyphens |
+| `_unattributed` | `_unattributed` | the sentinel name is a fixed point; no UUID session id sanitizes to it |
+| `fk/a.b:c` | `fk_a_b_c` | every separator, dot and colon collapses to `_` |
+| `../secrets` | `___secrets` | traversal is neutralised rather than escaped |
+
+**Which file, and the degrade.** The hook reads its own `session_id` from the JSON payload Claude Code
+writes to the hook's **stdin** — the same value the `PreToolUse` hook injects into MCP calls — and looks
+for `$FIGMA_BRIDGE_CHANGES_DIR/<key>/<sanitized session_id>.json`. Finding none, it falls back to the
+session-agnostic `_unattributed.json` sentinel and renders it identically, ignoring a sentinel older
+than the Change Feed's sentinel TTL (staleness is decided on the record's `updatedAt`, not on the file's
+existence). An unreadable or malformed count file is **no signal** — both fields omitted — never a
+wedge: the same self-healing discipline the hook applies to a corrupt `last-online.json`.
+
+**Why the counts are resolved before jq runs.** `online[]` is assembled by a single jq program over the
+`/channels` payload, and **jq cannot open a file at a path it computes** — so a per-file count field
+cannot be interpolated inside that expression. The counts are therefore resolved in a **bash pre-pass**:
+sanitize each listed file's address, read its count file (with the sentinel fallback above), assemble a
+`{key: {pendingCount, state}}` object, and pass that object into the jq program as an argument. The
+block's shape is unaffected; only the assembly has two stages.
+
 ## Presence enrichment — `current_page` and `selected`
 
 `ChannelInfo` (owned by [[figma-bridge/docs/specs/overview|overview.md]]) gains two optional fields so the
@@ -149,7 +207,7 @@ block can answer "where is the user":
 
 ```
 ChannelInfo = {
-  channel, fileName, fileKey, connectedAt, version?,   // identity (overview.md)
+  channel, fileName, fileKey, connectedAt, epoch, version?,   // identity (overview.md)
   currentPage?: string,   // page NAME  (detail via list_pages)
   selected?:    number,   // count of selected nodes  (ids via get_selection)
 }
@@ -175,9 +233,10 @@ infers presence from traffic** (a faithful, non-interpreting transport — **B1*
   plugin's existing `currentpagechange` / `selectionchange` listeners (the same listeners the Change Feed
   uses). The relay updates that channel's `ChannelInfo` in place and parses nothing else.
 - **Why not re-`register`:** `register` mints the connection `epoch` (and drives the version handshake and
-  `connectedAt`), so re-sending it on every navigation would churn `epoch` and force a spurious Change-Feed
-  `reset` each time. A separate `presence` frame touches **only** `currentPage` / `selected`; the
-  connection-level fields are untouched.
+  `connectedAt`), so re-sending it on every navigation would churn `epoch` and break the Change Feed's
+  baseline each time — a fresh `epoch` reads as a reconnect and arms `gap`
+  ([[figma-bridge/docs/specs/change-feed|change-feed.md]]). A separate `presence` frame touches **only**
+  `currentPage` / `selected`; the connection-level fields are untouched.
 - **Debounce** coalesces rapid selection/navigation churn into at most one update per short window — a
   tuning detail traded against staleness, not a contract. Freshness only has to hold **at turn start**
   (when the hook reads `/channels`), so a short debounce is ample.
@@ -246,13 +305,15 @@ signal and the `recently_offline` transition.
 
 ## Relationship to the Change Feed
 
-The Change Feed owns the count mirror (the on-disk `pending_edits` source), the `pull_changes` drain, and
-the change records. This spec owns the `UserPromptSubmit` hook and the injected block that *consumes* the
-count. In the block the count is a **data field** (`pending_edits`), shown every turn even when `0` — the
-block injects every turn regardless. The count-mirror mechanism it reads is defined by the Change Feed
-(leading-edge write, mutations-only, per-session path, `_unattributed` fallback). The agent's **drain** is
-gated on `pending_edits > 0`, so `pull_changes` runs only on turns that actually changed; the always-on
-block is the price paid for constant presence awareness.
+The Change Feed owns the count mirror (the on-disk `pending_edits` / `pending_edits_state` source), the
+`pull_changes` drain, and the change records. This spec owns the `UserPromptSubmit` hook and the injected
+block that *consumes* them. In the block the count is a **data field** (`pending_edits`), shown every turn
+even when `0` — the block injects every turn regardless. The count-mirror mechanism it reads is defined by
+the Change Feed (leading-edge write, mutations-only, per-session path, `_unattributed` fallback). The
+agent's **drain** is gated on `pending_edits > 0` **or** a `pending_edits_state` of `gap` — records to
+collect, or a baseline whose hole must be closed by re-reading. A bare `no_baseline` obliges nothing: the
+reads the agent was going to make *are* the baseline. So `pull_changes` runs only on turns that have
+something to answer for; the always-on block is the price paid for constant presence awareness.
 
 ## Data flow
 
@@ -269,7 +330,7 @@ flowchart TB
         CH["GET /channels"]
     end
     subgraph Server["MCP server"]
-        CF["changes/fileKey/sessionId.json\n(count mirror — Change Feed)"]
+        CF["$FIGMA_BRIDGE_CHANGES_DIR/fileKey/sessionId.json\n(count + state mirror — Change Feed)"]
     end
     subgraph CC["Claude Code plugin"]
         HK["UserPromptSubmit hook"]
@@ -281,10 +342,10 @@ flowchart TB
     HB --> REG
     REG --> CH
     CH -->|online, version, current_page, selected| HK
-    CF -->|pending_edits per file| HK
+    CF -->|pending_edits and state per file| HK
     LO <-->|diff for recently_offline, then rewrite| HK
     HK -->|always-on YAML block as text| Agent
-    Agent -->|pull_changes when pending| CF
+    Agent -->|pull_changes when pending or gap| CF
 ```
 
 ## Design constraints
@@ -297,10 +358,10 @@ Figma / Claude Code facts that shape this design:
 - **`/channels` is HTTP on the relay's port.** A shell hook reads it with a plain request. The hook uses
   the **default `18080`**, overridable by an explicit env var — it does **not** run the server's runtime
   ping/pong port-discovery, so the port is a fixed default/override, not discovered.
-- **The hook shares the Change Feed's `fileKey` sanitizer.** To find a file's count file the hook applies
-  the *same* sanitizer the server uses to write it (the shared util named by
-  [[figma-bridge/docs/specs/change-feed|change-feed.md]]); a drift would silently read `pending_edits` as
-  `0`.
+- **The hook cannot import TypeScript.** The count-file path is computed by a shared TS function on the
+  writing side and by a shell expression here, so the two are held together by a checked-in fixture over
+  an ASCII alphabet rather than by a shared module (Reading the count files). A drift would silently
+  render the count as *absent* on a file that has one.
 - **`sessionId` is hook-injected, not agent-authored.** The count-file path is keyed by the Claude Code
   `session_id`, injected into MCP calls by a `PreToolUse` hook; the `UserPromptSubmit` hook reads count
   files with its **native** `session_id` — the same value — with the `_unattributed` sentinel as the

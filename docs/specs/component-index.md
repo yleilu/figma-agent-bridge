@@ -13,6 +13,7 @@ related:
   - "[[figma-bridge/docs/specs/overview]]"
   - "[[figma-bridge/docs/specs/tool-surface]]"
   - "[[figma-bridge/docs/specs/team-library-registry]]"
+  - "[[figma-bridge/docs/specs/change-feed]]"
   - "[[figma-bridge/docs/principles]]"
 ---
 
@@ -53,6 +54,11 @@ searchable, and kept current — is maintained over the file's **local** compone
   `fileKey`. The `fileKey` addressing model is owned by [[figma-bridge/docs/specs/overview|overview.md]];
   its wire envelope by [[figma-bridge/docs/specs/request-envelope|request-envelope.md]] (this spec is a
   consumer of both).
+- The key the index is built and read under is the **addressable** file identity — the `synthKey`
+  (`fileKey ?? channel`) defined in [[figma-bridge/docs/specs/overview|overview.md]]. The staleness
+  push identifies its file the same way, so the **invalidation key is the build key**: an index built
+  for a never-saved file under its channel-derived key is reachable by the frame that marks it stale,
+  which is what makes an unsaved file's index invalidatable at all.
 
 ## Component taxonomy
 
@@ -121,9 +127,11 @@ digests keep the cache honest **without ever projecting just to decide whether t
 The projected records are cached, keyed by `fileKey`. The serialized **MiniSearch index is the on-disk
 cache**, stamped with a version that covers both the record shape and the index config, so either change
 invalidates a stale cache. The store lives at
-**`~/.figma-agent-bridge/component-index/<sanitized-fileKey>.json`**; the `fileKey` sanitizer is (to be)
-shared with the Change Feed ([[figma-bridge/docs/specs/change-feed|change-feed.md]], which writes its
-count mirror under a sibling `changes/<sanitized-fileKey>/` path with the same sanitizer).
+**`~/.figma-agent-bridge/component-index/<sanitizeKey(fileKey)>.json`**, where `sanitizeKey` is the
+shared path sanitizer defined by the Change Feed
+([[figma-bridge/docs/specs/change-feed|change-feed.md]]). It returns a path **segment** with no
+extension — the `.json` is appended by the caller — so the one function serves both this file stem and
+the feed's sibling `changes/<sanitizeKey(fileKey)>/` directory name.
 
 ### Freshness
 
@@ -135,10 +143,15 @@ The index is built once (a full projection) and then kept current, cheapest-mech
   debounced). `documentchange` is a **nudge**, not the source of truth, so its exact granularity is not
   load-bearing — correctness comes from re-projection. This path — `documentchange` → `index-stale` UI
   message → `document_changed` frame → `markStale(fileKey)` — is **shared with the Change Feed**
-  ([[figma-bridge/docs/specs/change-feed|change-feed.md]]), which enriches the same frame with an
-  all-types `changes[]` + `epoch`. The `INDEX_STALE_TYPES` gate (`COMPONENT` / `COMPONENT_SET` /
-  `INSTANCE`) on the `markStale` signal **must be preserved**: the feed consumes **all** change types,
-  but the index keeps re-projecting **only** on component edits.
+  ([[figma-bridge/docs/specs/change-feed|change-feed.md]]), which carries an all-types `changes[]` +
+  `epoch` on the same frame. The shared path is therefore **discriminated, not implicit**: frame arrival
+  is not the staleness signal, and `markStale` fires only when the frame's `params.indexStale === true`.
+  The `INDEX_STALE_TYPES` gate (`COMPONENT` / `COMPONENT_SET` / `INSTANCE`) lives **in the plugin** and
+  is untouched by the sharing — it is what computes that boolean — because the feed consumes **all**
+  change types while the index keeps re-projecting **only** on component edits. The flag is computed
+  **pre-filter**, over the raw `documentchange` batch, so the agent's *own* component writes still mark
+  the index stale even though the feed's self-write filter drops them from `changes[]`: staleness is the
+  index's agreement with the **document**, and the agent's writes change the document.
 - **Reconcile on connect.** A cheap membership enumerate diffed against the cache re-projects
   **added / removed / renamed** components. A property-only edit made while the plugin was *closed* is
   the one residual gap — closed by the live signal on reconnect or an explicit `reindex`.

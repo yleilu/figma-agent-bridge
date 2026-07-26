@@ -13,6 +13,7 @@ related:
   - "[[figma-bridge/docs/specs/tool-surface]]"
   - "[[figma-bridge/docs/specs/plugin-presence]]"
   - "[[figma-bridge/docs/specs/connection-liveness]]"
+  - "[[figma-bridge/docs/specs/change-feed]]"
   - "[[figma-bridge/docs/specs/expression-formats]]"
 ---
 
@@ -35,7 +36,7 @@ workspaces.
 | Package | npm name | Layer | Role |
 |---|---|---|---|
 | `shared` | `@figma-agent-bridge/shared` | bridge/tool | One vocabulary: `NodeSpec`/`ParsedNode` schemas, types, constants, zod schemas. Depended on by relay + server. |
-| `relay` | `@figma-agent-bridge/relay` | bridge | WebSocket relay. Pairs the MCP server with each Figma file's plugin over that file's own channel (one file, one channel — B3) and keeps the availability registry (`fileKey → {channel, fileName, connectedAt}`); default port **18080**. |
+| `relay` | `@figma-agent-bridge/relay` | bridge | WebSocket relay. Pairs the MCP server with each Figma file's plugin over that file's own channel (one file, one channel — B3) and keeps the availability registry (`fileKey → {channel, fileName, connectedAt, epoch}`); default port **18080**. |
 | `figma-plugin` | `@figma-agent-bridge/figma-plugin` | bridge | The Figma plugin (React UI + sandbox `code`). Executes commands inside Figma; the only layer that touches `figma.*`. Built with Vite (two configs: `ui`, `code`). |
 | `server` | `@figma-agent-bridge/server` | tool | The MCP server — the agent-facing tool surface. Parses expressions, owns the typed error envelope, sends commands over the relay. |
 | `cli` | `@figma-agent-bridge/cli` | — | CLI entry (scaffold). |
@@ -84,21 +85,33 @@ drives one specific file with no ambiguity (B3). The lifecycle contract:
   back to a per-session channel registered under `fileName`; reload determinism there is
   best-effort.
 - **Availability, not activity (the availability registry).** The relay maintains
-  `{ fileKey → { channel, fileName, connectedAt } }` — the files with a **live plugin**
-  (reachable/writable). A plugin's `register` adds its entry; an explicit `leave` frame (a clean plugin
-  close), the socket's `close`, or a missed heartbeat (`DEFAULT_HEARTBEAT_INTERVAL = 10_000` ms → dead
-  within ~2 ticks), removes it, so **closing a file drops it from the set**. The interval and the
-  companion **command-liveness watchdog** (which fast-fails a command sent to a plugin that died mid-use)
-  are owned by [[figma-bridge/docs/specs/connection-liveness|connection-liveness.md]]. This is availability — a transport fact — not
-  activity: Figma exposes no "frontmost/active file" signal, so the agent never guesses which
-  file is meant. `fileName` is populated **reliably at register time**: the prior
-  `fileName: null` was a timing bug (the register frame was sent before the main-thread file
-  name arrived); the fix carries `fileKey`+`fileName` on register (re-sending if the name
-  arrives late). The entry also carries the plugin `version` (the **B2** handshake) and is
-  **enriched** with the user's `currentPage` and `selected` count — presence fields the plugin
+  `{ fileKey → { channel, fileName, connectedAt, epoch } }` — the files with a **live plugin**
+  (reachable/writable). **Each entry is bound to the registering plugin's socket.** A plugin's
+  `register` on a channel it has joined creates the entry, or — from a new socket — rebinds the
+  existing one and refreshes its fields in place; every binding mints a fresh `connectedAt`, so
+  that value identifies one plugin *connection*, not one channel. The entry then lives exactly as
+  long as that socket: an explicit `leave` frame (a clean plugin close), the socket's `close`, or
+  a missed heartbeat (`DEFAULT_HEARTBEAT_INTERVAL = 10_000` ms → dead within ~2 ticks) removes
+  it, so **closing a file drops it from the set** — even while other members (the MCP server)
+  still hold the channel open. Channel membership is a different fact from availability: a
+  channel with members but no registered plugin has **no** entry, because the registry answers
+  *which files have a live plugin*, not *which channels exist*. The interval and the companion
+  **command-liveness watchdog** (which fast-fails a command sent to a plugin that died mid-use)
+  are owned by [[figma-bridge/docs/specs/connection-liveness|connection-liveness.md]]. This is
+  availability — a transport fact — not activity: Figma exposes no "frontmost/active file" signal,
+  so the agent never guesses which file is meant. `fileName` is populated **reliably at register
+  time**: the prior `fileName: null` was a timing bug (the register frame was sent before the
+  main-thread file name arrived); the fix carries `fileKey`+`fileName` on register (re-sending if
+  the name arrives late). The entry also carries the plugin `version` (the **B2** handshake) and
+  is **enriched** with the user's `currentPage` and `selected` count — presence fields the plugin
   self-reports (initial on `register`, refreshed via a dedicated `presence` frame that leaves the
   connection-level fields untouched) for passive turn-start awareness, owned by
-  [[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]].
+  [[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]]. It further **publishes** the
+  plugin's connection **`epoch`**, refreshed on every `register` (including a re-register onto an
+  entry that already exists), so a consumer reading `/channels` can tell one plugin connection
+  from the next without receiving a frame. The nonce itself — who mints it, and where else it
+  rides — is owned by [[figma-bridge/docs/specs/request-envelope|request-envelope.md]]; what a
+  change in it *means* by [[figma-bridge/docs/specs/change-feed|change-feed.md]].
 - **Addressing model (B3) — this spec is the single source of truth.** Every tool takes an
   explicit **per-call `fileKey`** parameter naming the file it operates on (identity per B3, the
   canonical param name everywhere); `connect` establishes the pairing/availability. The `fileKey`
@@ -106,6 +119,19 @@ drives one specific file with no ambiguity (B3). The lifecycle contract:
   rides in the command's `meta` block — the request-metadata mechanism is owned by
   [[figma-bridge/docs/specs/request-envelope|request-envelope.md]]. Other specs link
   here rather than restating it.
+
+  **The addressable identity is the `synthKey`: `fileKey ?? channel`** — a registry entry's
+  `fileKey` when the file has one, and its `channel` when it does not (a never-saved file). This
+  is the value the agent passes as the `fileKey` param, and the value everything downstream keys a
+  file by: the file gate matches against it, the availability listing prints it, the presence
+  block renders it, and a plugin-initiated frame stamps it. One name, one rule — a tool never sees
+  a `null` identity, and an unsaved file is addressable on the same terms as a saved one.
+
+  An unsaved file's channel — and therefore its synthKey — is **per plugin session**: stable
+  across that session's reconnects, but a plugin *reload* mints a new one. So an unsaved file
+  reappears at a **new address** after a reload, never as the same file rejoining, and anything
+  keyed by the old synthKey is orphaned. A saved file's synthKey is its `fileKey` and is stable
+  indefinitely.
 - **Targeting + guard (B3).** The agent names a target file by `fileKey`; the server resolves
   it against the availability registry and drives only that file's channel. An **unavailable**
   target (file closed / never matched) **fails and asks the agent to choose** — never a silent

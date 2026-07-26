@@ -15,6 +15,7 @@ related:
   - "[[figma-bridge/docs/specs/change-feed]]"
   - "[[figma-bridge/docs/specs/tool-surface]]"
   - "[[figma-bridge/docs/specs/claude-plugin]]"
+  - "[[figma-bridge/docs/specs/id-generation]]"
   - "[[figma-bridge/docs/principles]]"
 ---
 
@@ -48,7 +49,7 @@ server or platform provides it.** Everything below follows from that one distinc
 | Field | Kind | Generator · when · how | Consumers |
 |---|---|---|---|
 | `fileKey` | **param** (agent-selected) | an existing file identity the agent picks per call, sent in `arguments` | relay channel routing, plugin B3 guard, per-file index / change-feed buffers |
-| `sessionId` | **header** (platform, hook-injected — **reserved, agent never sets**) | the Claude Code `session_id`, injected into each call's `arguments` by a `PreToolUse` hook (see Sourcing) | change-feed **count-file path** (v1); multi-session `source` attribution (forward-compat); per-agent status identity **when no `agentId`** (top-level agent) |
+| `sessionId` | **header** (platform, hook-injected — **reserved, agent never sets**) | the Claude Code `session_id`, injected into each call's `arguments` by a `PreToolUse` hook (see Sourcing) | the change-feed **count-file path** ([[figma-bridge/docs/specs/change-feed|change-feed.md]]); per-agent status identity **when no `agentId`** (top-level agent) |
 | `agentId` | **header** (platform, hook-injected — **reserved, agent never sets**) | the Claude Code `agent_id`, injected by the **same** `PreToolUse` hook alongside `sessionId`; **present only for subagent-originated calls** — absent for the top-level agent | per-agent status identity (a subagent's row key) — consumer owns the keying policy |
 | `agentType` | **header** (platform, hook-injected — **reserved, agent never sets**) | the Claude Code `agent_type` (e.g. `"Explore"`), injected by the same hook alongside `agentId`; same subagent-only presence | default display label for a per-agent status row |
 | `requestId` | **header** (server) | `genId('cmd')`, per request — the correlation id | request↔reply correlation (the pending map) |
@@ -58,7 +59,7 @@ server or platform provides it.** Everything below follows from that one distinc
 | Field | Where it lives |
 |---|---|
 | `appVersion` | The **B2 handshake** at register; compared major.minor; a skew fails the connection loudly. See [[figma-bridge/docs/specs/version-handshake]]. Not a per-request header. |
-| `epoch` | A plugin **nonce** set on each `register`/reconnect, **compared for equality only** (a reconnect yields a different value → change-feed `reset`). See [[figma-bridge/docs/specs/change-feed]]. |
+| `epoch` | A plugin **connection nonce**, minted on each `register`/reconnect and **compared for equality only**; published on the `register` frame *and* on every push frame's `meta`. Defined below. |
 | `channel` | Derived from `fileKey` (`file-<fileKey>`, or a random session channel for unsaved files); the relay's transport routing layer, not agent-facing. |
 
 ## The wire envelope
@@ -73,9 +74,14 @@ server or platform provides it.** Everything below follows from that one distinc
 { meta: { requestId }, result | error }
 
 // push      (plugin → server, unsolicited; e.g. change-feed document_changed)
-{ command, params: { …payload }, meta: { fileKey, epoch } }
+{ command, params, meta: { fileKey, epoch, seq } }
 ```
 
+- **`packages/shared/src/ws-schemas.ts`'s `metaSchema` is the *enforcing* definition of this
+  header.** The relay parses every frame and re-broadcasts the **parsed** object, so a `meta` field
+  this spec describes but that schema does not enumerate is silently **stripped in transit** — it
+  does not exist on the wire. The shapes above and that schema therefore change together. (`params`
+  is a free record and is forwarded whole, so a body field needs no schema change.)
 - `meta.fileKey` **replaces** `targetFileKey`; the plugin reads it for its **B3 identity guard**
   (refuse a command whose `meta.fileKey` ≠ its own `figma.fileKey`).
 - The wrapper **moves** the identity fields (`fileKey`, `sessionId`, and — when present — `agentId`,
@@ -84,10 +90,20 @@ server or platform provides it.** Everything below follows from that one distinc
 - `requestId` correlates a reply to its command (the pending map is keyed by it). The reply changes
   today's flat frame `id` → `meta.requestId` — a **coordinated plugin-side change**, not a server-only
   refactor (both sides adopt it atomically; the B2 handshake guards skew).
+- **On a push, `meta.fileKey` carries the *addressable* file identity — the `synthKey`** (`fileKey`
+  when the file is saved, the plugin's `channel` when it is not; defined in
+  [[figma-bridge/docs/specs/overview|overview.md]]) — **not** raw `figma.fileKey`, which is `null`
+  for an unsaved file. Because only the plugin's **UI realm** knows its channel, a push's `meta` is
+  stamped there; the sandbox posts the body to the UI and never needs the identity.
+- **`meta.seq` is a per-connection monotonic frame counter**, carried on pushes only. It starts at
+  `0` on a connection's first frame and increments by one per frame, so a consumer that sees a `seq`
+  beyond the next expected value knows the relay dropped a frame. It is scoped to one `epoch`: a
+  `seq` restarting at `0` alongside a new `epoch` is a reconnect, not a loss. Commands and replies
+  do not carry it.
 - **Pushes carry no `sessionId`/`agentId`/`agentType`/`requestId`.** A push is unsolicited (no
   correlation) and the relay **broadcasts** it to every channel member, so a single frame-level sender
-  identity would be meaningless. Self-write attribution therefore rides **per-record in
-  `changes[].source`**, not in frame `meta` (see [[figma-bridge/docs/specs/change-feed|change-feed.md]]).
+  identity would be meaningless. A consumer that needs to tell its own writes from a user's therefore
+  cannot read it off the frame (see [[figma-bridge/docs/specs/change-feed|change-feed.md]]).
 
 ## `fileKey` — the one param
 
@@ -131,25 +147,31 @@ supports `PreToolUse` with a matcher. So:
   with `sessionId` written **last**. `{ sessionId, …args }` (agent value wins) is **forbidden** — the
   key order is a security rule, not incidental.
 - The server cannot structurally tell a hook-injected `sessionId` from an agent-supplied one, so it
-  keys on **presence, not source**: it uses whatever `sessionId` arrives and, when **none** arrives,
-  degrades (the Fallback). Because the hook forcibly overwrites when present, the arriving value *is*
-  the hook's on the hardened path. The residual — hook absent **and** the agent supplies a stray value
-  — is a benign **count-file misroute** (a missed/false nudge, never a data hazard: it selects only a
-  count-file path and grants no access); multi-session `source` forgery is hardened forward-compat.
-- Defense-in-depth: the server is 1:1 with a CC session, so it MAY cache the first injected `sessionId`
-  and ignore the arguments field thereafter for its own writes. The plugin still receives `sessionId`
-  **per command** in `meta` (forward-compat multi-session attribution; the v1 plugin ignores it — its
-  self-write filter drops *all* plugin-caused changes without consulting `sessionId`).
+  keys on **presence, not provenance**: it uses whatever `sessionId` arrives and, when it has **never**
+  received one, degrades (the Fallback). Because the hook forcibly overwrites when present, the
+  arriving value *is* the hook's on the hardened path. The residual — hook absent **and** the agent
+  supplies a stray value — is a benign **count-file misroute** (a missed/false nudge, never a data
+  hazard: it selects only a count-file path and grants no access).
+- Defense-in-depth, and a **requirement** rather than an option: the server is 1:1 with a CC session,
+  so it **SHALL** remember the **first** injected `sessionId` — first non-empty value wins for the
+  life of the process — and ignore the arguments field thereafter for its own writes. It is required
+  because the change-feed's count mirror is written on a **push**, and a push carries no `sessionId`
+  at all, so a per-call read would never evaluate on that write path
+  ([[figma-bridge/docs/specs/change-feed|change-feed.md]]). The plugin still receives `sessionId`
+  **per command** in `meta` and does not need it to attribute a change: its self-write filter drops
+  *all* plugin-caused changes without consulting it.
 
 **Fallback (documented, not silent — T7):** two sub-cases, because a missing count file reads as `0`
 and must never be mistaken for "quiet turn":
 
 1. **Whole hook bundle absent** (no `PreToolUse` *and* no `UserPromptSubmit`): no `sessionId` and no
    presence block at all — the count file is moot; the agent gets no proactive change signal.
-2. **No `sessionId` on the call** (`PreToolUse` absent, `UserPromptSubmit` present): the server keys
-   the degrade on **presence** — when a command carries **no** `sessionId`, it writes an explicit
-   **unattributed signal** the presence hook reads as "nudge unconditionally" — never a silent
-   zero. The mechanism (a session-agnostic sentinel) is owned by
+2. **No `sessionId` ever received** (`PreToolUse` absent, `UserPromptSubmit` present): the server
+   keys the degrade on **presence** — when it has **never** received a `sessionId`, it writes an
+   explicit **unattributed signal** the presence hook reads as "nudge unconditionally" — never a
+   silent zero. The trigger is *never received*, not *this call carries none*: a push carries no
+   `sessionId`, so the per-call phrasing would fire on every write. The mechanism (a
+   session-agnostic sentinel) is owned by
    [[figma-bridge/docs/specs/change-feed|change-feed.md]]; this spec fixes the requirement: **the
    degrade is never a silent never-on.** (A *stray* agent-supplied `sessionId` with the hook absent
    routes to a wrong count file instead of the sentinel — the benign misroute noted in the Trust rule.)
@@ -194,6 +216,30 @@ non-deterministic order), so the identity injection is a **single** hook, never 
 `genId('cmd')` minted per `sendCommand` — the correlation id carried on the frame — globally unique
 across channels (nanoid, never a per-channel counter — the pending map is keyed by it alone, so it
 must stay global). Correlation only; the agent never sees it. The reply echoes it as `meta.requestId`.
+
+## `epoch` — the connection nonce
+
+`epoch` names **one plugin connection**. The plugin's **UI realm** mints it with `genId('epoch')`
+([[figma-bridge/docs/specs/id-generation|id-generation.md]], random family) on each
+`register`/reconnect and holds it for the life of that socket. That realm owns it because it is the
+side that knows when its own connection is new — and the only side that can stamp it on a frame. It
+is **not** the relay's `connectedAt`: that value is minted relay-side and never delivered to the
+plugin, so a plugin cannot carry it.
+
+It is published on **two** paths, both of them needed:
+
+- **On the `register` frame** — the relay's channel registry stores it and `GET /channels` exposes it
+  as a `ChannelInfo` field ([[figma-bridge/docs/specs/overview|overview.md]]). This is the path a
+  member that joins a channel *after* the plugin registered can read: the relay does not replay, so a
+  late joiner never receives that connection's earlier frames.
+- **On every push frame's `meta`** — so a member already receiving frames observes a change in-band,
+  without polling.
+
+It is **compared for equality only** — never ordered, never parsed, never interpreted as a clock. A
+value differing from the one a consumer holds means the connection is not the one that value came
+from. **What a mismatch means** for a consumer's own state is owned by
+[[figma-bridge/docs/specs/change-feed|change-feed.md]]; this spec owns that `epoch` exists, where it
+is minted, and where it rides.
 
 ## How the pieces meet
 

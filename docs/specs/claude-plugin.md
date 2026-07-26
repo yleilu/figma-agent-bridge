@@ -13,6 +13,7 @@ related:
   - '[[figma-bridge/docs/specs/tool-surface]]'
   - '[[figma-bridge/docs/specs/feedback-system]]'
   - '[[figma-bridge/docs/specs/plugin-presence]]'
+  - '[[figma-bridge/docs/specs/change-feed]]'
   - '[[figma-bridge/docs/specs/dev-ops]]'
   - '[[figma-bridge/docs/deferred-capabilities]]'
 ---
@@ -207,15 +208,27 @@ availability and pending user edits (passive plugin/file awareness) — which us
 [[figma-bridge/docs/specs/change-feed|change-feed.md]]). Beyond these two core hooks, the **status
 monitor** ([[figma-bridge/docs/specs/status-monitor|status-monitor.md]]) registers three more
 `hooks.json` entries — `Stop`, `SubagentStop`, `SessionEnd` — for per-agent status lifecycle (owned by
-that spec). The **feedback system** ([[figma-bridge/docs/specs/feedback-system|feedback-system.md]])
+that spec). The **`SessionEnd`** entry carries a **second responsibility** on top of that lifecycle:
+deleting this session's Change Feed count files (`changes/<file>/<sanitized session_id>.json`), the
+per-session mirror the presence hook reads — it is the one packaged hook that runs, with a native
+`session_id`, exactly when that session's mirror stops being meaningful. The session-agnostic
+`_unattributed` sentinel is **not** covered by that sweep — it belongs to no session, so no session
+ending can retire it: the server unlinks its own on clean shutdown, and a reader treats one older than
+its TTL as no signal at all, deciding staleness on the record's `updatedAt` rather than on the file's
+existence (record, path, and TTL owned by [[figma-bridge/docs/specs/change-feed|change-feed.md]]).
+The **feedback system** ([[figma-bridge/docs/specs/feedback-system|feedback-system.md]])
 adds **no hooks**: its end-of-work review is an **agent-driven finish-step** carried by the
 `figma-design` skill (the main agent offers the review when a unit of work recorded new friction),
 not a `Stop` hook — see [[figma-bridge/docs/specs/feedback-system|feedback-system.md]].
 
-**Dev-mode fallback.** The plugin-distributed `PreToolUse` hook is scoped to the
-plugin-install tool namespace, so it is inert on the dev/manual (`.mcp.json`) route, where the
-server is named `figma-bridge` instead. A developer on that route who wants identity
-attribution opts in by adding the equivalent hook to their project or user `settings.json`;
+**Routes without the packaged hooks.** The packaged `PreToolUse` matcher covers **both** MCP
+namespaces — the plugin install's and the dev/manual `figma-bridge` one — so the injector is **not**
+inert on the dev route. It is absent only where the Claude Code plugin itself is not installed (the
+from-source and standalone-server routes), and there **no** packaged hook runs: no
+`sessionId`/`agentId`/`agentType` is injected, no status block is injected, and nothing writes or
+reads the count mirror. The features those hooks carry are inert **by construction** on such a route —
+nothing written, nothing read — rather than half-working. A developer running that way who wants
+identity attribution opts in by adding the equivalent hook to their project or user `settings.json`;
 if they don't, the reserved `sessionId`/`agentId`/`agentType` fields simply stay absent:
 
 ```json
@@ -392,10 +405,10 @@ The [[figma-bridge/docs/principles|P1]] partition, made concrete per skill — w
 
 | Skill                                      | Purpose                               | Holds                                                                                                                                                                                                              | Never holds (→ goes to)                                                                                                                                                                                                                                        |
 | ------------------------------------------ | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `figma-design`                             | Build well                            | tool mechanics, call patterns, limits; the **basic** level of design-system-first + component-first; the naming **floor** (meaningful, non-default)                                                                | concrete values (tokens/scale/ramp/naming convention) + strict levels → `figma-bridge-prefs`                                                                                                                                                                   |
+| `figma-design`                             | Build well                            | tool mechanics, call patterns, limits; how to read the turn-start presence block (when the drain is worth a call, what a broken baseline obliges); the **basic** level of design-system-first + component-first; the naming **floor** (meaningful, non-default)                                                                | concrete values (tokens/scale/ramp/naming convention) + strict levels → `figma-bridge-prefs`                                                                                                                                                                   |
 | `figma-reviewer`                           | Find issues                           | review _how-to_ (inspect/enumerate/report, the six dimensions' mechanics) + the non-overridable floor it owns: **verification discipline + destructive-op safety** + default-name detection + internal-consistency | all concrete standards come from the loaded `figma-design` + `figma-bridge-prefs`; the accessibility thresholds (WCAG/contrast/touch/text-size) specifically come from `figma-bridge-prefs` **only** (figma-design ships zero a11y); the reviewer defines none |
 | `figma-feedback`                           | Report _tool_ friction                | bug/proposal categories, formats, high-value litmus, `record_feedback` mapping; the fold-back fork                                                                                                                 | design critique → `figma-reviewer`; preference content → `figma-bridge-prefs` via `figma-setup`                                                                                                                                                                |
-| `figma-connection`                         | Diagnose/recover connection & version | symptoms → diagnosis → recovery                                                                                                                                                                                    | anything design/build/review                                                                                                                                                                                                                                   |
+| `figma-connection`                         | Diagnose/recover connection & version | symptoms → diagnosis → recovery                                                                                                                                                                                    | anything design/build/review; the presence block's drain mechanics → `figma-design`                                                                                                                                                                                                                                   |
 | `figma-setup`                              | Set up Figma; author + update `figma-bridge-prefs` | materialising the packaged Figma plugin payload + the import path (§5.1); the instantiate / tailor / update / scope flow                                                                               | the preference **values** (the user's, in `figma-bridge-prefs`)                                                                                                                                                                                                |
 | `figma-bridge-prefs` _(user, not shipped)_ | The user's durable preferences        | concrete values, the **strict** levels, house review standards, **the accessibility thresholds (WCAG AA default)**                                                                                                 | tool mechanics; the shipped floor (verification + destructive-op safety)                                                                                                                                                                                       |
 
@@ -434,6 +447,23 @@ variables (design tokens), shared styles, or components in use (traces of system
 - **"check my selection"** → `inspect` the selection and describe it (read, don't assume).
 - **Mind token usage** — batch, prefer scoped reads, don't re-scan the whole document.
 - _(extended as new rules surface in use.)_
+
+**Reading the turn-start presence block.** Every turn opens with the injected `figma_bridge:` block
+([[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]]); its per-file `pending_edits` /
+`pending_edits_state` fields say what the user changed since the last drain. What to do about them is
+**tool usage** (P1) — how this surface is operated, with no defensible alternative reading — so it
+belongs to the design loop, not to the connection skill (§6.6):
+
+- **`pending_edits > 0`** → call `pull_changes({fileKey})` **before acting on that file's existing
+  nodes**: the user edited them since your last read, and acting blind risks clobbering the change.
+- **`pending_edits_state: gap`** → the feed lost part of the history: drain, then **re-read what you
+  already hold** — what came back cannot be assumed to be everything that happened.
+- **`pending_edits_state: no_baseline`** on a file you have not read yet obliges nothing: the reads
+  you were going to make *are* the baseline.
+- **Both fields absent** → "unknown, no signal" — never read as `0`.
+
+How often to re-verify beyond that (re-read before every batch, not only before a destructive op) is a
+preference and lives in `figma-bridge-prefs`.
 
 **Mechanics — with examples.** The fiddly, get-it-wrong-repeatedly calls ship **with exact
 code snippets** (tool-usage patterns, not visual templates):
@@ -693,8 +723,10 @@ server/plugin, a failed handshake, or a Figma payload that needs refreshing (§5
 build-loop skills (§6.1/§6.3/§6.4) it is **not** part of the design loop; the **main agent** invokes
 it when a call can't reach Figma or the version handshake reports a mismatch. The connection and
 handshake **mechanism** it wraps is specced authoritatively in §8 (app-semver major.minor per B2);
-this skill is the _when + how to react_ layer over it. **Structure:** `SKILL.md` (symptoms →
-diagnosis → recovery) → `references/` as needed.
+this skill is the _when + how to react_ layer over it. It reads the presence block only for what it
+diagnoses — which files are addressable, and which just went offline; the block's **drain mechanics**
+(`pending_edits` / `pending_edits_state`) are design-loop tool usage and live in `figma-design`
+(§6.1). **Structure:** `SKILL.md` (symptoms → diagnosis → recovery) → `references/` as needed.
 
 ### 6.7 Skill — `figma-setup` (Figma plugin setup + customization layer)
 
