@@ -1,95 +1,137 @@
----
-title: figma-agent-bridge
-created: 2026-06-22T17:00:00+08:00
-tags:
-  - spec
-  - figma-bridge
-  - readme
-type: spec
-related:
-  - '[[figma-bridge/docs/principles]]'
-  - '[[figma-bridge/docs/architecture]]'
-  - '[[figma-bridge/docs/specs/tool-surface]]'
-  - '[[figma-bridge/docs/specs/expression-formats]]'
----
+<img src="packages/branding/assets/logo-128.png" width="88" alt="Agent Bridge" />
 
-<p align="center">
-  <img src="packages/branding/assets/logo-128.png" width="88" alt="Agent Bridge" />
-</p>
+# Figma Agent Bridge
 
-# figma-agent-bridge
-
-> Governed by [the principles](docs/principles.md).
+[![CI](https://github.com/yleilu/figma-agent-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/yleilu/figma-agent-bridge/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 An MCP bridge that lets an AI agent **read and build Figma designs**. The agent talks
 MCP to a server, the server relays commands over a WebSocket to the **Agent Bridge**
 Figma plugin, and the plugin executes them against the live document — then returns
 results back up the same pipe.
 
+## Why this exists
+
+figma-agent-bridge builds production-ready Figma files, not throwaway mockups. Every
+node carries a name, a description, and structured context alongside it — so an agent
+(or the next person to open the file) understands what a piece is and how to treat it
+without re-deriving intent from scratch. It's a full 51-tool read/write facade covering
+nodes, structure, the design system, and dev handoff, self-hosted with no rate limits —
+and it works on any Figma plan, free tier included.
+
+## Features
+
+- **Everything organized, no orphan shapes** — every build pulls from your real
+  components, variables, and styles, the way you'd build it by hand. Nothing gets
+  dropped in as a disconnected one-off that breaks your system.
+- **Continuous context, not one-shot reads** — every node carries a name, a visible
+  description, and hidden structured context, surfaced in the same read, so intent
+  travels with the file instead of getting lost between sessions.
+- **Built for token efficiency** — whole-tree builds and bulk edits happen in one
+  step, and even a massive file scans safely — paginated, cursor-based reads that
+  never try to swallow more than an agent can hold.
+- **Self-hosted, no rate limit** — runs on your own machine, so there's no call
+  quota to hit mid-project. Works the same on a free Figma account as a paid one.
+
+See [docs/specs/tool-surface.md](docs/specs/tool-surface.md) for the full tool catalogue.
+
 ## Install
 
-Three routes. All of them run the server on your own [Bun](https://bun.sh) — **there is no
-toolchain-free route** — and all of them need the Figma **desktop** app, because the Figma plugin
-arrives by manifest import. Prerequisites, steps, verification, and teardown for each are in
-[docs/specs/dev-ops.md](docs/specs/dev-ops.md) §3.
+> **Not live yet.** The Claude Code plugin resolves from the `figma-agent-bridge` npm
+> package, which today is only a name-reservation stub (`0.0.1`) — its own description
+> says the real package "ships from 0.3.0 onward." Routes 1–3 below are accurate to the
+> design, not to what you can run today; route 4 (manual/from source) works right now,
+> since it never touches the published package.
 
-| Route                             | Who it is for                                             | What you install                                                                                                            |
-| --------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| **Claude Code plugin** _(primary)_ | anyone driving Figma from Claude Code                     | the marketplace plugin — server bundle, skills, agents, hooks, and the Figma plugin payload ([plugin/README.md](plugin/README.md)) |
-| **Manual / from source**          | contributors working on this repository                   | a clone, built and registered by hand — see [Quickstart](#quickstart)                                                       |
-| **Standalone MCP server**         | any other MCP client, or a hand-wired Claude Code entry    | the published `figma-agent-bridge` package's `bin` entry, run with `bunx` — the raw tool surface, no skills or agents        |
+**Every route needs:** [Bun](https://bun.sh) and the Figma **desktop** app (plugins
+arrive by manifest import, which the browser can't do).
 
-## Three layers
+**Windows (routes 1–2):** the MCP tools work the same as anywhere else, but the
+plugin's five hooks — identity injection, the presence status block — are POSIX shell
+scripts calling `jq`/`curl`. Native Windows has neither, so without a POSIX shell
+providing them, those hooks quietly don't run; nothing errors, they just don't fire.
+Routes 3 and 4 aren't affected.
 
-The whole discipline is that concerns never leak across them ([principles](docs/principles.md), [architecture](docs/architecture.md)):
+### 1. Claude Desktop
 
-- **Bridge** — reliable, standardized transport (MCP server transport + WebSocket relay + the Agent Bridge Figma plugin). Cares only about connection reliability and a uniform result/error contract.
-- **Tool** — the agent-facing capability surface over Figma: symmetric reads/writes, compact formatting, batching. Holds no opinions.
-- **Plugin** — the Claude Code plugin (skills, agents, commands). Where all preferences and opinionated workflows live. _(Not the Figma plugin — that is part of the bridge.)_
+1. Install Bun, then open (or reopen) Claude Desktop — a session that's already
+   running won't see a freshly-installed `bun`.
+2. Open Claude Desktop's plugin directory and add this repository as a marketplace:
+   `yleilu/figma-agent-bridge`.
+3. Install the listed plugin, **Agent Bridge**, from the resulting entry.
+4. Restart or reload so the MCP server is picked up.
 
-## Tech stack
+Then continue with **Figma-side setup** below.
 
-Bun monorepo (`packages/*`), TypeScript throughout, MCP SDK on the server, a
-WebSocket relay for transport, and a Vite + React Figma plugin.
+### 2. Claude Code CLI
 
-| Package                            | Role                                                           |
-| ---------------------------------- | -------------------------------------------------------------- |
-| `@figma-agent-bridge/server`       | MCP server — the tool surface                                  |
-| `@figma-agent-bridge/relay`        | WebSocket relay between server and Figma plugin                |
-| `@figma-agent-bridge/figma-plugin` | Agent Bridge Figma plugin (Vite + React UI, executes commands) |
-| `@figma-agent-bridge/shared`       | Shared types, expression grammar/parser                        |
-| `@figma-agent-bridge/cli`          | CLI entry                                                      |
+1. Install Bun, then open (or reopen) Claude Code — a session that's already running
+   won't see a freshly-installed `bun`.
+2. `claude plugin marketplace add yleilu/figma-agent-bridge`
+3. `claude plugin install figma-agent-bridge@figma-agent-bridge`
+4. Reload or restart the host.
 
-## Quickstart
+(The same two steps work as in-session slash commands: `/plugin marketplace add
+yleilu/figma-agent-bridge`, then `/plugin install figma-agent-bridge@figma-agent-bridge`.)
 
-```sh
-# Install (Bun workspaces)
-bun install
+Then continue with **Figma-side setup** below.
 
-# Run relay + MCP server together (relay auto-started, port auto-discovered)
-./scripts/start-mcp.sh
+### Figma-side setup (routes 1 and 2)
 
-# …or run them via root scripts
-bun run dev:relay  # relay only
-bun run dev:server # server only
-bun run dev        # relay + plugin watch builds (ui, code, relay)
+Once the plugin is installed, on either route:
 
-# Build the Figma plugin
-bun run build:plugin
-```
+1. Ask the agent to run the `figma-setup` skill — it materializes the Figma plugin
+   and tells you the exact path to import.
+2. In Figma: **Plugins → Development → Import plugin from manifest** → that path.
+3. Open the plugin from a Figma design file — it connects on its own.
 
-Then load `packages/figma-plugin/manifest.json` in Figma (Plugins → Development →
-Import plugin from manifest) and point your MCP client at the server.
+### 3. From Figma's plugin marketplace
+
+Not applicable yet — this project isn't published to Figma's plugin marketplace
+(org-private or public) at all today. See routes 1 and 2 for the current install
+path.
+
+### 4. Manual / from source — for contributors
+
+Working on this repo directly, or running from a local clone:
+
+1. Clone the repo, then `bun install`.
+2. `bun run build:plugin` — builds the Figma plugin (its output isn't committed, so
+   this step is required).
+3. Register the server with your agent host, pointing at
+   `packages/server/src/index.ts` in your clone, run with `bun` — use absolute paths
+   for both the interpreter and the script.
+4. In Figma: **Plugins → Development → Import plugin from manifest** →
+   `packages/figma-plugin/manifest.json` in your clone.
+5. Open the plugin from a Figma design file — it connects on its own.
 
 Repo scripts: `bun run test`, `bun run typecheck`, `bun run lint`, `bun run format`.
 
-## Documentation map
+## Troubleshooting
 
-- [docs/principles.md](docs/principles.md) — the governing document; every other doc is subordinate to it.
-- [docs/architecture.md](docs/architecture.md) — the _how_: transport, error envelope, package layout.
-- [docs/milestones.md](docs/milestones.md) — milestone roadmap.
-- Specs — [overview](docs/specs/overview.md), [tool-surface](docs/specs/tool-surface.md), [expression-formats](docs/specs/expression-formats.md).
-- Reference — [figma-plugin-api](docs/reference/figma-plugin-api.md), [api-coverage](docs/reference/api-coverage.md).
-- [docs/plans/](docs/plans/) — milestone and harvest plans.
-- [docs/decisions/](docs/decisions/) — decision records.
-- [docs/research/](docs/research/) — research notes.
+- **The agent has the skills but can't call any Figma tools.** You're on Claude
+  Desktop's regular chat surface — it loads the skills but doesn't guarantee the MCP
+  tools are bridged. Switch to Desktop's **Code surface**.
+- **`bun` isn't found right after installing it.** A session keeps the PATH it
+  started with — install Bun *before* opening the agent host, or fully quit and
+  reopen it (a plugin reload alone isn't enough).
+- **The plugin doesn't show up after importing the manifest.** It only appears in a
+  Figma **design file** — the manifest excludes FigJam, Slides, and Dev Mode.
+- **Everything installed, but the Figma panel never connects.** The server attaches
+  to whatever's already listening on its port (`18080`, loopback only) rather than
+  always starting fresh — a stale or unrelated process already holding that port
+  silently satisfies the check. Free up port `18080` (quit whatever's using it, or
+  restart your machine) and try again.
+
+## Status
+
+Actively developed, pre-1.0 — breaking changes are possible.
+
+## Acknowledgments
+
+Structure and approach inspired by
+[grab/cursor-talk-to-figma-mcp](https://github.com/grab/cursor-talk-to-figma-mcp).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
