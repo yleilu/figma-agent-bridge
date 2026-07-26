@@ -627,19 +627,17 @@ and is never a cloud-CI job.
     out of `dev` is a fix the next release will not carry.
 - **Merges.** Feature branches merge with a non-fast-forward, `merge:`-prefixed commit, preserving a
   legible topology.
-- **Commits.** **Human-authored** commits — the hotfix commit written straight onto `main` included —
-  use Conventional Commits with scopes discovered from history, and are created only with **explicit
-  human approval**. The release pipeline authors exactly one commit of its own — `Release X.Y.Z`
+- **Commits.** Commits use Conventional Commits with scopes discovered from history — the hotfix
+  commit written straight onto `main` included. The release pipeline authors exactly one commit of
+  its own — `Release X.Y.Z`
   (§7) — deliberately outside that convention, so a release is unmistakable in the log. Its only
   other write is the back-merge onto `dev`, which **authors** nothing: it moves what `main` already
   carries, fast-forwarding where it can and otherwise recording the merge commit that a merge
   requires.
-- **Push.** Pushing to origin is a **human** act, with exactly one exception: **the release
-  pipeline** pushes on its own behalf. Its writes are **direct pushes, never pull requests** — which
-  is what its actor exemption exists for — and they are enumerated and closed: the release commit on
-  `main`, the tag on that commit, and the back-merge onto `dev` (§7). It writes to no other branch,
-  and it authors no content beyond the release commit. Everything else — feature work, integration
-  merges, the release PR itself — is pushed by a human.
+- **The pipeline's pushes.** The release pipeline pushes on its own behalf, and its writes are
+  **direct pushes, never pull requests** — which is what its actor exemption exists for. They are
+  enumerated and closed: the release commit on `main`, the tag on that commit, and the back-merge
+  onto `dev` (§7). It writes to no other branch, and it authors no content beyond the release commit.
 
 ---
 
