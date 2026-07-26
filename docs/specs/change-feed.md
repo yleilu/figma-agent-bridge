@@ -328,17 +328,20 @@ resolved, and deletion inside auto-layout is the largest reflow producer there i
 a lazy resolve inside the filter would have to use the deprecated synchronous variant and would
 silently pin the plugin manifest to non-dynamic-page document access.
 
-The closure is the set of nodes whose geometry an agent write can move without naming them:
+The closure is the set of nodes whose geometry an agent write can move without naming them.
+Hugging governs whether the **frame** resizes, not whether its **children** reflow: an auto-layout
+frame re-lays its children whether or not it hugs, so a fixed-size stack still moves every sibling
+after the one that changed.
 
 ```
 reflow(id) =
     descendants(id)
-  ∪ { for each ancestor A of id, walking UP while A is an auto-layout frame that
-      HUGS along the axis its child can grow:  A  ∪  children(A) }
+  ∪ { for each ancestor A of id, walking UP while A is an auto-layout frame:
+      children(A), plus A itself when A HUGS along the axis its child can grow }
 ```
 
 The walk **stops at the first ancestor that cannot resize** — a fixed-size frame absorbs the change,
-so its siblings cannot move. This is narrower than "all ancestors and their children" (which on a
+so its own siblings cannot move, though its children already have. This is narrower than "all ancestors and their children" (which on a
 page-root write would swallow every top-level frame) and wider than "siblings and direct children"
 (which misses the nested hug chains that design-system-first construction makes the common shape).
 
