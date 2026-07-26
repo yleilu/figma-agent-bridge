@@ -82,6 +82,30 @@ Rules for running the surface smoothly and cheaply:
 
 ---
 
+## Read the turn-start presence block
+
+Every turn opens with an injected `figma_bridge:` YAML block (see
+`docs/specs/plugin-presence.md`) — passive awareness, not something you fetch. Its per-file
+`pending_edits` / `pending_edits_state` fields say what the **user** changed since your last
+drain. What to do about them:
+
+- **`pending_edits > 0`** → call `pull_changes({fileKey})` **before acting on that file's
+  existing nodes**. The user edited them since your last read, and acting blind risks
+  clobbering their change.
+- **`pending_edits_state: gap`** → the feed lost part of the history. Drain, then **re-read
+  what you already hold** — what came back can't be assumed to be everything that happened.
+- **`pending_edits_state: no_baseline`** on a file you haven't read yet obliges nothing:
+  the reads you were going to make *are* the baseline.
+- **Both fields absent** → "unknown, no signal". Never read it as `0`.
+
+How often to re-verify beyond that (re-read before every batch, not only before a
+destructive op) is a preference — see `figma-bridge-prefs`.
+
+The same block's reachability fields (`recently_offline[]`, `relay: unreachable`) are
+`figma-connection`'s.
+
+---
+
 ## Report your progress
 
 **Always keep the panel current.** `report_status` paints one live line onto the plugin's
