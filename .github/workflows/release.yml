@@ -1,25 +1,124 @@
 name: release
+
+# Two triggers and no others (dev-ops.md §7):
+#   - the release PR merging into `main` — the version is computed from its labels (§6.5)
+#   - manual dispatch with an explicit version — hotfixes (§5) and every recovery path
+#
+# There is deliberately NO `concurrency:` block. §7 makes the "has `main` moved?"
+# precondition below "the whole of the pipeline's concurrency and staleness discipline":
+# a queued run is guaranteed to fail it, because the run ahead of it pushes a `Release`
+# commit onto `main`. Cancelling or serialising runs here would only hide that.
 on:
-  push:
-    tags: ['v*']
+  pull_request:
+    types: [closed] # `closed` is not in the default type set — it must be named
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Exact version to release, e.g. 0.4.0 — stamped verbatim, must be >= the current version-of-record (not checked; §7)'
+        required: true
+        type: string
+
+# Least privilege, exactly as in ci.yml. Every write this job performs — the release
+# commit, the tag, the back-merge, the GitHub release — is authenticated with the App
+# token minted below, never with GITHUB_TOKEN, whose only use here is the precondition's
+# read-only `gh api .../git/ref/heads/main`. So GITHUB_TOKEN needs no write scope at all.
 permissions:
-  contents: write # the GitHub release
-  id-token: write # npm publish --provenance
+  contents: read # only the precondition reads with this token; every write uses the App's
+  id-token: write # npm trusted publishing (OIDC) — the whole publish credential
+
 jobs:
   release:
-    # ubuntu-latest is enough: with the compiled binaries and .mcpb bundles retired there is no
-    # macOS cross-compilation left — the release only runs `bun build --target=bun`, zips the
-    # fig-plugin payload, and publishes to npm. macos-14 is no longer required.
+    # Only a MERGED pull request into `main` cuts a release. A closed-unmerged PR, or a
+    # PR whose base is any other branch, is not a release event.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main')
+    # ubuntu-latest is enough: with the compiled binaries and .mcpb bundles retired there is
+    # no macOS cross-compilation left — the release only runs `bun build --target=bun`, zips
+    # the fig-plugin payload, and publishes to npm.
     runs-on: ubuntu-latest
     steps:
+      # ─────────────────────────────────────────────────────────────────────────────
+      # THE PRECONDITION (§7). First step, before any checkout, install, gate, stamp or
+      # build: a merge-triggered run proceeds only if `main`'s tip is STILL the commit
+      # that triggered it. Otherwise it refuses and does nothing. Manual dispatch is
+      # exempt — it has no triggering commit, and releasing a `main` that has moved is
+      # exactly what it is for.
+      # ─────────────────────────────────────────────────────────────────────────────
+      - name: Precondition — main is still the commit that triggered this run
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIGGER_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TRIGGER_SHA" ] || [ "$TRIGGER_SHA" = "null" ]; then
+            echo "REFUSED: the merge event carries no merge_commit_sha, so the triggering commit" >&2
+            echo "cannot be identified. Release this main by manual dispatch instead (§7)." >&2
+            exit 1
+          fi
+          # Asked at check time, not at checkout time: the question is whether main is
+          # STILL that commit, right now.
+          TIP="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+          echo "PR #${PR_NUMBER} merged as $TRIGGER_SHA"
+          echo "main is now at      $TIP"
+          if [ "$TIP" != "$TRIGGER_SHA" ]; then
+            {
+              echo "## Release refused — \`main\` moved"
+              echo
+              echo "This run was triggered by PR #${PR_NUMBER} merging as \`${TRIGGER_SHA}\`, but"
+              echo "\`main\` is now at \`${TIP}\`. Nothing was done: no gate, no stamp, no build,"
+              echo "no publish, no push."
+              echo
+              echo "Cut the release with **Run workflow** (manual dispatch) and an explicit"
+              echo "version — it releases \`main\` as it now stands (dev-ops.md §7)."
+            } >>"$GITHUB_STEP_SUMMARY"
+            echo "REFUSED: main has moved since the merge — release by manual dispatch (§7)." >&2
+            exit 1
+          fi
+          echo "TRIGGER_SHA=$TRIGGER_SHA" >>"$GITHUB_ENV"
+
+      # The pipeline's own identity: a GitHub App installed on this repository and named
+      # in the `main` ruleset's bypass list, which is what dev-ops.md §5's "exempts named
+      # actors — the release pipeline" means in practice. It also makes the pipeline's
+      # pushes RETRIGGER `ci.yml` (§4.4), which GITHUB_TOKEN pushes never do.
+      - name: Mint the release pipeline's token
+        id: token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      # `main` as it stands — never a pull request's merge ref (§7). fetch-depth: 0 so the
+      # back-merge at step 9 has `dev`'s history and the tag steps see existing tags.
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ steps.token.outputs.token }}
+
+      # The same precondition, re-asked against the thing actually checked out. Cheap, and
+      # it closes the window between the API read above and the fetch.
+      - name: Precondition — the checkout is that same commit
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$HEAD_SHA" != "$TRIGGER_SHA" ]; then
+            echo "REFUSED: checked out $HEAD_SHA, expected $TRIGGER_SHA — main moved mid-run." >&2
+            echo "Release by manual dispatch (§7)." >&2
+            exit 1
+          fi
+
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.9 # pinned; keep in lockstep with .bun-version — Bun builds the published bundle
       # Node is here only to provide a compliant `npm`: `bun publish` has no OIDC support
-      # (oven-sh/bun#22423), and trusted publishing needs npm >= 11.5.1. Node 22 ships npm 10.x,
-      # which fails with a misleading E404 (npm/cli#9088) — hence Node 24 *and* the explicit
-      # upgrade below, so a runner-image change can never drop us under the floor.
+      # (oven-sh/bun#22423), and trusted publishing needs npm >= 11.5.1. Node 22 ships npm
+      # 10.x, which fails with a misleading E404 (npm/cli#9088) — hence Node 24 *and* the
+      # explicit upgrade below, so a runner-image change can never drop us under the floor.
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -28,70 +127,249 @@ jobs:
         run: |
           npm install -g npm@latest
           npm --version
+
+      # ── Step 1 (§7): install reproducibly from the committed lockfile ───────────────
       - run: bun install --frozen-lockfile
 
-      # The tag is the version-of-record: the stamp must already be committed (§6.1, §6.3) and
-      # the tag must name that same version — before anything is built or published.
-      - name: Assert the version is stamped and matches the tag
-        run: |
-          bun run release:stamp
-          git diff --exit-code
-          VERSION="$(bun -e "console.log(require('./package.json').version)")"
-          if [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
-            echo "ERROR: tag $GITHUB_REF_NAME does not name the version-of-record ($VERSION)" >&2
-            exit 1
-          fi
-          echo "VERSION=$VERSION" >>"$GITHUB_ENV"
-
-      - name: Verify gate
+      # ── Step 2 (§7): the headless gate (§4.1). A red gate aborts; the merge stands ──
+      - name: Gate
         run: bun run verify
 
+      # ── Step 3 (§7): settle and stamp the version ──────────────────────────────────
+      # `bump` writes ONE field — the version-of-record in the root manifest. It cannot
+      # write the other four: it only sets a top-level `version` on files basenamed
+      # package.json, and blind-replaces version strings in anything else, which would
+      # never address marketplace.json's nested source.version by name. `release:stamp`
+      # remains the propagator (§6.3).
+      - name: Decide the version
+        id: decide
+        env:
+          RELEASE_TRIGGER: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          ARG="$(bun run scripts/release-version.ts)"
+          echo "bump argument: $ARG"
+          echo "arg=$ARG" >>"$GITHUB_OUTPUT"
+
+      - name: Bump the version-of-record and stamp every artifact
+        env:
+          BUMP_ARG: ${{ steps.decide.outputs.arg }}
+        run: |
+          set -euo pipefail
+          ./node_modules/.bin/bump "$BUMP_ARG" --quiet   # root package.json only
+          bun run release:stamp                          # the other four fields (§6.3)
+          VERSION="$(bun -e "console.log(require('./package.json').version)")"
+          echo "VERSION=$VERSION" >>"$GITHUB_ENV"
+          echo "releasing $VERSION"
+
+      - name: Prepare the release commit
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          # GitHub App names are GLOBALLY UNIQUE, so this repository's App is not
+          # guaranteed to be named `figma-agent-bridge-release`, and its slug is whatever
+          # name was free. The slug is configuration, not a literal: it is what the commit
+          # author `<slug>[bot]` and its noreply address are built from. Task 9b sets it.
+          APP_SLUG: ${{ vars.RELEASE_APP_SLUG }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_SLUG:-}" ]; then
+            echo "ERROR: the RELEASE_APP_SLUG repository variable is empty." >&2
+            echo "It names the App whose token this run pushes with, and without it the" >&2
+            echo "release commit cannot be attributed to that App. Set it with:" >&2
+            echo "  gh variable set RELEASE_APP_SLUG --repo yleilu/figma-agent-bridge --body '<slug>'" >&2
+            exit 1
+          fi
+          USER_ID="$(gh api "/users/${APP_SLUG}%5Bbot%5D" --jq .id)"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${USER_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
+          # An explicit pathspec is how "the stamped version files and nothing else" (§7)
+          # is guaranteed rather than hoped for.
+          STAMPED=(
+            package.json
+            plugin/package.json
+            plugin/.claude-plugin/plugin.json
+            .claude-plugin/marketplace.json
+          )
+          if git diff --quiet -- "${STAMPED[@]}"; then
+            # Already stamped at this version: a re-run, or a dispatch finishing the git
+            # side of a published-but-unpushed release. The step is a no-op (§7).
+            echo "HEAD already stamps $VERSION — no release commit to author."
+          else
+            git commit -m "Release $VERSION" -- "${STAMPED[@]}"
+          fi
+          git --no-pager show --stat --oneline HEAD
+
+      # ── Step 4 (§7): build ─────────────────────────────────────────────────────────
       - name: Build the plugin package + the fig-plugin archive
         env:
-          # Baked into the server bundle so the published package can file anonymous feedback
-          # through the Worker. Release-only: from-source builds leave it unset and the server
-          # reads process.env at runtime instead.
+          # Baked into the server bundle so the published package can file anonymous
+          # feedback through the Worker. Release-only: from-source builds leave it unset
+          # and the server reads process.env at runtime instead.
           WORKER_URL: ${{ secrets.FEEDBACK_WORKER_URL }}
         run: |
+          set -euo pipefail
+          if [ -z "${WORKER_URL:-}" ]; then
+            echo "ERROR: the FEEDBACK_WORKER_URL repository secret is empty." >&2
+            echo "A release is the only build that bakes it in; shipping without it" >&2
+            echo "silently degrades anonymous feedback for every user of this version." >&2
+            exit 1
+          fi
           bun run build # build:plugin, then build:package (server bundle + payload into plugin/)
           bash scripts/build-figma-plugin-zip.sh
 
-      # Packaging defects are invisible to the test suite and total for the user (§4.2).
+      # ── Step 5 (§7): the release's LAST gate (§4.2) ────────────────────────────────
+      # Packaging defects are invisible to the test suite and total for the user. This
+      # leaves dist/figma-agent-bridge-$VERSION.tgz behind on purpose: the publish below
+      # ships those exact asserted bytes.
       - name: Assert the install (packed-tarball form)
         run: bash scripts/assert-install.sh
 
-      # Authentication is OIDC trusted publishing — the `id-token: write` permission above is the
-      # whole credential. No token is stored anywhere. NODE_AUTH_TOKEN must stay UNSET: a value
-      # (even an empty one from a missing secret) makes npm use the .npmrc token path instead and
-      # OIDC is never attempted.
+      # ── Step 6 (§7): publish, BEFORE any git write ─────────────────────────────────
+      # Git must never claim more than the registry holds. Authentication is OIDC trusted
+      # publishing — the `id-token: write` permission above is the whole credential. No
+      # token is stored anywhere. NODE_AUTH_TOKEN must stay UNSET: a value (even an empty
+      # one from a missing secret) makes npm use the .npmrc token path and OIDC is never
+      # attempted.
       - name: Publish the plugin package to npm
         run: |
-          # `npm view pkg@missing-version` exits 0 with EMPTY output when the package exists, so
-          # test the output, not the exit code.
+          set -euo pipefail
+          # `npm view pkg@missing-version` exits 0 with EMPTY output when the package
+          # exists, so test the output, not the exit code.
           if [ -n "$(npm view "figma-agent-bridge@$VERSION" version 2>/dev/null || true)" ]; then
-            echo "figma-agent-bridge@$VERSION is already published — skipping so a re-run does not 403."
+            echo "figma-agent-bridge@$VERSION is already on the registry — skipping (§7)."
             exit 0
           fi
-          # publish the exact tarball the install assertion just installed
           ( cd plugin && npm publish "$GITHUB_WORKSPACE/dist/figma-agent-bridge-$VERSION.tgz" --provenance --access public )
+
+      # ── Step 7 (§7): push the release commit, then its tag ─────────────────────────
+      # A plain, never-forced push: if `main` moved since the checkout the push is
+      # refused as a non-fast-forward and the run stops, leaving the published-but-
+      # unpushed residue §7 governs.
+      - name: Push the release commit to main
+        run: git push origin HEAD:refs/heads/main
+
+      - name: Push the tag
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
+            echo "tag v$VERSION is already on origin — skipping (§7)."
+            exit 0
+          fi
+          git tag -a "v$VERSION" -m "Release $VERSION"
+          git push origin "refs/tags/v$VERSION"
+
+      # ── Step 8 (§7): the GitHub release ────────────────────────────────────────────
+      # Notes = the human-written half first, then the commit list since the previous tag.
+      #
+      # `generate_release_notes: true` is deliberately NOT used, and this is a real
+      # difference rather than a stylistic one. That option lists the PULL REQUESTS merged
+      # since the last release; §5 blesses work reaching `dev` "either by pull request, or
+      # by a merge made locally and pushed", and this repository's history is almost
+      # entirely the latter. Its generated half would therefore routinely contain nothing
+      # but the release PR itself, and a DISPATCHED release — whose notes are the generated
+      # half alone (§7 step 8) — would come out empty. §7 asks for the commit list, so the
+      # commit list is what this generates, from git.
+      #
+      # The PR body reaches the file through the environment, never through `${{ }}` inside
+      # the shell, because it is free-form Markdown written by a human. On dispatch there is
+      # no pull request to take a body from, so that half is empty.
+      - name: Assemble the release notes
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          NOTES="$RUNNER_TEMP/release-notes.md"
+          printf '%s\n' "${PR_BODY:-}" >"$NOTES"
+          # HEAD is the release commit. The previous tag is the nearest `v*` tag reachable
+          # from HEAD's parent — from the PARENT so that a re-run which already tagged HEAD
+          # does not find its own tag and produce an empty list. `fetch-depth: 0` on the
+          # checkout is what makes the history and the tags available here.
+          PREV_TAG="$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD^ 2>/dev/null || true)"
+          {
+            echo
+            if [ -n "$PREV_TAG" ]; then
+              echo "## Changes since $PREV_TAG"
+              RANGE="$PREV_TAG..HEAD"
+            else
+              # The first release: no previous tag exists, so the list is the whole history
+              # to date rather than an empty section. Measured on this repository that is
+              # 464 commits / ~32 KB of subjects — well inside GitHub's 125,000-character
+              # release-body limit, and it only ever happens once.
+              echo "## Changes"
+              RANGE="HEAD"
+            fi
+            echo
+            # `--invert-grep` drops the pipeline's own `Release X.Y.Z` commit, which is
+            # deliberately outside Conventional Commits (§5) and is not a change anyone
+            # reads notes to learn about. `--no-merges` drops the merge commits for the
+            # same reason: §7 asks for the Conventional Commits since the previous tag.
+            git log --no-merges --invert-grep --grep='^Release [0-9]' \
+              --pretty='- %s' "$RANGE"
+          } >>"$NOTES"
+          cat "$NOTES"
 
       - name: Publish the GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          token: ${{ steps.token.outputs.token }}
+          tag_name: v${{ env.VERSION }}
+          body_path: ${{ runner.temp }}/release-notes.md
           fail_on_unmatched_files: true
-          generate_release_notes: true
           files: dist/figma-plugin.zip
 
-      # The published form (§4.2) — the only gate that can prove registry resolution. It installs
-      # the published package with npm, the same fetcher Claude Code runs for an npm-sourced
-      # entry. GAP: the last mile — Claude Code resolving the marketplace ENTRY, and its skills /
-      # agents / figma-setup loading in a real session — needs an authenticated Claude Code and is
-      # not scriptable here; it stays a human post-release check (claude-plugin.md §9.1/§9.4/§9.5).
-      - name: Assert the install (published form)
+      # ── Step 9 (§7): back-merge main into dev ──────────────────────────────────────
+      # This step alone cannot fail the release: by the time it runs the version is
+      # published and tagged. A back-merge the pipeline cannot complete is handed to a
+      # human, and nothing is unwound.
+      - name: Back-merge main into dev
+        continue-on-error: true
         run: |
-          for i in 1 2 3 4 5 6; do
-            [ -n "$(npm view "figma-agent-bridge@$VERSION" version 2>/dev/null || true)" ] && break
-            echo "waiting for the registry to serve $VERSION ($i)…"
-            sleep 10
-          done
-          bash scripts/assert-install.sh --registry "$VERSION"
+          set -euo pipefail
+          git fetch origin +refs/heads/main:refs/remotes/origin/main +refs/heads/dev:refs/remotes/origin/dev
+          git checkout -B dev origin/dev
+          if git merge --no-edit origin/main && git push origin dev; then
+            echo "dev now carries $VERSION."
+            exit 0
+          fi
+          git merge --abort || true
+          {
+            echo "## Back-merge \`main\` → \`dev\` needs a human"
+            echo
+            echo "Release **$VERSION** is published, pushed, and tagged — nothing is unwound."
+            echo "What is left is the back-merge (dev-ops.md §7 step 9, §5)."
+            echo
+            echo '```sh'
+            echo "git fetch origin"
+            echo "git switch dev && git pull --ff-only"
+            echo "git merge origin/main   # resolve, then commit"
+            echo "git push origin dev"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          exit 1
+
+      # The published form of the install assertion is NOT a pipeline step and cannot be
+      # one — it needs an authenticated Claude Code host, which a runner is not (§4.2).
+      # This is the handoff to the operator who carries it.
+      - name: Hand the published-form check to the operator
+        if: success()
+        run: |
+          {
+            echo "## Released $VERSION — one check left, and it is yours"
+            echo
+            echo "The pipeline has passed every gate it can run. The **published form** of the"
+            echo "install assertion (dev-ops.md §4.2) needs an authenticated Claude Code host,"
+            echo "so it is an operator check, performed on your own machine now:"
+            echo
+            echo '```sh'
+            echo "bash scripts/assert-install.sh --registry $VERSION   # registry resolution"
+            echo '```'
+            echo
+            echo "Then the last mile, which no script reaches — see \`docs/release-checklist.md\`:"
+            echo "\`/plugin marketplace add\` + \`/plugin install\` from a clean plugin cache,"
+            echo "skills and agents loading, \`figma-setup\` materialising the payload."
+            echo
+            echo "If it fails: withdraw $VERSION from resolution and ship the fix as a new"
+            echo "patch release (§4.2). A published version is immutable — repair is forward."
+          } >>"$GITHUB_STEP_SUMMARY"

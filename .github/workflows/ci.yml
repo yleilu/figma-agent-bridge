@@ -3,6 +3,12 @@ on:
   push:
     branches: [dev, main]
   pull_request:
+
+# The gate reads and runs; it writes nothing. Stated explicitly so a repository-default
+# change can never silently hand this job write scope.
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: ubuntu-latest

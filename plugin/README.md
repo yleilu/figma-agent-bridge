@@ -199,22 +199,16 @@ The bundle runs in two modes:
 
 ## Releases
 
-Every `v*` tag publishes:
+Every release publishes:
 
 - the **plugin package** to the npm registry — the server bundle plus the skills, agents,
   hooks, and Figma plugin payload. This is what the Claude Code route installs, and what the
   standalone-server route runs through the package's `bin` entry.
 - the **Figma plugin archive** to GitHub Releases — for hand-importing the Figma plugin.
 
-Everything is built at release time; nothing built is committed to the repository.
-
-## Releasing
-
-1. Bump the version in the root `package.json` — the single version of record.
-2. `bun run release:stamp` — stamps that version into every artifact.
-3. Commit, tag (`v<version>`), and push. CI runs the verification gate, builds the server
-   bundle and the Figma plugin into the package, publishes the package to the registry, and
-   publishes the GitHub Release with its assets.
+Everything is built at release time; nothing built is committed to the repository. A release
+is cut by merging a release pull request from `dev` into `main`; the pipeline computes the
+version, stamps it into every artifact, and publishes. No version field is edited by hand.
 
 ## License
 

@@ -83,13 +83,8 @@ Two real DX gaps hit while building a full dashboard end-to-end through the tool
 The dev-ops workflow is **built + merged to dev** (CI gate, release pipeline, and the npm-published Claude Code plugin package — see `docs/specs/dev-ops.md`). The headless-verifiable parts are done and green; the following need a real machine / app / release and are **deliberately deferred** — the workflow is treated as complete:
 
 - **Live installs (human, GUI/CLI):** the Claude Code plugin install + run on a box **with Bun on PATH** (including that the package installs inert — no dependency-install step); and, since **Bun is a prerequisite of every route** (`docs/specs/dev-ops.md` §3.1), that a **missing Bun** surfaces the clear error the design promises — pointing at the README check-install — rather than failing silently; the **Windows** path (Bun `.mcp.json` PATH resolution on a real Windows box); the Figma plugin **manifest import** from the path `figma-setup` reports, including that an upgrade needs no re-import.
-- **Real release run:** `release.yml` executes only on a pushed `v*` tag with the `FEEDBACK_WORKER_URL` repo secret set — cutting a first tagged release validates gate → server bundle + Figma plugin build → package publish → fig-plugin zip → GitHub Release end-to-end.
-- **Claim the npm package name before the first publish:** the `figma-agent-bridge` name must be owned on the registry and a publish token wired into CI — the marketplace entry resolves the plugin from there, so the first tagged release cannot ship without it.
-- **Pin Bun before enabling cloud CI:** Bun is the toolchain that builds the published server bundle, and CI (`oven-sh/setup-bun@v2` = latest) is unpinned, so what a release ships depends on whichever Bun the runner happens to install. Pin it (`setup-bun` `bun-version` + a `.bun-version`) so the server bundle builds reproducibly across runs.
 - **Windows coverage for the plugin's hooks:** the shipped hooks are bash scripts using `jq` and `curl`. No Windows-native equivalent or graceful degradation exists when a shell/`jq` is absent — behaviour there is unaddressed, not just unverified.
-- **P2 / P3 (non-code):** cloud CI turns on the moment `dev`/branches are pushed (`ci.yml` already triggers); PR-gated merges are a GitHub branch-protection toggle on `dev`/`main` requiring the `ci` check.
-
-First-release recipe: bump root `package.json` → `bun run release:stamp` → commit → tag `vX.Y.Z` → push (CI builds the server bundle + Figma plugin, publishes the package to the registry, and cuts the GitHub Release).
+- **P2 / P3 (non-code):** cloud CI turns on the moment `dev`/branches are pushed (`ci.yml` already triggers); branch protection on `main` and the release pipeline's actor exemption are GitHub ruleset configuration (`docs/specs/dev-ops.md` §5).
 
 ## Skill guidance (figma-design) — deferred improvements (surfaced 2026-07-16 — skill-in-loop QA)
 

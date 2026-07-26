@@ -94,8 +94,9 @@ field _within_ it, and `package` is meaningful only inside that object:
 ```
 
 The entry's own `version` sits alongside the source's, and both carry the version-of-record
-(§5) — the source's version is what npm resolves, the entry's is what the plugin manifest is
-checked against when a release is tagged.
+(§5) — the source's version is what npm resolves, the entry's is what the host lists. Both are
+written by the release that stamps them, alongside the plugin manifest
+([[figma-bridge/docs/specs/dev-ops|dev-ops.md]] §6.3).
 
 Claude Code resolves that entry at **install time** — it runs npm to fetch the package, then
 copies it into its own per-version plugin cache. The delivery mechanism, and everything the
@@ -300,7 +301,8 @@ collapses every release into a single directory. The plugin↔server match is th
 _structural_: the server bundle and the plugin metadata are the same artifact, shipped
 together. The Figma-plugin↔server match is enforced at connect time by the version handshake
 (principle B2 — [[figma-bridge/docs/specs/version-handshake|version-handshake.md]]). The
-pipeline that stamps that version, builds the artifacts, and publishes them at a tag is
+pipeline that stamps that version, builds the artifacts, and publishes them — triggered by a release
+pull request merging, and tagging the commit it stamps — is
 [[figma-bridge/docs/specs/dev-ops|dev-ops.md]].
 
 **No bootstrap hook.** Nothing is fetched at session start or on first run: resolution happens
