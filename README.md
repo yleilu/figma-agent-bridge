@@ -1,4 +1,4 @@
-<img src="packages/branding/assets/logo-128.png" width="88" alt="Agent Bridge" />
+<img src="packages/branding/assets/logo-128.png" width="88" alt="Figma Agent Bridge" />
 
 # Figma Agent Bridge
 
@@ -58,7 +58,7 @@ Routes 3 and 4 aren't affected.
    running won't see a freshly-installed `bun`.
 2. Open Claude Desktop's plugin directory and add this repository as a marketplace:
    `yleilu/figma-agent-bridge`.
-3. Install the listed plugin, **Agent Bridge**, from the resulting entry.
+3. Install the listed plugin, **Figma Bridge**, from the resulting entry.
 4. Restart or reload so the MCP server is picked up.
 
 Then continue with **Figma-side setup** below.

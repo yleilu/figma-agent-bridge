@@ -10,8 +10,17 @@ import {
   LOGO_ON_WHITE_SVG,
 } from './logo.generated'
 
+// The naming forms — see docs/specs/branding.md §4. Each names a
+// different thing and they are not interchangeable.
 export const BRAND = {
-  name: 'Agent Bridge',
+  // the project as a whole, in prose
+  name: 'Figma Agent Bridge',
+  // the Figma plugin, as shown inside Figma
+  figmaName: 'Agent Bridge',
+  // the Claude Code plugin, as shown inside Claude
+  claudeName: 'Figma Bridge',
+  // every machine-read name
+  id: 'figma-agent-bridge',
   color: '#D97757',
   bg: '#FFFFFF',
 } as const

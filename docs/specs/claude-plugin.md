@@ -82,7 +82,7 @@ field _within_ it, and `package` is meaningful only inside that object:
 ```json
 {
   "name": "figma-agent-bridge",
-  "displayName": "Agent Bridge",
+  "displayName": "Figma Bridge",
   "description": "Build and review Figma designs with an AI agent.",
   "source": {
     "source": "npm",

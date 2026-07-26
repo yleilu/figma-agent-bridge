@@ -174,9 +174,9 @@ steps 5–7 are the **Figma leg**:
 7. **Open the plugin from a Figma design file.** It connects on its own (§3.8.1).
 
 The plugin's own name is `figma-agent-bridge` — which is what step 3's slug uses — but it is
-**listed** under its display name, **Agent Bridge**. Anywhere the user reads a list rather than types
-a slug (entry surface a below, the host's installed-plugin list, an uninstall prompt), that is the
-name to look for.
+**listed** under its display name, **Figma Bridge** (branding.md). Anywhere the user reads a list
+rather than types a slug (entry surface a below, the host's installed-plugin list, an uninstall
+prompt), that is the name to look for.
 
 **The plugin ships no slash commands.** Its surfaces are **skills, agents, and hooks**, so
 `figma-setup` is invoked by asking the agent for it — never as a `/figma-setup` command. The two

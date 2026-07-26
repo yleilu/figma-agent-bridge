@@ -53,8 +53,15 @@ describe('branding', () => {
 
   test('BRAND tokens', () => {
     expect(BRAND.color).toBe('#D97757')
-    expect(BRAND.name).toBe('Agent Bridge')
     expect(BRAND.bg).toBe('#FFFFFF')
+  })
+
+  // docs/specs/branding.md §4 — four forms, one per thing named.
+  test('BRAND carries every naming form', () => {
+    expect(BRAND.name).toBe('Figma Agent Bridge')
+    expect(BRAND.figmaName).toBe('Agent Bridge')
+    expect(BRAND.claudeName).toBe('Figma Bridge')
+    expect(BRAND.id).toBe('figma-agent-bridge')
   })
 
   test('every transparent icon size exists on disk', () => {
