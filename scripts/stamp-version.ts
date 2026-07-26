@@ -3,6 +3,7 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { isBareSemver } from './release-version'
 
 const root = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -12,25 +13,21 @@ const pkg = JSON.parse(
   await readFile(join(root, 'package.json'), 'utf8'),
 )
 const version = pkg.version as string
+// The release turns this number into the git tag `vX.Y.Z`, an
+// `npm view` argument and a tarball filename, so a malformed one
+// stops here rather than reaching the registry (§6.1, §6.4).
+if (!isBareSemver(version)) {
+  throw new Error(
+    `the root manifest's version is not a bare semver number: ${JSON.stringify(version)}`,
+  )
+}
 
 const stampJson = async (
   relPath: string,
   mutate: (o: Record<string, unknown>) => void,
-  { optional = false }: { optional?: boolean } = {},
 ) => {
   const p = join(root, relPath)
-  let raw: string
-  try {
-    raw = await readFile(p, 'utf8')
-  } catch (err) {
-    const { code } = err as NodeJS.ErrnoException
-    if (optional && code === 'ENOENT') {
-      console.log(`skipped ${relPath} (absent)`)
-      return
-    }
-    throw err
-  }
-  const o = JSON.parse(raw)
+  const o = JSON.parse(await readFile(p, 'utf8'))
   mutate(o)
   await writeFile(p, JSON.stringify(o, null, 2) + '\n')
   console.log(`stamped ${relPath} -> ${version}`)
@@ -39,15 +36,12 @@ const stampJson = async (
 await stampJson('plugin/.claude-plugin/plugin.json', o => {
   o.version = version
 })
-// The published package's npm metadata. Optional so the stamp
-// still runs on a tree that predates it.
-await stampJson(
-  'plugin/package.json',
-  o => {
-    o.version = version
-  },
-  { optional: true },
-)
+// The published package's npm metadata — one of the four fields the
+// lockstep table names (§6.3). Required, not optional: a tree without
+// it would publish a package manifest no release ever stamped.
+await stampJson('plugin/package.json', o => {
+  o.version = version
+})
 await stampJson('.claude-plugin/marketplace.json', o => {
   const plugins = o.plugins as Record<string, unknown>[]
   for (const pl of plugins) {

@@ -62,6 +62,12 @@ describe('plugin config', () => {
     // the lockstep
     const npmPkg = await read('plugin/package.json')
     expect(npmPkg.version).toBe(p.version)
+    // the release turns the version-of-record into the git tag
+    // `vX.Y.Z`, an `npm view` argument and a tarball filename, so it
+    // must be a BARE X.Y.Z — no leading `v`, no range
+    expect(rootPkg.version).toMatch(
+      /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?$/,
+    )
   })
   it('the published package is inert (no deps, no install scripts, no lockfile)', async () => {
     const npmPkg = await read('plugin/package.json')
