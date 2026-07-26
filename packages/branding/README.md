@@ -10,7 +10,7 @@ type: doc
 
 # @figma-agent-bridge/branding
 
-Single source of truth for the **Agent Bridge** brand mark — a terracotta
+Single source of truth for the **Figma Agent Bridge** brand mark — a terracotta
 (`#D97757`) bridge. Source-only (no build); consumed as TypeScript.
 
 ## Source of truth

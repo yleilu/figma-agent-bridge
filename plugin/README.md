@@ -1,14 +1,14 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/yleilu/figma-agent-bridge/main/packages/branding/assets/logo-128.png" width="72" alt="Agent Bridge" />
+  <img src="https://raw.githubusercontent.com/yleilu/figma-agent-bridge/main/packages/branding/assets/logo-128.png" width="72" alt="Figma Bridge" />
 </p>
 
-<h1 align="center">Agent Bridge</h1>
+<h1 align="center">Figma Bridge</h1>
 
 <p align="center">Drive Figma from Claude Code — design, review, and file feedback.</p>
 
 ---
 
-The **Agent Bridge** Claude Code plugin bundles the skills, agents, and hooks — plus the
+The **Figma Bridge** Claude Code plugin bundles the skills, agents, and hooks — plus the
 MCP server and the Figma plugin payload — for building and reviewing Figma designs with an
 AI agent over the MCP bridge.
 
@@ -27,7 +27,7 @@ command -v bun >/dev/null || curl -fsSL https://bun.sh/install | bash
 ```
 
 There is no toolchain-free alternative: every install route runs the server on your own Bun,
-so a machine without it cannot run Agent Bridge. The repository README's
+so a machine without it cannot run Figma Agent Bridge. The repository README's
 [Install section](https://github.com/yleilu/figma-agent-bridge#install) lists every route.
 
 **Supported on macOS and Linux**; on Windows the plugin runs degraded — see
@@ -48,7 +48,7 @@ guaranteed to be bridged, which leaves the agent knowing how to design and unabl
 
 **Desktop app — the Directory.** Use the Directory's **add-a-repository** action and point it
 at this repository, `yleilu/figma-agent-bridge`. That syncs the marketplace and does nothing
-else. Then, from the listing that appears, install **Agent Bridge**. Stopping after the first
+else. Then, from the listing that appears, install **Figma Bridge**. Stopping after the first
 step leaves the install half done — nothing has gone wrong, but no plugin is installed yet.
 
 **Slash commands — the Code surface or the CLI.** The same two steps, typed:
@@ -133,7 +133,7 @@ mismatch.
 - npm — used once, at install time, to fetch the package
 - git — used once, to add the marketplace
 
-**Platform.** The MCP tools are platform-neutral; the **hooks** are not. Agent Bridge ships five
+**Platform.** The MCP tools are platform-neutral; the **hooks** are not. Figma Bridge ships five
 POSIX shell hooks that call `jq` and `curl`, and native Windows supplies neither. On Windows the
 tools keep working, but without a POSIX shell that provides `jq` and `curl` the hooks simply do
 not run — you lose agent identity injection and the turn-start presence status block. Nothing
