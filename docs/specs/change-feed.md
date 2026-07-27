@@ -927,6 +927,14 @@ Figma Plugin API and architecture facts that shape this design:
   **no** node lookups: everything it needs is captured eagerly in the command path.
 - **Style changes are part of `documentchange`** (STYLE_* subtypes) — no separate `stylechange`
   listener; variable changes are not covered.
+- **A style's identity is its KEY, not its id string.** The id a command returns and the id the
+  event carries differ in their trailing segment — empty in the result (`S:<key>,`), the page id in
+  the event (`S:<key>,<pageId>`). Only the key is stable, so self-write matching and collapse key on
+  it. Node ids are exact and are never prefix-matched: `1:8` and `1:80` are different nodes.
+- **Inside an auto-layout frame a child cannot be freely positioned** — a drag or an arrow key
+  **reorders** it among its siblings. A user reorder therefore emits `parent` alongside the
+  positional properties, so `parent` is a cascade property, and one record can carry a structural
+  change and a positional one together.
 - **Undo/redo restores the original id**, and `documentchange` may not fire reliably on undo/redo in
   some cases — a residual soft spot the re-read backstop covers.
 - **Nesting rule:** creating or deleting a parent emits one change for the top-level node only;

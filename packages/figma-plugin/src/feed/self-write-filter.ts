@@ -71,13 +71,44 @@ type RawChange = {
     id?: string
     type?: string
     name?: string
+    removed?: boolean
   } | null
   properties?: string[]
 }
 
+/** A RemovedNode / removed BaseStyle. `removed`, `type` and `id` are the only
+ *  three reads the API guarantees on one; everything else throws. */
+const isRemoved = (
+  target: { removed?: boolean } | null | undefined,
+): boolean => target?.removed === true
+
 export type SelfWriteFilter = {
   admit(change: unknown): ChangeRecord | null
   admitContext(): boolean
+}
+
+// A style's id is NOT one stable string. `create_styles` returns
+// `S:<key>,` — trailing segment empty — while the documentchange event for
+// the same style carries the page id: `S:<key>,1:8`. The KEY is the stable
+// part. Matching whole strings therefore never succeeded, and every
+// agent-created style leaked into the feed as a user edit.
+//
+// Node ids are NOT normalised: they are exact, and a prefix match would
+// wrongly equate `1:8` with `1:80`.
+const styleKey = (id: string): string => {
+  const comma = id.indexOf(',')
+  return comma === -1 ? id : id.slice(0, comma)
+}
+
+const isSelfWrite = (
+  id: string,
+  op: ChangeOp,
+  touched: ReadonlySet<string>,
+): boolean => {
+  if (touched.has(id)) return true
+  if (!op.startsWith('style_')) return false
+  const key = styleKey(id)
+  return touched.has(key) || touched.has(`${key},`)
 }
 
 export const createSelfWriteFilter = (
@@ -95,7 +126,8 @@ export const createSelfWriteFilter = (
     if (id === undefined) return null
 
     const open = scope.isOpen()
-    if (open && scope.touched().has(id)) return null
+    if (open && isSelfWrite(id, op, scope.touched()))
+      return null
 
     const rec: ChangeRecord = { op, id }
     if (typeof target?.type === 'string') {
@@ -103,7 +135,18 @@ export const createSelfWriteFilter = (
     }
     const isDelete =
       op === 'delete' || op === 'style_delete'
-    if (!isDelete && typeof target?.name === 'string') {
+    // `removed`, not `isDelete`, is what makes `name` unreadable. The typings
+    // put `node: SceneNode | RemovedNode` on EVERY BaseNodeChange, and
+    // documentchange is BATCHED — a node edited and then deleted inside one
+    // batch window arrives as a CREATE or PROPERTY_CHANGE whose node is
+    // already gone. A RemovedNode exposes only `removed` / `type` / `id` and
+    // THROWS on every other read, and this listener has no try/catch around
+    // it: one such change would cost the whole batch its records.
+    if (
+      !isDelete &&
+      !isRemoved(target) &&
+      typeof target?.name === 'string'
+    ) {
       rec.name = target.name
     }
 
