@@ -31,8 +31,10 @@ describe('ChannelInfo presence fields', () => {
       version: '0.2.0',
       currentPage: 'Icons',
       selected: 2,
+      epoch: 'epoch-abc123def456',
     }
     expect(info.currentPage).toBe('Icons')
     expect(info.selected).toBe(2)
+    expect(info.epoch).toBe('epoch-abc123def456')
   })
 })

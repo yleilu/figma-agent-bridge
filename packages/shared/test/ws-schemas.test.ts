@@ -364,4 +364,42 @@ describe('meta envelope', () => {
       expect(r.data.agentType).toBe('general-purpose')
     }
   })
+
+  it('metaSchema carries epoch + seq (change-feed push headers)', () => {
+    const r = metaSchema.safeParse({
+      fileKey: 'fk',
+      epoch: 'epoch-abc123def456',
+      seq: 0,
+    })
+    expect(r.success).toBe(true)
+    if (r.success) {
+      expect(r.data.epoch).toBe('epoch-abc123def456')
+      expect(r.data.seq).toBe(0)
+    }
+  })
+
+  it('STRIPS an undeclared meta field (allow-list, not passthrough)', () => {
+    const r = metaSchema.parse({
+      fileKey: 'fk',
+      notAField: 'x',
+    })
+    expect(
+      (r as Record<string, unknown>).notAField,
+    ).toBeUndefined()
+  })
+
+  it('registerMessageSchema carries epoch', () => {
+    const r = registerMessageSchema.safeParse({
+      type: 'register',
+      channel: 'file-fk',
+      fileName: 'Design',
+      fileKey: 'fk',
+      version: '0.3.0',
+      epoch: 'epoch-abc123def456',
+    })
+    expect(r.success).toBe(true)
+    if (r.success) {
+      expect(r.data.epoch).toBe('epoch-abc123def456')
+    }
+  })
 })

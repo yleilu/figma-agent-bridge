@@ -12,8 +12,12 @@ export const metaSchema = z.object({
   agentType: z.string().optional(),
   // genId('cmd') per request; correlates a reply to its command (pending map key).
   requestId: z.string().optional(),
-  // Plugin connection nonce for change-feed pushes (forward-compat; not used here).
+  // Plugin connection nonce, carried on the register frame and on every PUSH
+  // frame's meta (change-feed.md). Equality-compared only.
   epoch: z.string().optional(),
+  // Per-connection monotonic push-frame counter, starting at 0 on the opening
+  // flush. A seq beyond lastSeq+1 means the relay's bucket dropped a frame.
+  seq: z.number().int().nonnegative().optional(),
 })
 
 // `command` is present on a REQUEST/PUSH (server↔plugin) but omitted on a bare
@@ -51,6 +55,11 @@ export const registerMessageSchema = z.object({
   version: z.string().optional(),
   currentPage: z.string().optional(),
   selected: z.number().optional(),
+  // Plugin connection nonce, minted per register/reconnect. Stored on the
+  // channel registry entry and exposed on GET /channels so a LATE-JOINING
+  // server can anchor its baseline without receiving a frame (the relay
+  // never replays).
+  epoch: z.string().optional(),
 })
 
 export const presenceMessageSchema = z.object({

@@ -4,6 +4,7 @@ import {
   startRelay,
   stopRelay,
 } from '@figma-agent-bridge/relay/relay'
+import { APP_VERSION } from '@figma-agent-bridge/shared/constants'
 import { POC_RELAY_OPTS } from '../scripts/poc-relay'
 import {
   extractProbeFrame,
@@ -245,6 +246,18 @@ describe('the collector end to end', () => {
     plugin.send(
       JSON.stringify({ type: 'join', channel: CHANNEL }),
     )
+    // The collector discovers channels via /channels, and availability is
+    // bound to the REGISTERING socket (overview.md) — a bare join is not
+    // listed. The real plugin registers; this stand-in must too.
+    plugin.send(
+      JSON.stringify({
+        type: 'register',
+        channel: CHANNEL,
+        fileName: 'POC',
+        fileKey: 'poc',
+        version: APP_VERSION,
+      }),
+    )
 
     collector = startCollector({
       relayUrl: `ws://localhost:${E2E_PORT}`,
@@ -333,6 +346,18 @@ describe('the collector end to end', () => {
     plugin.send(
       JSON.stringify({ type: 'join', channel: CHANNEL }),
     )
+    // The collector discovers channels via /channels, and availability is
+    // bound to the REGISTERING socket (overview.md) — a bare join is not
+    // listed. The real plugin registers; this stand-in must too.
+    plugin.send(
+      JSON.stringify({
+        type: 'register',
+        channel: CHANNEL,
+        fileName: 'POC',
+        fileKey: 'poc',
+        version: APP_VERSION,
+      }),
+    )
 
     collector = startCollector({
       relayUrl: `ws://localhost:${E2E_PORT}`,
@@ -405,6 +430,18 @@ describe('the collector end to end', () => {
     )
     plugin.send(
       JSON.stringify({ type: 'join', channel: CHANNEL }),
+    )
+    // The collector discovers channels via /channels, and availability is
+    // bound to the REGISTERING socket (overview.md) — a bare join is not
+    // listed. The real plugin registers; this stand-in must too.
+    plugin.send(
+      JSON.stringify({
+        type: 'register',
+        channel: CHANNEL,
+        fileName: 'POC',
+        fileKey: 'poc',
+        version: APP_VERSION,
+      }),
     )
 
     collector = startCollector({

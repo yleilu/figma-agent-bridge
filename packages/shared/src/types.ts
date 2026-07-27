@@ -32,6 +32,8 @@ export type RegisterMessage = {
   version?: string
   currentPage?: string
   selected?: number
+  // Plugin connection nonce, minted per register/reconnect (change-feed.md).
+  epoch?: string
 }
 
 export type PresenceMessage = {
@@ -126,9 +128,8 @@ export type RelayOutgoing =
 
 // --- Request metadata (request-envelope.md) ---
 // Rides every frame. Commands carry { fileKey, sessionId?, requestId };
-// replies carry { requestId }; pushes carry { fileKey, epoch } (change-feed,
-// forward-compat — not implemented here). Generalizes the old flat
-// targetFileKey/id.
+// replies carry { requestId }; pushes carry { fileKey, epoch, seq }
+// (change-feed.md). Generalizes the old flat targetFileKey/id.
 export type Meta = {
   fileKey?: string | null
   sessionId?: string
@@ -136,6 +137,7 @@ export type Meta = {
   agentType?: string
   requestId?: string
   epoch?: string
+  seq?: number
 }
 
 export type CommandMessage = {
@@ -161,6 +163,10 @@ export type ChannelInfo = {
   currentPage?: string
   // Presence enrichment: count of currently selected nodes.
   selected?: number
+  // Plugin connection nonce, refreshed on every register (change-feed.md).
+  // A consumer reading /channels can tell one plugin connection from the next
+  // without receiving a frame.
+  epoch?: string
 }
 
 // --- M2 parsed output types ---
