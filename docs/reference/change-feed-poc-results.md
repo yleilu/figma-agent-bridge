@@ -73,10 +73,16 @@ reflow records arrive at all, so the closure stops working before the touched se
 
 ## The value
 
-**`SETTLE_MS = 400 ms.**
+**`SETTLE_MS` = 400 ms.**
 
 Derived, not chosen: 4× the measured p99.9 of 100 ms, and 3.3× the empirical floor of ~120 ms. The
 margin covers a slower machine, a loaded Figma, and shapes not in the battery.
+
+The measured value **coincides with the placeholder** the implementation plan carried before the POC
+ran. Equality with 400 therefore cannot, on its own, distinguish a measured value from a forgotten
+edit, so `packages/shared/test/change-feed.test.ts` pins `SETTLE_MS` against the two measurements it
+is derived from — the 100 ms p99.9 batch period and the ~120 ms sweep floor — rather than against a
+bare "not the placeholder" inequality.
 
 The upper bound is set by the opposite failure — a window so wide it swallows the user's concurrent
 edits. That was tested directly and did not occur at 400 ms: with the window continuously open, 50

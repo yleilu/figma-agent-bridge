@@ -1,32 +1,10 @@
 // The drop rule (change-feed.md, Plugin-side pipeline §2). Source-side, because
 // DocumentChange.origin === 'LOCAL' includes the plugin's OWN edits.
+import type {
+  ChangeOp,
+  ChangeRecord,
+} from '@figma-agent-bridge/shared/change-feed'
 import type { WriteScope } from './write-scope'
-
-// ── TEMPORARY — verbatim copies of the declarations that land in
-// packages/shared/src/change-feed.ts in Task 3. DELETE these two blocks in
-// Task 3 and import them from '@figma-agent-bridge/shared/change-feed' instead.
-// They are duplicated (not imported) because the shared module does not exist
-// yet and its SETTLE_MS value is the POC's output, so it cannot land first.
-type MutationOp =
-  | 'create'
-  | 'update'
-  | 'delete'
-  | 'style_create'
-  | 'style_update'
-  | 'style_delete'
-
-export type ChangeOp = MutationOp | 'page' | 'select'
-
-export type ChangeRecord = {
-  op: ChangeOp
-  id?: string
-  type?: string
-  name?: string
-  props?: string[]
-  ids?: string[]
-  count?: number
-}
-// ── end TEMPORARY ───────────────────────────────────────────────────────────
 
 /** Geometry a re-flow moves on a node the agent did not name. All are real
  *  NodeChangeProperty values. `name`/`parent`/`fills`/`characters` are NOT here

@@ -1,4 +1,6 @@
 export * from './id'
+export * from './paths'
+export * from './change-feed'
 export * from './types'
 export * from './schemas'
 export * from './ws-schemas'
