@@ -20,7 +20,10 @@ import {
   discoverChannels,
   PluginDisconnectedError,
 } from '@figma-agent-bridge/server/figma-client'
-import { COMMANDS } from '@figma-agent-bridge/shared'
+import {
+  APP_VERSION,
+  COMMANDS,
+} from '@figma-agent-bridge/shared'
 import { createMockPlugin } from './mocks/mock-plugin'
 
 const TEST_PORT = 3098
@@ -924,6 +927,18 @@ describe('discoverChannels', () => {
       }),
     )
     await next()
+    // Availability is bound to the REGISTERING socket (overview.md): a bare
+    // join is not discoverable.
+    ws.send(
+      JSON.stringify({
+        type: 'register',
+        channel: 'discover-ch',
+        fileName: null,
+        fileKey: null,
+        version: APP_VERSION,
+      }),
+    )
+    await Bun.sleep(30)
 
     const result = await discoverChannels(HTTP_URL)
     expect(result).toHaveLength(1)

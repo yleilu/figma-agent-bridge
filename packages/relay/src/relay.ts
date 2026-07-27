@@ -31,6 +31,9 @@ type RelayContext = {
   channels: Map<string, Set<ServerWebSocket<WsData>>>
   clientChannels: Map<string, Set<string>>
   channelRegistry: Map<string, ChannelInfo>
+  /** channel → id of the socket whose `register` created the entry
+   *  (overview.md: availability is bound to the registering plugin's socket). */
+  registrar: Map<string, string>
   sockets: Set<ServerWebSocket<WsData>>
   alive: WeakMap<ServerWebSocket<WsData>, boolean>
   rate: WeakMap<ServerWebSocket<WsData>, RateState>
@@ -53,6 +56,7 @@ const createContext = (): RelayContext => ({
   channels: new Map(),
   clientChannels: new Map(),
   channelRegistry: new Map(),
+  registrar: new Map(),
   sockets: new Set(),
   alive: new WeakMap(),
   rate: new WeakMap(),
@@ -109,6 +113,24 @@ const rejectJoin = (
   send(ws, reply)
 }
 
+/**
+ * Availability is bound to the REGISTERING socket (overview.md), never to the
+ * channel's member count: a plugin close drops the file even while the MCP
+ * server still holds the channel open, and a channel with members but no
+ * registered plugin has no entry at all. Both departure paths (`close` and an
+ * explicit `leave`) ask the same question — is this socket the registrar?
+ */
+const dropRegistration = (
+  ctx: RelayContext,
+  channel: string,
+  socketId: string,
+) => {
+  if (ctx.registrar.get(channel) === socketId) {
+    ctx.registrar.delete(channel)
+    ctx.channelRegistry.delete(channel)
+  }
+}
+
 const removeClient = (
   ctx: RelayContext,
   ws: ServerWebSocket<WsData>,
@@ -123,10 +145,10 @@ const removeClient = (
         members.delete(ws)
         if (members.size === 0) {
           ctx.channels.delete(channel)
-          ctx.channelRegistry.delete(channel)
           ctx.agentStatus.delete(channel)
         }
       }
+      dropRegistration(ctx, channel, id)
     })
     ctx.clientChannels.delete(id)
   }
@@ -175,14 +197,9 @@ const handleJoin = (
   members.add(ws)
   ctx.alive.set(ws, true)
 
-  if (!ctx.channelRegistry.has(channel)) {
-    ctx.channelRegistry.set(channel, {
-      channel,
-      fileName: null,
-      fileKey: null,
-      connectedAt: Date.now(),
-    })
-  }
+  // Joining creates NO availability entry: the registry answers *which files
+  // have a live plugin*, not *which channels exist* (overview.md). Only
+  // `register` mints one.
 
   let joined = ctx.clientChannels.get(id)
   if (joined === undefined) {
@@ -211,6 +228,7 @@ const handleRegister = (
   version: string | undefined,
   currentPage?: string,
   selected?: number,
+  epoch?: string,
 ) => {
   if (
     ctx.clientChannels.get(ws.data.id)?.has(channel) !==
@@ -218,18 +236,22 @@ const handleRegister = (
   ) {
     return
   }
-  const entry = ctx.channelRegistry.get(channel)
-  if (entry !== undefined) {
-    entry.fileName = fileName
-    entry.fileKey = fileKey
-    entry.version = version
-    if (currentPage !== undefined) {
-      entry.currentPage = currentPage
-    }
-    if (selected !== undefined) {
-      entry.selected = selected
-    }
+  // Create-or-rebind. Every binding mints a fresh connectedAt: that value
+  // identifies one plugin CONNECTION, not one channel (overview.md), which is
+  // what makes connection-liveness.md's dead marker self-clear on reconnect.
+  const prev = ctx.channelRegistry.get(channel)
+  const entry: ChannelInfo = {
+    channel,
+    fileName,
+    fileKey,
+    connectedAt: Date.now(),
+    version,
+    currentPage: currentPage ?? prev?.currentPage,
+    selected: selected ?? prev?.selected,
+    epoch: epoch ?? prev?.epoch,
   }
+  ctx.channelRegistry.set(channel, entry)
+  ctx.registrar.set(channel, ws.data.id)
 }
 
 const handlePresence = (
@@ -272,10 +294,10 @@ const handleLeave = (
     members.delete(ws)
     if (members.size === 0) {
       ctx.channels.delete(channel)
-      ctx.channelRegistry.delete(channel)
       ctx.agentStatus.delete(channel)
     }
   }
+  dropRegistration(ctx, channel, id)
 
   joined.delete(channel)
   if (joined.size === 0) {
@@ -610,6 +632,7 @@ export const startRelay = (
             frame.version,
             frame.currentPage,
             frame.selected,
+            frame.epoch,
           )
         } else if (frame.type === 'presence') {
           handlePresence(
@@ -714,6 +737,7 @@ export const stopRelay = (server: Server<WsData>): void => {
     ctx.channels.clear()
     ctx.clientChannels.clear()
     ctx.channelRegistry.clear()
+    ctx.registrar.clear()
     ctx.sockets.clear()
     ctx.agentStatus.clear()
     contexts.delete(server)

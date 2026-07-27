@@ -125,22 +125,10 @@ describe('handleConnect auto-discovery', () => {
 
   it('returns channel list when multiple channels', async () => {
     const ws1 = await connectRaw()
-    ws1.send(
-      JSON.stringify({
-        type: 'join',
-        channel: 'multi-1',
-      }),
-    )
-    await waitForMessage(ws1)
+    await joinAndRegister(ws1, 'multi-1')
 
     const ws2 = await connectRaw()
-    ws2.send(
-      JSON.stringify({
-        type: 'join',
-        channel: 'multi-2',
-      }),
-    )
-    await waitForMessage(ws2)
+    await joinAndRegister(ws2, 'multi-2')
 
     const mockClient: FigmaClient = {
       joinChannel: () => Promise.resolve(''),
