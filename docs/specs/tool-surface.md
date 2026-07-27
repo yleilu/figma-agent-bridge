@@ -31,18 +31,19 @@ related:
 > where **K counts the meta-tools the server registers** — a *registration*, not a mention in a
 > spec, is what puts a tool on the surface, so the formula is checkable against
 > `packages/server/src/index.ts`, whose `registerFileTool` + `registerSessionTool` +
-> `registerBufferTool` calls **are** the exposed surface. **K = 9**: `search_components` and
-> `reindex` (component-index.md), `report_status` (status-monitor.md), `record_feedback` and
-> the five send-flow tools `list_feedback` / `send_feedback` / `discard_feedback` /
-> `github_auth_start` / `github_auth_poll` (feedback-system.md). So the exposed surface is
-> **`51 + 9` = 60**, which the code splits as **52 file-addressed + 8 session-addressed**
-> (49 facade + 3 meta take a `fileKey`; the facade's `connect`/`status` and the six
-> machine-global feedback tools do not).
-> A meta-tool a feature spec designs but the server does not register — `pull_changes`
-> (change-feed.md), and the registry trio `register_library` / `unregister_library` /
-> `list_libraries` (team-library-registry.md) — is in neither K nor the exposed total; registering
-> it is what adds it. Do not restate a hardcoded total (a bare "51" already wrongly omits
-> `record_feedback`).
+> `registerBufferTool` calls **are** the exposed surface. **K = 10**: `search_components` and
+> `reindex` (component-index.md), `report_status` (status-monitor.md), `pull_changes`
+> (change-feed.md), `record_feedback` and the five send-flow tools `list_feedback` /
+> `send_feedback` / `discard_feedback` / `github_auth_start` / `github_auth_poll`
+> (feedback-system.md). So the exposed surface is
+> **`51 + 10` = 61**, which the code splits as **52 file-addressed + 8 session-addressed +
+> 1 buffer-addressed** (49 facade + 3 meta take a `fileKey`; the facade's `connect`/`status` and
+> the six machine-global feedback tools do not; `pull_changes` takes a `fileKey` but reaches
+> `server.tool` through its own gate).
+> A meta-tool a feature spec designs but the server does not register — the registry trio
+> `register_library` / `unregister_library` / `list_libraries` (team-library-registry.md) — is in
+> neither K nor the exposed total; registering it is what adds it. Do not restate a hardcoded
+> total (a bare "51" already wrongly omits `record_feedback`).
 >
 > The **change feed** (docs/specs/change-feed.md) specifies one non-facade meta-tool
 > `pull_changes({fileKey, limit?}) → {changes, truncated, state}` — a destructive buffer **drain**
@@ -52,8 +53,7 @@ related:
 > does **not** inherit the file gate's `DISCONNECTED` / `INCOMPATIBLE`. It therefore reaches
 > `server.tool` through **`registerBufferTool`**, a third registration wrapper alongside the file
 > and session wrappers, carrying the same identity handling (`fileKey` plus the reserved headers)
-> behind a different gate. It must **not** inflate the facade count; registering it raises the
-> exposed surface to **`51 + 10` = 61**.
+> behind a different gate. It must **not** inflate the facade count; it is counted in K above.
 >
 > The **team-library registry** (docs/specs/team-library-registry.md) specifies three
 > non-facade meta-tools — `register_library`, `unregister_library`, `list_libraries`
