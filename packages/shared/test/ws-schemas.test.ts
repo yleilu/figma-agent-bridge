@@ -343,6 +343,12 @@ describe('meta envelope', () => {
   })
 
   it('accepts a meta-less push (document_changed forward-compat)', () => {
+    // The RELAY still forwards a meta-less frame — it is a schema-level
+    // forwarder, not a consumer. `params.fileId` is a legacy fixture: the
+    // server no longer reads it, identity now rides meta.fileKey
+    // (change-feed.md). A frame like this is dropped by the push handler,
+    // which is the point: it must still PARSE, so the drop is a decision and
+    // not a validation error.
     const r = commandMessageSchema.safeParse({
       command: 'document_changed',
       params: { fileId: 'fk-1' },

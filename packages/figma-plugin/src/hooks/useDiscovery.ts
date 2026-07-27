@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback } from 'react'
 
-// POC ONLY (change-feed Task 1f) — reverted with the probe harness in Task 7.
-// The POC relay runs on 18081 with its token bucket disarmed so probe frames
-// cannot be silently dropped; 18080 must keep serving the real relay. There is
-// no UI control for the port, and the stored value would win over the default,
-// so the POC build pins it unconditionally below.
-const DEFAULT_RELAY_PORT = 18081
+export const DEFAULT_RELAY_PORT = 18080
 const STORAGE_KEY = 'relay-port'
+
+/** The stored port wins; the default is the fallback. Exported so the
+ *  fallback is pinned by a test — a port that silently resolves to the wrong
+ *  relay reads as "the bridge is not running", not as a bug. */
+export const resolveRelayPort = (saved: unknown): number =>
+  (saved as number | null | undefined) ?? DEFAULT_RELAY_PORT
 
 type StorageMessage = {
   type: 'storage-result'
@@ -77,10 +78,8 @@ export const useDiscovery = () => {
 
   const resolve = useCallback(async () => {
     try {
-      await getStorageValue(STORAGE_KEY)
-      // POC ONLY: ignore the stored port so the probe build always reaches
-      // the disarmed POC relay. Restored to `saved ?? DEFAULT` in Task 7.
-      setPort(DEFAULT_RELAY_PORT)
+      const saved = await getStorageValue(STORAGE_KEY)
+      setPort(resolveRelayPort(saved))
     } catch {
       setPort(DEFAULT_RELAY_PORT)
     }

@@ -324,6 +324,51 @@ describe('createWriteScope closure capture', () => {
     expect(s.isOpen()).toBe(false)
   })
 
+  // A Figma node REMOVED between `resolve` and the walk throws on every
+  // accessor, and the walk reads `.children` / `.parent` on live nodes. Both
+  // call sites now sit in the command path — `claim` inside the handlers,
+  // `fold` inside `enter` — so an unguarded throw fails the user's command or,
+  // worse, rejects `enter` and leaves the dispatch with no command-result at
+  // all. Capturing the closure must never break the command it is watching.
+  const throwingNode = (id: string): Node =>
+    ({
+      id,
+      get children(): never {
+        throw new Error('node removed')
+      },
+      get parent(): never {
+        throw new Error('node removed')
+      },
+    }) as unknown as Node
+
+  it('claim survives a closure walk that throws', async () => {
+    const s = createWriteScope({
+      settleMs: 10,
+      resolve: () => Promise.resolve(null),
+    })
+    await s.enter({})
+    expect(() => s.claim(throwingNode('1:1'))).not.toThrow()
+    // The TOUCHED half still lands: it is the stronger suppression, and it
+    // costs nothing to record.
+    expect(s.touched().has('1:1')).toBe(true)
+    expect(s.reflow().size).toBe(0)
+  })
+
+  it('enter RESOLVES when the closure walk throws', async () => {
+    let t = 0
+    const s = createWriteScope({
+      settleMs: 10,
+      resolve: id => Promise.resolve(throwingNode(id)),
+      now: () => t,
+    })
+    const done = await s.enter({ nodeId: '1:2' })
+    expect(s.touched().has('1:2')).toBe(true)
+    expect(s.reflow().size).toBe(0)
+    done(null)
+    t = 10
+    expect(s.isOpen()).toBe(false)
+  })
+
   it('never hands resolve an id that is not a plain node id', async () => {
     const seen: string[] = []
     const s = createWriteScope({

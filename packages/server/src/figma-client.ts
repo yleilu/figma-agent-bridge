@@ -52,10 +52,13 @@ export type FigmaClient = {
     command: string,
     params: Record<string, unknown>,
   ) => void
+  // A PUSH's identity rides in `meta`, not in `params` (change-feed.md), so
+  // the handler is handed both halves of the frame.
   onRequest: (
     command: string,
     handler: (
       params: Record<string, unknown>,
+      meta: Meta,
     ) => Promise<unknown> | unknown,
   ) => void
   disconnect: () => void
@@ -168,6 +171,7 @@ export const createFigmaClient = (
     string,
     (
       params: Record<string, unknown>,
+      meta: Meta,
     ) => Promise<unknown> | unknown
   >()
 
@@ -263,7 +267,9 @@ export const createFigmaClient = (
       // `sendReply` is defined later in this same closure; `handleMessage` only
       // runs at runtime (on an inbound message), so the forward reference is safe.
       /* eslint-disable @typescript-eslint/no-use-before-define */
-      Promise.resolve(handler(message.params ?? {}))
+      Promise.resolve(
+        handler(message.params ?? {}, message.meta ?? {}),
+      )
         .then(result => {
           if (rid !== undefined) {
             sendReply(rid, { result })
@@ -693,6 +699,7 @@ export const createFigmaClient = (
     command: string,
     handler: (
       params: Record<string, unknown>,
+      meta: Meta,
     ) => Promise<unknown> | unknown,
   ): void => {
     requestHandlers.set(command, handler)

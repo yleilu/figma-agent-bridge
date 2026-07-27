@@ -86,11 +86,11 @@ describe('SelfWriteFilter', () => {
   // BaseNodeChange, not only DeleteChange — documentchange is BATCHED, so a
   // node created-or-edited and then deleted inside one batch window arrives as
   // a CREATE / PROPERTY_CHANGE whose node is already removed. A removed node
-  // exposes only `removed` / `type` / `id` and THROWS on anything else; a throw
-  // here would take the whole batch with it in production (Task 3's listener
-  // has no try/catch) and, in the POC probe, silently delete the change from
-  // the kept-count the gate is read from — a false PASS on the one criterion
-  // that matters.
+  // exposes only `removed` / `type` / `id` and THROWS on anything else. The
+  // sandbox listener guards PER CHANGE, so a throw here costs one record
+  // rather than the batch's tail — but a record silently lost is a user edit
+  // the agent never hears about, which is the failure this feature exists to
+  // prevent. The filter must not throw in the first place.
   const removedNode = (id: string, type: string): unknown =>
     new Proxy(
       { removed: true, type, id } as Record<

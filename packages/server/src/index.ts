@@ -160,6 +160,7 @@ import {
   handleGithubAuthPoll,
 } from './tools/github-auth'
 import { IndexManager } from './component-index/manager'
+import { createDocumentChangedHandler } from './component-index/document-changed'
 import {
   handleSearchComponents,
   handleReindex,
@@ -195,13 +196,10 @@ if (process.argv.includes('--relay')) {
 
   const indexManager = new IndexManager()
 
-  client.onRequest(COMMANDS.DOCUMENT_CHANGED, params => {
-    const { fileId } = params
-    if (typeof fileId === 'string') {
-      indexManager.markStale(fileId)
-    }
-    return { ok: true }
-  })
+  client.onRequest(
+    COMMANDS.DOCUMENT_CHANGED,
+    createDocumentChangedHandler(indexManager),
+  )
 
   // --- Session tools (NOT file-addressed) ------------------------------------
   // These address the connection, not a per-call file, so they take the REAL

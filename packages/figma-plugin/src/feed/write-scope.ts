@@ -190,6 +190,23 @@ export const createWriteScope = (opts: {
     (depth > 0 && now() - enteredAt < maxOpenMs) ||
     now() < closesAt
 
+  /** Walk the closure and union it in, never propagating a throw. A node
+   *  REMOVED between resolve and the walk throws on `.children` / `.parent`,
+   *  and both call sites sit in the COMMAND path: an unguarded throw in
+   *  `claim` fails the user's command, and one in `fold` rejects `enter` and
+   *  leaves the dispatch with no command-result at all. A partial closure
+   *  over-reports (the agent's own records survive as user edits), which is
+   *  this module's chosen failure direction throughout. */
+  const foldClosure = (node: BaseNode): void => {
+    try {
+      for (const r of reflowClosure(node, expanded)) {
+        reflowSet.add(r)
+      }
+    } catch {
+      // the closure costs nothing but itself
+    }
+  }
+
   const fold = async (id: string): Promise<void> => {
     touchedSet.add(id)
     if (foldedSet.has(id)) return
@@ -207,9 +224,7 @@ export const createWriteScope = (opts: {
       return
     }
     if (node === null) return
-    for (const r of reflowClosure(node, expanded)) {
-      reflowSet.add(r)
-    }
+    foldClosure(node)
   }
 
   const close = (result: unknown): void => {
@@ -249,9 +264,7 @@ export const createWriteScope = (opts: {
     claim(node) {
       touchedSet.add(node.id)
       foldedSet.add(node.id)
-      for (const r of reflowClosure(node, expanded)) {
-        reflowSet.add(r)
-      }
+      foldClosure(node)
     },
     touched: () => touchedSet,
     reflow: () => reflowSet,
