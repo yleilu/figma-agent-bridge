@@ -213,6 +213,42 @@ export const useRelay = () => {
         return
       }
 
+      // POC ONLY (change-feed Task 1) — delete in Task 7. Forwards the
+      // sandbox probe's batched rows to the POC collector as a plain
+      // broadcast. Like index-stale it is an unsolicited PUSH: no meta, no
+      // requestId, no reply. MUST sit above the `command-result` gate.
+      if (msg.type === 'feed-probe') {
+        const probeWs = wsRef.current
+        const probeChannel = channelRef.current
+        if (probeWs && probeChannel) {
+          probeWs.send(
+            JSON.stringify({
+              type: 'message',
+              channel: probeChannel,
+              message: {
+                command: 'feed_probe',
+                params: {
+                  // Forwarded VERBATIM: poc-collect.ts reads contiguity off
+                  // `flushSeq` and turns a jump into a GAP row, which is the
+                  // only thing that distinguishes "the filter kept nothing"
+                  // (the gate PASSING) from "nothing arrived".
+                  flushSeq: msg.flushSeq,
+                  rowCount: msg.rowCount,
+                  session: msg.session,
+                  // The relay's BroadcastMessage carries NO channel
+                  // (packages/shared/src/types.ts), so the source has to be
+                  // stamped here or two plugins on one relay interleave into
+                  // one file with no way to partition them.
+                  channel: probeChannel,
+                  rows: msg.rows,
+                },
+              },
+            }),
+          )
+        }
+        return
+      }
+
       if (msg.type === 'index-stale') {
         const staleWs = wsRef.current
         const staleChannel = channelRef.current

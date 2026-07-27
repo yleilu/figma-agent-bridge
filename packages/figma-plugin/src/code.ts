@@ -13,6 +13,19 @@ import {
   MAX_WINDOW_HEIGHT,
 } from './spring-height'
 import { homogeneousKind } from './selection-label'
+// POC ONLY (Task 1) — deleted in Task 7 along with every `poc*` below.
+// `genId` comes off the BARREL, not '@figma-agent-bridge/shared/id': the
+// subpath is absent from shared's `exports` map, so tsc resolves it but vite
+// does not and the sandbox build fails.
+import { genId } from '@figma-agent-bridge/shared'
+import { createWriteScope } from './feed/write-scope'
+import { createSelfWriteFilter } from './feed/self-write-filter'
+import {
+  pocChangeId,
+  pocTakeFlush,
+  pocVerdict,
+  type PocVerdict,
+} from './feed/poc-probe'
 
 figma.showUI(__html__, {
   width: WINDOW_WIDTH,
@@ -71,6 +84,191 @@ const pushPresence = () => {
 figma.on('currentpagechange', pushPresence)
 figma.on('selectionchange', pushPresence)
 
+// ── POC ONLY (docs/scratch/plans/2026-07-26-change-feed.md, Task 1).
+// DELETE IN TASK 7, together with: the `poc*` wiring in the dispatch and in
+// the BATCH case, every `pocClaim(...)` call site, the imports above,
+// src/feed/poc-probe.ts(.test.ts) and the `feed-probe` branch in
+// hooks/useRelay.ts. `grep -n poc packages/figma-plugin/src` finds all of it.
+//
+// This is a SECOND documentchange listener, deliberately: the component-index
+// listener below returns early on anything that does not touch a
+// COMPONENT/COMPONENT_SET/INSTANCE, and the feed needs every change.
+//
+// POC_SETTLE_MS is swept BY HAND — edit it, rebuild
+// (`bun run --filter @figma-agent-bridge/figma-plugin build`), reload the
+// plugin, re-run cases 1 and 11. Measurement A needs no sweep: `dt` is the
+// gap between a command's exit and the events it produced, which is
+// window-independent.
+const POC_SETTLE_MS = 400
+const pocScope = createWriteScope({
+  settleMs: POC_SETTLE_MS,
+  resolve: id => figma.getNodeByIdAsync(id),
+})
+const pocFilter = createSelfWriteFilter(pocScope)
+/** Rows per `feed-probe` frame, and the ceiling on rows held back for the
+ *  next tick. See `pocTakeFlush` for why both bounds exist. */
+const POC_FLUSH_CAP = 2000
+const POC_BACKLOG_CAP = 20_000
+let pocRows: unknown[] = []
+let pocExitAt = 0
+/** Monotonic per command EXIT. Two rows sharing an `exitSeq` were measured
+ *  against the same command; a change in `exitSeq` inside what should be one
+ *  settle window is the visible signature of interleaved dispatches (the
+ *  handler is async and useRelay posts each execute-command immediately, so
+ *  commands CAN overlap). Measurement A is run with one command in flight at
+ *  a time; this is how that is checked rather than assumed. */
+let pocExitSeq = 0
+/** The command `pocExitAt` / `pocExitSeq` refer to — the last one to EXIT,
+ *  not necessarily one that is running. Measurement A's per-shape
+ *  distribution is `select(.cmd == "create_tree")` and is not computable
+ *  without it: `.raw` is the DocumentChange type, never the battery shape. */
+let pocLastCmd: string | null = null
+/** Open dispatch frames. A documentchange arriving while a command is still
+ *  RUNNING is measured against the PREVIOUS command's exit, so its `dt` is
+ *  the inter-command gap — seconds, in a hand-driven battery — and not a
+ *  batch period at all. `open` cannot separate the two populations (it is
+ *  true in-flight AND during the settle window); this can. */
+let pocDepth = 0
+
+/** Open a write-scope frame and hand back the disposer that closes it.
+ *  The probe must never be able to break the command path it is measuring:
+ *  `enter` increments the refcount BEFORE its only await, so a rejection
+ *  there would leave a frame no one can close and wedge the window open —
+ *  a rejected `enter` therefore still yields a closing disposer. */
+const pocEnter = (
+  params: unknown,
+): Promise<(result?: unknown) => void> => {
+  pocDepth += 1
+  let released = false
+  const release = () => {
+    if (released) return
+    released = true
+    pocDepth = Math.max(0, pocDepth - 1)
+  }
+  return pocScope
+    .enter(params)
+    .then(done => (result?: unknown) => {
+      release()
+      done(result)
+    })
+    .catch(() => (result?: unknown) => {
+      release()
+      pocScope.exit(result ?? null)
+    })
+}
+
+/** Monotonic per FRAME. Without it every silent-drop path between the sandbox
+ *  and feed-poc.jsonl is invisible, and "0 kept rows" — which is what gate
+ *  criterion 1 PASSING looks like — is indistinguishable from "no rows
+ *  arrived". The loss paths are real: the relay's 4 MiB inbound cap closes
+ *  the socket, Measurement D runs against the production relay whose token
+ *  bucket drops frames with no error to either side, and the sweep loop's
+ *  rebuild/reload drops the socket mid-flush. poc-collect.ts turns a jump in
+ *  this number into a GAP row. */
+let pocFlushSeq = 0
+
+/** This sandbox load. `flushSeq` restarts at 0 on every reload, and the sweep
+ *  loop reloads between runs — without a session key the collector could not
+ *  tell a restart from a 57-frame loss. It also partitions the file when two
+ *  plugins reach the same relay. (`genId`, not `crypto.randomUUID`: the
+ *  latter is secure-context-only and THROWS in the plugin iframe.) */
+const POC_SESSION = genId()
+
+const pocFlush = () => {
+  if (pocRows.length === 0) return
+  const { frame, rest, dropped } = pocTakeFlush(
+    pocRows,
+    POC_FLUSH_CAP,
+    POC_BACKLOG_CAP,
+  )
+  pocRows = rest
+  if (dropped > 0) {
+    // A drop must read as a NUMBER in the data, never as a missing tail.
+    pocRows.push({
+      tEvent: Date.now(),
+      raw: 'PROBE_OVERFLOW',
+      dropped,
+    })
+  }
+  figma.ui.postMessage({
+    type: 'feed-probe',
+    flushSeq: pocFlushSeq++,
+    rowCount: frame.length,
+    session: POC_SESSION,
+    rows: frame,
+  })
+}
+setInterval(pocFlush, 500)
+
+// `at` is passed in, not read here: every change in one documentchange batch
+// shares an arrival instant, and Measurement A is a distribution over
+// (arrival − last command exit).
+//
+// `tExit` starts at 0, so a row emitted before this session's FIRST command
+// exit carries an absurd `dt` (≈ epoch millis) rather than a plausible one.
+// That is deliberate: those rows must be excluded from Measurement A, and an
+// obviously-wrong number is safer than a small one that reads as real.
+const pocBase = (at: number) => ({
+  tEvent: at,
+  tExit: pocExitAt,
+  dt: at - pocExitAt,
+  exitSeq: pocExitSeq,
+  cmd: pocLastCmd,
+  inFlight: pocDepth > 0,
+  settleMs: POC_SETTLE_MS,
+})
+
+const pocRow = (
+  at: number,
+  row: {
+    raw: string
+    id: string | null
+    props: string[]
+    open: boolean
+    verdict: PocVerdict
+    keptProps: string[] | null
+    keys?: string[]
+    /** 'LOCAL' | 'REMOTE' — REMOTE is a DIFFERENT USER in the file. A
+     *  collaborator's edits land as `kept` rows and pollute case 10's
+     *  exactly-20 and case 11's must-be-0; unrecorded, a polluted run is
+     *  undiagnosable afterwards. */
+    origin?: string | null
+  },
+) => {
+  pocRows.push({ ...pocBase(at), ...row })
+}
+
+/** `claim` plus a row recording what the claim actually contributed to the
+ *  reflow closure. Measurement C's claim-placement sub-deliverable (the
+ *  post-append closure vs the at-creation one) is otherwise unobservable —
+ *  nothing else in the probe exposes the closure's size.
+ *
+ *  A claim row carries NO `verdict` field, deliberately. The POC pending
+ *  count is `select(.verdict == "kept") | .id | unique | length`; a claim row
+ *  labelled `kept` would enter every node the AGENT created into the very
+ *  count case 11 requires to be zero.
+ *
+ *  It carries no `tExit`/`dt` either. A claim happens MID-command, so those
+ *  would be measured against the PREVIOUS command's exit and mean nothing;
+ *  today they are harmless only because `group_by(.raw)` happens to sort
+ *  CLAIM into its own bucket, which is a property of the query and not of the
+ *  data. Omitting them means no future aggregate can sweep them in. */
+const pocClaim = (node: BaseNode, site: string) => {
+  const before = pocScope.reflow().size
+  pocScope.claim(node)
+  pocRows.push({
+    tEvent: Date.now(),
+    exitSeq: pocExitSeq,
+    cmd: pocLastCmd,
+    inFlight: pocDepth > 0,
+    settleMs: POC_SETTLE_MS,
+    raw: 'CLAIM',
+    site,
+    id: node.id,
+    reflowAdded: pocScope.reflow().size - before,
+  })
+}
+
 // Component-index freshness: on a component-relevant document change, nudge the
 // server to mark this file's index stale (debounced). It only SIGNALS — the
 // server re-projects — so documentchange granularity is not load-bearing.
@@ -110,6 +308,100 @@ figma.on('documentchange', event => {
     })
   }, 300)
 })
+
+// Registered AFTER the component-index listener above, deliberately. Figma
+// does not document whether a throwing listener stops the later ones being
+// called for the same event, and registration order is a free choice — so the
+// throwaway probe goes downstream of the shipped path, never upstream of it.
+const pocError = (at: number, e: unknown) => {
+  // Visible in the data rather than silent: a PROBE_ERROR row means the
+  // measurement is missing a change, and no result may be read past it.
+  pocRows.push({
+    ...pocBase(at),
+    raw: 'PROBE_ERROR',
+    error: String(e),
+  })
+}
+
+figma.on('documentchange', event => {
+  const tEvent = Date.now()
+  // The OUTER guard covers `event.documentChanges` itself; the inner one is
+  // per change, so one throwing change does not cost the rest of the batch
+  // its rows — silently losing the tail of a batch is exactly the distortion
+  // Measurement A cannot survive.
+  try {
+    for (const change of event.documentChanges) {
+      const c = change as {
+        type: string
+        properties?: string[]
+        origin?: string
+      }
+      try {
+        const id = pocChangeId(change)
+        const open = pocScope.isOpen()
+        const admitted = pocFilter.admit(change)
+        pocRow(tEvent, {
+          raw: c.type,
+          id,
+          props: c.properties ?? [],
+          open,
+          verdict: pocVerdict({
+            kept: admitted !== null,
+            id,
+            open,
+            touched: pocScope.touched(),
+            reflow: pocScope.reflow(),
+          }),
+          keptProps: admitted?.props ?? null,
+          origin: c.origin ?? null,
+          // Measurement B has to confirm DocumentChange's real field names
+          // against the live runtime — self-write-filter.ts only assumes them.
+          keys: Object.keys(change as object),
+        })
+      } catch (e) {
+        pocError(tEvent, e)
+      }
+    }
+  } catch (e) {
+    pocError(tEvent, e)
+  }
+})
+
+// The two CONTEXT listeners, so POC case 13 ("the agent's own navigation
+// produces no context records") is measurable live rather than only in the
+// unit test. Registered as their own listeners, not folded into the presence
+// ones above, so deleting the probe in Task 7 cannot disturb presence.
+//
+// An admitted context row is `kept-context`, NOT `kept` — see PocVerdict.
+// Case 13 still reads exactly as written: the agent's own navigation must
+// produce `dropped-context`, and a fail-open filter would show
+// `kept-context` here instead.
+figma.on('currentpagechange', () => {
+  pocRow(Date.now(), {
+    raw: 'CONTEXT_PAGE',
+    id: figma.currentPage.id,
+    props: [],
+    open: pocScope.isOpen(),
+    verdict: pocFilter.admitContext()
+      ? 'kept-context'
+      : 'dropped-context',
+    keptProps: null,
+  })
+})
+
+figma.on('selectionchange', () => {
+  pocRow(Date.now(), {
+    raw: 'CONTEXT_SELECT',
+    id: null,
+    props: [],
+    open: pocScope.isOpen(),
+    verdict: pocFilter.admitContext()
+      ? 'kept-context'
+      : 'dropped-context',
+    keptProps: null,
+  })
+})
+// ── end POC ─────────────────────────────────────────────────────────────
 
 // Plugin Presence (Task 8): best-effort clean-close signal. On a clean
 // close, tell the UI to send a `leave` frame so the relay drops the
@@ -1099,6 +1391,12 @@ const createSingleNode = async (
       throw new Error('Unsupported node type: ' + type)
   }
 
+  // POC ONLY — delete in Task 7. Belt-and-braces: the node is still parented
+  // to the current page here, so this contributes the TOUCHED half only (its
+  // closure is empty). It exists for the path where the append below throws
+  // and the node is removed again — Figma still emits CREATE + DELETE for it.
+  pocClaim(node, 'createSingleNode@create')
+
   // Apply common properties (fills, strokes, effects, etc.)
   await applyCommonProperties(node, spec, parent, warnings)
 
@@ -1125,6 +1423,11 @@ const createSingleNode = async (
 
   // Apply post-append properties (FILL sizing, ABSOLUTE positioning)
   applyPostAppendProperties(node, spec)
+
+  // POC ONLY — delete in Task 7. THE load-bearing claim: the node is in its
+  // real parent and its auto-layout sizing is set, so `hugs()` can decide and
+  // the reflow closure is the true one.
+  pocClaim(node, 'createSingleNode@post-append')
 
   return node
 }
@@ -1187,6 +1490,11 @@ const createTreeNode = async (
             '). To fill a slot, target the slot node.',
         )
       }
+      // POC ONLY — delete in Task 7.
+      pocClaim(
+        instance,
+        'createTreeNode@component-instance',
+      )
       return instance
     }
     if (existing.type === 'INSTANCE') {
@@ -1206,6 +1514,8 @@ const createTreeNode = async (
               '). To fill a slot, target the slot node.',
           )
         }
+        // POC ONLY — delete in Task 7.
+        pocClaim(instance, 'createTreeNode@instance-of')
         return instance
       }
     }
@@ -1222,6 +1532,8 @@ const createTreeNode = async (
           '). To fill a slot, target the slot node.',
       )
     }
+    // POC ONLY — delete in Task 7.
+    pocClaim(cloned, 'createTreeNode@clone')
     return cloned
   }
 
@@ -2357,6 +2669,9 @@ const handleCommand = async (
       }
       const sourceNode = found as SceneNode
       const comp = figma.createComponentFromNode(sourceNode)
+      // POC ONLY — delete in Task 7. The component takes the source node's
+      // place in the tree, so its closure is the real one at this point.
+      pocClaim(comp, 'create_component')
       if (ccName !== undefined) comp.name = ccName
       if (ccDescription !== undefined)
         comp.description = ccDescription
@@ -2614,6 +2929,15 @@ const handleCommand = async (
               try {
                 const slot = compWithSlot.createSlot!()
                 if (slot && name) slot.name = name
+                // POC ONLY — delete in Task 7. createSlot() returns a node
+                // already inside the component; the local typing is a
+                // minimal { name } shape, hence the cast.
+                if (slot) {
+                  pocClaim(
+                    slot as unknown as BaseNode,
+                    'update_component@slot',
+                  )
+                }
                 slotsCreated.push(name)
               } catch (e) {
                 slotsSkipped.push(name)
@@ -2728,6 +3052,8 @@ const handleCommand = async (
         )
       }
       const cs = figma.combineAsVariants(cvComps, cvParent)
+      // POC ONLY — delete in Task 7.
+      pocClaim(cs, 'combine_variants')
       if (params.name !== undefined)
         cs.name = params.name as string
       return {
@@ -2924,6 +3250,11 @@ const handleCommand = async (
       const svgFrame = figma.createNodeFromSvg(
         params.svg as string,
       )
+      // POC ONLY — delete in Task 7. Paired with the post-append claim
+      // below: createNodeFromSvg returns a frame that already has children
+      // but no real parent, so the two claims differ by the ANCESTOR half of
+      // the closure (Measurement C's claim-placement sub-deliverable).
+      pocClaim(svgFrame, 'create_from_svg@create')
       if (params.name) {
         svgFrame.name = params.name as string
       }
@@ -2932,6 +3263,8 @@ const handleCommand = async (
         svgFrame.resize(w, h)
       }
       ;(svgParent as FrameNode).appendChild(svgFrame)
+      // POC ONLY — delete in Task 7.
+      pocClaim(svgFrame, 'create_from_svg@post-append')
       return {
         id: svgFrame.id,
         name: svgFrame.name,
@@ -3669,6 +4002,8 @@ const handleCommand = async (
         } else {
           dest.appendChild(clone)
         }
+        // POC ONLY — delete in Task 7.
+        pocClaim(clone, 'clone_node')
         clones.push({
           id: clone.id,
           name: clone.name,
@@ -3874,6 +4209,8 @@ const handleCommand = async (
             error: 'Unknown boolean op: ' + op,
           }
       }
+      // POC ONLY — delete in Task 7.
+      pocClaim(boolNode, 'boolean_op')
       return {
         id: boolNode.id,
         name: boolNode.name,
@@ -3920,6 +4257,8 @@ const handleCommand = async (
         }
       }
       const vector = figma.flatten(nodes, flatParent)
+      // POC ONLY — delete in Task 7.
+      pocClaim(vector, 'flatten')
       return {
         id: vector.id,
         name: vector.name,
@@ -3977,6 +4316,8 @@ const handleCommand = async (
         }
       }
       const group = figma.group(nodes, groupParent)
+      // POC ONLY — delete in Task 7.
+      pocClaim(group, 'group_nodes')
       return {
         id: group.id,
         name: group.name,
@@ -4057,6 +4398,10 @@ const handleCommand = async (
           tgIndex,
           modifiers,
         )
+        // POC ONLY — delete in Task 7. Not in the plan's site list, but it
+        // is a creation choke point: the API is absent from the pinned
+        // runtime, so this claim is expected never to fire.
+        pocClaim(tgNode as BaseNode, 'transform_group')
         return {
           id: tgNode.id,
           name: tgNode.name,
@@ -4074,6 +4419,8 @@ const handleCommand = async (
     // create_page: add a new page and name it.
     case COMMANDS.CREATE_PAGE: {
       const page = figma.createPage()
+      // POC ONLY — delete in Task 7.
+      pocClaim(page, 'create_page')
       page.name = params.name as string
       return { id: page.id, name: page.name }
     }
@@ -4100,6 +4447,8 @@ const handleCommand = async (
         return { error: 'Page not found: ' + pageId }
       }
       const dup = (page as PageNode).clone()
+      // POC ONLY — delete in Task 7.
+      pocClaim(dup, 'duplicate_page')
       if (params.name !== undefined) {
         dup.name = params.name as string
       }
@@ -5239,8 +5588,15 @@ const handleCommand = async (
         error?: string
       }[] = []
       for (const entry of batchOps) {
+        // POC ONLY — delete in Task 7. A nested enter/exit pair, NOT a new
+        // window: the outer dispatch already holds a frame, so the refcount
+        // keeps the window open across the whole batch and each op's ids
+        // still fold in. `finally` closes the frame even for the ops this
+        // loop deliberately swallows.
+        const pocDone = await pocEnter(entry.params ?? {})
+        let opResult: unknown = null
         try {
-          const opResult = await handleCommand(
+          opResult = await handleCommand(
             entry.op,
             entry.params ?? {},
           )
@@ -5261,6 +5617,8 @@ const handleCommand = async (
           }
         } catch (e) {
           results.push({ ok: false, error: String(e) })
+        } finally {
+          pocDone(opResult)
         }
       }
       return { results }
@@ -5295,11 +5653,29 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
       return
     }
 
+    // POC ONLY — delete in Task 7. The window opens BEFORE the handler and
+    // closes when the dispatch settles, including when the handler throws:
+    // a frame left open wedges the window and silently eats the user's
+    // later edits, so the disposer is called from `finally`, never inline.
+    //
+    // NOTE for Task 7: this is the ONE dispatch point, so READ commands open
+    // the window too — `inspect(root)` folds a large reflow closure and any
+    // user move inside it within SETTLE_MS is then attributed to the agent.
+    // Reads emit no documentchange, so this cannot bias Measurement A; it
+    // does widen the silent-loss residual the spec discloses. Measurement B's
+    // false-drop rate is the evidence for whether the production wiring
+    // should gate `enter` on write commands.
     let result: unknown
+    const pocDone = await pocEnter(msg.params)
     try {
       result = await handleCommand(msg.command, msg.params)
     } catch (err) {
       result = { error: String(err) }
+    } finally {
+      pocDone(result)
+      pocExitAt = Date.now()
+      pocExitSeq += 1
+      pocLastCmd = msg.command
     }
 
     figma.ui.postMessage({
