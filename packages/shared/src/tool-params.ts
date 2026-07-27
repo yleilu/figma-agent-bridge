@@ -87,7 +87,7 @@ export const fileTargetParamsSchema = z.object({
     .string()
     .optional()
     .describe(
-      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook (request-envelope.md); ignored by this surface today.',
+      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook (request-envelope.md); the server remembers it once and keys the change-feed count file on it (change-feed.md).',
     ),
   agentId: z
     .string()
@@ -1496,6 +1496,27 @@ export const searchComponentsParamsSchema = z.object({
 
 export const reindexParamsSchema = z.object({
   ...fileTargetParamsSchema.shape,
+})
+
+// ---------------------------------------------------------------------------
+// Change feed tool
+// ---------------------------------------------------------------------------
+
+/**
+ * Params for `pull_changes` (change-feed.md): a DESTRUCTIVE drain of this
+ * file's server-side change buffer. Non-idempotent — a second immediate call
+ * returns an empty `ok`.
+ */
+export const pullChangesParamsSchema = z.object({
+  ...fileTargetParamsSchema.shape,
+  limit: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      'Max records this call returns (default 100). Records beyond it stay buffered — call again; there is no cursor, because consumption IS the position.',
+    ),
 })
 
 // ---------------------------------------------------------------------------

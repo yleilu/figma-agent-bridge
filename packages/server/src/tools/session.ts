@@ -134,6 +134,13 @@ export const handleConnect = async (
   client: FigmaClient,
   relayHttpUrl?: string,
   port?: number,
+  // change-feed.md — connect() is the OTHER join point (requireFile is the
+  // one every file tool flows through). A baseline opens here too, or an
+  // explicit connect would leave the file's first pushes unbuffered.
+  onJoined?: (
+    fileKey: string,
+    epoch: string | null,
+  ) => void,
 ): Promise<ToolResult> => {
   const { fileKey, fileName, channel } = params
 
@@ -167,6 +174,10 @@ export const handleConnect = async (
       const joinedKey =
         info !== undefined ? synthKey(info) : channel
       await client.joinChannel(channel, joinedKey)
+      // A raw channel absent from /channels has no registry entry, so no
+      // epoch: the baseline opens UNANCHORED and can only reach `ok` once a
+      // push names its connection.
+      onJoined?.(joinedKey, info?.epoch ?? null)
       return connectResult({
         channel,
         fileKey: joinedKey,
@@ -225,6 +236,7 @@ export const handleConnect = async (
 
   try {
     await client.joinChannel(info.channel, synthKey(info))
+    onJoined?.(synthKey(info), info.epoch ?? null)
     return connectResult({
       channel: info.channel,
       fileKey: synthKey(info),

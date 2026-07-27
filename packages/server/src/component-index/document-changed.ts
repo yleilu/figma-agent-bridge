@@ -10,12 +10,22 @@ type StaleMarker = {
   markStale(fileKey: string): void
 }
 
+/**
+ * Whether the frame was routable, and to which file. The change feed composes
+ * this handler rather than re-deriving the answer (change-feed/attach.ts), so
+ * the B3 drop rule has ONE owner: a push both consumers can see must not be
+ * routable to one and dropped by the other.
+ */
+export type PushRouting =
+  | { ok: false }
+  | { ok: true; fileKey: string }
+
 export const createDocumentChangedHandler =
   (indexManager: StaleMarker) =>
   (
     params: Record<string, unknown>,
     meta: Meta,
-  ): { ok: boolean } => {
+  ): PushRouting => {
     const { fileKey } = meta
     // A push whose meta.fileKey is absent or empty is DROPPED, silently: it
     // cannot be routed to a buffer, and inventing a route would violate B3.
@@ -32,5 +42,5 @@ export const createDocumentChangedHandler =
     if (params.indexStale === true) {
       indexManager.markStale(fileKey)
     }
-    return { ok: true }
+    return { ok: true, fileKey }
   }

@@ -7,6 +7,7 @@ import { PluginDisconnectedError } from '@figma-agent-bridge/server/figma-client
 import type { ChannelInfo } from '@figma-agent-bridge/shared'
 import { textResult } from '@figma-agent-bridge/server/tools/shared'
 import { withFile } from '@figma-agent-bridge/server/tools/with-file'
+import { sessionIdentity } from '@figma-agent-bridge/server/change-feed/session-identity'
 
 const base = (over: Partial<FigmaClient>): FigmaClient => ({
   joinChannel: () => Promise.resolve(''),
@@ -23,6 +24,8 @@ const base = (over: Partial<FigmaClient>): FigmaClient => ({
   channelFor: () => null,
   discover: () => Promise.resolve([] as ChannelInfo[]),
   isInstanceDead: () => false,
+  onSocketClose: () => undefined,
+  onFileDead: () => undefined,
   ...over,
 })
 
@@ -114,6 +117,37 @@ describe('withFile', () => {
     const env = JSON.parse(res.content[0].text)
     expect(env.code).toBe('DISCONNECTED')
     expect(env.error).toContain('fk-a')
+  })
+
+  it('LATCHES the injected sessionId even when the gate refuses the call', async () => {
+    // The count mirror is written on the PUSH path, which carries no
+    // sessionId: if this wrapper stops remembering the id, every count file
+    // stays on the `_unattributed` sentinel forever and adoption never runs.
+    // The gate-refusing shape is the one that pins the ordering — remember
+    // must precede requireFile.
+    const client = base({
+      channelFor: () => null,
+      discover: () => Promise.resolve([] as ChannelInfo[]),
+    })
+    const wrapped = withFile(client, async () =>
+      textResult('should not run'),
+    )
+    await wrapped({
+      fileKey: 'fk-none',
+      sessionId: 's-latched',
+      nodeId: '1:2',
+    })
+    const latched = sessionIdentity.current()
+    expect(latched).toBeDefined()
+    // First-wins: a later call cannot steal the identity.
+    await wrapped({
+      fileKey: 'fk-none',
+      sessionId: 's-other',
+      nodeId: '1:2',
+    })
+    expect(sessionIdentity.current()).toBe(
+      latched as string,
+    )
   })
 
   it('rethrows non-PluginDisconnectedError errors from the handler', async () => {

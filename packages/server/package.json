@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./tools/*": "./src/tools/*",
+    "./change-feed/*": "./src/change-feed/*.ts",
     "./component-index/*": "./src/component-index/*",
     "./ensure-relay": "./src/ensure-relay.ts",
     "./figma-client": "./src/figma-client.ts",

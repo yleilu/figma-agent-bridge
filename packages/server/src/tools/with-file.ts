@@ -4,8 +4,10 @@
 // scoped-client handler `(params, scoped: ScopedFigmaClient)` is structurally
 // incompatible with server.tool's `(args, extra: RequestHandlerExtra)` callback,
 // so it CANNOT be registered raw — a forgotten wrapper is a COMPILE error, not a
-// silent WRONG_FILE. registerSessionTool is the explicit exemption for the 3
-// non-file tools (connect / status / record_feedback).
+// silent WRONG_FILE. registerSessionTool (below) is the explicit exemption for
+// the 8 connection-addressed tools; registerBufferTool (tools/with-buffer.ts) is
+// the third path, for the one tool that takes a fileKey but dispatches nothing.
+// tool-surface.md counts the calls to all three as the exposed surface.
 
 import type {
   McpServer,
@@ -21,6 +23,7 @@ import type {
   ScopedFigmaClient,
 } from '../figma-client'
 import { PluginDisconnectedError } from '../figma-client'
+import { sessionIdentity } from '../change-feed/session-identity'
 import {
   requireFile,
   errorEnvelope,
@@ -34,17 +37,21 @@ import {
  * this from the schema shape `S` binds the handler's param type to its schema, so
  * pairing the wrong handler with a schema is a compile error (see registerFileTool).
  */
-type FileHandlerParams<S extends ZodRawShape> = Omit<
+export type FileHandlerParams<S extends ZodRawShape> = Omit<
   objectOutputType<S, ZodTypeAny>,
   'fileKey' | 'sessionId' | 'agentId' | 'agentType'
 >
 
 /**
- * Registration wrapper for every FILE-ADDRESSED tool (B3). Reads `fileKey` from
+ * Registration wrapper for every FILE-ADDRESSED tool (B3). Remembers the
+ * injected `sessionId` (change-feed.md, count mirror), reads `fileKey` from
  * the validated params, gates via requireFile (ASK/error/INCOMPATIBLE on miss),
  * MOVES the identity fields (`fileKey`, `sessionId`) out of the forwarded params
  * into `meta` (via forFile), and calls the handler with a file-scoped client.
  * Exported for direct unit testing; production code registers via registerFileTool.
+ *
+ * `onJoined` is passed straight through to requireFile — the change feed's
+ * baseline hook (change-feed.md), fired only when the gate actually joins.
  */
 export const withFile =
   <P extends Record<string, unknown>, R>(
@@ -53,6 +60,10 @@ export const withFile =
       params: P,
       client: ScopedFigmaClient,
     ) => Promise<R>,
+    onJoined?: (
+      fileKey: string,
+      epoch: string | null,
+    ) => void,
   ) =>
   async (
     args: P & {
@@ -62,7 +73,16 @@ export const withFile =
       agentType?: string
     },
   ): Promise<R | ToolResult> => {
-    const gate = await requireFile(client, args.fileKey)
+    // FIRST, before the gate: a call that fails the file gate still carries the
+    // session identity, and the count mirror's writes happen on the PUSH path,
+    // which has no sessionId of its own (change-feed.md, sessionId at write
+    // time). Losing an id here would leave the sentinel un-migrated.
+    sessionIdentity.remember(args.sessionId)
+    const gate = await requireFile(
+      client,
+      args.fileKey,
+      onJoined,
+    )
     if (!gate.ok) {
       return gate.result
     }
@@ -125,6 +145,10 @@ export const registerFileTool = <S extends ZodRawShape, R>(
     params: FileHandlerParams<S>,
     client: ScopedFigmaClient,
   ) => Promise<R>,
+  onJoined?: (
+    fileKey: string,
+    epoch: string | null,
+  ) => void,
 ): void => {
   // The cast is the ONE thing given up: TS can't resolve the withFile closure's
   // param type against `server.tool`'s overloaded ShapeOutput for a generic `S`,
@@ -134,14 +158,29 @@ export const registerFileTool = <S extends ZodRawShape, R>(
   server.tool(
     name,
     schema.shape,
-    withFile(client, handler) as unknown as ToolCallback<S>,
+    withFile(
+      client,
+      handler,
+      onJoined,
+    ) as unknown as ToolCallback<S>,
   )
 }
 
 /**
- * The escape hatch for the 3 NON-file tools (connect / status / record_feedback):
- * they address the connection, not a per-call file, so they take the REAL client
- * and are NOT gated by requireFile. Naming it explicitly documents the exemption.
+ * The escape hatch for the 8 NON-file tools — `connect` / `status` and the six
+ * machine-global feedback tools (`record_feedback`, `list_feedback`,
+ * `send_feedback`, `discard_feedback`, `github_auth_start`,
+ * `github_auth_poll`). They address the connection, not a per-call file, so
+ * they take the REAL client and are NOT gated by requireFile. Naming it
+ * explicitly documents the exemption.
+ *
+ * It does NOT call `sessionIdentity.remember`, unlike the file and buffer
+ * wrappers: none of these schemas spreads `fileTargetParamsSchema`, so an
+ * injected `sessionId` is stripped by zod before the handler runs and there is
+ * nothing here to remember. Adoption therefore happens on the first
+ * file-addressed or buffer-addressed call, and the count mirror's `_unattributed`
+ * sentinel + migrate path is exactly what covers the window until then
+ * (change-feed.md, Adoption).
  */
 export const registerSessionTool = <S extends ZodRawShape>(
   server: McpServer,

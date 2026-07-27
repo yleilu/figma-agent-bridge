@@ -112,10 +112,19 @@ export const protocolMismatch = (
  * file-addressed tool. Resolve `fileKey` → a driveable channel: already joined
  * → ok; available in the registry → AUTO-JOIN; empty registry → DISCONNECTED;
  * present-but-unmatched → WRONG_FILE with the list, asking the agent to choose.
+ *
+ * `onJoined` is the change feed's baseline hook, fired ONLY on a successful
+ * (auto-)join — the moment the server becomes a recipient of that file's
+ * broadcasts. Taking it as a parameter keeps the dependency one-way: this
+ * module never imports the feed.
  */
 export const requireFile = async (
   client: FigmaClient,
   fileKey: string,
+  onJoined?: (
+    fileKey: string,
+    epoch: string | null,
+  ) => void,
 ): Promise<FileGate> => {
   if (client.channelFor(fileKey) !== null) {
     return { ok: true, fileKey }
@@ -172,6 +181,11 @@ export const requireFile = async (
   }
   try {
     await client.joinChannel(match.channel, fileKey)
+    // change-feed.md — a baseline opens when the server successfully JOINS
+    // that file's channel; the epoch is seeded from the registry entry the
+    // gate has already resolved, so the buffer's history belongs to a KNOWN
+    // connection from its first moment.
+    onJoined?.(fileKey, match.epoch ?? null)
     return { ok: true, fileKey }
   } catch (err) {
     return {
