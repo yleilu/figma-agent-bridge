@@ -8,4 +8,32 @@ sid=$(printf '%s' "$payload" | jq -r '.session_id // empty') || exit 0
 curl -fsS --max-time 3 -X POST "http://localhost:$PORT/agent-status/remove" \
   -H 'content-type: application/json' \
   -d "$(jq -nc --arg s "$sid" '{ sessionId: $s }')" >/dev/null 2>&1 || true
+
+# Second responsibility (claude-plugin.md): remove this session's Change Feed
+# count files. The _unattributed sentinel is NOT covered — it belongs to no
+# session, so the server unlinks its own on clean shutdown and a reader expires
+# a stale one on updatedAt.
+#
+# The stem is sanitizeKey's shell twin (packages/shared/src/paths.ts), mirrored
+# from plugin/hooks/presence — LC_ALL=C included — and pinned to sanitizeKey by
+# the fixture table in test/lifecycle-hooks.test.ts. A stem that disagrees by
+# one character sweeps a path that does not exist, and this session's counts
+# outlive it forever.
+CHANGES_DIR="${FIGMA_BRIDGE_CHANGES_DIR:-$HOME/.figma-agent-bridge/changes}"
+stem="$(printf '%s' "$sid" | LC_ALL=C sed 's/[^A-Za-z0-9_-]/_/g')"
+if [ -d "$CHANGES_DIR" ] && [ -n "$stem" ]; then
+  # -mindepth/-maxdepth 2: only changes/<file>/<stem>.json, never a stray
+  # match elsewhere under the tree.
+  #
+  # The second predicate is this session's WRITE RESIDUE. The count mirror
+  # writes atomically as `<stem>.json.<writer>.<n>.tmp` then renames
+  # (packages/server/src/change-feed/count-mirror.ts, tmpFor); a kill between
+  # the two leaves the temp behind and nothing else ever removes it — the
+  # server unlinks only its own sentinels and no reader looks at a .tmp. It is
+  # session-scoped by its stem, so this sweep is its owner. Two predicates, not
+  # a widened glob: `-name "$stem.json*"` would also match `<stem>.jsonx`.
+  find "$CHANGES_DIR" -mindepth 2 -maxdepth 2 -type f \
+    \( -name "$stem.json" -o -name "$stem.json.*.tmp" \) \
+    -delete 2>/dev/null || true
+fi
 exit 0

@@ -91,6 +91,13 @@ agent's own reflow closure all survived. There is no evidence of a ceiling anywh
 
 ## Gate
 
+> **Scope of this table: the POC probe, under an ACTIVE Figma.** Every row below was measured with
+> the file in the foreground and edits flowing. The shipped code was later re-checked against the
+> same criterion under an **idle** Figma and did **not** reproduce row 1 — see
+> [the shipped-code live sweep](#shipped-code-live-sweep) and, specifically,
+> [the idle-delivery leak](#the-idle-delivery-leak--gate-item-2-is-open). Read this table as "the
+> filter's *rule* is sound", not as "the shipped feature passes".
+
 | Criterion | Result |
 |---|---|
 | Quiet-user regression reaches exactly 0 | **PASS** — 3 runs, row counts verified non-vacuous |
@@ -99,9 +106,14 @@ agent's own reflow closure all survived. There is no evidence of a ceiling anywh
 | False user edits per agent command | **0** |
 | `SETTLE_MS` derived from measurement | **PASS** |
 
-**The self-write filter is not falsified.** The design's central risk — a batch tail heavy enough
-that the window suppressing agent writes would also swallow concurrent user edits — did not
-materialise. Both requirements hold simultaneously with roughly 4× margin.
+**The self-write filter is not falsified *as a rule*.** The design's central risk — a batch tail
+heavy enough that the window suppressing agent writes would also swallow concurrent user edits — did
+not materialise. Both requirements hold simultaneously with roughly 4× margin.
+
+What the POC did **not** establish is that the rule's *precondition* always holds. The rule is
+"`documentchange` arrives within `SETTLE_MS` of the command that caused it"; the measurements above
+sample that arrival only while Figma is active. The shipped-code sweep found the precondition
+failing outright when it is not.
 
 ## Behaviours confirmed against the live runtime
 
@@ -127,3 +139,95 @@ materialise. Both requirements hold simultaneously with roughly 4× margin.
 - **Sustained load** (a continuous multi-hundred-node drag against a production-sized relay) was not
   measured; the rate limiter's drop behaviour under that load is characterised only by the relay's
   own configuration.
+- **Only an ACTIVE Figma was sampled.** Every measurement here was taken with the file in the
+  foreground and the probe driving edits continuously. Nothing in this document says what the
+  `documentchange` batch period is when Figma has been left alone — and that turned out to be the
+  case that matters.
+
+## Shipped-code live sweep
+
+The POC measured a probe wired into `code.ts`. This section records what was checked against the
+**shipped** pipeline (accumulator → flusher → wire → server buffer → count mirror → presence hook),
+live, on 2026-07-28. It is deliberately separate from everything above: the numbers above are still
+true of the probe, and one of them is **not** true of the shipped code.
+
+### The idle-delivery leak — gate item 2 is OPEN
+
+The plan's live-sweep item 2 re-checks the gate on the shipped code: *20 agent writes of mixed shape,
+user idle, `pending_edits` must be exactly 0; if it is not, stop and re-open the GATE.* **It was not
+0.** The correct status of this branch is **blocked**, not shipped.
+
+What was observed, with a Figma that had been left untouched for a long stretch before the run:
+
+| Evidence | What it shows |
+|---|---|
+| Sweep PHASE 5 → PHASE 7 | The 20-write battery produced **no push frame at all** while it ran (`pushFramesDelta=0`). Four phases later a **single frame, `seq=1`, `records=19`** arrived carrying nothing but the agent's own creates — including eight from a **previous run of the same script**. `pendingCount` went 0 → 19. |
+| The drain that followed | Listed `{"op":"create","id":"19:161","name":"T16Doomed"}` for a node that run had created **and deleted**. Per change-feed.md's collapse algebra a create+delete cancels; here the create survived. The leak therefore does not merely miscount — it can name a node that does not exist. |
+| Probe 1 | One `create_node`. The push arrived **49.2 s after the command exited** and carried the create as a kept record. `SETTLE_MS` is 400 ms, so a 49 s delivery is 120× outside the window: the filter evaluates `admit` at event time and the window was long closed. |
+| Probe 2 | The same shape, sampled every 3 s for 90.3 s: `pendingCount=0` throughout and **no push frame in the window**. This run distinguishes nothing on its own — see the vacuity note below. |
+| Probe 2 control (`p2c`) | `create_component` under the same idle conditions → push at **t+0.42 s**, `indexStale=true`, `records=0`. Delivery was prompt *and* the filter dropped the agent's own create. This is the one **witnessed** run: it proves the harness, the socket and the filter all work, and that the pathology is intermittent rather than universal. |
+
+**Vacuity note (POC correction 2 applies to this section too).** Probe 2's "0 over 90 s" rests on
+absence alone: with no push frame anywhere in its window, nothing inside that window separates "the
+filter worked" from "delivery was still deferred". It is **not** evidence that the filter held, and
+the 90 s figure should not be quoted as such. Only the `p2c` control carries a liveness marker, and
+it is a different run nine minutes later. The same objection retires the sweep's own
+`RESULT case 11: pendingCount=0` — PHASE 6's liveness control reported `pushFramesDelta=0` in the
+very same window, i.e. the harness correctly refused to witness that zero.
+
+**Trigger and threshold are uncharacterised.** The runs differ in whether Figma was idle, which
+command shape was used, and how long the plugin had been up; none of those was varied
+systematically. Until it is, the honest statement is that `documentchange` delivery to the plugin
+sandbox is **not reliably prompt**, and that the self-write filter — which is time-windowed — fails
+**open** whenever it is not. Fail-open is the "worse than not shipping" direction the gate exists to
+catch.
+
+**Next step, before this branch can merge:** reproduce the pathology deliberately (leave Figma
+untouched, then issue one agent write and watch `pending_edits`), characterise the trigger and the
+threshold, and then either fix it or — if it is an unfixable Figma/Chromium throttling fact — reopen
+the gate as an explicit human decision and record that decision here.
+
+### Verified live, with a liveness witness
+
+Each of these was watched for a positive signal, not for the absence of one:
+
+- **Baseline open → `{0, no_baseline}`**, written immediately as the `_unattributed` sentinel.
+- **Adoption and migration.** The sentinel's record reappeared as `<sessionId>.json` sharing the
+  sentinel's exact `updatedAt` (`1785176097936`) — the record *moved*, it was not re-derived.
+- **`no_baseline` → `ok` on the first drain**, witnessed by a moving `updatedAt`.
+- **Reconnect arm.** A plugin reload produced a new epoch and the spec's opening flush verbatim
+  (`seq=0 epoch=epoch-ynl4sh6jnjr2 indexStale=false records=0`), then `state: gap` in both the count
+  file and the presence block, and `pull_changes → {changes: [], state: 'gap'}`.
+- **Drain.** 19 real records out; the count file read 19 before and 0 after.
+- **Presence rendering, all three cases** — a count file present (`pending_edits: 0`), absent (both
+  fields omitted, not `0`), and `gap` (`pending_edits: 0` **plus** `pending_edits_state: gap`).
+- **Default-directory agreement.** One run with `FIGMA_BRIDGE_CHANGES_DIR` unset on both the server
+  and the hook: the server wrote and the hook read the same
+  `~/.figma-agent-bridge/changes/<key>/<session>.json`.
+- **Count-file shape.** `{schema, fileKey, writer, pendingCount, state, updatedAt}`, one file per
+  `<fileKey>/<session>`, no `.tmp` left behind.
+
+### Deferred, with what each would prove
+
+None of the following was run. They are listed so the record is not read as more complete than it is.
+
+| Deferred | What it would prove |
+|---|---|
+| Quiet-agent baseline (20 real user edits → `pending_edits: 20`) | The capture path end to end from a human's hands, not the agent's. |
+| Collapse (drag one node 40× → `pending_edits: 1`) | The collapse algebra on **user** input. See the note below — collapse currently has *no* clean live evidence. |
+| Navigation never counts | That `page`/`select` records stay out of the count. |
+| Reconnect → `gap` driven by closing and reopening the plugin by hand | The in-band arm from a real user action rather than a scripted reload. |
+| Unsaved file addressed by synthKey | That an unsaved file's counts render and drain under its channel. |
+| Reply health under sustained drag | The token-bucket invariant: the feed must never spend budget a paired reply needs. |
+| Socket close → `gap` by killing the relay | Covered only by a same-arm proxy (`client.disconnect()`), which exercises the server's handler but not a real socket death. |
+| **The real `session_id` chain** | The sweep hand-passed `sess-task16`. The full chain — identity `PreToolUse` → `meta.sessionId` → `sanitizeKey` stem → presence-hook stdin `.session_id` → `SessionEnd` sweep — has never run end to end in a real Claude Code session, and it is the single contract that makes the per-session path work at all rather than degrading to `_unattributed`. |
+| **The real MCP server process** | The harness re-declares `packages/server/src/index.ts`'s wiring rather than running it. The two agree today (diffed), but a future divergence in `index.ts` is invisible to this sweep. |
+
+### Collapse algebra is NOT verified live
+
+An earlier draft claimed it was. Withdrawn: the only live collapse evidence came from the leaked
+batch — a dataset this section declares corrupt — and it contains a counter-example to itself. Run
+2's create-then-delete (`19:169`) cancelled; run 1's identical create-then-delete (`19:161`, same
+script) did not, and its `create` survived into the drain. Whether that is a real collapse defect or
+an artifact of split delivery cannot be told apart without a run-1 log, which does not exist. Fold it
+into the idle-delivery investigation. Collapse's only trustworthy evidence today is the unit suite.
