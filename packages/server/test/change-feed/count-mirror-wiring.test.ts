@@ -12,7 +12,10 @@ import {
   ChangeFeed,
   isImmediateWrite,
 } from '@figma-agent-bridge/server/change-feed/feed'
-import { createCountMirror } from '@figma-agent-bridge/server/change-feed/count-mirror'
+import {
+  createCountMirror,
+  type CountMirror,
+} from '@figma-agent-bridge/server/change-feed/count-mirror'
 
 // The composition index.ts performs: the feed's onChange drives the mirror,
 // the count is DERIVED from the map sizes, and `drain` is immediate BY REASON.
@@ -20,13 +23,29 @@ import { createCountMirror } from '@figma-agent-bridge/server/change-feed/count-
 // off disk for the whole test.
 let dir: string
 let prevDir: string | undefined
+// The mirrors this test stood up, and every write it set going. `write` is
+// fire-and-forget in production and the wiring below keeps it that way, but
+// `resolveChangesDir()` is read INSIDE the write: a write still in flight when
+// the env is restored lands in the user's REAL state directory, next to the
+// files the presence hook reads. So teardown stops the timers and waits for
+// the chain BEFORE it restores the env or removes the directory.
+let mirrors: CountMirror[] = []
+let inflight: Promise<unknown>[] = []
 beforeEach(async () => {
   // Restored in afterEach: process.env outlives this file's module registry.
   prevDir = process.env.FIGMA_BRIDGE_CHANGES_DIR
   dir = await mkdtemp(join(tmpdir(), 'cfw-'))
   process.env.FIGMA_BRIDGE_CHANGES_DIR = dir
+  mirrors = []
+  inflight = []
 })
 afterEach(async () => {
+  // shutdown() FIRST: it clears the pending debounce timers, so nothing new
+  // can be enqueued while we drain what already is.
+  for (const m of mirrors) {
+    m.shutdown()
+  }
+  await Promise.allSettled(inflight)
   if (prevDir === undefined) {
     delete process.env.FIGMA_BRIDGE_CHANGES_DIR
   } else {
@@ -40,22 +59,35 @@ const read = async () =>
     await readFile(join(dir, 'fk', 'sid.json'), 'utf8'),
   )
 
-const wire = (): ChangeFeed => {
+const wire = (writer = 'sid'): ChangeFeed => {
   const mirror = createCountMirror({
     writer: 'srv-w',
     debounceMs: 5000,
     sessionId: () => 'sid',
   })
-  return new ChangeFeed((buffer, reason) => {
-    void mirror.write(
-      buffer.fileKey,
-      buffer.nodes.size + buffer.styles.size,
-      buffer.state,
-      // The SAME predicate index.ts passes — shared, not restated, so this
-      // test binds the production decision rather than a copy of it.
-      { immediate: isImmediateWrite(reason) },
-    )
-  })
+  // The count source is `feed.pendingCount`, NOT the map sizes: `pending_edits`
+  // means "distinct things changed OUTSIDE this session", so shadow entries and
+  // the context slots must stay out of the number.
+  mirrors.push(mirror)
+  const feed: ChangeFeed = new ChangeFeed(
+    (buffer, reason) => {
+      // Fire-and-forget, exactly as index.ts does — the promise is only
+      // RECORDED so teardown can wait for it.
+      inflight.push(
+        mirror.write(
+          buffer.fileKey,
+          feed.pendingCount(buffer.fileKey),
+          buffer.state,
+          // The SAME predicate index.ts passes — shared, not restated, so
+          // this test binds the production decision rather than a copy of it.
+          { immediate: isImmediateWrite(reason) },
+        ),
+      )
+    },
+    undefined,
+    { writer: () => writer },
+  )
+  return feed
 }
 
 describe('feed → count mirror wiring', () => {
@@ -183,6 +215,53 @@ describe('feed → count mirror wiring', () => {
     await Bun.sleep(10)
     expect((await read()).pendingCount).toBe(1)
 
+    feed.drain('fk', 100)
+    await Bun.sleep(10)
+    expect(await read()).toMatchObject({
+      pendingCount: 0,
+      state: 'ok',
+    })
+  })
+
+  it('a buffer holding only SHADOWS mirrors 0, and a drain leaves them behind', async () => {
+    const feed = wire('A')
+    feed.openBaseline('fk', 'e1')
+    feed.ingest(
+      'fk',
+      {
+        changes: [
+          { op: 'update', id: 'n1', props: ['x'], by: 1 },
+          { op: 'create', id: 'n2', by: 1 },
+        ],
+        writers: ['A'],
+        indexStale: false,
+        at: 1,
+      } as never,
+      { epoch: 'e1', seq: 1 },
+    )
+    await Bun.sleep(10)
+    // The session's own build is not a pending edit TO IT.
+    expect(await read()).toMatchObject({
+      pendingCount: 0,
+      state: 'no_baseline',
+    })
+
+    feed.ingest(
+      'fk',
+      {
+        changes: [
+          { op: 'update', id: 'n1', props: ['name'] },
+        ],
+        writers: ['A'],
+        indexStale: false,
+        at: 2,
+      } as never,
+      { epoch: 'e1', seq: 2 },
+    )
+    await Bun.sleep(10)
+    expect((await read()).pendingCount).toBe(1)
+
+    // The drain leaves the shadows behind, and they hold nothing open.
     feed.drain('fk', 100)
     await Bun.sleep(10)
     expect(await read()).toMatchObject({

@@ -1515,7 +1515,13 @@ export const pullChangesParamsSchema = z.object({
     .positive()
     .optional()
     .describe(
-      'Max records this call returns (default 100). Records beyond it stay buffered — call again; there is no cursor, because consumption IS the position.',
+      'Max ENTRIES (ids) this call returns (default 100). Entries beyond it stay buffered — call again; there is no cursor, because consumption IS the position. When it truncates, `remaining` maps where the rest are.',
+    ),
+  detail: z
+    .enum(['folded', 'runs'])
+    .optional()
+    .describe(
+      "'folded' (default): one net effect per id — op, the union of changed props, the final value of each, and src. 'runs': the same entries carrying runs[] instead, oldest first, each with its own op/props/set/src — how it got here, and whether your own write survived. Costs more tokens per entry; ask for it deliberately.",
     ),
 })
 

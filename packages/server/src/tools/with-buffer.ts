@@ -16,7 +16,10 @@ import type {
 } from 'zod'
 import { DRAIN_LIMIT } from '@figma-agent-bridge/shared/change-feed'
 import type { FigmaClient } from '../figma-client'
-import type { ChangeFeed } from '../change-feed/feed'
+import type {
+  ChangeFeed,
+  DrainDetail,
+} from '../change-feed/feed'
 import { sessionIdentity } from '../change-feed/session-identity'
 import {
   errorEnvelope,
@@ -128,17 +131,20 @@ export const registerBufferTool = <
 }
 
 /**
- * The drain. `{changes, truncated, state}` — the third output shape under D1:
- * bounded by `limit` + `truncated`, and NO cursor, because a destructive drain
- * has no position to resume from (the buffer's remainder IS the continuation).
+ * The drain. `{changes, truncated, remaining?, state}` — the third output shape
+ * under D1: bounded by `limit` + `truncated`, NO cursor (a destructive drain
+ * has no position to resume from — the buffer's remainder IS the continuation),
+ * and a truncation RECEIPT, because what is left of an event backlog has a
+ * shape worth reporting where what is left of a query result does not.
  */
 export const handlePullChanges = async (
-  params: { limit?: number },
+  params: { limit?: number; detail?: DrainDetail },
   ctx: BufferContext,
 ): Promise<ToolResult> => {
   const drained = ctx.feed.drain(
     ctx.fileKey,
     params.limit ?? DRAIN_LIMIT,
+    params.detail ?? 'folded',
   )
   // A read must not have a JOIN as a side effect, so an available-but-unwatched
   // file gets this answer, repeated, until a real join opens a baseline.

@@ -1,17 +1,43 @@
 // The per-fileKey server buffer (change-feed.md, Server buffer model). The
 // buffer belongs to the CONSUMER: the relay broadcasts one push to every
 // channel member and each session's server buffers and drains independently,
-// so one session's drain never empties another's view.
+// so one session's drain never empties another's view. Attribution makes that
+// split load-bearing rather than merely convenient — the buffer is where a
+// record stops being A CHANGE and becomes A CHANGE RELATIVE TO A READER.
 import {
   BUFFER_CAP,
-  collapse,
-  toEntry,
-  toRecord,
+  DRAIN_VALUE_BUDGET,
+  HOTSPOT_CAP,
+  RUNS_PER_ID_CAP,
+  SELF,
+  VALUE_MAX_BYTES,
+  collapseAcross,
+  collapseWithin,
+  measureValue,
   type BaselineState,
-  type BufferEntry,
+  type BufferRun,
   type ChangeRecord,
+  type CollapseRun,
   type DocumentChangedParams,
-} from '@figma-agent-bridge/shared/change-feed'
+  type DrainedRecord,
+  type ForeignRun,
+  type MutationOp,
+  type BufferEntry,
+  type WriterKey,
+} from '@figma-agent-bridge/shared'
+import {
+  foldEntry,
+  hotspots,
+  renderRuns,
+  type Hotspots,
+} from './fold'
+import { bitFor, resolveIngest } from './subtract'
+import { selfWriter } from './session-identity'
+
+/** The stored entry: the spec's `BufferEntry` plus the two clocks BUFFER_CAP's
+ *  stages need — `seq` for "the oldest distinct id", `at` for "longest
+ *  untouched". Neither is ever emitted. */
+type Entry = BufferEntry & { seq: number; at: number }
 
 export type FileBuffer = {
   fileKey: string
@@ -19,15 +45,22 @@ export type FileBuffer = {
   /** The connection this buffer's history belongs to. */
   epoch: string | null
   lastSeq: number | null
-  nodes: Map<string, BufferEntry>
-  styles: Map<string, BufferEntry>
-  page: ChangeRecord | null
-  select: ChangeRecord | null
+  nodes: Map<string, Entry>
+  styles: Map<string, Entry>
+  /** Latest-wins slots; masks stripped AS THEY ARE STORED, which is what makes
+   *  the drain's records mask-free by construction rather than by a filter. */
+  page: DrainedRecord | null
+  select: DrainedRecord | null
 }
 
+export type DrainDetail = 'folded' | 'runs'
+
 export type DrainResult = {
-  changes: ChangeRecord[]
+  changes: DrainedRecord[]
   truncated: boolean
+  /** ONLY when truncated: what is left of an event backlog has a shape worth
+   *  reporting where what is left of a query result does not. */
+  remaining?: Hotspots
   state: BaselineState
 }
 
@@ -58,8 +91,202 @@ export const isImmediateWrite = (
   reason === 'arm' ||
   reason === 'drain'
 
+const isSelfRun = (
+  run: BufferRun,
+): run is Extract<BufferRun, { mine: Set<string> }> =>
+  run.w === SELF
+
+const hasForeign = (entry: BufferEntry): boolean =>
+  entry.runs.some(r => !isSelfRun(r))
+
+/** The collapse algebra's operand for a stored run: the run's own payload plus
+ *  the entry-level identity and locator the tables carry through. */
+const operandOf = (
+  entry: Entry,
+  run: ForeignRun,
+): CollapseRun => ({
+  op: run.op,
+  ...(entry.type !== undefined ? { type: entry.type } : {}),
+  ...(entry.name !== undefined ? { name: entry.name } : {}),
+  ...(run.props !== undefined ? { props: run.props } : {}),
+  ...(run.set !== undefined ? { set: run.set } : {}),
+  ...(entry.pg !== undefined ? { pg: entry.pg } : {}),
+  ...(entry.fr !== undefined ? { fr: entry.fr } : {}),
+  ...(run.merged === true ? { merged: true as const } : {}),
+})
+
+const operandOfRecord = (
+  rec: ChangeRecord,
+): CollapseRun => {
+  const out: CollapseRun = { op: rec.op as MutationOp }
+  if (rec.type !== undefined) {
+    out.type = rec.type
+  }
+  if (rec.name !== undefined) {
+    out.name = rec.name
+  }
+  if (rec.props !== undefined) {
+    out.props = new Set(rec.props)
+  }
+  if (rec.set !== undefined) {
+    out.set = new Map(Object.entries(rec.set))
+  }
+  if (rec.pg !== undefined) {
+    out.pg = rec.pg
+  }
+  if (rec.fr !== undefined) {
+    out.fr = rec.fr
+  }
+  if (rec.merged === true) {
+    out.merged = true
+  }
+  return out
+}
+
+/** Split a collapse result back into the run's payload and the entry's shared
+ *  identity + locator. */
+const writeBack = (
+  entry: Entry,
+  run: ForeignRun,
+  next: CollapseRun,
+): void => {
+  run.op = next.op
+  if (next.props === undefined) {
+    delete run.props
+  } else {
+    run.props = next.props
+  }
+  if (next.set === undefined) {
+    delete run.set
+  } else {
+    run.set = next.set
+  }
+  if (next.merged === true) {
+    run.merged = true
+  } else {
+    delete run.merged
+  }
+  entry.type = next.type
+  entry.name = next.name
+  entry.pg = next.pg
+  entry.fr = next.fr
+}
+
+/**
+ * The entry-level identity + locator a NEW run establishes. Opening a run is
+ * still a MERGE onto what the entry already holds, so the rule has to be the
+ * table's: latest DEFINED wins, and a delete clears `name` but inherits `pg` /
+ * `fr` — a delete can never locate itself, so an earlier run is the only way a
+ * deleted node is ever locatable at all, and the truncation receipt buckets it
+ * instead of dropping it into `other`.
+ *
+ * Routed through `collapseAcross` rather than restated, so the rule has ONE
+ * home: the shell carries the arriving op and no payload, which makes every
+ * arm of the table reduce to exactly the latest-defined merge of the four
+ * identity fields.
+ */
+const seedIdentity = (
+  entry: Entry,
+  seeded: CollapseRun,
+): void => {
+  const shell: CollapseRun = { op: seeded.op }
+  if (entry.type !== undefined) {
+    shell.type = entry.type
+  }
+  if (entry.name !== undefined) {
+    shell.name = entry.name
+  }
+  if (entry.pg !== undefined) {
+    shell.pg = entry.pg
+  }
+  if (entry.fr !== undefined) {
+    shell.fr = entry.fr
+  }
+  const next = collapseAcross(shell, seeded)
+  entry.type = next.type
+  entry.name = next.name
+  entry.pg = next.pg
+  entry.fr = next.fr
+}
+
+/** Masks are transport between the plugin and the buffer, spent at ingest:
+ *  putting session ids in the agent's context would cost tokens for an
+ *  identifier it has nothing to do with (T4). */
+const toSlot = (rec: ChangeRecord): DrainedRecord => {
+  const out: DrainedRecord = { op: rec.op }
+  if (rec.id !== undefined) {
+    out.id = rec.id
+  }
+  if (rec.name !== undefined) {
+    out.name = rec.name
+  }
+  if (rec.ids !== undefined) {
+    out.ids = rec.ids
+  }
+  if (rec.count !== undefined) {
+    out.count = rec.count
+  }
+  return out
+}
+
+/** The serialized value cost of one rendered entry, in bytes — what
+ *  DRAIN_VALUE_BUDGET is spent against. A value the plugin's own caps admitted
+ *  is measured again here by the SAME function, so the two cannot disagree; one
+ *  that somehow did not is charged the per-property cap rather than skipped. */
+const valueBytes = (rec: DrainedRecord): number => {
+  let n = 0
+  const add = (set: Record<string, unknown>): void => {
+    for (const v of Object.values(set)) {
+      n += measureValue(v) ?? VALUE_MAX_BYTES
+    }
+  }
+  if (rec.set !== undefined) {
+    add(rec.set)
+  }
+  for (const run of rec.runs ?? []) {
+    if ('set' in run && run.set !== undefined) {
+      add(run.set)
+    }
+  }
+  return n
+}
+
+const stripValues = (rec: DrainedRecord): void => {
+  delete rec.set
+  for (const run of rec.runs ?? []) {
+    if ('set' in run) {
+      delete run.set
+    }
+  }
+}
+
+const KEY_SEP = '\0'
+
+/** Two run keys unioned, canonically — the same construction `writerKeyOf`
+ *  makes, over keys that are already canonical. */
+const mergeKeys = (
+  a: WriterKey,
+  b: WriterKey,
+): WriterKey => {
+  const names = new Set<string>()
+  for (const part of [
+    ...a.split(KEY_SEP),
+    ...b.split(KEY_SEP),
+  ]) {
+    if (part.length > 0) {
+      names.add(part)
+    }
+  }
+  return [...names].sort().join(KEY_SEP)
+}
+
 export class ChangeFeed {
   private readonly buffers = new Map<string, FileBuffer>()
+
+  /** Monotonic across the whole feed: the two maps are separate, so "the oldest
+   *  distinct id" and "the longest-untouched shadow" are only answerable
+   *  against a shared clock. */
+  private clock = 0
 
   constructor(
     /** Fired whenever a buffer's count or state may have changed — the count
@@ -69,17 +296,49 @@ export class ChangeFeed {
       reason: ChangeReason,
     ) => void = () => undefined,
     private readonly cap: number = BUFFER_CAP,
-  ) {}
+    /** `writer` is the ONE seam: production leaves it at `selfWriter`, so the
+     *  identity the buffer subtracts and the one the count mirror files under
+     *  are a single lookup. A test supplies it to stand up TWO consumers of the
+     *  same broadcast frame in one process — which is the whole property this
+     *  design turns on and the one a singleton makes unobservable. */
+    opts: {
+      runsPerId?: number
+      writer?: () => string
+    } = {},
+  ) {
+    this.runsPerId = opts.runsPerId ?? RUNS_PER_ID_CAP
+    this.writer = opts.writer ?? selfWriter
+  }
+
+  private readonly runsPerId: number
+
+  private readonly writer: () => string
 
   has(fileKey: string): boolean {
     return this.buffers.has(fileKey)
   }
 
+  /**
+   * Entries holding AT LEAST ONE FOREIGN RUN, across both maps — distinct
+   * changed things, not actions and not runs. Shadow entries never count: they
+   * record what this session itself did, and a count that rose on the agent's
+   * own writing would be the exact signal the subtraction at ingest avoids.
+   * Context slots never count either.
+   */
   pendingCount(fileKey: string): number {
     const b = this.buffers.get(fileKey)
-    return b === undefined
-      ? 0
-      : b.nodes.size + b.styles.size
+    if (b === undefined) {
+      return 0
+    }
+    let n = 0
+    for (const map of [b.nodes, b.styles]) {
+      for (const entry of map.values()) {
+        if (hasForeign(entry)) {
+          n += 1
+        }
+      }
+    }
+    return n
   }
 
   /**
@@ -176,6 +435,18 @@ export class ChangeFeed {
       b.state = 'gap'
     }
 
+    // The frame's writer table. Every arriving record is resolved against THIS
+    // server's own writer — the same value the count mirror keys its file on,
+    // one lookup so the two cannot drift.
+    const rawWriters = (params as { writers?: unknown })
+      .writers
+    const writers = Array.isArray(rawWriters)
+      ? rawWriters.filter(
+          (w): w is string => typeof w === 'string',
+        )
+      : undefined
+    const self = this.writer()
+
     // The relay validates only `meta` and forwards `params` as a FREE record,
     // and the push path is the one path with no version gate (B2 guards the
     // FILE gate, which pushes never traverse) — so a non-conforming or future
@@ -198,8 +469,9 @@ export class ChangeFeed {
           b.state = 'gap'
           continue
         }
-        this.fold(b, item as ChangeRecord)
+        this.route(b, item as ChangeRecord, writers, self)
       }
+      this.enforceCap(b)
     }
     this.onChange(b, 'ingest')
   }
@@ -223,14 +495,20 @@ export class ChangeFeed {
   }
 
   /**
-   * Drain-on-read: returns buffered records AND removes exactly the records it
-   * returned, so there is no cursor — the buffer IS the position. Returns null
-   * when no buffer exists (the caller answers `no_baseline` WITHOUT creating
-   * one: a read must not smuggle in a join).
+   * Drain-on-read: returns buffered records AND removes exactly the entries it
+   * returned, so there is no cursor — the buffer IS the position. An entry is
+   * removed WITH ALL ITS RUNS, self runs included (a partial drain of one id's
+   * history would leave a fragment whose first run is not the first run) while
+   * its `mine` stays behind as a shadow, because a shadow is not a change and
+   * the question it answers outlives the answer.
+   *
+   * Returns null when no buffer exists (the caller answers `no_baseline`
+   * WITHOUT creating one: a read must not smuggle in a join).
    */
   drain(
     fileKey: string,
     limit: number,
+    detail: DrainDetail = 'folded',
   ): DrainResult | null {
     const b = this.buffers.get(fileKey)
     if (b === undefined) {
@@ -238,19 +516,34 @@ export class ChangeFeed {
     }
 
     const { state } = b
-    const changes: ChangeRecord[] = []
+    const changes: DrainedRecord[] = []
     let truncated = false
+    const render =
+      detail === 'runs' ? renderRuns : foldEntry
 
-    const takeMap = (
-      map: Map<string, BufferEntry>,
-    ): void => {
+    const takeMap = (map: Map<string, Entry>): void => {
       for (const [id, entry] of [...map]) {
+        // Shadows are invisible to `changes[]` — they exist only to answer a
+        // later foreign change on the same id.
+        if (!hasForeign(entry)) {
+          continue
+        }
         if (changes.length >= limit) {
           truncated = true
           return
         }
-        changes.push(toRecord(id, entry))
-        map.delete(id)
+        const rendered = render(id, entry)
+        if (rendered !== null) {
+          changes.push(rendered)
+        }
+        if (
+          entry.mine !== undefined &&
+          entry.mine.size > 0
+        ) {
+          entry.runs = []
+        } else {
+          map.delete(id)
+        }
       }
     }
     // Mutations first, context slots last: the slots are latest-wins and lose
@@ -276,9 +569,10 @@ export class ChangeFeed {
       }
     }
 
+    this.spendValueBudget(changes)
+
     const empty =
-      b.nodes.size === 0 &&
-      b.styles.size === 0 &&
+      this.pendingCount(fileKey) === 0 &&
       b.page === null &&
       b.select === null
     // Clears to ok ONLY on a drain that (a) empties the buffer and (b) has an
@@ -288,26 +582,127 @@ export class ChangeFeed {
     // The join is the moment a continuous history can start, so the seeded
     // value counts; a registry epoch that has since gone stale self-corrects
     // to `gap` — in-band on the next push, and at the next re-join via
-    // openBaseline's comparison.
+    // openBaseline's comparison. EMPTY means no FOREIGN RUN remains: shadow
+    // entries survive a drain and never hold the state open.
     if (empty && b.epoch !== null) {
       b.state = 'ok'
     }
     this.onChange(b, 'drain')
 
-    return { changes, truncated, state }
+    const out: DrainResult = { changes, truncated, state }
+    if (truncated) {
+      // A thousand-record backlog handed back a hundred at a time is not
+      // actionable — ten more calls to learn what one re-read would have told
+      // the agent. `remaining` is a MAP OF WHERE TO LOOK.
+      const left: { fr?: string; pg?: string }[] = []
+      for (const map of [b.nodes, b.styles]) {
+        for (const entry of map.values()) {
+          if (hasForeign(entry)) {
+            left.push({ fr: entry.fr, pg: entry.pg })
+          }
+        }
+      }
+      out.remaining = hotspots(
+        left,
+        fr => b.nodes.get(fr)?.name,
+        HOTSPOT_CAP,
+      )
+    }
+    return out
   }
 
-  private fold(b: FileBuffer, rec: ChangeRecord): void {
+  /**
+   * The BYTE bound on a response, spent the way RECORD_VALUE_BUDGET is one
+   * layer down: entries in ASCENDING serialized size of their values, ties
+   * broken by their position in `changes`, each keeping its `set` while the
+   * budget holds. Allocation order is not render order — `changes` keeps its
+   * stated order, so `limit` and truncation are unaffected.
+   *
+   * NO ENTRY IS EVER DROPPED FOR IT: the response degrades to names-only, which
+   * is the record the design carries when it can carry nothing better. A budget
+   * that dropped entries instead would trade a reported CHANGE for a reported
+   * VALUE, which is the wrong way round.
+   */
+  private spendValueBudget(changes: DrainedRecord[]): void {
+    const sized = changes
+      .map((rec, i) => ({ i, size: valueBytes(rec) }))
+      .filter(e => e.size > 0)
+      .sort((a, b) =>
+        a.size !== b.size ? a.size - b.size : a.i - b.i,
+      )
+    let used = 0
+    const kept = new Set<number>()
+    for (const e of sized) {
+      if (used + e.size > DRAIN_VALUE_BUDGET) {
+        break // ascending, so nothing after this one fits either
+      }
+      used += e.size
+      kept.add(e.i)
+    }
+    for (const e of sized) {
+      if (!kept.has(e.i)) {
+        stripValues(changes[e.i])
+      }
+    }
+  }
+
+  private entryFor(
+    b: FileBuffer,
+    map: Map<string, Entry>,
+    id: string,
+  ): Entry {
+    const held = map.get(id)
+    this.clock += 1
+    if (held !== undefined) {
+      held.at = this.clock
+      return held
+    }
+    const entry: Entry = {
+      seq: this.clock,
+      at: this.clock,
+      runs: [],
+    }
+    map.set(id, entry)
+    return entry
+  }
+
+  private route(
+    b: FileBuffer,
+    rec: ChangeRecord,
+    writers: string[] | undefined,
+    self: string,
+  ): void {
     if (rec.op === 'page') {
-      b.page = rec
+      // The session that navigated discards its own; the others learn that the
+      // page changed under them. A dropped page record leaves the slot as it
+      // was — it is context, never a mutation.
+      const bit = bitFor(writers, self)
+      if (bit !== 0 && ((rec.by ?? 0) & bit) !== 0) {
+        return
+      }
+      b.page = toSlot(rec)
       return
     }
     if (rec.op === 'select') {
-      b.select = rec
+      // The `select` slot appears in NO row of the ingest table: it carries no
+      // id and therefore neither mask, so it is always kept and always replaces
+      // the slot.
+      b.select = toSlot(rec)
       return
     }
     const { id } = rec
     if (id === undefined) {
+      return
+    }
+    // An update naming NO property is not a change this feed can represent:
+    // the fold returns nothing for it and drops the entry, so counting it
+    // would put a number in the presence block that the very next drain
+    // cannot account for. Refused here rather than at the fold, so the rule
+    // holds against ANY producer and not only against this plugin version.
+    if (
+      (rec.op === 'update' || rec.op === 'style_update') &&
+      (rec.props ?? []).length === 0
+    ) {
       return
     }
     // Node and style ids live in SEPARATE maps — the id spaces are distinct
@@ -315,18 +710,279 @@ export class ChangeFeed {
     const map = rec.op.startsWith('style_')
       ? b.styles
       : b.nodes
-    const next = collapse(map.get(id), toEntry(rec))
-    if (next === null) {
-      map.delete(id)
+    const res = resolveIngest(rec, writers, self)
+    if (res.kind === 'foreign') {
+      this.appendForeign(b, map, id, res.key, res.rec)
       return
     }
-    if (!map.has(id) && map.size >= this.cap) {
-      map.delete(map.keys().next().value as string)
-      // Memory bound, NOT the drain limit: it DESTROYS records rather than
-      // paging them, so it can never be the continuation mechanism — the
-      // baseline is broken and the agent must re-read.
-      b.state = 'gap'
+    if (res.kind === 'split') {
+      this.appendForeign(b, map, id, res.key, res.rec)
     }
-    map.set(id, next)
+    this.appendSelf(b, map, id, res.mine)
+  }
+
+  private appendForeign(
+    b: FileBuffer,
+    map: Map<string, Entry>,
+    id: string,
+    key: WriterKey,
+    rec: ChangeRecord,
+  ): void {
+    const entry = this.entryFor(b, map, id)
+    const arriving = operandOfRecord(rec)
+    const last = entry.runs[entry.runs.length - 1]
+
+    // A self run's key matches nothing, so a foreign record arriving after one
+    // always opens a new run — the boundary is what the fold reads.
+    if (
+      last !== undefined &&
+      !isSelfRun(last) &&
+      last.w === key
+    ) {
+      const next = collapseWithin(
+        operandOf(entry, last),
+        arriving,
+      )
+      if (next === null) {
+        // create → delete under ONE writer inside one unbroken stretch.
+        entry.runs.pop()
+        if (
+          entry.runs.length === 0 &&
+          (entry.mine === undefined ||
+            entry.mine.size === 0)
+        ) {
+          map.delete(id)
+        }
+        return
+      }
+      writeBack(entry, last, next)
+      return
+    }
+
+    const seeded = collapseWithin(
+      undefined,
+      arriving,
+    ) as CollapseRun
+    const run: ForeignRun = { w: key, op: seeded.op }
+    if (seeded.props !== undefined) {
+      run.props = seeded.props
+    }
+    if (seeded.set !== undefined) {
+      run.set = seeded.set
+    }
+    if (seeded.merged === true) {
+      run.merged = true
+    }
+    seedIdentity(entry, seeded)
+    entry.runs.push(run)
+    this.capRuns(entry)
+  }
+
+  private appendSelf(
+    b: FileBuffer,
+    map: Map<string, Entry>,
+    id: string,
+    mine: string[],
+  ): void {
+    const entry = this.entryFor(b, map, id)
+    const last = entry.runs[entry.runs.length - 1]
+    if (last !== undefined && isSelfRun(last)) {
+      // Two ADJACENT self runs are one unbroken stretch of this session's own
+      // work — the definition of a run — and nothing separates them, so they
+      // answer every per-property and existence question identically. Merging
+      // them is what keeps a solo session's own build costing a set of short
+      // strings per node rather than a history of it.
+      for (const name of mine) {
+        last.mine.add(name)
+      }
+    } else {
+      entry.runs.push({ w: SELF, mine: new Set(mine) })
+    }
+    entry.mine ??= new Set()
+    for (const name of mine) {
+      entry.mine.add(name)
+    }
+
+    // An entry with nothing left to report becomes a shadow. Appending a self
+    // run is the ONLY thing that can suppress, so this is the only place the
+    // rule can reach zero — and it must be evaluated here rather than at drain,
+    // because `pendingCount` falls with it.
+    if (
+      hasForeign(entry) &&
+      foldEntry(id, entry) === null
+    ) {
+      entry.runs = []
+    }
+  }
+
+  /** The two oldest foreign runs that are IMMEDIATELY ADJACENT merge: no self
+   *  run between them, because two foreign runs fused over one would put a
+   *  property's last writer on the wrong side of this session's own. Returns
+   *  false when no such pair exists. */
+  private mergeAdjacent(entry: Entry): boolean {
+    for (let i = 0; i + 1 < entry.runs.length; i += 1) {
+      const a = entry.runs[i]
+      const bRun = entry.runs[i + 1]
+      if (isSelfRun(a) || isSelfRun(bRun)) {
+        continue
+      }
+      const next = collapseAcross(
+        operandOf(entry, a),
+        operandOf(entry, bRun),
+      )
+      const merged: ForeignRun = {
+        // Their keys UNION — and a merged run's key is only ever compared for
+        // equality, so the canonical join is what matters.
+        w: a.w === bRun.w ? a.w : mergeKeys(a.w, bRun.w),
+        op: next.op,
+        merged: true,
+      }
+      if (next.props !== undefined) {
+        merged.props = next.props
+      }
+      if (next.set !== undefined) {
+        merged.set = next.set
+      }
+      entry.type = next.type
+      entry.name = next.name
+      entry.pg = next.pg
+      entry.fr = next.fr
+      entry.runs.splice(i, 2, merged)
+      return true
+    }
+    return false
+  }
+
+  /** RUNS_PER_ID_CAP: a pathological alternation — a user dragging a node an
+   *  agent keeps restyling — would grow one id's history without limit. Loses
+   *  ORDER between two foreign runs and nothing else, so it never arms `gap`. */
+  private capRuns(entry: Entry): void {
+    while (entry.runs.length > this.runsPerId) {
+      if (!this.mergeAdjacent(entry)) {
+        return
+      }
+    }
+  }
+
+  /**
+   * BUFFER_CAP — the MEMORY bound. It bounds RUNS plus SHADOW ENTRIES (a run
+   * being the unit that costs memory and a shadow the unit that costs it
+   * invisibly) and degrades in three stages, SPENDING ORDER BEFORE IT SPENDS
+   * CHANGES:
+   *
+   *   1. shadow entries, longest-untouched first  — arms NOTHING
+   *   2. merges of adjacent foreign runs           — arms NOTHING
+   *   3. the oldest distinct id                    — arms `gap`
+   *
+   * Only stage 3 loses a change, and only stage 3 arms the baseline. Reaching
+   * stage 1 or 2 is a buffer under pressure telling the reader less about HOW;
+   * reaching stage 3 is a buffer that can no longer be trusted about WHAT.
+   */
+  private enforceCap(b: FileBuffer): void {
+    while (this.load(b) > this.cap) {
+      if (this.dropShadow(b)) {
+        continue
+      }
+      if (this.mergeBiggest(b)) {
+        continue
+      }
+      if (!this.evictOldest(b)) {
+        return
+      }
+    }
+  }
+
+  private load(b: FileBuffer): number {
+    let n = 0
+    for (const map of [b.nodes, b.styles]) {
+      for (const entry of map.values()) {
+        n += entry.runs.length
+        if (!hasForeign(entry)) {
+          n += 1
+        } // its `mine`
+      }
+    }
+    return n
+  }
+
+  /** Stage 1. A lost shadow costs an EXPLANATION, never a change, so arming
+   *  `gap` over one would oblige a full re-read to recover a label. */
+  private dropShadow(b: FileBuffer): boolean {
+    let victim: {
+      map: Map<string, Entry>
+      id: string
+    } | null = null
+    let at = Number.POSITIVE_INFINITY
+    for (const map of [b.nodes, b.styles]) {
+      for (const [id, entry] of map) {
+        if (!hasForeign(entry) && entry.at < at) {
+          at = entry.at
+          victim = { map, id }
+        }
+      }
+    }
+    if (victim === null) {
+      return false
+    }
+    victim.map.delete(victim.id)
+    return true
+  }
+
+  /**
+   * Stage 2. Order is lost, no change is.
+   *
+   * Candidates are tried in DESCENDING run count (ties by `seq`) until one
+   * merges. The busiest entry is not necessarily a mergeable one — self runs
+   * between its foreign runs leave it no adjacent pair — and stopping at the
+   * first refusal would fall through to stage 3, which spends a change and
+   * arms `gap`, while order was still there to spend elsewhere. False means
+   * what the spec's ordering requires it to mean: NO entry has an adjacent
+   * foreign pair left.
+   */
+  private mergeBiggest(b: FileBuffer): boolean {
+    const candidates: Entry[] = []
+    for (const map of [b.nodes, b.styles]) {
+      for (const entry of map.values()) {
+        if (entry.runs.length >= 2) {
+          candidates.push(entry)
+        }
+      }
+    }
+    candidates.sort((x, y) =>
+      x.runs.length !== y.runs.length
+        ? y.runs.length - x.runs.length
+        : x.seq - y.seq,
+    )
+    for (const entry of candidates) {
+      if (this.mergeAdjacent(entry)) {
+        return true
+      }
+    }
+    return false
+  }
+
+  /** Stage 3, and the only one that destroys a CHANGE. It DESTROYS rather than
+   *  pages, so it can never be the continuation mechanism — the baseline is
+   *  broken and the agent must re-read. */
+  private evictOldest(b: FileBuffer): boolean {
+    let victim: {
+      map: Map<string, Entry>
+      id: string
+    } | null = null
+    let seq = Number.POSITIVE_INFINITY
+    for (const map of [b.nodes, b.styles]) {
+      for (const [id, entry] of map) {
+        if (entry.seq < seq) {
+          seq = entry.seq
+          victim = { map, id }
+        }
+      }
+    }
+    if (victim === null) {
+      return false
+    }
+    victim.map.delete(victim.id)
+    b.state = 'gap'
+    return true
   }
 }

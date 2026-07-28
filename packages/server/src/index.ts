@@ -234,17 +234,21 @@ if (process.argv.includes('--relay')) {
   // The spec's write-trigger rows map one-to-one: `open`, `arm` and `drain`
   // are immediate BY REASON (isImmediateWrite names them), and `ingest` falls
   // through to the mirror's leading-edge / state-change / return-to-quiet
-  // conditions. The count is DERIVED from the map sizes, never a separately
-  // maintained counter that could drift under drain/push interleaving;
-  // context slots never count.
-  const feed = new ChangeFeed((buffer, reason) => {
-    void countMirror.write(
-      buffer.fileKey,
-      buffer.nodes.size + buffer.styles.size,
-      buffer.state,
-      { immediate: isImmediateWrite(reason) },
-    )
-  })
+  // conditions. The count is DERIVED, never a separately maintained counter
+  // that could drift under drain/push interleaving — and it is
+  // `feed.pendingCount`, not the map sizes: `pending_edits` means "distinct
+  // things changed OUTSIDE this session", so shadow entries (what this session
+  // itself caused) and the context slots must stay out of the number.
+  const feed: ChangeFeed = new ChangeFeed(
+    (buffer, reason) => {
+      void countMirror.write(
+        buffer.fileKey,
+        feed.pendingCount(buffer.fileKey),
+        buffer.state,
+        { immediate: isImmediateWrite(reason) },
+      )
+    },
+  )
   attachChangeFeed(client, feed, fileKey => {
     indexManager.markStale(fileKey)
   })

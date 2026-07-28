@@ -1,6 +1,5 @@
 // packages/shared/test/commands.test.ts
 import { describe, expect, it } from 'bun:test'
-import { APP_VERSION } from '../src'
 import {
   COMMANDS,
   READ_ONLY_COMMANDS,
@@ -164,9 +163,15 @@ describe('COMMANDS registry', () => {
     expect(COMMANDS.PING).toBe('ping')
   })
 
-  it('version bumped to 0.3.x (ping is a B2 wire change)', () => {
-    expect(APP_VERSION.startsWith('0.3.')).toBe(true)
-  })
+  // NO version assertion here, deliberately. The handshake compares
+  // major.minor, so a breaking wire change does bump the MINOR — but the
+  // version is a single number stamped across every artifact by the release
+  // pipeline from the release PR's label, never edited on a branch
+  // (dev-ops.md, "Version lockstep"). Pinning a number here would make this
+  // suite fail on every release that is not the one it was written for, and
+  // would encode the stamp as a branch's job. What this change owes is that
+  // the breaking frame is enumerated in version-handshake.md, and that its
+  // release PR carries `release:minor`.
 })
 
 // The event-causing axis (change-feed.md, "Only a dispatch that can cause an

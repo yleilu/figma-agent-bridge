@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'bun:test'
 import { sanitizeKey } from '@figma-agent-bridge/shared/paths'
+import {
+  SELF,
+  UNATTRIBUTED,
+} from '@figma-agent-bridge/shared/change-feed'
 
 describe('sanitizeKey', () => {
   // The fixture table pinned by plugin-presence.md, over the ASCII alphabet
@@ -24,5 +28,15 @@ describe('sanitizeKey', () => {
 
   it('returns a path SEGMENT with no extension', () => {
     expect(sanitizeKey('abc').endsWith('.json')).toBe(false)
+  })
+
+  // One degrade, named once: the plugin stamps this literal at source and the
+  // server subtracts it at ingest, so it lives in `shared` and the two cannot
+  // drift. It has to be a FIXED POINT here — the count mirror files under
+  // `sanitizeKey(writer)`, and a sentinel that sanitized to something else
+  // would be filed under a stem no reader looks for.
+  it('leaves the UNATTRIBUTED sentinel exactly as it is', () => {
+    expect(sanitizeKey(UNATTRIBUTED)).toBe(UNATTRIBUTED)
+    expect(UNATTRIBUTED).not.toBe(SELF)
   })
 })

@@ -251,6 +251,183 @@ describe('change-feed ingest over the relay', () => {
     plugin.close()
     client.disconnect()
   })
+
+  // ── the BROADCAST property ────────────────────────────────────────────────
+  // The relay has NO UNICAST: one frame reaches every member of the channel or
+  // none does. So the plugin ATTRIBUTES and each consumer SUBTRACTS — and THIS
+  // is the property a single-server unit test cannot show, because it is about
+  // two servers reading the same bytes and arriving at different buffers.
+  it('the SAME frame produces DIFFERENT buffers for two consumers', async () => {
+    const clientA = createFigmaClient(WS)
+    const clientB = createFigmaClient(WS)
+    const feedA = new ChangeFeed(
+      () => undefined,
+      undefined,
+      {
+        writer: () => 'A',
+      },
+    )
+    const feedB = new ChangeFeed(
+      () => undefined,
+      undefined,
+      {
+        writer: () => 'B',
+      },
+    )
+    attachChangeFeed(clientA, feedA, () => undefined)
+    attachChangeFeed(clientB, feedB, () => undefined)
+    await clientA.joinChannel('ch-two', 'fk-two')
+    await clientB.joinChannel('ch-two', 'fk-two')
+    feedA.openBaseline('fk-two', 'e1')
+    feedB.openBaseline('fk-two', 'e1')
+
+    const plugin = await rawPlugin()
+    plugin.send(
+      JSON.stringify({ type: 'join', channel: 'ch-two' }),
+    )
+    await Bun.sleep(30)
+    plugin.send(
+      JSON.stringify({
+        type: 'message',
+        channel: 'ch-two',
+        message: {
+          command: 'document_changed',
+          params: {
+            // Attribution rides `params`, which the relay forwards WHOLE —
+            // `metaSchema` gains nothing, so nothing here can be silently
+            // stripped by the allow-list.
+            writers: ['A', 'B'],
+            changes: [
+              {
+                op: 'update',
+                id: 'n1',
+                props: ['x'],
+                set: { x: 1 },
+                by: 1,
+              },
+              {
+                op: 'update',
+                id: 'n2',
+                props: ['y'],
+                set: { y: 2 },
+                by: 2,
+              },
+              { op: 'update', id: 'n3', props: ['z'] },
+            ],
+            indexStale: false,
+            at: 1,
+          },
+          meta: {
+            fileKey: 'fk-two',
+            epoch: 'e1',
+            seq: 0,
+          },
+        },
+      }),
+    )
+    await Bun.sleep(50)
+    // Each drops its OWN and keeps the peer's and the user's.
+    expect(
+      feedA.drain('fk-two', 100)?.changes.map(c => c.id),
+    ).toEqual(['n2', 'n3'])
+    expect(
+      feedB.drain('fk-two', 100)?.changes.map(c => c.id),
+    ).toEqual(['n1', 'n3'])
+    // …and each is 0 pending afterwards, which is the signal `pending_edits`
+    // carries. A count that never returned to 0 would carry none.
+    expect(feedA.pendingCount('fk-two')).toBe(0)
+    expect(feedB.pendingCount('fk-two')).toBe(0)
+    plugin.close()
+    clientA.disconnect()
+    clientB.disconnect()
+  })
+
+  it('keeps two records for ONE id as two RUNS, in the order the frame carried', async () => {
+    const client = createFigmaClient(WS)
+    const feed = new ChangeFeed(
+      () => undefined,
+      undefined,
+      {
+        writer: () => 'A',
+      },
+    )
+    attachChangeFeed(client, feed, () => undefined)
+    await client.joinChannel('ch-runs', 'fk-runs')
+    feed.openBaseline('fk-runs', 'e1')
+
+    const plugin = await rawPlugin()
+    plugin.send(
+      JSON.stringify({ type: 'join', channel: 'ch-runs' }),
+    )
+    await Bun.sleep(30)
+    plugin.send(
+      JSON.stringify({
+        type: 'message',
+        channel: 'ch-runs',
+        message: {
+          command: 'document_changed',
+          params: {
+            writers: ['A', 'B'],
+            changes: [
+              {
+                op: 'update',
+                id: 'n1',
+                props: ['x'],
+                set: { x: 10 },
+                by: 1,
+              },
+              {
+                op: 'update',
+                id: 'n1',
+                props: ['x'],
+                set: { x: 20 },
+                by: 2,
+              },
+              // `merged` must survive the wire from the plugin's accumulator
+              // into the buffer: a loss of order AT SOURCE has to be visible
+              // to the server rather than indistinguishable from a genuine
+              // single run.
+              {
+                op: 'update',
+                id: 'n2',
+                props: ['a', 'b'],
+                by: 2,
+                merged: true,
+              },
+            ],
+            indexStale: false,
+            at: 1,
+          },
+          meta: {
+            fileKey: 'fk-runs',
+            epoch: 'e1',
+            seq: 0,
+          },
+        },
+      }),
+    )
+    await Bun.sleep(50)
+    const out = feed.drain('fk-runs', 100, 'runs')
+    expect(out?.changes[0]?.runs).toEqual([
+      { src: 'self', mine: ['x'] },
+      {
+        op: 'update',
+        props: ['x'],
+        set: { x: 20 },
+        src: 'agent',
+      },
+    ])
+    expect(out?.changes[1]?.runs).toEqual([
+      {
+        op: 'update',
+        props: ['a', 'b'],
+        src: 'agent',
+        merged: true,
+      },
+    ])
+    plugin.close()
+    client.disconnect()
+  })
 })
 
 // The two disconnect arms are registrations, not behaviour of the transport:

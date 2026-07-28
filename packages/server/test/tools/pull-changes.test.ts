@@ -8,6 +8,7 @@ import {
   withBuffer,
   handlePullChanges,
 } from '@figma-agent-bridge/server/tools/with-buffer'
+import { pullChangesParamsSchema } from '@figma-agent-bridge/shared/tool-params'
 
 const stub = (available: ChannelInfo[]): FigmaClient =>
   ({
@@ -166,6 +167,160 @@ describe('pull_changes', () => {
       (await call({ fileKey: 'fk', limit: 1 })) as never,
     )
     expect(second.truncated).toBe(false)
+  })
+
+  it('defaults to `folded`, and `detail:"runs"` swaps the four fields for runs[]', async () => {
+    const feed = new ChangeFeed(() => undefined, 2000, {
+      writer: () => 'A',
+    })
+    feed.openBaseline('fk', 'e1')
+    const frame = (over: Record<string, unknown>) => ({
+      changes: [
+        {
+          op: 'update',
+          id: 'n1',
+          props: ['x'],
+          set: { x: 20 },
+          ...over,
+        },
+      ],
+      writers: ['A', 'B'],
+      indexStale: false,
+      at: 1,
+    })
+    feed.ingest('fk', frame({ by: 1 }) as never, {
+      epoch: 'e1',
+      seq: 0,
+    })
+    feed.ingest('fk', frame({ by: 2 }) as never, {
+      epoch: 'e1',
+      seq: 1,
+    })
+    const call = withBuffer(
+      stub([]),
+      feed,
+      handlePullChanges,
+    )
+
+    const folded = text(
+      (await call({ fileKey: 'fk' })) as never,
+    )
+    expect(folded.changes[0]).toEqual({
+      id: 'n1',
+      op: 'update',
+      props: ['x'],
+      set: { x: 20 },
+      src: 'agent',
+      mine: ['x'],
+    })
+    expect(folded.changes[0].runs).toBeUndefined()
+  })
+
+  it('`detail:"runs"` returns runs[] and NONE of op/props/set/src on the entry', async () => {
+    const feed = new ChangeFeed(() => undefined, 2000, {
+      writer: () => 'A',
+    })
+    feed.openBaseline('fk', 'e1')
+    feed.ingest(
+      'fk',
+      {
+        changes: [
+          { op: 'update', id: 'n1', props: ['x'], by: 1 },
+          {
+            op: 'update',
+            id: 'n1',
+            props: ['y'],
+            set: { y: 2 },
+            by: 2,
+          },
+          { op: 'select', ids: ['n1'] },
+        ],
+        writers: ['A', 'B'],
+        indexStale: false,
+        at: 1,
+      } as never,
+      { epoch: 'e1', seq: 0 },
+    )
+    const call = withBuffer(
+      stub([]),
+      feed,
+      handlePullChanges,
+    )
+    const out = text(
+      (await call({
+        fileKey: 'fk',
+        detail: 'runs',
+      })) as never,
+    )
+    const [node, slot] = out.changes
+    expect(node.runs).toEqual([
+      { src: 'self', mine: ['x'] },
+      {
+        op: 'update',
+        props: ['y'],
+        set: { y: 2 },
+        src: 'agent',
+      },
+    ])
+    for (const field of ['op', 'props', 'set', 'src']) {
+      expect(node[field]).toBeUndefined()
+    }
+    // The CONTEXT SLOTS ignore `detail` entirely and keep `op`.
+    expect(slot).toEqual({ op: 'select', ids: ['n1'] })
+  })
+
+  it('an invalid `detail` is INVALID_PARAM at the schema', () => {
+    const bad = pullChangesParamsSchema.safeParse({
+      fileKey: 'fk',
+      detail: 'everything',
+    })
+    expect(bad.success).toBe(false)
+    expect(
+      pullChangesParamsSchema.safeParse({ fileKey: 'fk' })
+        .success,
+    ).toBe(true)
+  })
+
+  it('`remaining` rides a truncated drain and reconciles with the count the mirror then writes', async () => {
+    const feed = new ChangeFeed()
+    feed.openBaseline('fk', 'e1')
+    feed.ingest(
+      'fk',
+      {
+        changes: [
+          { op: 'create', id: 'n1', fr: 'f1', pg: 'p1' },
+          { op: 'create', id: 'n2', fr: 'f1', pg: 'p1' },
+          { op: 'create', id: 'n3' },
+        ],
+        indexStale: false,
+        at: 1,
+      },
+      { epoch: 'e1', seq: 0 },
+    )
+    const call = withBuffer(
+      stub([]),
+      feed,
+      handlePullChanges,
+    )
+    const first = text(
+      (await call({ fileKey: 'fk', limit: 1 })) as never,
+    )
+    expect(first.truncated).toBe(true)
+    expect(first.remaining.total).toBe(2)
+    expect(first.remaining.total).toBe(
+      feed.pendingCount('fk'),
+    )
+    expect(
+      first.remaining.frames.reduce(
+        (s: number, f: { n: number }) => s + f.n,
+        0,
+      ) + first.remaining.other,
+    ).toBe(first.remaining.total)
+    const second = text(
+      (await call({ fileKey: 'fk' })) as never,
+    )
+    expect(second.truncated).toBe(false)
+    expect(second.remaining).toBeUndefined()
   })
 
   it('strips the identity headers and forwards only the tool params', async () => {

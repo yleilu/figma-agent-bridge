@@ -257,6 +257,17 @@ export const useRelay = () => {
       if (msg.type === 'feed-flush') {
         sendFeedFrame({
           changes: msg.changes,
+          // ATTRIBUTION RIDES `params`, never `meta`. `meta` answers "who is
+          // speaking and about which connection" — one value per frame — and
+          // attribution is PER RECORD: one frame carries the work of every
+          // session that wrote inside the flush window, so there is no single
+          // sender identity to put in a header. `meta` is also an enumerated
+          // allow-list the relay enforces, so an addition there would be a
+          // relay change and a stripped field an invisible failure; `params`
+          // is forwarded whole.
+          ...(msg.writers !== undefined
+            ? { writers: msg.writers }
+            : {}),
           indexStale: msg.indexStale === true,
           ...(msg.overflow === true
             ? { overflow: true }
@@ -529,6 +540,10 @@ export const useRelay = () => {
                         unknown
                       >) ?? {},
                     targetFileKey: meta?.fileKey ?? null,
+                    // The WRITER of this dispatch (change-feed.md). It already
+                    // rides the wire's meta; forwarding it into the sandbox is
+                    // an internal message field, not a wire addition.
+                    sessionId: meta?.sessionId ?? null,
                   },
                 },
                 '*',

@@ -14,6 +14,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { sanitizeKey } from '@figma-agent-bridge/shared/paths'
 import type { BaselineState } from '@figma-agent-bridge/shared/change-feed'
+import { SENTINEL } from './session-identity'
 
 /** Honoured by BOTH the server and the presence hook. A hardcoded directory on
  *  one side of a two-process contract is a drift waiting to happen. */
@@ -21,8 +22,10 @@ export const resolveChangesDir = (): string =>
   process.env.FIGMA_BRIDGE_CHANGES_DIR ??
   join(homedir(), '.figma-agent-bridge', 'changes')
 
-/** A fixed point of sanitizeKey; no UUID session id can sanitize to it. */
-export const SENTINEL = '_unattributed'
+// The sentinel is ONE literal: the count file's stem and the reserved WRITER
+// name a frame's `writers[]` may carry are the same value by construction, not
+// by coincidence (change-feed.md, "`_unattributed` is a writer").
+export { SENTINEL } from './session-identity'
 export const COUNT_SCHEMA = 1
 
 export type CountRecord = {

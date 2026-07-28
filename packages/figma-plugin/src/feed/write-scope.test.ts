@@ -5,6 +5,8 @@ import {
   createWriteScope,
   reflowClosure,
   MAX_CLOSURE_NODES,
+  UNATTRIBUTED,
+  type WriteScope,
 } from './write-scope'
 
 describe('harvestIds', () => {
@@ -237,6 +239,15 @@ const makeScope = (
     ...over,
   })
 
+/** The union shims are gone with the wire cut: membership is asked PER WRITER
+ *  now, because a drop decided for one session is not a drop for another. The
+ *  blocks below dispatch under ONE writer, so "some writer holds it" is exactly
+ *  the question the shims used to answer. */
+const has = (s: WriteScope, id: string): boolean =>
+  s.writersOf(id).size > 0
+const reflows = (s: WriteScope, id: string): boolean =>
+  s.reflowWritersOf(id).size > 0
+
 describe('createWriteScope retention', () => {
   const dispatch = async (
     s: ReturnType<typeof makeScope>,
@@ -244,23 +255,32 @@ describe('createWriteScope retention', () => {
     params: unknown,
     result: unknown = null,
   ): Promise<void> => {
-    const done = await s.enter(command, params)
+    const done = await s.enter(
+      UNATTRIBUTED,
+      command,
+      params,
+    )
     done(result)
   }
 
   it('a READ-ONLY dispatch harvests nothing, but still refcounts', async () => {
     const c = clock()
     const s = makeScope(c)
-    const done = await s.enter(COMMANDS.GET_NODE, {
-      nodeId: 'a',
-    })
+    const done = await s.enter(
+      UNATTRIBUTED,
+      COMMANDS.GET_NODE,
+      {
+        nodeId: 'a',
+      },
+    )
     // Reach is what makes this load-bearing: `search` returns hundreds of
     // ids and an `inspect` of a page root folds that page's whole closure.
-    expect([...s.touched()]).toEqual([])
+    expect(has(s, 'a')).toBe(false)
     expect(s.inFlight()).toBe(true)
     done({ id: 'b' })
     expect(s.inFlight()).toBe(false)
-    expect([...s.touched()]).toEqual([])
+    expect(has(s, 'a')).toBe(false)
+    expect(has(s, 'b')).toBe(false)
   })
 
   it('an event-causing dispatch keeps its ids INDEFINITELY after exit', async () => {
@@ -277,7 +297,8 @@ describe('createWriteScope retention', () => {
       { id: 'b' },
     )
     c.t = 60_000 // 150x the retired SETTLE_MS
-    expect([...s.touched()].sort()).toEqual(['a', 'b'])
+    expect(has(s, 'a')).toBe(true)
+    expect(has(s, 'b')).toBe(true)
   })
 
   it('evicts the oldest generation once RETAINED_COMMANDS newer ones exist', async () => {
@@ -291,12 +312,12 @@ describe('createWriteScope retention', () => {
         nodeId: `n${i}`,
       })
     }
-    expect(s.touched().has('first')).toBe(true)
+    expect(has(s, 'first')).toBe(true)
     await dispatch(s, COMMANDS.UPDATE_NODE, {
       nodeId: 'last',
     })
-    expect(s.touched().has('first')).toBe(false)
-    expect(s.touched().has('last')).toBe(true)
+    expect(has(s, 'first')).toBe(false)
+    expect(has(s, 'last')).toBe(true)
   })
 
   it('reads do NOT spend the retention count', async () => {
@@ -308,8 +329,8 @@ describe('createWriteScope retention', () => {
     for (let i = 0; i < 100; i += 1) {
       await dispatch(s, COMMANDS.SEARCH, { ids: [`r${i}`] })
     }
-    expect(s.touched().has('first')).toBe(true)
-    expect(s.touched().has('r99')).toBe(false)
+    expect(has(s, 'first')).toBe(true)
+    expect(has(s, 'r99')).toBe(false)
   })
 
   it('releases the WHOLE retained set once the agent goes idle', async () => {
@@ -319,9 +340,9 @@ describe('createWriteScope retention', () => {
     const s = makeScope(c, { retentionCeilingMs: 1000 })
     await dispatch(s, COMMANDS.UPDATE_NODE, { nodeId: 'a' })
     c.t = 999
-    expect(s.touched().has('a')).toBe(true)
+    expect(has(s, 'a')).toBe(true)
     c.t = 1000
-    expect([...s.touched()]).toEqual([])
+    expect(has(s, 'a')).toBe(false)
   })
 
   it('keys the ceiling on IDLE time, never on a generation AGE', async () => {
@@ -343,7 +364,7 @@ describe('createWriteScope retention', () => {
       })
     }
     expect(c.t).toBe(5000) // 5x the ceiling has elapsed
-    expect(s.touched().has('a')).toBe(true)
+    expect(has(s, 'a')).toBe(true)
   })
 
   it('never fires the ceiling while a dispatch is in flight', async () => {
@@ -354,35 +375,46 @@ describe('createWriteScope retention', () => {
     })
     await dispatch(s, COMMANDS.UPDATE_NODE, { nodeId: 'a' })
     c.t = 10
-    await s.enter(COMMANDS.UPDATE_NODE, { nodeId: 'b' })
+    await s.enter(UNATTRIBUTED, COMMANDS.UPDATE_NODE, {
+      nodeId: 'b',
+    })
     c.t = 5000
-    expect([...s.touched()].sort()).toEqual(['a', 'b'])
+    expect(has(s, 'a')).toBe(true)
+    expect(has(s, 'b')).toBe(true)
   })
 
   it('force-seals a dispatch that never settles, KEEPING its ids', async () => {
     const c = clock()
     const s = makeScope(c, { maxDispatchMs: 1000 })
-    const done = await s.enter(COMMANDS.UPDATE_NODE, {
-      nodeId: 'a',
-    })
+    const done = await s.enter(
+      UNATTRIBUTED,
+      COMMANDS.UPDATE_NODE,
+      {
+        nodeId: 'a',
+      },
+    )
     c.t = 999
     expect(s.inFlight()).toBe(true)
     c.t = 1000
     expect(s.inFlight()).toBe(false)
     // Sealed, not dropped: a wedge must degrade to a leak, never to a
     // silently-admitted self-write.
-    expect(s.touched().has('a')).toBe(true)
+    expect(has(s, 'a')).toBe(true)
     // A later claim opens a FRESH generation and folds into it.
-    s.claim(asNode(n('1:1')))
-    expect(s.touched().has('1:1')).toBe(true)
+    s.claim(UNATTRIBUTED, asNode(n('1:1')))
+    expect(has(s, '1:1')).toBe(true)
     // The late exit of the force-sealed dispatch must not drive the
     // refcount negative — inFlight() would break for the rest of the
     // session.
     expect(() => done(null)).not.toThrow()
     expect(s.inFlight()).toBe(false)
-    const again = await s.enter(COMMANDS.UPDATE_NODE, {
-      nodeId: 'z',
-    })
+    const again = await s.enter(
+      UNATTRIBUTED,
+      COMMANDS.UPDATE_NODE,
+      {
+        nodeId: 'z',
+      },
+    )
     expect(s.inFlight()).toBe(true)
     again(null)
     expect(s.inFlight()).toBe(false)
@@ -391,7 +423,11 @@ describe('createWriteScope retention', () => {
   it('spends exactly ONE generation on a batch of ten ops', async () => {
     const c = clock()
     const s = makeScope(c, { retainedCommands: 4 })
-    const outer = await s.enter(COMMANDS.BATCH, { ops: [] })
+    const outer = await s.enter(
+      UNATTRIBUTED,
+      COMMANDS.BATCH,
+      { ops: [] },
+    )
     for (let i = 0; i < 10; i += 1) {
       await dispatch(s, COMMANDS.UPDATE_NODE, {
         nodeId: `b${i}`,
@@ -406,31 +442,39 @@ describe('createWriteScope retention', () => {
       })
     }
     for (let i = 0; i < 10; i += 1) {
-      expect(s.touched().has(`b${i}`)).toBe(true)
+      expect(has(s, `b${i}`)).toBe(true)
     }
   })
 
   it('merges overlapping dispatches into the open generation', async () => {
     const c = clock()
     const s = makeScope(c, { retainedCommands: 2 })
-    const a = await s.enter(COMMANDS.UPDATE_NODE, {
-      nodeId: 'a',
-    })
-    const b = await s.enter(COMMANDS.UPDATE_NODE, {
-      nodeId: 'b',
-    })
+    const a = await s.enter(
+      UNATTRIBUTED,
+      COMMANDS.UPDATE_NODE,
+      {
+        nodeId: 'a',
+      },
+    )
+    const b = await s.enter(
+      UNATTRIBUTED,
+      COMMANDS.UPDATE_NODE,
+      {
+        nodeId: 'b',
+      },
+    )
     a(null)
     expect(s.inFlight()).toBe(true) // sealed only at the SECOND exit
     b(null)
     expect(s.inFlight()).toBe(false)
     await dispatch(s, COMMANDS.UPDATE_NODE, { nodeId: 'c' })
-    expect(s.touched().has('a')).toBe(true)
-    expect(s.touched().has('b')).toBe(true)
+    expect(has(s, 'a')).toBe(true)
+    expect(has(s, 'b')).toBe(true)
     await dispatch(s, COMMANDS.UPDATE_NODE, { nodeId: 'd' })
     // One generation: the two ids leave TOGETHER, never one without the
     // other.
-    expect(s.touched().has('a')).toBe(false)
-    expect(s.touched().has('b')).toBe(false)
+    expect(has(s, 'a')).toBe(false)
+    expect(has(s, 'b')).toBe(false)
   })
 
   it('unions touched over every retained generation and the open one', async () => {
@@ -442,19 +486,18 @@ describe('createWriteScope retention', () => {
     await dispatch(s, COMMANDS.UPDATE_NODE, {
       nodeId: 'g2',
     })
-    await s.enter(COMMANDS.UPDATE_NODE, { nodeId: 'g3' })
-    expect([...s.touched()].sort()).toEqual([
-      'g1',
-      'g2',
-      'g3',
-    ])
+    await s.enter(UNATTRIBUTED, COMMANDS.UPDATE_NODE, {
+      nodeId: 'g3',
+    })
+    for (const id of ['g1', 'g2', 'g3'])
+      expect(has(s, id)).toBe(true)
   })
 
   it('opens a generation for a claim that arrives with none open', () => {
     const c = clock()
     const s = makeScope(c)
-    s.claim(asNode(n('1:1')))
-    expect(s.touched().has('1:1')).toBe(true)
+    s.claim(UNATTRIBUTED, asNode(n('1:1')))
+    expect(has(s, '1:1')).toBe(true)
   })
 
   it('re-walks a closure PER GENERATION, so evicting the first loses nothing', async () => {
@@ -479,12 +522,10 @@ describe('createWriteScope retention', () => {
     await dispatch(s, COMMANDS.UPDATE_NODE, {
       nodeId: '2:2',
     })
-    expect(s.touched().has('1:1')).toBe(true)
-    expect([...s.reflow()].sort()).toEqual([
-      '1:1',
-      '1:2',
-      '1:9',
-    ])
+    expect(has(s, '1:1')).toBe(true)
+    for (const id of ['1:1', '1:2', '1:9'])
+      expect(reflows(s, id)).toBe(true)
+    expect(reflows(s, '2:2')).toBe(false)
   })
 
   it('a page id is TOUCHED without the page being dragged into reflow', async () => {
@@ -506,8 +547,9 @@ describe('createWriteScope retention', () => {
     await dispatch(s, COMMANDS.SET_CURRENT_PAGE, {
       pageId: '0:1',
     })
-    expect(s.touched().has('0:1')).toBe(true)
-    expect([...s.reflow()]).toEqual([])
+    expect(has(s, '0:1')).toBe(true)
+    for (const id of ['0:1', '1:1', '1:2', '1:3'])
+      expect(reflows(s, id)).toBe(false)
   })
 
   it('claim of a cloned PAGE does not drag its contents into reflow', async () => {
@@ -517,10 +559,11 @@ describe('createWriteScope retention', () => {
     const c = clock()
     const dup = kids(n('0:2', { type: 'PAGE' }), n('2:1'))
     const s = makeScope(c)
-    await s.enter(COMMANDS.DUPLICATE_PAGE, {})
-    s.claim(asNode(dup))
-    expect(s.touched().has('0:2')).toBe(true)
-    expect([...s.reflow()]).toEqual([])
+    await s.enter(UNATTRIBUTED, COMMANDS.DUPLICATE_PAGE, {})
+    s.claim(UNATTRIBUTED, asNode(dup))
+    expect(has(s, '0:2')).toBe(true)
+    for (const id of ['0:2', '2:1'])
+      expect(reflows(s, id)).toBe(false)
   })
 
   it('a BATCH harvests nothing at its OUTER entry — its ops harvest themselves', async () => {
@@ -531,38 +574,48 @@ describe('createWriteScope retention', () => {
     // exactly the reach the read-only rule exists to refuse.
     const c = clock()
     const s = makeScope(c)
-    const outer = await s.enter(COMMANDS.BATCH, {
-      ops: [
-        {
-          op: COMMANDS.INSPECT,
-          params: { pageId: '0:1' },
-        },
-        {
-          op: COMMANDS.UPDATE_NODE,
-          params: { nodeId: '1:1' },
-        },
-      ],
-    })
-    expect([...s.touched()]).toEqual([])
+    const outer = await s.enter(
+      UNATTRIBUTED,
+      COMMANDS.BATCH,
+      {
+        ops: [
+          {
+            op: COMMANDS.INSPECT,
+            params: { pageId: '0:1' },
+          },
+          {
+            op: COMMANDS.UPDATE_NODE,
+            params: { nodeId: '1:1' },
+          },
+        ],
+      },
+    )
+    expect(has(s, '0:1')).toBe(false)
+    expect(has(s, '1:1')).toBe(false)
     // The nested enters decide, each under its OWN classification.
     await dispatch(s, COMMANDS.INSPECT, { pageId: '0:1' })
     await dispatch(s, COMMANDS.UPDATE_NODE, {
       nodeId: '1:1',
     })
-    expect([...s.touched()]).toEqual(['1:1'])
+    expect(has(s, '1:1')).toBe(true)
+    expect(has(s, '0:1')).toBe(false)
     outer({
       results: [
         { ok: true, result: { id: '0:1' } },
         { ok: true, result: { id: '1:1' } },
       ],
     })
-    expect(s.touched().has('0:1')).toBe(false)
+    expect(has(s, '0:1')).toBe(false)
   })
 
   it('a BATCH still spends exactly one generation with the outer harvest gone', async () => {
     const c = clock()
     const s = makeScope(c, { retainedCommands: 2 })
-    const outer = await s.enter(COMMANDS.BATCH, { ops: [] })
+    const outer = await s.enter(
+      UNATTRIBUTED,
+      COMMANDS.BATCH,
+      { ops: [] },
+    )
     await dispatch(s, COMMANDS.UPDATE_NODE, {
       nodeId: 'b0',
     })
@@ -571,21 +624,257 @@ describe('createWriteScope retention', () => {
     })
     outer(null)
     await dispatch(s, COMMANDS.UPDATE_NODE, { nodeId: 'x' })
-    expect(s.touched().has('b0')).toBe(true)
-    expect(s.touched().has('b1')).toBe(true)
+    expect(has(s, 'b0')).toBe(true)
+    expect(has(s, 'b1')).toBe(true)
   })
 
   it('returns a ONE-SHOT disposer', async () => {
     const c = clock()
     const s = makeScope(c)
-    const done = await s.enter(COMMANDS.UPDATE_NODE, {
-      nodeId: 'a',
-    })
+    const done = await s.enter(
+      UNATTRIBUTED,
+      COMMANDS.UPDATE_NODE,
+      {
+        nodeId: 'a',
+      },
+    )
     done({ id: 'b' })
-    expect(s.touched().has('b')).toBe(true)
+    expect(has(s, 'b')).toBe(true)
     done({ id: 'c' }) // a second call is a no-op
-    expect(s.touched().has('c')).toBe(false)
+    expect(has(s, 'c')).toBe(false)
     expect(s.inFlight()).toBe(false)
+  })
+})
+
+// ── per-writer generations ──────────────────────────────────────────────────
+// One plugin serves EVERY session on the file, and generations INTERLEAVE
+// rather than nest: a peer's dispatch can open, seal and be evicted inside the
+// lifetime of this one's. So the refcount, the idle ceiling and the eviction
+// ring are all scoped to the WRITER. A shared ring would hand one session
+// control of another's correctness — the systematic leak change-feed.md rules
+// out by name.
+
+describe('createWriteScope per-writer generations', () => {
+  const as = async (
+    s: ReturnType<typeof makeScope>,
+    writer: string,
+    command: string,
+    params: unknown,
+    result: unknown = null,
+  ): Promise<void> => {
+    const done = await s.enter(writer, command, params)
+    done(result)
+  }
+
+  it('defaults the writer to _unattributed — the degraded route keeps single-agent behaviour', async () => {
+    const c = clock()
+    const s = makeScope(c)
+    const done = await s.enter(
+      UNATTRIBUTED,
+      COMMANDS.UPDATE_NODE,
+      {
+        nodeId: 'a',
+      },
+    )
+    done({ id: 'b' })
+    expect([...s.writersOf('a')]).toEqual([UNATTRIBUTED])
+    expect([...s.writersOf('b')]).toEqual([UNATTRIBUTED])
+    expect([...s.writersOf('never')]).toEqual([])
+  })
+
+  it("a peer's dispatch rate does not spend this writer's retention", async () => {
+    // THE test only two writers can express. Under a shared ring B's burst
+    // evicts A's generation after a handful of commands A did not issue, so
+    // A's own deferred events come back to A as foreign — at a rate B sets.
+    const c = clock()
+    const s = makeScope(c, { retainedCommands: 4 })
+    await as(s, 'A', COMMANDS.UPDATE_NODE, { nodeId: 'a1' })
+    for (let i = 0; i < 12; i += 1) {
+      await as(s, 'B', COMMANDS.UPDATE_NODE, {
+        nodeId: `b${i}`,
+      })
+    }
+    expect([...s.writersOf('a1')]).toEqual(['A'])
+    // …and B's own ring is spent exactly as it always was.
+    expect([...s.writersOf('b0')]).toEqual([])
+    expect([...s.writersOf('b11')]).toEqual(['B'])
+  })
+
+  it('two writers overlapping never share a generation', async () => {
+    // Merging across writers is not a loss of precision but a WRONG ANSWER:
+    // it fuses A's ids into B's attribution.
+    const c = clock()
+    const s = makeScope(c, { retainedCommands: 1 })
+    const a = await s.enter('A', COMMANDS.UPDATE_NODE, {
+      nodeId: 'a1',
+    })
+    const b = await s.enter('B', COMMANDS.UPDATE_NODE, {
+      nodeId: 'b1',
+    })
+    a(null)
+    b(null)
+    expect([...s.writersOf('a1')]).toEqual(['A'])
+    expect([...s.writersOf('b1')]).toEqual(['B'])
+    // retainedCommands: 1 — A dispatching again evicts A's ring and NOT B's.
+    await as(s, 'A', COMMANDS.UPDATE_NODE, { nodeId: 'a2' })
+    expect([...s.writersOf('a1')]).toEqual([])
+    expect([...s.writersOf('b1')]).toEqual(['B'])
+  })
+
+  it("one writer's overlapping dispatches DO share a generation", async () => {
+    const c = clock()
+    const s = makeScope(c, { retainedCommands: 1 })
+    const one = await s.enter('A', COMMANDS.UPDATE_NODE, {
+      nodeId: 'a1',
+    })
+    const two = await s.enter('A', COMMANDS.UPDATE_NODE, {
+      nodeId: 'a2',
+    })
+    one(null)
+    expect(s.inFlight()).toBe(true) // sealed only at the SECOND exit
+    two(null)
+    await as(s, 'A', COMMANDS.UPDATE_NODE, { nodeId: 'a3' })
+    // One generation: the two ids leave TOGETHER, never one without the
+    // other.
+    expect([...s.writersOf('a1')]).toEqual([])
+    expect([...s.writersOf('a2')]).toEqual([])
+    expect([...s.writersOf('a3')]).toEqual(['A'])
+  })
+
+  it('names EVERY writer that touched an id', async () => {
+    // A record has writers, not a writer. Attributing it to the most recent
+    // claimant would report it to the OTHER claimant as foreign.
+    const c = clock()
+    const s = makeScope(c)
+    await as(s, 'A', COMMANDS.UPDATE_NODE, { nodeId: 'n1' })
+    await as(s, 'B', COMMANDS.UPDATE_NODE, { nodeId: 'n1' })
+    expect([...s.writersOf('n1')].sort()).toEqual([
+      'A',
+      'B',
+    ])
+  })
+
+  it('evicts the longest-idle writer ENTIRELY past RETAINED_WRITERS', async () => {
+    // Never PART of a writer's set: half-evicting one would silently shorten
+    // its reach on somebody else's activity, which is the coupling the
+    // per-writer scoping exists to remove.
+    const c = clock()
+    const s = makeScope(c, {
+      retainedWriters: 2,
+      retainedCommands: 4,
+    })
+    await as(s, 'A', COMMANDS.UPDATE_NODE, { nodeId: 'a1' })
+    c.t = 1
+    await as(s, 'A', COMMANDS.UPDATE_NODE, { nodeId: 'a2' })
+    c.t = 2
+    await as(s, 'B', COMMANDS.UPDATE_NODE, { nodeId: 'b1' })
+    c.t = 3
+    await as(s, 'C', COMMANDS.UPDATE_NODE, { nodeId: 'c1' })
+    expect([...s.writersOf('a1')]).toEqual([])
+    expect([...s.writersOf('a2')]).toEqual([])
+    expect([...s.writersOf('b1')]).toEqual(['B'])
+    expect([...s.writersOf('c1')]).toEqual(['C'])
+  })
+
+  it('keys the idle ceiling on EACH writer, so a working peer holds nothing open', async () => {
+    // Hand-over is session-scoped for the mirror-image reason: another
+    // session's activity is no evidence that THIS one has handed over.
+    const c = clock()
+    const s = makeScope(c, { retentionCeilingMs: 1000 })
+    await as(s, 'A', COMMANDS.UPDATE_NODE, { nodeId: 'a1' })
+    for (let i = 0; i < 3; i += 1) {
+      c.t += 500
+      await as(s, 'B', COMMANDS.UPDATE_NODE, {
+        nodeId: `b${i}`,
+      })
+    }
+    expect(c.t).toBe(1500)
+    expect([...s.writersOf('a1')]).toEqual([]) // A idle 1500ms
+    expect([...s.writersOf('b2')]).toEqual(['B']) // B still working
+  })
+
+  it('is in flight while ANY writer is dispatching', async () => {
+    const c = clock()
+    const s = makeScope(c)
+    const a = await s.enter('A', COMMANDS.UPDATE_NODE, {
+      nodeId: 'a1',
+    })
+    await as(s, 'B', COMMANDS.UPDATE_NODE, { nodeId: 'b1' })
+    expect(s.inFlight()).toBe(true)
+    a(null)
+    expect(s.inFlight()).toBe(false)
+  })
+
+  it('force-seals only the WEDGED writer, and clears only its refcount', async () => {
+    const c = clock()
+    const s = makeScope(c, { maxDispatchMs: 1000 })
+    await s.enter('A', COMMANDS.UPDATE_NODE, {
+      nodeId: 'a1',
+    })
+    c.t = 900
+    const b = await s.enter('B', COMMANDS.UPDATE_NODE, {
+      nodeId: 'b1',
+    })
+    c.t = 1000
+    // A is force-sealed; B has been dispatching for 100 ms and is untouched.
+    expect(s.inFlight()).toBe(true)
+    expect([...s.writersOf('a1')]).toEqual(['A'])
+    b(null)
+    expect(s.inFlight()).toBe(false)
+    expect([...s.writersOf('b1')]).toEqual(['B'])
+  })
+
+  it('claims under the CLAIMING dispatch writer, not whoever dispatched meanwhile', async () => {
+    // Dispatches suspend at every await, so an ambient "current writer" would
+    // attribute a node created after a font load to whichever session
+    // dispatched in the meantime — and that misattribution lands on the
+    // SILENCE side, since the record is then suppressed for a session that
+    // did not cause it.
+    const c = clock()
+    const s = makeScope(c)
+    const a = await s.enter('A', COMMANDS.CREATE_NODE, {})
+    // B dispatches while A is suspended on its await, and is STILL IN FLIGHT
+    // when A's node appears: an ambient rule — the open generation, the most
+    // recently opened one — would hand the node to B.
+    const b = await s.enter('B', COMMANDS.UPDATE_NODE, {
+      nodeId: 'b1',
+    })
+    s.claim('A', asNode(n('1:1')))
+    a(null) // null, so ONLY the claim can attribute 1:1
+    b(null)
+    expect([...s.writersOf('1:1')]).toEqual(['A'])
+    expect([...s.writersOf('b1')]).toEqual(['B'])
+  })
+
+  it('scopes the reflow closure to its writer too', async () => {
+    // An id can sit inside A's cascade and be untouched by B, so each
+    // consumer must read its OWN bit out of `rf`.
+    const c = clock()
+    const leaf = n('1:1')
+    kids(n('1:9', HUG), leaf, n('1:2'))
+    const s = makeScope(c)
+    await s.enter('A', COMMANDS.CREATE_NODE, {})
+    s.claim('A', asNode(leaf))
+    expect([...s.reflowWritersOf('1:2')]).toEqual(['A'])
+    expect([...s.reflowWritersOf('9:9')]).toEqual([])
+    expect([...s.writersOf('1:2')]).toEqual([])
+  })
+
+  it('answers each writer independently over the SAME ids', async () => {
+    // The shims that unioned every writer are gone: a union is the wrong
+    // answer once the drop is per consumer, because an id inside A's cascade
+    // can be untouched by B.
+    const c = clock()
+    const leaf = n('1:1')
+    kids(n('1:9', HUG), leaf, n('1:2'))
+    const s = makeScope(c)
+    await as(s, 'A', COMMANDS.UPDATE_NODE, { nodeId: 'a1' })
+    await s.enter('B', COMMANDS.CREATE_NODE, {})
+    s.claim('B', asNode(leaf))
+    expect([...s.writersOf('a1')]).toEqual(['A'])
+    expect([...s.writersOf('1:1')]).toEqual(['B'])
+    expect([...s.reflowWritersOf('1:2')]).toEqual(['B'])
+    expect([...s.reflowWritersOf('a1')]).toEqual([])
   })
 })
 
@@ -596,14 +885,11 @@ describe('createWriteScope closure capture', () => {
     const s = createWriteScope({
       resolve: () => Promise.resolve(null),
     })
-    await s.enter(COMMANDS.UPDATE_NODE, {})
-    s.claim(asNode(leaf))
-    expect(s.touched().has('1:1')).toBe(true)
-    expect([...s.reflow()].sort()).toEqual([
-      '1:1',
-      '1:2',
-      '1:9',
-    ])
+    await s.enter(UNATTRIBUTED, COMMANDS.UPDATE_NODE, {})
+    s.claim(UNATTRIBUTED, asNode(leaf))
+    expect(has(s, '1:1')).toBe(true)
+    for (const id of ['1:1', '1:2', '1:9'])
+      expect(reflows(s, id)).toBe(true)
   })
 
   it('computes a closure for an id first seen at exit', async () => {
@@ -614,14 +900,13 @@ describe('createWriteScope closure capture', () => {
       resolve: id =>
         Promise.resolve(id === '1:1' ? asNode(leaf) : null),
     })
-    await s.enter(COMMANDS.UPDATE_NODE, {})
-    s.exit({ id: '1:1' })
-    await s.enter(COMMANDS.UPDATE_NODE, { nodeId: '1:1' })
-    expect([...s.reflow()].sort()).toEqual([
-      '1:1',
-      '1:2',
-      '1:9',
-    ])
+    await s.enter(UNATTRIBUTED, COMMANDS.UPDATE_NODE, {})
+    s.exit(UNATTRIBUTED, { id: '1:1' })
+    await s.enter(UNATTRIBUTED, COMMANDS.UPDATE_NODE, {
+      nodeId: '1:1',
+    })
+    for (const id of ['1:1', '1:2', '1:9'])
+      expect(reflows(s, id)).toBe(true)
   })
 
   it('survives a resolve that rejects', async () => {
@@ -629,11 +914,16 @@ describe('createWriteScope closure capture', () => {
     const s = makeScope(c, {
       resolve: () => Promise.reject(new Error('boom')),
     })
-    const done = await s.enter(COMMANDS.UPDATE_NODE, {
-      nodeId: '1:2',
-    })
-    expect(s.touched().has('1:2')).toBe(true)
-    expect(s.reflow().size).toBe(0)
+    const done = await s.enter(
+      UNATTRIBUTED,
+      COMMANDS.UPDATE_NODE,
+      {
+        nodeId: '1:2',
+      },
+    )
+    expect(has(s, '1:2')).toBe(true)
+    expect(reflows(s, '1:1')).toBe(false)
+    expect(reflows(s, '1:2')).toBe(false)
     done(null)
     expect(s.inFlight()).toBe(false)
   })
@@ -659,12 +949,15 @@ describe('createWriteScope closure capture', () => {
     const s = createWriteScope({
       resolve: () => Promise.resolve(null),
     })
-    await s.enter(COMMANDS.UPDATE_NODE, {})
-    expect(() => s.claim(throwingNode('1:1'))).not.toThrow()
+    await s.enter(UNATTRIBUTED, COMMANDS.UPDATE_NODE, {})
+    expect(() =>
+      s.claim(UNATTRIBUTED, throwingNode('1:1')),
+    ).not.toThrow()
     // The TOUCHED half still lands: it is the stronger suppression, and it
     // costs nothing to record.
-    expect(s.touched().has('1:1')).toBe(true)
-    expect(s.reflow().size).toBe(0)
+    expect(has(s, '1:1')).toBe(true)
+    expect(reflows(s, '1:1')).toBe(false)
+    expect(reflows(s, '1:2')).toBe(false)
   })
 
   it('enter RESOLVES when the closure walk throws', async () => {
@@ -672,11 +965,16 @@ describe('createWriteScope closure capture', () => {
     const s = makeScope(c, {
       resolve: id => Promise.resolve(throwingNode(id)),
     })
-    const done = await s.enter(COMMANDS.UPDATE_NODE, {
-      nodeId: '1:2',
-    })
-    expect(s.touched().has('1:2')).toBe(true)
-    expect(s.reflow().size).toBe(0)
+    const done = await s.enter(
+      UNATTRIBUTED,
+      COMMANDS.UPDATE_NODE,
+      {
+        nodeId: '1:2',
+      },
+    )
+    expect(has(s, '1:2')).toBe(true)
+    expect(reflows(s, '1:1')).toBe(false)
+    expect(reflows(s, '1:2')).toBe(false)
     done(null)
     expect(s.inFlight()).toBe(false)
   })
@@ -689,18 +987,19 @@ describe('createWriteScope closure capture', () => {
         return Promise.resolve(null)
       },
     })
-    await s.enter(COMMANDS.UPDATE_NODE, {
+    await s.enter(UNATTRIBUTED, COMMANDS.UPDATE_NODE, {
       parentId: 'I1:2;3:4', // compound instance child — HANGS the real API
       ids: ['S:5', 'VariableID:6:7'],
       nodeId: '1:2',
     })
     expect(seen).toEqual(['1:2'])
     // …but every one of them is still TOUCHED.
-    expect([...s.touched()].sort()).toEqual([
+    for (const id of [
       '1:2',
       'I1:2;3:4',
       'S:5',
       'VariableID:6:7',
     ])
+      expect(has(s, id)).toBe(true)
   })
 })

@@ -1,4 +1,4 @@
-// Where the agent's own writes are known (change-feed.md, Plugin-side
+// Where each session's own writes are known (change-feed.md, Plugin-side
 // pipeline §1).
 //
 // Retention is keyed on the COMMAND, not on the clock. `documentchange`
@@ -11,6 +11,17 @@
 // generations. Membership is asked at EVENT time and answered from what is
 // retained THEN: how long delivery took is not part of the question, only how
 // much has happened since.
+//
+// Each generation is tagged with its WRITER, because one plugin serves every
+// session on the file. Generations INTERLEAVE rather than nest — a peer's
+// dispatch can open, seal and be evicted inside the lifetime of this one's —
+// so the refcount, the idle ceiling and the eviction ring are all scoped to
+// the writer. A SHARED ring would hand one session control of another's
+// correctness: a peer's burst would evict a quieter session's generations
+// after a handful of commands it did not issue, and that session's own
+// deferred events would return to it as foreign at a rate its peer sets. The
+// memory bound is the product RETAINED_COMMANDS x RETAINED_WRITERS, which is
+// what makes per-writer scoping affordable.
 import {
   COMMANDS,
   isEventCausing,
@@ -18,6 +29,7 @@ import {
 import {
   MAX_DISPATCH_MS,
   RETAINED_COMMANDS,
+  RETAINED_WRITERS,
   RETENTION_CEILING_MS,
 } from '@figma-agent-bridge/shared/change-feed'
 
@@ -187,45 +199,69 @@ export const reflowClosure = (
   return [...out]
 }
 
+/**
+ * The writer of a dispatch that carries no `meta.sessionId` — the identity
+ * hook absent. A reserved literal, and the SAME one the server's count mirror
+ * keys its sentinel file on, so the degraded route keeps exactly the
+ * single-agent behaviour: that server subtracts this writer.
+ *
+ * It is resolved ONCE, where the message arrives, and threaded from there.
+ * There is deliberately no default on `enter` / `exit` / `claim`: a creating
+ * path that forgot to thread the writer must be a COMPILE ERROR, because a
+ * runtime fallback would restore exactly the silence this design refuses — a
+ * node claimed under whichever session happened to dispatch in the meantime.
+ */
+export { UNATTRIBUTED } from '@figma-agent-bridge/shared/change-feed'
+
 export type WriteScope = {
   /** Called on entry to every command dispatch, including each nested batch
-   *  op. Refcounted; the outermost EVENT-CAUSING entry OPENS a generation and
+   *  op, with the WRITER it belongs to. Refcounted PER WRITER; that writer's
+   *  outermost EVENT-CAUSING entry OPENS a generation tagged with it and
    *  harvests the command's PARAMS, capturing the reflow closure of every id
    *  they name while those nodes still exist. A read-only command refcounts
    *  and harvests nothing — a pure read emits no event, so it has nothing to
    *  suppress and its reach would be pure over-claim.
    *
-   *  Resolves to a ONE-SHOT disposer. Prefer
-   *  `const done = await scope.enter(cmd, p); try { … } finally { done(r) }`
+   *  Resolves to a ONE-SHOT disposer that remembers its writer. Prefer
+   *  `const done = await scope.enter(w, cmd, p); try { … } finally { done(r) }`
    *  over a bare `exit` — a skipped exit holds the generation open until
    *  MAX_DISPATCH_MS force-seals it. */
   enter(
+    writer: string,
     command: string,
     params: unknown,
   ): Promise<(result?: unknown) => void>
-  /** Called ONCE per enter, when that dispatch settles. Harvests the RETURN.
-   *  Refcounted; when the count returns to 0 the generation is SEALED — it
-   *  stops growing and stays RETAINED. */
-  exit(result: unknown): void
-  /** True while a dispatch is in flight, and no dispatch counts as in flight
-   *  for longer than MAX_DISPATCH_MS. Governs the CONTEXT SLOTS only — node
-   *  and style membership is decided by `touched` / `reflow` alone. */
+  /** Called ONCE per enter, when that dispatch settles. Harvests the RETURN
+   *  into that WRITER's open generation. Refcounted; when that writer's count
+   *  returns to 0 its generation is SEALED — it stops growing and stays
+   *  RETAINED. */
+  exit(writer: string, result: unknown): void
+  /** True while ANY writer has a dispatch in flight, and no dispatch counts
+   *  as in flight for longer than MAX_DISPATCH_MS. Governs the CONTEXT SLOTS
+   *  only — node and style membership is decided by the masks alone. */
   inFlight(): boolean
-  /** Called by every node-CREATING code path at the moment of creation. A
-   *  generic param walk cannot recover ids that do not exist when the command
-   *  is dispatched. */
-  claim(node: BaseNode): void
-  /** Ids the agent is known to have touched — the union over the open
-   *  generation and every retained one. Monotonic WITHIN a generation, and
-   *  shrinking only by eviction. */
-  touched(): ReadonlySet<string>
-  /** Ids whose GEOMETRY the agent's writes can move without naming them.
-   *  Union over the same generations. */
-  reflow(): ReadonlySet<string>
+  /** Called by every node-CREATING code path at the moment of creation, with
+   *  the DISPATCH's writer. A generic param walk cannot recover ids that do
+   *  not exist when the command is dispatched.
+   *
+   *  The writer is a PARAMETER, never inferred from whatever is open:
+   *  dispatches suspend at every await, so a node created after a font load
+   *  would be claimed under whichever session dispatched in the meantime —
+   *  and that misattribution lands on the SILENCE side. */
+  claim(writer: string, node: BaseNode): void
+  /** The writers known to have touched this id — read over every writer's
+   *  open generation and every retained one. Monotonic WITHIN a generation,
+   *  and shrinking only by eviction. */
+  writersOf(id: string): ReadonlySet<string>
+  /** The writers whose writes can move this id's GEOMETRY without naming it.
+   *  Read over the same generations. */
+  reflowWritersOf(id: string): ReadonlySet<string>
 }
 
-/** One dispatch's harvest. Sealed at exit, evicted by one of the two bounds. */
+/** One dispatch's harvest, tagged with the session that caused it. Sealed at
+ *  that writer's exit, evicted by one of the three bounds. */
 type Generation = {
+  writer: string
   touched: Set<string>
   reflow: Set<string>
   /** ids whose closure has already been walked FOR THIS GENERATION — NOT the
@@ -235,12 +271,67 @@ type Generation = {
   expanded: Set<string>
 }
 
+/**
+ * One writer's whole standing in the scope: its refcount, its idle clock and
+ * its own ordered ring. Holding the ring per writer is what makes the three
+ * bounds writer-scoped — RETAINED_COMMANDS evicts THAT writer's oldest sealed
+ * generation, RETENTION_CEILING_MS releases THAT writer's whole set, and only
+ * RETAINED_WRITERS crosses writers, and then only wholesale.
+ */
+type WriterState = {
+  writer: string
+  /** refcount over that writer's dispatches, reads included */
+  depth: number
+  /** when its depth went 0 → 1, i.e. when its current IN-FLIGHT INTERVAL
+   *  began — which is also when the generation it belongs to opened, and what
+   *  MAX_DISPATCH_MS is measured from. Its own overlapping dispatches SHARE
+   *  it, so a run that never lets its refcount return to 0 is force-sealed as
+   *  a whole rather than per dispatch. Only reachable past the server's own
+   *  30 s dispatch timeout, by which point the caller has already given up. */
+  depthSince: number
+  /** its most recent enter(), ANY command */
+  lastDispatchAt: number
+  open: Generation | null
+  /** oldest first */
+  retained: Generation[]
+}
+
+/**
+ * The membership index, rebuilt lazily: `admit` asks once per change and a
+ * documentchange batch can carry hundreds against every retained generation,
+ * so the walk is memoised and invalidated on every mutation and eviction.
+ *
+ * Keyed by WRITER, not by id. Inverting it — one set of writers per touched id
+ * — would answer in O(1) but allocate a Set per id on every rebuild, and a
+ * single create_tree puts thousands of ids in one generation. Keyed this way
+ * the structure is exactly today's (one union set per writer, one writer in
+ * the ordinary case) and a lookup costs one `has` per writer, of which there
+ * are at most RETAINED_WRITERS.
+ */
+type Index = {
+  /** writer → every id that writer touched, across its generations */
+  touched: Map<string, Set<string>>
+  /** writer → every id in that writer's reflow closures */
+  reflow: Map<string, Set<string>>
+  /** memoised answers: there are only as many distinct ones as there are
+   *  writer subsets in play, and in the ordinary case exactly one. */
+  answers: Map<string, ReadonlySet<string>>
+}
+
+const EMPTY: ReadonlySet<string> = new Set()
+
+/** Writer names are opaque, so the memo key is separator-joined and the
+ *  separator is one no platform session id carries — the same argument
+ *  `writerKeyOf` makes in shared. */
+const ANSWER_SEP = '\0'
+
 export const createWriteScope = (opts: {
   resolve: (id: string) => Promise<BaseNode | null>
   now?: () => number
   retainedCommands?: number
   retentionCeilingMs?: number
   maxDispatchMs?: number
+  retainedWriters?: number
 }): WriteScope => {
   const now = opts.now ?? Date.now
   const retainedCommands =
@@ -249,119 +340,189 @@ export const createWriteScope = (opts: {
     opts.retentionCeilingMs ?? RETENTION_CEILING_MS
   const maxDispatchMs =
     opts.maxDispatchMs ?? MAX_DISPATCH_MS
+  const retainedWriters =
+    opts.retainedWriters ?? RETAINED_WRITERS
 
-  let depth = 0 // refcount over ALL dispatches, reads included
-  // When depth went 0 → 1, i.e. when the current IN-FLIGHT INTERVAL began —
-  // which is also when the generation it belongs to opened, and what
-  // MAX_DISPATCH_MS is measured from ("MAX_DISPATCH_MS after it opened").
-  // Overlapping dispatches SHARE it, so a run that never lets the refcount
-  // return to 0 is force-sealed as a whole rather than per dispatch. Only
-  // reachable past the server's own 30 s dispatch timeout, by which point the
-  // caller has already given up.
-  let depthSince = 0
-  let lastDispatchAt = 0 // the most recent enter(), ANY command
-  let open: Generation | null = null
-  const retained: Generation[] = [] // oldest first
-  // `admit` asks touched() once per change and a documentchange batch can
-  // carry hundreds against up to RETAINED_COMMANDS generations, so the union
-  // is memoised: rebuilt lazily, invalidated on every mutation and eviction.
-  let cache: {
-    touched: Set<string>
-    reflow: Set<string>
-  } | null = null
+  const states = new Map<string, WriterState>()
+  let cache: Index | null = null
 
-  const newGeneration = (): Generation => ({
+  const stateFor = (writer: string): WriterState => {
+    const held = states.get(writer)
+    if (held !== undefined) return held
+    const st: WriterState = {
+      writer,
+      depth: 0,
+      depthSince: 0,
+      lastDispatchAt: 0,
+      open: null,
+      retained: [],
+    }
+    states.set(writer, st)
+    return st
+  }
+
+  const newGeneration = (writer: string): Generation => ({
+    writer,
     touched: new Set(),
     reflow: new Set(),
     folded: new Set(),
     expanded: new Set(),
   })
 
-  const seal = (): void => {
-    if (open === null) return
-    retained.push(open)
-    open = null
-    // `cache` is unaffected: the union is over retained + open either way.
+  const seal = (st: WriterState): void => {
+    if (st.open === null) return
+    st.retained.push(st.open)
+    st.open = null
+    // `cache` is unaffected: the index is over retained + open either way.
   }
 
-  const sealIfSettled = (): void => {
-    if (depth === 0) seal()
+  const sealIfSettled = (st: WriterState): void => {
+    if (st.depth === 0) seal(st)
   }
 
-  /** Opens a generation, first evicting the oldest sealed ones so that
-   *  retained + open never exceeds RETAINED_COMMANDS. THE memory bound, and
-   *  what covers a deferred event: it advances only when commands are
-   *  DISPATCHED, so an event that lands long after its own command still
-   *  finds it as long as the agent has not dispatched past it. */
-  const openGeneration = (): Generation => {
-    while (
-      retained.length > 0 &&
-      retained.length >= retainedCommands
-    ) {
-      retained.shift()
+  /** A writer that holds nothing and is dispatching nothing is not a writer
+   *  the scope has to remember — and leaving it in would spend a
+   *  RETAINED_WRITERS slot on a session that has already let go. */
+  const isSpent = (st: WriterState): boolean =>
+    st.depth === 0 &&
+    st.open === null &&
+    st.retained.length === 0
+
+  /** Evicts the WHOLE set of the writer that has been idle longest, never
+   *  part of one: half-evicting a writer's ring would silently shorten its
+   *  reach on somebody else's activity, which is the coupling per-writer
+   *  scoping exists to remove. A writer with a dispatch IN FLIGHT is not
+   *  idle, so it is chosen last. */
+  const evictIdlestWriter = (keep: string): void => {
+    const idle = (st: WriterState): boolean =>
+      st.depth === 0
+    let victim: WriterState | null = null
+    for (const st of states.values()) {
+      if (st.writer === keep) continue
+      if (victim === null) {
+        victim = st
+        continue
+      }
+      const better =
+        idle(st) === idle(victim)
+          ? st.lastDispatchAt < victim.lastDispatchAt
+          : idle(st)
+      if (better) victim = st
     }
-    open = newGeneration()
+    if (victim === null) return
+    states.delete(victim.writer)
     cache = null
-    return open
+  }
+
+  /** Opens a generation for `st`, first evicting THAT writer's oldest sealed
+   *  ones so that its retained + open never exceeds RETAINED_COMMANDS. THE
+   *  memory bound, and what covers a deferred event: it advances only when
+   *  THAT WRITER dispatches, so an event that lands long after its own
+   *  command still finds it as long as its own session has not dispatched
+   *  past it — and a peer's dispatch rate cannot spend it. */
+  const openGeneration = (st: WriterState): Generation => {
+    while (
+      st.retained.length > 0 &&
+      st.retained.length >= retainedCommands
+    ) {
+      st.retained.shift()
+    }
+    st.open = newGeneration(st.writer)
+    cache = null
+    if (states.size > retainedWriters) {
+      evictIdlestWriter(st.writer)
+    }
+    return st.open
   }
 
   /** Every harvest path goes through this, so a `claim` or the late `exit` of
    *  a force-sealed dispatch opens a FRESH generation and folds into it —
    *  retained longer than its own would have been, which is the conservative
    *  side. */
-  const ensureOpen = (): Generation =>
-    open ?? openGeneration()
+  const ensureOpen = (st: WriterState): Generation =>
+    st.open ?? openGeneration(st)
 
-  /** Both bounds are evaluated ON READ. An idle plugin dispatches nothing, so
-   *  there is nothing to wake up, and `admit` is the only reader. */
+  /** All three bounds are evaluated ON READ. An idle plugin dispatches
+   *  nothing, so there is nothing to wake up, and `admit` is the only
+   *  reader. */
   const reap = (t: number): void => {
-    // A dispatch that never settles would otherwise leave a generation that
-    // is neither counted out nor released, growing without bound as every
-    // later command merged into it, with inFlight() true for the rest of the
-    // session. Sealing on age degrades that to a leak. FIRST, because it can
-    // make the scope idle, which the ceiling below then acts on.
-    if (depth > 0 && t - depthSince >= maxDispatchMs) {
-      depth = 0
-      seal()
-    }
-    // Keyed on IDLE TIME SINCE THE LAST DISPATCH, never on a generation's own
-    // age: while the agent keeps working nothing is released and
-    // retainedCommands alone decides; once the agent stops, the whole
-    // retained set lets go together. Age-keying would expire generations
-    // mid-task and collapse this into a wall-clock window with a bigger
-    // constant — the bug this design replaces.
-    if (
-      depth === 0 &&
-      retained.length > 0 &&
-      t - lastDispatchAt >= retentionCeilingMs
-    ) {
-      retained.length = 0
-      cache = null
+    for (const st of states.values()) {
+      // A dispatch that never settles would otherwise leave a generation that
+      // is neither counted out nor released, growing without bound as every
+      // later command by that writer merged into it, with inFlight() true for
+      // the rest of the session. Sealing on age degrades that to a leak.
+      // FIRST, because it can make that writer idle, which the ceiling below
+      // then acts on. It clears THAT writer's refcount only.
+      if (
+        st.depth > 0 &&
+        t - st.depthSince >= maxDispatchMs
+      ) {
+        st.depth = 0
+        seal(st)
+      }
+      // Keyed on THAT WRITER's idle time since its last dispatch, never on a
+      // generation's own age: while a session keeps working none of its
+      // generations is released and retainedCommands alone decides; once it
+      // stops, its whole retained set lets go together. Age-keying would
+      // expire generations mid-task and collapse this into a wall-clock
+      // window with a bigger constant — the bug this design replaces. A peer
+      // working does NOT hold an idle session's claims open.
+      if (
+        st.depth === 0 &&
+        st.retained.length > 0 &&
+        t - st.lastDispatchAt >= retentionCeilingMs
+      ) {
+        st.retained.length = 0
+        cache = null
+      }
+      if (isSpent(st)) states.delete(st.writer)
     }
   }
 
-  const rebuild = (): {
-    touched: Set<string>
-    reflow: Set<string>
-  } => {
-    const t = new Set<string>()
-    const r = new Set<string>()
-    const fold = (g: Generation): void => {
-      for (const id of g.touched) t.add(id)
-      for (const id of g.reflow) r.add(id)
+  const rebuild = (): Index => {
+    const touched = new Map<string, Set<string>>()
+    const reflow = new Map<string, Set<string>>()
+    for (const st of states.values()) {
+      const t = new Set<string>()
+      const r = new Set<string>()
+      const fold = (g: Generation): void => {
+        for (const id of g.touched) t.add(id)
+        for (const id of g.reflow) r.add(id)
+      }
+      for (const g of st.retained) fold(g)
+      if (st.open !== null) fold(st.open)
+      touched.set(st.writer, t)
+      reflow.set(st.writer, r)
     }
-    for (const g of retained) fold(g)
-    if (open !== null) fold(open)
-    cache = { touched: t, reflow: r }
+    cache = { touched, reflow, answers: new Map() }
     return cache
   }
 
-  const union = (): {
-    touched: Set<string>
-    reflow: Set<string>
-  } => {
+  const index = (): Index => {
     reap(now())
     return cache ?? rebuild()
+  }
+
+  /** The writers whose set in `m` holds `id`. Map iteration is insertion-
+   *  ordered and the index is rebuilt whole, so the answer — and therefore
+   *  its memo key — is deterministic within one index. */
+  const membersOf = (
+    i: Index,
+    m: Map<string, Set<string>>,
+    kind: string,
+    id: string,
+  ): ReadonlySet<string> => {
+    const names: string[] = []
+    for (const [writer, ids] of m) {
+      if (ids.has(id)) names.push(writer)
+    }
+    if (names.length === 0) return EMPTY
+    const key = kind + ANSWER_SEP + names.join(ANSWER_SEP)
+    const held = i.answers.get(key)
+    if (held !== undefined) return held
+    const answer: ReadonlySet<string> = new Set(names)
+    i.answers.set(key, answer)
+    return answer
   }
 
   /** Walk the closure and union it in, never propagating a throw. A node
@@ -414,33 +575,36 @@ export const createWriteScope = (opts: {
   const close = (
     harvest: boolean,
     result: unknown,
+    st: WriterState,
   ): void => {
     if (harvest) {
       // Return-only ids get no closure: the node may already be gone, and
       // creates claim() their closure at creation instead.
       const ids = harvestIds(result)
       if (ids.length > 0) {
-        const g = ensureOpen()
+        const g = ensureOpen(st)
         for (const id of ids) g.touched.add(id)
         cache = null
       }
     }
     // Clamped: a forced seal has already zeroed the refcount, and a late exit
     // driving it negative would break inFlight() for the rest of the session.
-    depth = Math.max(0, depth - 1)
-    sealIfSettled()
+    st.depth = Math.max(0, st.depth - 1)
+    sealIfSettled(st)
     cache = null
   }
 
   return {
-    async enter(command, params) {
+    async enter(writer, command, params) {
       const t = now()
       reap(t)
-      // Refreshed by EVERY enter, reads included: an agent that is reading is
-      // still working and has not handed over.
-      lastDispatchAt = t
-      if (depth === 0) depthSince = t
-      depth += 1
+      const st = stateFor(writer)
+      // Refreshed by EVERY enter of THIS writer, reads included: a session
+      // that is reading is still working and has not handed over. A peer's
+      // enter does not refresh it — hand-over is session-scoped.
+      st.lastDispatchAt = t
+      if (st.depth === 0) st.depthSince = t
+      st.depth += 1
       const eventCausing = isEventCausing(command)
       // `batch` OWNS the generation but harvests nothing itself. It
       // re-dispatches each op through the same switch, and each nested
@@ -454,7 +618,7 @@ export const createWriteScope = (opts: {
       const harvest =
         eventCausing && command !== COMMANDS.BATCH
       if (eventCausing) {
-        const g = ensureOpen()
+        const g = ensureOpen(st)
         if (harvest) {
           await Promise.all(
             harvestIds(params).map(id => fold(g, id)),
@@ -462,28 +626,41 @@ export const createWriteScope = (opts: {
         }
       }
       let disposed = false
+      // The disposer remembers ITS OWN writer: by the time a dispatch
+      // settles, any number of other sessions may have dispatched.
       return result => {
         if (disposed) return
         disposed = true
-        close(harvest, result)
+        close(harvest, result, st)
       }
     },
     // Bare `exit` treats its dispatch as event-causing: it has no command to
     // classify by, and over-claiming reach is the conservative direction.
-    exit: result => close(true, result),
+    exit: (writer, result) =>
+      close(true, result, stateFor(writer)),
     inFlight() {
       reap(now())
-      return depth > 0
+      for (const st of states.values()) {
+        if (st.depth > 0) return true
+      }
+      return false
     },
-    claim(node) {
-      const g = ensureOpen()
+    claim(writer, node) {
+      const st = stateFor(writer)
+      const g = ensureOpen(st)
       g.touched.add(node.id)
       g.folded.add(node.id)
       foldClosure(g, node)
       cache = null
-      sealIfSettled()
+      sealIfSettled(st)
     },
-    touched: () => union().touched,
-    reflow: () => union().reflow,
+    writersOf(id) {
+      const i = index()
+      return membersOf(i, i.touched, 't', id)
+    },
+    reflowWritersOf(id) {
+      const i = index()
+      return membersOf(i, i.reflow, 'r', id)
+    },
   }
 }
