@@ -9,6 +9,7 @@
     "./types": "./src/types.ts",
     "./paths": "./src/paths.ts",
     "./change-feed": "./src/change-feed.ts",
+    "./commands": "./src/commands.ts",
     "./constants": "./src/constants.ts",
     "./schemas": "./src/schemas.ts",
     "./ws-schemas": "./src/ws-schemas.ts",

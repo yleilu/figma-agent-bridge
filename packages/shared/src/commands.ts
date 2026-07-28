@@ -97,3 +97,74 @@ export const COMMANDS = {
 
 export type Command =
   (typeof COMMANDS)[keyof typeof COMMANDS]
+
+/**
+ * Commands that can cause NO `documentchange`, `currentpagechange` or
+ * `selectionchange` — the change-feed's self-write scope opens no generation
+ * for one and harvests neither its params nor its return
+ * (docs/specs/change-feed.md, "Only a dispatch that can cause an event is
+ * harvested").
+ *
+ * Enumerating the READS rather than the writers is deliberate. Retention
+ * outlives the command by design, and a read's reach is large — `search`
+ * returns hundreds of ids, `inspect({pageId})` names a page whose closure is
+ * every node on it — so harvesting reads would put most of the document into
+ * the touched set for minutes and the filter would drop the user's real edits
+ * wholesale. That is silence, the direction the design refuses.
+ *
+ * `set_focus` is read-only by the PREDICATE, not by the doubt rule: its handler
+ * only calls `figma.viewport.scrollAndZoomIntoView` and changes no selection,
+ * so it can cause NO event and has nothing to suppress. It is filed under
+ * "write — structure" in the registry above, which is why it looks doubtful and
+ * is not. Classing it event-causing would fold the focused frame plus its
+ * ENTIRE reflow closure into a retained generation — and set_focus is the
+ * canonical hand-over command ("here is what I built"), so its reach would land
+ * exactly on the subtree the user is about to start editing.
+ *
+ * Doubtful entries are classed EVENT-CAUSING, which costs only reach:
+ *   - `create_image` registers an image and creates no node;
+ *   - `create_variables` / `update_variables` / `delete_variables` —
+ *     `documentchange` does not fire for variable edits (a known Figma gap);
+ *   - `set_current_page` / `set_selection` mutate nothing yet DO fire the
+ *     context events, and `set_current_page` is load-bearing: its `pageId`
+ *     must reach the touched set or the agent's own page switch comes back
+ *     as the user's;
+ *   - `batch` is always event-causing because its ops may be.
+ *
+ * `connect`, `search_components` and `reindex` are answered server-side, and
+ * `document_changed` / `ping` are protocol frames handled in the plugin's UI
+ * realm: none reaches the sandbox dispatcher. They are listed only so the
+ * classification is total over the registry.
+ */
+export const READ_ONLY_COMMANDS: ReadonlySet<string> =
+  new Set<string>([
+    COMMANDS.STATUS,
+    COMMANDS.GET_SELECTION,
+    COMMANDS.GET_NODE,
+    COMMANDS.GET_NODES,
+    COMMANDS.INSPECT,
+    COMMANDS.EXPORT,
+    COMMANDS.LIST_PAGES,
+    COMMANDS.SEARCH,
+    COMMANDS.GET_STYLES,
+    COMMANDS.GET_VARIABLES,
+    COMMANDS.GET_COMPONENTS,
+    COMMANDS.LIST_FONTS,
+    COMMANDS.GET_PLUGIN_DATA,
+    COMMANDS.GET_REACTIONS,
+    COMMANDS.GET_ANNOTATIONS,
+    // not a read, but it mutates nothing and fires no event: viewport only
+    COMMANDS.SET_FOCUS,
+    // never reach the sandbox dispatcher
+    COMMANDS.CONNECT,
+    COMMANDS.SEARCH_COMPONENTS,
+    COMMANDS.REINDEX,
+    COMMANDS.DOCUMENT_CHANGED,
+    COMMANDS.PING,
+  ])
+
+/** Doubt defaults to event-causing: a command wrongly classed read-only
+ *  leaks its own writes back as user edits, which is the fail-open
+ *  direction. */
+export const isEventCausing = (command: string): boolean =>
+  !READ_ONLY_COMMANDS.has(command)

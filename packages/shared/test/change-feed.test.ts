@@ -1,34 +1,71 @@
 import { describe, it, expect } from 'bun:test'
 import {
   collapse,
-  SETTLE_MS,
+  MAX_DISPATCH_MS,
+  RETAINED_COMMANDS,
+  RETENTION_CEILING_MS,
   SENTINEL_TTL_MS,
   type BufferEntry,
 } from '@figma-agent-bridge/shared/change-feed'
 
 describe('tuning constants that must not drift', () => {
-  // The POC's measured value, copied from
-  // docs/reference/change-feed-poc-results.md. Update BOTH together, never
-  // one alone — that is the entire point of this test.
-  const MEASURED_SETTLE_MS = 400
+  // Every number below is read off docs/reference/change-feed-poc-results.md.
+  // Update BOTH together, never one alone — that is the entire point of this
+  // test.
 
-  // The two measurements SETTLE_MS is derived FROM, same document: the p99.9
-  // of the documentchange batch period, and the empirical floor of the sweep
-  // (120 ms passed, 80 ms failed open).
-  const MEASURED_BATCH_P999_MS = 100
-  const MEASURED_FILTER_FLOOR_MS = 120
+  // The largest observed burst of dispatches outstanding with an earlier
+  // event still undelivered: the 20-write battery produced NO frame while it
+  // ran, then one frame of 19 records — eight of them from a PREVIOUS run of
+  // the same script ("The idle-delivery leak").
+  const MEASURED_OUTSTANDING_DISPATCHES = 28
 
-  it('SETTLE_MS is the POC-measured value, not the placeholder', () => {
-    expect(SETTLE_MS).toBe(MEASURED_SETTLE_MS)
-    // The plan's placeholder was ALSO 400, so equality with it cannot by
-    // itself tell a measured value from a forgotten edit. The two bounds
-    // below are what make the number legible: under the floor the filter
-    // fails OPEN and every agent write reads as a user edit.
-    expect(SETTLE_MS).toBeGreaterThan(
-      MEASURED_BATCH_P999_MS,
+  // The longest deferral ever measured between a command's exit and the
+  // delivery of its documentchange (Probe 1).
+  const MEASURED_MAX_DEFERRAL_MS = 49_200
+
+  // The server's own dispatch timeout (figma-client.ts): a command it has
+  // already abandoned and that is still open plugin-side is a wedge.
+  const SERVER_DISPATCH_TIMEOUT_MS = 30_000
+
+  it('RETAINED_COMMANDS is above the largest observed outstanding burst', () => {
+    expect(Number.isInteger(RETAINED_COMMANDS)).toBe(true)
+    expect(RETAINED_COMMANDS).toBeGreaterThan(
+      MEASURED_OUTSTANDING_DISPATCHES,
     )
-    expect(SETTLE_MS).toBeGreaterThan(
-      MEASURED_FILTER_FLOOR_MS,
+  })
+
+  it('RETAINED_COMMANDS stays "in tens of commands" — it is THE memory bound', () => {
+    // Both sides, or the assertion is not a pin: this is the constant that
+    // bounds plugin-sandbox memory (up to this many generations, each
+    // holding a reflow set capped only at MAX_CLOSURE_NODES), and it is
+    // also how much of the user's work on nodes the agent touched is
+    // dropped in silence. Without an upper bound it could drift to 4096
+    // and this suite would stay green — the exact drift the test exists to
+    // prevent. change-feed.md: "sized in TENS of commands".
+    expect(RETAINED_COMMANDS).toBeLessThanOrEqual(100)
+  })
+
+  it('RETENTION_CEILING_MS is sized in minutes, above the longest deferral', () => {
+    expect(RETENTION_CEILING_MS).toBeGreaterThan(
+      MEASURED_MAX_DEFERRAL_MS,
+    )
+    // "Sized in MINUTES" (change-feed.md), pinned on both sides: too low and
+    // retention lets go before a deferred batch lands; too high and the
+    // user's post-hand-over edits stay invisible for that long.
+    expect(RETENTION_CEILING_MS).toBeGreaterThanOrEqual(
+      2 * 60_000,
+    )
+    expect(RETENTION_CEILING_MS).toBeLessThanOrEqual(
+      15 * 60_000,
+    )
+  })
+
+  it('MAX_DISPATCH_MS reaps a wedge well before the idle ceiling could', () => {
+    expect(MAX_DISPATCH_MS).toBeGreaterThan(
+      SERVER_DISPATCH_TIMEOUT_MS,
+    )
+    expect(MAX_DISPATCH_MS).toBeLessThan(
+      RETENTION_CEILING_MS,
     )
   })
 

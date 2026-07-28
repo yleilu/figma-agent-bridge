@@ -62,7 +62,7 @@ const isRemoved = (
 
 export type SelfWriteFilter = {
   admit(change: unknown): ChangeRecord | null
-  admitContext(): boolean
+  admitContext(rec: ChangeRecord): boolean
 }
 
 // A style's id is NOT one stable string. `create_styles` returns
@@ -103,9 +103,12 @@ export const createSelfWriteFilter = (
     const id = target?.id ?? c.id
     if (id === undefined) return null
 
-    const open = scope.isOpen()
-    if (open && isSelfWrite(id, op, scope.touched()))
-      return null
+    // Node and style records are decided by MEMBERSHIP and nothing else.
+    // Membership is asked at EVENT time and answered from what the scope
+    // retains THEN; nothing in the question refers to how long the runtime
+    // took to deliver the event, which is what makes an arbitrarily deferred
+    // batch decidable at all.
+    if (isSelfWrite(id, op, scope.touched())) return null
 
     const rec: ChangeRecord = { op, id }
     if (typeof target?.type === 'string') {
@@ -130,11 +133,9 @@ export const createSelfWriteFilter = (
 
     if (op === 'update' || op === 'style_update') {
       let props = [...new Set(c.properties ?? [])].sort()
-      if (
-        op === 'update' &&
-        open &&
-        scope.reflow().has(id)
-      ) {
+      // `op === 'update'` is the only thing scoping the reflow rule to
+      // nodes: no real StyleChangeProperty is a cascade property.
+      if (op === 'update' && scope.reflow().has(id)) {
         // Subtraction, not a whole-record drop: one batch can carry the
         // agent's cascade AND the user's rename on the same node.
         props = props.filter(p => !CASCADE_PROPS.has(p))
@@ -146,6 +147,29 @@ export const createSelfWriteFilter = (
   },
   // The agent's own set_current_page / set_selection fire the same events;
   // a page/select record is context, never a mutation, so dropping one is
-  // harmless (it never counts toward pending_edits).
-  admitContext: () => !scope.isOpen(),
+  // harmless (it never counts toward pending_edits). Decided PER SLOT, and
+  // only the `page` slot can ride retention.
+  admitContext(rec) {
+    if (scope.inFlight()) return false
+    // The page id a set_current_page names is harvested like any other id,
+    // so the agent's own page switch is decided by MEMBERSHIP — delivery is
+    // deferred, so the in-flight flag alone would let it back in long after
+    // the command exited, and the block would report "the user just switched
+    // page" (a T7 violation).
+    if (
+      rec.op === 'page' &&
+      rec.id !== undefined &&
+      scope.touched().has(rec.id)
+    ) {
+      return false
+    }
+    // A `select` record cannot be decided that way: it carries NO id, and
+    // its `ids` are the CURRENT selection rather than an identity, so
+    // testing them against touched() would drop the user's selection of the
+    // very nodes the agent just built — the most likely thing a user selects
+    // and exactly what the slot exists to report. The agent's own selection
+    // changes therefore surface as the user's whenever they arrive after
+    // their command; the cost is a wrong hint, never a wrong count.
+    return true
+  },
 })

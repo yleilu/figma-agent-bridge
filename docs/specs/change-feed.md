@@ -450,10 +450,18 @@ after the one that changed.
 
 ```
 reflow(id) =
+    ∅                                        when id is a PAGE or the DOCUMENT
     descendants(id)
   ∪ { for each ancestor A of id, walking UP while A is an auto-layout frame:
       children(A), plus A itself when A HUGS along the axis its child can grow }
 ```
+
+**A page and the document have an empty closure.** Neither has geometry of its own, so naming one
+moves nothing — but `descendants()` of a page is every node on it, and of the document every node in
+the file. Since a page id enters `touched()` legitimately (`set_current_page` names it,
+`duplicate_page` claims one, `create_node` takes it as a parent), the general formula would put the
+whole page into the closure and subtract `CASCADE_PROPS` from every record on it. The closure exists
+for nodes an agent write can move *without naming*; a container with no layout moves nothing.
 
 The walk **stops at the first ancestor that cannot resize** — a fixed-size frame absorbs the change,
 so its own siblings cannot move, though its children already have. This is narrower than "all ancestors and their children" (which on a

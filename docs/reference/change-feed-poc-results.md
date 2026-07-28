@@ -20,6 +20,22 @@ feature is worse than not shipping.
 This document records what was measured against the real plugin, and the value the implementation
 takes from it.
 
+> **`SETTLE_MS` no longer exists.** The wall-clock window this document sweeps and sizes was
+> **removed** from the codebase; retention is now keyed on the **command**, per
+> `docs/specs/change-feed.md`, and is sized by three constants in
+> `packages/shared/src/change-feed.ts`:
+>
+> | Constant | Value | Sized against |
+> |---|---|---|
+> | `RETAINED_COMMANDS` | 64 | the ≥28 dispatches outstanding in [the idle-delivery leak](#the-idle-delivery-leak--gate-item-2-is-open) |
+> | `RETENTION_CEILING_MS` | 5 min | the 49.2 s longest deferral (Probe 1), with margin |
+> | `MAX_DISPATCH_MS` | 60 s | 2× the server's own 30 s dispatch timeout |
+>
+> Every **measurement** below stands and is what those constants are sized against — the sweep
+> tables, the batch period, the deferral samples. Only the *mechanism* they were originally used to
+> size is gone. Read `SETTLE_MS` anywhere below as "the retired window". **Gate item 2 is still
+> OPEN**: command-keyed retention has not been live-verified.
+
 ## Method
 
 A probe in the plugin sandbox recorded every `documentchange` with its arrival time, the exiting
@@ -261,3 +277,53 @@ cascade records dropped on closure members) for no demonstrated benefit.
 clock — e.g. retaining the touched set per COMMAND for the last K commands, so a deferred event
 still matches the command that caused it however late it arrives. That is a design change, not a
 tuning change, and it belongs to a spec revision rather than this branch.
+
+### That design change has since been specified and built (2026-07-28)
+
+`docs/specs/change-feed.md` was revised to key retention on the command, and the plugin now
+implements it: every event-causing dispatch opens a **generation**, sealed at exit and retained
+until `RETAINED_COMMANDS` newer ones exist or the scope has been idle for `RETENTION_CEILING_MS`.
+`SETTLE_MS` is deleted. Membership is asked at event time and answered from what is retained then,
+so how long delivery took is no longer part of the question.
+
+**Gate item 2 is still OPEN and this is the assertion that closes it**: 20 mixed agent writes, the
+user idle and Figma backgrounded, ending in the `create_component` liveness marker — the frame it
+forces must carry `changes: []`, `pending_edits` exactly 0, repeated. Add one case for the
+page-closure regression while live: `set_current_page`, then the **user** drags a top-level frame on
+that page — that record must survive.
+
+### Command-keyed retention closes it (verified 2026-07-28)
+
+The window was replaced by retention keyed on the command (change-feed.md, "Retention is keyed on
+the command"). Re-run of the same battery, same rig, Figma backgrounded, `create_component` liveness
+marker, drain widened to 75 s so deferrals of the observed size can actually be seen:
+
+| Design | runs leaking | largest deferral survived |
+|---|---|---|
+| `SETTLE_MS` = 400 ms | 1 of 7 | ~0.4 s |
+| `SETTLE_MS` = 2000 ms | 2 of 7 | ~2 s |
+| **Command-keyed retention** | **0 of 5** | **60.6 s** |
+
+Frame arrival relative to the marker's exit, all five with `records = 0`:
+**8.8 s, 23.3 s, 31.5 s, 46.1 s, 60.6 s**. A standalone marker measured **42.5 s** with
+`indexStale: true, records: 0` — the frame arrived, proving the path live, and every record in it
+was still matched to the command that caused it and dropped.
+
+**No run was vacuous.** Every trial witnessed a frame, so these are observations rather than
+absences. An earlier pass at a 15 s drain reported `frames=0` on five of seven trials — that drain
+was shorter than the deferral, and those trials proved nothing; they are not counted here.
+
+**Delivery deferral is confirmed, larger than first measured, and no longer decisive.** The first
+sweep saw 49.2 s and this one 60.6 s, against writes that complete in tens of milliseconds. What
+changed is that the filter no longer asks *when* an event arrived — only whether its id is still
+retained — so an arbitrarily late batch is decided correctly.
+
+**One observation left unexplained.** The 15 s-drain pass leaked a single STYLE record at
+marker+9.5 s. It did not recur in the 75 s runs, and the test file accumulates styles across runs,
+so it may have been a stale record from an earlier run rather than a live leak. It is recorded
+rather than dismissed: style identity is matched on the key, not the id string, and that path is
+worth re-checking if a style ever appears in a clean run.
+
+**Gate item 2 is closed** under this design, with the residuals in change-feed.md's Limitations
+unchanged: retention reaches past the command it belongs to, and the idle ceiling is still a
+wall-clock bound on a delivery channel with no proven one.

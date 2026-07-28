@@ -3,6 +3,8 @@ import { describe, expect, it } from 'bun:test'
 import { APP_VERSION } from '../src'
 import {
   COMMANDS,
+  READ_ONLY_COMMANDS,
+  isEventCausing,
   type Command,
 } from '@figma-agent-bridge/shared/commands'
 
@@ -164,5 +166,109 @@ describe('COMMANDS registry', () => {
 
   it('version bumped to 0.3.x (ping is a B2 wire change)', () => {
     expect(APP_VERSION.startsWith('0.3.')).toBe(true)
+  })
+})
+
+// The event-causing axis (change-feed.md, "Only a dispatch that can cause an
+// event is harvested"). A command wrongly classed READ-ONLY leaks its own
+// writes back as user edits — the fail-open direction — so the enumerated set
+// is the read-only one and doubt defaults to event-causing.
+describe('event-causing classification', () => {
+  it('is TOTAL and DISJOINT over the registry', () => {
+    // Total: every command lands on one side or the other by construction,
+    // and the guard that matters is that READ_ONLY_COMMANDS holds nothing
+    // that is not a real command — a typo there silently classes a writer
+    // as a read. This is the "never drop API items" rule on the new axis:
+    // a command added later without a classification decision shows up here.
+    const values = new Set<string>(Object.values(COMMANDS))
+    const strays = [...READ_ONLY_COMMANDS].filter(
+      c => !values.has(c),
+    )
+    expect(strays).toEqual([])
+    for (const c of values) {
+      expect(isEventCausing(c)).toBe(
+        !READ_ONLY_COMMANDS.has(c),
+      )
+    }
+  })
+
+  it('is exactly the 16 event-free switch entries + the 5 that never dispatch', () => {
+    // The 16 are the entries in code.ts's switch that emit no
+    // documentchange / currentpagechange / selectionchange. Their REACH is
+    // what makes this load-bearing: `search` returns hundreds of ids and
+    // `inspect({pageId})` names a page whose closure is every node on it.
+    // 15 are pure reads; `set_focus` is the sixteenth — it is filed under
+    // "write — structure" in the registry but its handler only calls
+    // figma.viewport.scrollAndZoomIntoView, which no listener observes.
+    // The other 5 have no switch case at all — connect / search_components /
+    // reindex are server-side and document_changed / ping are protocol
+    // frames handled in the UI realm — and are listed only so this test is
+    // total over the registry.
+    expect([...READ_ONLY_COMMANDS].sort()).toEqual(
+      [
+        COMMANDS.CONNECT,
+        COMMANDS.SET_FOCUS,
+        COMMANDS.DOCUMENT_CHANGED,
+        COMMANDS.EXPORT,
+        COMMANDS.GET_ANNOTATIONS,
+        COMMANDS.GET_COMPONENTS,
+        COMMANDS.GET_NODE,
+        COMMANDS.GET_NODES,
+        COMMANDS.GET_PLUGIN_DATA,
+        COMMANDS.GET_REACTIONS,
+        COMMANDS.GET_SELECTION,
+        COMMANDS.GET_STYLES,
+        COMMANDS.GET_VARIABLES,
+        COMMANDS.INSPECT,
+        COMMANDS.LIST_FONTS,
+        COMMANDS.LIST_PAGES,
+        COMMANDS.PING,
+        COMMANDS.REINDEX,
+        COMMANDS.SEARCH,
+        COMMANDS.SEARCH_COMPONENTS,
+        COMMANDS.STATUS,
+      ].sort(),
+    )
+  })
+
+  it.each([
+    COMMANDS.GET_NODE,
+    COMMANDS.INSPECT,
+    COMMANDS.SEARCH,
+    COMMANDS.EXPORT,
+    COMMANDS.GET_COMPONENTS,
+    COMMANDS.LIST_PAGES,
+    // NOT the doubt rule — the predicate. set_focus moves the viewport only
+    // (figma.viewport.scrollAndZoomIntoView) and changes no selection, so it
+    // can cause NO event and has nothing to suppress. Classing it
+    // event-causing would fold the focused frame plus its ENTIRE reflow
+    // closure into a retained generation, and set_focus is the canonical
+    // hand-over command ("here is what I built") — precisely the moment the
+    // user starts editing what it points at.
+    COMMANDS.SET_FOCUS,
+  ])('%s is NOT event-causing', c => {
+    expect(isEventCausing(c)).toBe(false)
+  })
+
+  it.each([
+    // mutate nothing, yet fire currentpagechange / selectionchange —
+    // set_current_page load-bearing: its pageId must reach touched() or the
+    // agent's own page switch returns as the user's.
+    COMMANDS.SET_CURRENT_PAGE,
+    COMMANDS.SET_SELECTION,
+    // its ops may be, and it is refcounted, so it spends ONE generation
+    COMMANDS.BATCH,
+    // registers an image, creates no node — doubt rule
+    COMMANDS.CREATE_IMAGE,
+    // documentchange does not fire for variable edits — doubt rule
+    COMMANDS.CREATE_VARIABLES,
+  ])('%s IS event-causing', c => {
+    expect(isEventCausing(c)).toBe(true)
+  })
+
+  it('defaults an UNKNOWN command to event-causing', () => {
+    // The conservative direction: a leak is a false nudge, a wrong read is
+    // silence.
+    expect(isEventCausing('nonexistent_command')).toBe(true)
   })
 })

@@ -19,7 +19,6 @@ import {
   FLUSH_DEBOUNCE_MS,
   FLUSH_MAX_WAIT_MS,
   SELECT_IDS_CAP,
-  SETTLE_MS,
   type ChangeRecord,
 } from '@figma-agent-bridge/shared/change-feed'
 import { createWriteScope } from './feed/write-scope'
@@ -88,8 +87,14 @@ figma.on('selectionchange', pushPresence)
 // The agent's own writes are known HERE, in the command path. The filter is
 // source-side because DocumentChange.origin === 'LOCAL' includes them, so a
 // downstream consumer could never tell them apart.
+//
+// Membership is keyed on the COMMAND and OUTLIVES it: every event-causing
+// dispatch opens a generation, and the scope retains the most recent
+// RETAINED_COMMANDS of them (released wholesale once the agent goes idle for
+// RETENTION_CEILING_MS). `documentchange` delivery is batched and unbounded,
+// so a rule that expired on a timer failed OPEN — the deferred event landed
+// after the window shut and the agent's own write was reported as the user's.
 const writeScope = createWriteScope({
-  settleMs: SETTLE_MS,
   resolve: id => figma.getNodeByIdAsync(id),
 })
 const feedFilter = createSelfWriteFilter(writeScope)
@@ -154,18 +159,20 @@ figma.on('documentchange', event => {
 
 // Context listeners, registered separately from the presence ones above: the
 // two consumers debounce differently and must not share a code path.
+// The record is built FIRST: `admitContext` decides the page slot by
+// MEMBERSHIP of the record's own id, so it needs the record.
 figma.on('currentpagechange', () => {
-  if (!feedFilter.admitContext()) return
-  feedAccum.add({
+  const rec: ChangeRecord = {
     op: 'page',
     id: figma.currentPage.id,
     name: figma.currentPage.name,
-  })
+  }
+  if (!feedFilter.admitContext(rec)) return
+  feedAccum.add(rec)
   feedFlusher.schedule()
 })
 
 figma.on('selectionchange', () => {
-  if (!feedFilter.admitContext()) return
   const sel = figma.currentPage.selection
   const rec: ChangeRecord = {
     op: 'select',
@@ -174,6 +181,7 @@ figma.on('selectionchange', () => {
   // count carries the TRUE size only when the ids were truncated — a marquee
   // over a thousand nodes must not put a thousand ids on the wire (T10).
   if (sel.length > SELECT_IDS_CAP) rec.count = sel.length
+  if (!feedFilter.admitContext(rec)) return
   feedAccum.add(rec)
   feedFlusher.schedule()
 })
@@ -5348,12 +5356,18 @@ const handleCommand = async (
         error?: string
       }[] = []
       for (const entry of batchOps) {
-        // A nested enter/exit pair, NOT a new window: the outer dispatch
-        // already holds a frame, so the refcount keeps the window open across
-        // the whole batch and each op's ids still fold in. `finally` closes
-        // the frame even for the ops this loop deliberately swallows —
-        // a frame left open wedges the window and eats later user edits.
+        // A nested enter/exit pair, NOT a new generation: the outer dispatch
+        // already holds one, so the refcount keeps it open across the whole
+        // batch and each op's ids fold into it — a batch of fifty ops spends
+        // exactly one of the RETAINED_COMMANDS slots. `finally` closes the
+        // frame even for the ops this loop deliberately swallows.
+        //
+        // This is also the ONLY harvest for a batch: the outer `enter`
+        // opens the generation but folds nothing, so each op's params and
+        // return are classified as that OP, never blanket-claimed under
+        // `batch` (see write-scope.ts).
         const done = await writeScope.enter(
+          entry.op,
           entry.params ?? {},
         )
         let opResult: unknown = null
@@ -5415,20 +5429,26 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
       return
     }
 
-    // The self-write window opens BEFORE the handler and closes when the
-    // dispatch settles, INCLUDING when the handler throws: a frame left open
-    // wedges the window and silently eats the user's later edits, so the
-    // disposer is called from `finally`, never inline. The window is anchored
-    // at EXIT because a command that awaits a font load or an image fetch
-    // mutates seconds after it was dispatched (change-feed.md).
+    // The generation opens BEFORE the handler and SEALS when the dispatch
+    // settles, INCLUDING when the handler throws: an unsealed generation
+    // keeps absorbing every later command until MAX_DISPATCH_MS force-seals
+    // it, so the disposer is called from `finally`, never inline. It seals at
+    // EXIT rather than at entry because a command that awaits a font load or
+    // an image fetch mutates seconds after it was dispatched. Sealing is not
+    // expiry — a sealed generation stays in the union until one of the two
+    // bounds evicts it (change-feed.md).
     //
-    // This is the ONE dispatch point, so READ commands open the window too —
-    // `inspect(root)` folds a large reflow closure, and a user move inside it
-    // within SETTLE_MS is then attributed to the agent. That widens the
-    // silent-loss residual the spec discloses under Limitations; it never
-    // loses a write, which is the direction that matters.
+    // This is the ONE dispatch point, and the command name is what tells the
+    // scope whether to harvest at all: a READ emits no event, so it opens no
+    // generation and folds neither its params nor its return. Harvesting one
+    // would be pure over-claim — `search` returns hundreds of ids and
+    // `inspect(pageRoot)` folds that page's whole reflow closure — and under
+    // retention that reach would silence the user's real edits for minutes.
     let result: unknown
-    const done = await writeScope.enter(msg.params)
+    const done = await writeScope.enter(
+      msg.command,
+      msg.params,
+    )
     try {
       result = await handleCommand(msg.command, msg.params)
     } catch (err) {

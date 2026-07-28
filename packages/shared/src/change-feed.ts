@@ -46,23 +46,65 @@ export type DocumentChangedParams = {
 }
 
 // ── Tuning constants ────────────────────────────────────────────────────────
-// Every one of these is TUNING, not contract, EXCEPT SETTLE_MS, which is an
-// empirical fact — see docs/reference/change-feed-poc-results.md.
+// Every one of these is TUNING, not contract; the three retention bounds are
+// sized against measurements in docs/reference/change-feed-poc-results.md.
+//
+// Retention is keyed on the COMMAND, not on the clock: `documentchange`
+// delivery is batched and unbounded, so membership that expires on a timer
+// fails OPEN — the agent's own write comes back as the user's. Neither bound
+// below is sized toward over-reporting: a leak here would be systematic
+// (every command reporting itself back) and a count that is never zero
+// carries no signal at all.
 
 /**
- * Self-write window hold after a command settles. SET BY MEASUREMENT, not
- * chosen: docs/reference/change-feed-poc-results.md measured the
- * `documentchange` batch period at p99.9 = 100 ms across nine command shapes,
- * and swept this constant to find the filter's empirical floor — 120 ms
- * passes, 80 ms fails OPEN (every agent write reads as a user edit and
- * pending_edits never returns to 0). 400 ms is 4x the measured p99.9 and 3.3x
- * that floor; the opposite failure (a window wide enough to swallow the user's
- * concurrent edits) was tested at this value and did not occur.
+ * Sealed generations retained. THE memory bound: at most this many
+ * generations are live at once. Also what covers a deferred event — it
+ * advances only when commands are DISPATCHED, so an event that lands long
+ * after its own command still finds it, as long as the agent has not
+ * dispatched past it. Reads open no generation and do not spend it.
  *
- * Do NOT change on a hunch — re-run the POC.
- * packages/shared/test/change-feed.test.ts pins it against both measurements.
+ * Sized above the largest burst observed with an earlier event still
+ * undelivered: the POC sweep's 20-write battery produced NO frame while it
+ * ran, then one frame of 19 records — eight of them from a PREVIOUS run of
+ * the same script, i.e. >= 28 dispatches were outstanding at once
+ * (docs/reference/change-feed-poc-results.md, "The idle-delivery leak").
+ * 64 is ~2.3x that. Counts DISPATCHES, not work: 50 single-node updates
+ * spend 50, one batch of 50 ops spends 1.
  */
-export const SETTLE_MS = 400
+export const RETAINED_COMMANDS = 64
+
+/**
+ * Idle time since the last dispatch after which EVERY sealed generation is
+ * evicted at once. NOT a generation's own age — while the agent keeps
+ * working nothing is released and RETAINED_COMMANDS alone decides. Age-keying
+ * would expire generations mid-task (an agent round-trips through a model
+ * between calls) and collapse the design back into a wall-clock window with a
+ * bigger constant.
+ *
+ * Exists for HAND-OVER: without it an agent that builds a screen and stops
+ * goes on claiming nodes it touched twenty commands ago while the user
+ * refines them. Sized in minutes: above the longest deferral ever observed
+ * (49.2 s, POC Probe 1) with margin, and above any pause an agent takes
+ * between commands, so ordinary thinking time never releases retention
+ * mid-task. It cannot simply be raised — the same number sets how long a
+ * user's post-hand-over edits stay invisible.
+ */
+export const RETENTION_CEILING_MS = 5 * 60_000
+
+/**
+ * Ceiling on how long one dispatch may hold a generation open / count as in
+ * flight. A dispatch that never settles (a promise waiting on a font, an
+ * image, or an API that never resolves) would otherwise leave a generation
+ * that is neither counted out nor released, growing without bound as every
+ * later command merged into it, with inFlight() true for the rest of the
+ * session — suppressing every page and selection record.
+ *
+ * 2x the server's own 30 s dispatch timeout (figma-client.ts): a command the
+ * server has already abandoned and that is still open here is a wedge, not a
+ * slow font load. Batch delivery does not widen behind a font load or a
+ * network fetch — POC Measurement A.
+ */
+export const MAX_DISPATCH_MS = 60_000
 
 export const FLUSH_DEBOUNCE_MS = 300
 export const FLUSH_MAX_WAIT_MS = 2000
