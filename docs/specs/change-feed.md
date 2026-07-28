@@ -198,18 +198,42 @@ coincidence: the writer a server subtracts and the count file it writes are both
 `sessionIdentity.current() ?? '_unattributed'`. No platform session id collides with it (the same
 format argument the count mirror makes), and a stray agent-supplied one is the same benign misroute.
 
-### A record has writers, not a writer
+### A record names its LATEST writer, not everyone who has touched the id
 
-Two sessions can both have touched one id — A created a node, B renamed it, and a deferred batch
-delivers a change on it while both generations are still retained. The record is then attributed to
-**both**, as a set.
+Two sessions can both have touched one id — A moved a node, B moved it again, and both generations
+are still retained when a change on it is delivered. `by` names **only the later toucher**.
 
-Attributing it to a winner instead — the most recent claimant — would report it to the *other*
-claimant as foreign, which is a false nudge, and hide it from a session that may not have caused it,
-which is silence. A set preserves the single-session rule exactly: *drop for session S iff the id is
-in S's touched set*, evaluated independently per S — the one-agent rule with `S` left implicit.
+Attributing it to the set of everyone retaining the id is the tempting reading — it is a truthful
+answer to *"who has a claim here"* — but it answers the wrong question and it **cancels itself**.
+Ingest drops a record whose `by` names the reader; with both sessions named, both drop it, and the
+change reaches **nobody**. Retention is what makes this reachable rather than exotic: it deliberately
+remembers an id for many dispatches, so *"who has touched this"* keeps growing while *"who caused
+this change"* stays singular. The two coincide only while one session writes, which is why a set
+looks equivalent to the one-agent rule and is not.
+
+Naming the later toucher costs an over-report to the superseded session — it is told a node it had
+written has changed. That is not a false nudge: its snapshot **is** stale, which is the signal the
+feed exists to carry, and `mine` names the properties it wrote earlier so it reads the record as
+*superseded*, not as *never landed*. Set against silence to both parties, an accurate nudge to one
+is the cheaper failure — and this design consistently prefers over-reporting to silence.
+
+Later is decided by **touch order**, not by wall clock: every touch takes a monotonic tick, and
+re-touching an id makes that writer latest again. Elapsed time is not evidence of causation anywhere
+in this design, and a coarse clock would make two touches in the same millisecond unorderable.
+Figma applies last-write-wins, so the value a record carries belongs to its latest toucher — which
+is what makes that session, and only that session, the one for whom the record is not news.
 
 ### Two masks, because the reflow rule is per consumer
+
+**`rf` stays a set, and the asymmetry with `by` is deliberate.** The two masks make different
+claims. `by` claims authorship of one change, and a run has one writer — so two names there is not a
+richer answer but a self-cancelling one. `rf` claims only that a change is *explicable* as this
+writer's cascade, which is genuinely true of several sessions at once: two sessions working inside
+one auto-layout parent each hold every child of it in their closure. A set there is a true statement.
+The ingest rule keeps the asymmetry safe — a reader subtracts on `rf` only when `by` is empty, so an
+`rf` bit can never suppress a named write; it acts only on a pure cascade, where "any of these could
+have caused it" is the honest answer. Narrowing `rf` would strip the bit from the loser and report
+that session its own cascade as foreign news, which is the one thing the mask exists to prevent.
 
 Membership in the reflow closure is as session-scoped as membership in the touched set: an id can
 sit inside A's cascade and be untouched by B. A record therefore carries **two** attributions — the

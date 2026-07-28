@@ -15,8 +15,15 @@ const scope = (o: {
   exit: () => undefined,
   inFlight: () => o.inFlight ?? false,
   claim: () => undefined,
-  writersOf: id =>
-    new Set((o.touched ?? []).includes(id) ? [WRITER] : []),
+  // Rest params, because a style reaches the scope as its id AND its key
+  // forms — ALIASES of one thing, resolved to one winner there rather than
+  // unioned back into a set here.
+  writersOf: (...ids) =>
+    new Set(
+      ids.some(id => (o.touched ?? []).includes(id))
+        ? [WRITER]
+        : [],
+    ),
   reflowWritersOf: id =>
     new Set((o.reflow ?? []).includes(id) ? [WRITER] : []),
 })

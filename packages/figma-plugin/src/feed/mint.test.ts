@@ -112,7 +112,7 @@ describe('attributor → accumulator → mint', () => {
     if (rec !== null) accum.add(rec)
   }
 
-  it('two writers on ONE id produce two records, in run order, with disjoint bits', async () => {
+  it('two writers on ONE id produce two records, in run order, each naming ONE writer', async () => {
     const { scope, attributor, accum } = pipeline()
 
     const a = await scope.enter('A', COMMANDS.UPDATE_NODE, {
@@ -142,10 +142,67 @@ describe('attributor → accumulator → mint', () => {
     // what the frame carries, so a boundary lost here cannot be recovered.
     expect(minted.changes[0]?.set).toEqual({ x: 10 })
     expect(minted.changes[0]?.by).toBe(1)
-    // A's second record names BOTH writers: A touched the id first and B
-    // touched it after, and a record has WRITERS, not a writer.
+    // THE SUPERSESSION BUG, at the pipeline level and in the shape the live
+    // wire produced it: `by: 3` — binary 11, BOTH bits. B's write is the only
+    // cause of that change, but a union over retained generations claimed both
+    // writers, and at ingest each consumer discards records bearing its own
+    // bit — so A subtracted, B subtracted, and NOBODY saw it. `by` is
+    // "who caused THIS change", so it names B and B alone; A keeps the record
+    // and learns from `mine` that its own x = 10 landed and was superseded.
     expect(minted.changes[1]?.set).toEqual({ x: 20 })
-    expect(minted.changes[1]?.by).toBe(3)
+    expect(minted.changes[1]?.by).toBe(2)
+  })
+
+  // THE RESIDUAL the narrowing does not reach, pinned so it is a chosen
+  // outcome rather than an untested one. Attribution is asked at EVENT time,
+  // and the runtime chooses when an event is delivered: if A's documentchange
+  // is STILL UNDELIVERED when B touches the same id, A's own change is stamped
+  // with B too, because by then B is genuinely the latest toucher of that id.
+  //
+  // The degradation is strictly milder than the union it replaces — the union
+  // gave A nothing at all, this gives A the record without the annotation —
+  // and it is not fixable from the ingest side, because the frame that reaches
+  // the server never names A. Fixing it plugin-side would mean stamping at
+  // COMMAND time instead of event time, which is the one thing this design
+  // cannot do: the plugin does not know which properties a command changed
+  // until the runtime tells it.
+  it('a write DELIVERED LATE, after a peer touched the same id, is attributed to the peer', async () => {
+    const { scope, attributor, accum } = pipeline()
+
+    const a = await scope.enter('A', COMMANDS.UPDATE_NODE, {
+      nodeId: '1:1',
+    })
+    a(null)
+    const b = await scope.enter('B', COMMANDS.UPDATE_NODE, {
+      nodeId: '1:1',
+    })
+    b(null)
+
+    // Only NOW does the runtime deliver the batch — A's change and B's, in
+    // order, both after B's touch.
+    feed(
+      attributor,
+      accum,
+      propChange('1:1', ['x'], { x: 10 }),
+    )
+    feed(
+      attributor,
+      accum,
+      propChange('1:1', ['x'], { x: 20 }),
+    )
+
+    const minted = mintFrame(accum.drain().changes)
+    // A wins no bit and is not even in the frame's TABLE: nothing on the wire
+    // says A wrote here, so the server cannot supply A's `mine` from it.
+    expect(minted.writers).toEqual(['B'])
+    // And the loss is sharper than a missing annotation. Both records now name
+    // ONE writer on one id, so the accumulator sees no run boundary between
+    // them and folds them: A's write does not merely lose its label, it stops
+    // existing as a run. What A receives is a single foreign record carrying
+    // B's final value — true about the document, silent about A's own write.
+    expect(minted.changes).toHaveLength(1)
+    expect(minted.changes[0]?.by).toBe(1)
+    expect(minted.changes[0]?.set).toEqual({ x: 20 })
   })
 
   it('a writer past the cap merges into the adjacent EMPTY-key run — over-report AND mislabel', async () => {

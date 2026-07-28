@@ -340,6 +340,115 @@ describe('ChangeFeed subtraction at ingest', () => {
     ])
   })
 
+  // The INGEST HALF of the live-wire trace, run through BOTH consumers of the
+  // one broadcast frame. Its input is hand-built, so it pins what the server
+  // does GIVEN a correctly narrowed `by` — it does NOT guard the narrowing,
+  // which happens in the plugin and is guarded by mint.test.ts's
+  // `expect(minted.changes[1]?.by).toBe(2)`. Revert the plugin to the union
+  // and this file still goes green; that file goes red.
+  //
+  // What the narrowing fixes is upstream of here: the plugin used to stamp the
+  // second record `by: 3` — binary 11, both bits — from a union over retained
+  // generations, and each consumer discards records bearing its own bit, so A
+  // subtracted, B subtracted, and the change reached NOBODY (A drained empty
+  // for 150 s). What THIS test establishes is that once the frame names one
+  // writer, the server lands it on exactly one side of the pair — and the side
+  // it does not land on is the one that already holds the value.
+  it('THE SUPERSESSION FRAME reaches A and only A, and `mine` is what makes it answerable', () => {
+    const a = asA()
+    const b = asA({ writer: () => 'B' })
+    const first = [
+      {
+        op: 'update',
+        id: '39:492',
+        props: ['x'],
+        set: { x: 10 },
+        by: A,
+      },
+    ]
+    const second = [
+      {
+        op: 'update',
+        id: '39:492',
+        props: ['relativeTransform', 'x'],
+        set: { x: 200 },
+        by: B,
+      },
+    ]
+    for (const f of [a, b]) {
+      f.openBaseline('fk', 'e1')
+      feedFrom(f, first)
+      f.drain('fk', 100) // A's run is delivered and drained…
+      feedFrom(f, second, 1) // …and only THEN does B write.
+    }
+
+    // A keeps the record — its snapshot of x is genuinely stale — and `mine`
+    // says its own write LANDED and was overwritten, rather than never landed.
+    // That distinction is the whole reason the run model exists, and the union
+    // destroyed it by hiding the record from A altogether.
+    expect(a.pendingCount('fk')).toBe(1)
+    expect(a.drain('fk', 100)?.changes).toEqual([
+      {
+        id: '39:492',
+        op: 'update',
+        props: ['relativeTransform', 'x'],
+        set: { x: 200 },
+        src: 'agent',
+        mine: ['x'],
+      },
+    ])
+
+    // B caused it and subtracts it: reporting B's own write back to B is the
+    // signal this design suppresses at ingest.
+    expect(b.pendingCount('fk')).toBe(0)
+    expect(b.drain('fk', 100)?.changes).toEqual([])
+  })
+
+  // THE RESIDUAL, ingest side. The frame above depends on A's write having been
+  // DELIVERED before B touched the id. When it has not — both landing in one
+  // flush window — the plugin stamps A's own change with B as well (attribution
+  // is asked at event time, and by then B is the latest toucher), and the
+  // accumulator folds the pair into one run under B. See mint.test.ts, `a write
+  // DELIVERED LATE …`, for the frame this test's input is the output of.
+  //
+  // A is then not in `writers[]` at all, so there is nothing for the server to
+  // recover from: A keeps the record and learns the CURRENT value, but not that
+  // its own write landed and was superseded. Pinned because it is the one case
+  // the narrowing does not reach, and the annotation §`mine` promises is the
+  // thing it costs. Still strictly better than the union, which gave A nothing.
+  it('A write folded under a PEER in one flush window reaches A without `mine`', () => {
+    const a = asA()
+    a.openBaseline('fk', 'e1')
+    a.ingest(
+      'fk',
+      push(
+        [
+          {
+            op: 'update',
+            id: '39:492',
+            props: ['x'],
+            set: { x: 200 },
+            by: 1, // the only bit in a table that names B alone
+          },
+        ],
+        { writers: ['B'] },
+      ) as never,
+      { epoch: 'e1', seq: 0 },
+    )
+
+    expect(a.pendingCount('fk')).toBe(1)
+    expect(a.drain('fk', 100)?.changes).toEqual([
+      {
+        id: '39:492',
+        op: 'update',
+        props: ['x'],
+        set: { x: 200 },
+        src: 'agent',
+        // no `mine`: A's own write is nowhere on the wire.
+      },
+    ])
+  })
+
   it('THE MIRROR: a foreign change on a property this session did NOT write', () => {
     const f = asA()
     f.openBaseline('fk', 'e1')

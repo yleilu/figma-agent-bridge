@@ -741,17 +741,90 @@ describe('createWriteScope per-writer generations', () => {
     expect([...s.writersOf('a3')]).toEqual(['A'])
   })
 
-  it('names EVERY writer that touched an id', async () => {
-    // A record has writers, not a writer. Attributing it to the most recent
-    // claimant would report it to the OTHER claimant as foreign.
+  it('names the LATEST writer only — a run has ONE writer', async () => {
+    // THE SUPERSESSION BUG, at the unit level. A wrote and its frame was
+    // delivered and drained; B then wrote the same node in a SEPARATE run. A
+    // union over retained generations answers "who holds a claim on this id",
+    // which is true — but `by` is read at ingest as "who caused THIS change",
+    // and every consumer discards records bearing its own bit. Stamped with
+    // BOTH, A subtracts (its bit is set) and B subtracts (its bit is set):
+    // NOBODY sees it. Measured live — A drained empty for 150 s on the exact
+    // supersession case the aggregation design exists to answer.
+    const c = clock()
+    const s = makeScope(c)
+    await as(s, 'sess-A', COMMANDS.UPDATE_NODE, {
+      nodeId: '39:492',
+    })
+    c.t = 1
+    // A's generation is SEALED and still retained; B's opens after it.
+    await as(s, 'sess-B', COMMANDS.UPDATE_NODE, {
+      nodeId: '39:492',
+    })
+    expect([...s.writersOf('39:492')]).toEqual(['sess-B'])
+  })
+
+  it('still names A when A is the LATEST — its own write stays suppressed for A', async () => {
+    // The live-verified single-agent property, which the narrowing must not
+    // trade away: a solo session's own writes are suppressed FOR ITSELF.
+    // Alternation must not leave A permanently unable to subtract its own.
     const c = clock()
     const s = makeScope(c)
     await as(s, 'A', COMMANDS.UPDATE_NODE, { nodeId: 'n1' })
+    c.t = 1
     await as(s, 'B', COMMANDS.UPDATE_NODE, { nodeId: 'n1' })
-    expect([...s.writersOf('n1')].sort()).toEqual([
-      'A',
-      'B',
-    ])
+    c.t = 2
+    await as(s, 'A', COMMANDS.UPDATE_NODE, { nodeId: 'n1' })
+    expect([...s.writersOf('never-touched')]).toEqual([])
+    expect([...s.writersOf('n1')]).toEqual(['A'])
+  })
+
+  it('a peer touching ANOTHER id never displaces this writer', async () => {
+    const c = clock()
+    const s = makeScope(c)
+    await as(s, 'A', COMMANDS.UPDATE_NODE, { nodeId: 'n1' })
+    c.t = 1
+    await as(s, 'B', COMMANDS.UPDATE_NODE, { nodeId: 'n2' })
+    expect([...s.writersOf('n1')]).toEqual(['A'])
+    expect([...s.writersOf('n2')]).toEqual(['B'])
+  })
+
+  it('CONCURRENT same-window writes: the LATER TOUCH wins, and the earlier writer keeps the record', async () => {
+    // Both generations are OPEN and both hold the id — nothing seals first, so
+    // there is no "clearly later" generation. The code answers on the later
+    // TOUCH of that id, which is the safe direction: Figma applies last-write-
+    // wins, so the value the record carries is the later toucher's. Attributing
+    // it there makes the earlier writer KEEP the record — it learns, via `mine`,
+    // that its own write landed and was superseded — and makes the writer whose
+    // value is current subtract it, which is exactly what it caused. The
+    // reverse would hand the record to the party whose value is already on the
+    // node and hide the supersession from the party that needs it.
+    const c = clock()
+    const s = makeScope(c)
+    const a = await s.enter('A', COMMANDS.UPDATE_NODE, {
+      nodeId: 'n1',
+    })
+    const b = await s.enter('B', COMMANDS.UPDATE_NODE, {
+      nodeId: 'n1',
+    })
+    expect([...s.writersOf('n1')]).toEqual(['B'])
+    a(null)
+    b(null)
+    expect([...s.writersOf('n1')]).toEqual(['B'])
+  })
+
+  it("a CLAIM is a touch too, so a node created after a peer dispatched is the CLAIMER's", async () => {
+    const c = clock()
+    const s = makeScope(c)
+    const a = await s.enter('A', COMMANDS.CREATE_NODE, {})
+    const b = await s.enter('B', COMMANDS.UPDATE_NODE, {
+      nodeId: '1:1',
+    })
+    // B named 1:1 first; A then CREATES it (undo/redo restores an id, and a
+    // peer can name a node this dispatch is about to produce).
+    s.claim('A', asNode(n('1:1')))
+    a(null)
+    b(null)
+    expect([...s.writersOf('1:1')]).toEqual(['A'])
   })
 
   it('evicts the longest-idle writer ENTIRELY past RETAINED_WRITERS', async () => {

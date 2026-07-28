@@ -85,40 +85,23 @@ const styleKey = (id: string): string => {
   return comma === -1 ? id : id.slice(0, comma)
 }
 
-/** The union of two membership answers, allocating only when both are
- *  non-empty — the scope's own sets are shared and must never be mutated. */
-const union = (
-  a: ReadonlySet<string>,
-  b: ReadonlySet<string>,
-): ReadonlySet<string> => {
-  if (a.size === 0) return b
-  if (b.size === 0) return a
-  const out = new Set(a)
-  for (const name of b) out.add(name)
-  return out
-}
-
 /**
- * Membership for the record's id, asked at EVENT time and answered from what
- * the scope retains THEN. Nothing in the question refers to how long the
- * runtime took to deliver the event, which is what makes an arbitrarily
- * deferred batch decidable at all.
+ * The id forms one change may be recorded under. Asked at EVENT time and
+ * answered from what the scope retains THEN — nothing in the question refers to
+ * how long the runtime took to deliver the event, which is what makes an
+ * arbitrarily deferred batch decidable at all.
  *
  * A STYLE is matched on its KEY, across the two shapes the runtime and the
- * command path produce. Node ids are matched exactly.
+ * command path produce. Node ids are matched exactly and never by prefix.
+ *
+ * They go to the scope as ALIASES of one thing rather than as three separate
+ * lookups to be unioned: the union would put two writers back on a record that
+ * has one, which is the failure `writersOf` narrowing exists to remove.
  */
-const membersOf = (
-  id: string,
-  op: ChangeOp,
-  lookup: (id: string) => ReadonlySet<string>,
-): ReadonlySet<string> => {
-  const direct = lookup(id)
-  if (!op.startsWith('style_')) return direct
+const idFormsOf = (id: string, op: ChangeOp): string[] => {
+  if (!op.startsWith('style_')) return [id]
   const key = styleKey(id)
-  return union(
-    union(direct, lookup(key)),
-    lookup(`${key},`),
-  )
+  return [id, key, `${key},`]
 }
 
 export const createSelfWriteAttributor = (
@@ -149,13 +132,20 @@ export const createSelfWriteAttributor = (
    *  consumer reads its own bit out of each. An empty set is omitted, and
    *  ABSENT MEANS UNATTRIBUTED — which means everybody keeps it, so every
    *  failure of attribution surfaces as an over-report to someone rather than
-   *  as silence. */
+   *  as silence.
+   *
+   *  `by` names ONE writer — the latest to touch the id — because a record is
+   *  one RUN and a run has one writer. Two writers on one record is not a
+   *  richer answer but a self-cancelling one: each discards the record as its
+   *  own at ingest, so nobody is told. `rf` stays a SET, because a cascade
+   *  genuinely can be explicable by several writers at once and the ingest rule
+   *  never acts on it while `by` names somebody. */
   const stamp = (
     rec: AttributedRecord,
     id: string,
     op: ChangeOp,
   ): void => {
-    const by = membersOf(id, op, i => scope.writersOf(i))
+    const by = scope.writersOf(...idFormsOf(id, op))
     if (by.size > 0) rec.by = by
     // `rf` is NODE-ONLY: no real StyleChangeProperty is a cascade property, so
     // a style record is decided by `by` alone.

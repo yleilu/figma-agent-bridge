@@ -249,12 +249,32 @@ export type WriteScope = {
    *  would be claimed under whichever session dispatched in the meantime —
    *  and that misattribution lands on the SILENCE side. */
   claim(writer: string, node: BaseNode): void
-  /** The writers known to have touched this id — read over every writer's
-   *  open generation and every retained one. Monotonic WITHIN a generation,
-   *  and shrinking only by eviction. */
-  writersOf(id: string): ReadonlySet<string>
+  /** The LATEST writer to have touched this id — read over every writer's open
+   *  generation and every retained one, answering on the most recent TOUCH.
+   *  Pass ALIASES (a style's key forms) to have the latest taken across them.
+   *
+   *  A SET, but never more than one member, because `by` is read at ingest as
+   *  "who caused THIS change" and one record is one RUN of one writer. A union
+   *  over retained generations answers a different question — "who holds a
+   *  claim on this id" — and the two diverge the moment retention outlives a
+   *  single run, which is the entire point of retention. Stamped with both
+   *  writers, EVERY consumer discards the record as its own and nobody sees it:
+   *  silence, on the supersession case the aggregation exists to answer. The
+   *  earlier writer's interest is not lost — that is what `mine` is for at
+   *  ingest. */
+  writersOf(...ids: string[]): ReadonlySet<string>
   /** The writers whose writes can move this id's GEOMETRY without naming it.
-   *  Read over the same generations. */
+   *  Read over the same generations.
+   *
+   *  A UNION, deliberately, and NOT last-writer-wins. `by` claims authorship of
+   *  one change, which two writers cannot share; `rf` claims only that the
+   *  change is EXPLICABLE as this writer's cascade, and several writers'
+   *  closures genuinely can hold one id at once — two sessions working in one
+   *  auto-layout parent each hold every child of it. The ingest rule already
+   *  handles the interaction: a reader subtracts only when its bit is in `rf`
+   *  AND `by` is empty, so an explicit write by somebody else outranks a
+   *  cascade explanation and no `rf` bit can suppress a named write. Narrowing
+   *  it would instead report a session's own cascade back to it. */
   reflowWritersOf(id: string): ReadonlySet<string>
 }
 
@@ -262,7 +282,12 @@ export type WriteScope = {
  *  that writer's exit, evicted by one of the three bounds. */
 type Generation = {
   writer: string
-  touched: Set<string>
+  /** id → the TICK at which this generation last touched it. A Map, not a Set,
+   *  because `by` names the LATEST writer: every touch has to carry its own
+   *  place in the order, and a generation's own set is not ordered against
+   *  another writer's. Re-touching an id overwrites its tick — a writer that
+   *  comes back to a node is the latest writer of it again. */
+  touched: Map<string, number>
   reflow: Set<string>
   /** ids whose closure has already been walked FOR THIS GENERATION — NOT the
    *  same as "touched": `exit` adds return-harvested ids with no walk. */
@@ -301,21 +326,37 @@ type WriterState = {
  * documentchange batch can carry hundreds against every retained generation,
  * so the walk is memoised and invalidated on every mutation and eviction.
  *
- * Keyed by WRITER, not by id. Inverting it — one set of writers per touched id
- * — would answer in O(1) but allocate a Set per id on every rebuild, and a
- * single create_tree puts thousands of ids in one generation. Keyed this way
- * the structure is exactly today's (one union set per writer, one writer in
- * the ordinary case) and a lookup costs one `has` per writer, of which there
- * are at most RETAINED_WRITERS.
+ * The REFLOW half is keyed by WRITER, because its answer is a membership test
+ * over a set that may name several writers at once. Inverting it — one set of
+ * writers per id — would answer in O(1) but allocate a Set per id on every
+ * rebuild, and a single create_tree puts thousands of ids in one generation.
+ * Keyed by writer the structure is one union set per writer (one writer in the
+ * ordinary case) and a lookup costs one `has` per writer, of which there are at
+ * most RETAINED_WRITERS.
+ *
+ * The TOUCHED half is keyed the other way, by id, because its answer is a
+ * single winner: it has to compare ticks across writers, which a per-writer map
+ * would make a scan of every writer on every lookup. It DOES pay a per-id
+ * allocation — one `{writer, at}` per touched id per rebuild — which is the
+ * cost the reflow half is keyed by writer to avoid. It is a fraction of what
+ * inverting that half would pay (a two-field record, not a Set), and it buys
+ * an O(1) winner the reflow half has no need of. Should Measurement B show it
+ * on a create_tree-sized generation, two parallel `Map<id, string>` /
+ * `Map<id, number>` remove the allocation without changing the answer.
  */
 type Index = {
-  /** writer → every id that writer touched, across its generations */
-  touched: Map<string, Set<string>>
+  /** id → the LATEST writer to touch it, and the tick it did. Keyed by ID
+   *  here, unlike `reflow`, because the answer is a single winner rather than a
+   *  membership test: resolving it per writer would mean scanning every
+   *  writer's map on every lookup to compare ticks. */
+  latest: Map<string, { writer: string; at: number }>
   /** writer → every id in that writer's reflow closures */
   reflow: Map<string, Set<string>>
   /** memoised answers: there are only as many distinct ones as there are
    *  writer subsets in play, and in the ordinary case exactly one. */
   answers: Map<string, ReadonlySet<string>>
+  /** memoised singletons, one per writer — what `writersOf` returns. */
+  singles: Map<string, ReadonlySet<string>>
 }
 
 const EMPTY: ReadonlySet<string> = new Set()
@@ -346,6 +387,16 @@ export const createWriteScope = (opts: {
   const states = new Map<string, WriterState>()
   let cache: Index | null = null
 
+  /** The touch order, across every writer. Not the clock: `now` is injectable
+   *  and coarse, two touches inside one millisecond are ordinary, and elapsed
+   *  time is not evidence of causation anywhere in this design. A counter is
+   *  the order the touches actually happened in. */
+  let ticks = 0
+  const tick = (): number => {
+    ticks += 1
+    return ticks
+  }
+
   const stateFor = (writer: string): WriterState => {
     const held = states.get(writer)
     if (held !== undefined) return held
@@ -363,7 +414,7 @@ export const createWriteScope = (opts: {
 
   const newGeneration = (writer: string): Generation => ({
     writer,
-    touched: new Set(),
+    touched: new Map(),
     reflow: new Set(),
     folded: new Set(),
     expanded: new Set(),
@@ -480,21 +531,34 @@ export const createWriteScope = (opts: {
   }
 
   const rebuild = (): Index => {
-    const touched = new Map<string, Set<string>>()
+    const latest = new Map<
+      string,
+      { writer: string; at: number }
+    >()
     const reflow = new Map<string, Set<string>>()
     for (const st of states.values()) {
-      const t = new Set<string>()
       const r = new Set<string>()
       const fold = (g: Generation): void => {
-        for (const id of g.touched) t.add(id)
+        for (const [id, at] of g.touched) {
+          const held = latest.get(id)
+          // Ticks are unique, so there is no tie to break and no dependence on
+          // the order `states` happens to be iterated in.
+          if (held === undefined || at > held.at) {
+            latest.set(id, { writer: st.writer, at })
+          }
+        }
         for (const id of g.reflow) r.add(id)
       }
       for (const g of st.retained) fold(g)
       if (st.open !== null) fold(st.open)
-      touched.set(st.writer, t)
       reflow.set(st.writer, r)
     }
-    cache = { touched, reflow, answers: new Map() }
+    cache = {
+      latest,
+      reflow,
+      answers: new Map(),
+      singles: new Map(),
+    }
     return cache
   }
 
@@ -509,7 +573,6 @@ export const createWriteScope = (opts: {
   const membersOf = (
     i: Index,
     m: Map<string, Set<string>>,
-    kind: string,
     id: string,
   ): ReadonlySet<string> => {
     const names: string[] = []
@@ -517,11 +580,39 @@ export const createWriteScope = (opts: {
       if (ids.has(id)) names.push(writer)
     }
     if (names.length === 0) return EMPTY
-    const key = kind + ANSWER_SEP + names.join(ANSWER_SEP)
+    const key = names.join(ANSWER_SEP)
     const held = i.answers.get(key)
     if (held !== undefined) return held
     const answer: ReadonlySet<string> = new Set(names)
     i.answers.set(key, answer)
+    return answer
+  }
+
+  /** The single writer that touched the most recent of `ids`. Aliases exist for
+   *  ONE thing — a style, whose id is not one stable string — so taking the
+   *  latest ACROSS them keeps the winner well defined instead of unioning the
+   *  three lookups back into the set this narrowing exists to remove. */
+  const latestOf = (
+    i: Index,
+    ids: readonly string[],
+  ): ReadonlySet<string> => {
+    let best: { writer: string; at: number } | undefined
+    for (const id of ids) {
+      const held = i.latest.get(id)
+      if (
+        held !== undefined &&
+        (best === undefined || held.at > best.at)
+      ) {
+        best = held
+      }
+    }
+    if (best === undefined) return EMPTY
+    const held = i.singles.get(best.writer)
+    if (held !== undefined) return held
+    const answer: ReadonlySet<string> = new Set([
+      best.writer,
+    ])
+    i.singles.set(best.writer, answer)
     return answer
   }
 
@@ -551,7 +642,7 @@ export const createWriteScope = (opts: {
     g: Generation,
     id: string,
   ): Promise<void> => {
-    g.touched.add(id)
+    g.touched.set(id, tick())
     cache = null
     if (g.folded.has(id)) return
     g.folded.add(id)
@@ -583,7 +674,7 @@ export const createWriteScope = (opts: {
       const ids = harvestIds(result)
       if (ids.length > 0) {
         const g = ensureOpen(st)
-        for (const id of ids) g.touched.add(id)
+        for (const id of ids) g.touched.set(id, tick())
         cache = null
       }
     }
@@ -648,19 +739,18 @@ export const createWriteScope = (opts: {
     claim(writer, node) {
       const st = stateFor(writer)
       const g = ensureOpen(st)
-      g.touched.add(node.id)
+      g.touched.set(node.id, tick())
       g.folded.add(node.id)
       foldClosure(g, node)
       cache = null
       sealIfSettled(st)
     },
-    writersOf(id) {
-      const i = index()
-      return membersOf(i, i.touched, 't', id)
+    writersOf(...ids) {
+      return latestOf(index(), ids)
     },
     reflowWritersOf(id) {
       const i = index()
-      return membersOf(i, i.reflow, 'r', id)
+      return membersOf(i, i.reflow, id)
     },
   }
 }
