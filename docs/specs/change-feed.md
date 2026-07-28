@@ -1417,7 +1417,7 @@ figma_bridge:
       version: "0.3.0"
       current_page: "Icons"
       selected: 2
-      pending_edits: 3                     # distinct nodes/styles changed by anyone but me
+      pending_edits: 3                     # distinct nodes/styles changed outside this session
       pending_edits_state: gap             # only when the baseline is broken
   recently_offline:
     - name: Mockups
@@ -1427,11 +1427,20 @@ figma_bridge:
 
 - `pending_edits` is **always a number** when present, and it counts **distinct changed things, not
   actions**. Both fields are **omitted together** when no count file exists — "unknown, no signal".
-- **It means *changed by anyone but me*, and "me" is whoever is reading.** The same file at the same
-  instant shows a different number to each session on it, because each subtracted its own writes.
-  That is not an inconsistency to reconcile: a staleness signal is only ever relative to a snapshot,
-  and each session holds its own. The per-session count file, which serves multi-tenancy, is what
-  carries it — the block reads the file named for the session whose turn it is.
+- **It means *changed by anyone outside this session*, and the reading session is what "outside"
+  is measured from.** The same file at the same instant shows a different number to each session on
+  it, because each subtracted its own writes. That is not an inconsistency to reconcile: a staleness
+  signal is only ever relative to a snapshot, and each session holds its own. The per-session count
+  file, which serves multi-tenancy, is what carries it — the block reads the file named for the
+  session whose turn it is.
+- **The session is the unit, not the individual agent.** A session's subagents write under its
+  `sessionId` while carrying their own `agentId`
+  ([[figma-bridge/docs/specs/request-envelope|request-envelope.md]]), and attribution keys on the
+  session, so a subagent's write is the session's own and is subtracted like any other. This is the
+  intended reading rather than a limitation of the key: a subagent acts *for* the session that
+  dispatched it, and surfacing its work back as a foreign change would report the session's own plan
+  to itself — the same failure as reporting an agent its own writes, one level down. What lies
+  outside is another session on the file, or the user.
 - **The block does not split the count by cause.** One number, whether it is the user, another agent
   or both; the drain's `src` carries the distinction where there is room for it. Splitting it here
   would spend a field on every file every turn to answer a question the agent asks only on the turns
