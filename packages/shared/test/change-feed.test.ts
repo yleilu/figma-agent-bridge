@@ -5,6 +5,7 @@ import {
   collapseWithin,
   DRAIN_VALUE_BUDGET,
   HOTSPOT_CAP,
+  identityOf,
   MAX_DISPATCH_MS,
   RECORD_VALUE_BUDGET,
   RETAINED_COMMANDS,
@@ -560,5 +561,36 @@ describe('what both tables carry across a merge', () => {
         run('style_delete'),
       ).op,
     ).toBe('style_delete')
+  })
+})
+
+describe('identityOf — a style is its KEY, a node is exact', () => {
+  // The id `create_styles` returns; the agent holds THIS string.
+  const returned = 'S:1a2b3c,'
+
+  it('normalises every style form to the id a command returns', () => {
+    for (const form of [
+      'S:1a2b3c', // the bare key
+      'S:1a2b3c,', // what create_styles returned
+      'S:1a2b3c,43:505', // what one event carried
+      'S:1a2b3c,43:509', // what the next event carried
+    ]) {
+      expect(identityOf('style_create', form)).toBe(
+        returned,
+      )
+      expect(identityOf('style_update', form)).toBe(
+        returned,
+      )
+      expect(identityOf('style_delete', form)).toBe(
+        returned,
+      )
+    }
+  })
+
+  it('leaves node ids EXACT — 1:8 is not 1:80', () => {
+    expect(identityOf('create', '1:8')).toBe('1:8')
+    expect(identityOf('update', '1:80')).toBe('1:80')
+    expect(identityOf('delete', '1:8')).toBe('1:8')
+    expect(identityOf('page', '43:505')).toBe('43:505')
   })
 })

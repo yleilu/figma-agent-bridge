@@ -13,6 +13,7 @@ import {
   VALUE_MAX_BYTES,
   collapseAcross,
   collapseWithin,
+  identityOf,
   measureValue,
   type BaselineState,
   type BufferRun,
@@ -710,15 +711,22 @@ export class ChangeFeed {
     const map = rec.op.startsWith('style_')
       ? b.styles
       : b.nodes
+    // A STYLE is keyed by its KEY, normalised to the form a command returns
+    // (identityOf). The runtime hands out a different TRAILING segment per
+    // event, so keying on the raw string split one style across several
+    // entries: an inflated count, a collapse with nothing to fold, and an id
+    // that matched neither the other events nor what create_styles returned.
+    // Node ids pass through untouched — they are exact.
+    const key = identityOf(rec.op, id)
     const res = resolveIngest(rec, writers, self)
     if (res.kind === 'foreign') {
-      this.appendForeign(b, map, id, res.key, res.rec)
+      this.appendForeign(b, map, key, res.key, res.rec)
       return
     }
     if (res.kind === 'split') {
-      this.appendForeign(b, map, id, res.key, res.rec)
+      this.appendForeign(b, map, key, res.key, res.rec)
     }
-    this.appendSelf(b, map, id, res.mine)
+    this.appendSelf(b, map, key, res.mine)
   }
 
   private appendForeign(

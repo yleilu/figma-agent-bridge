@@ -1143,3 +1143,88 @@ describe('ChangeFeed drain budgets', () => {
     ).toEqual(['cheap', 'dear'])
   })
 })
+
+// A style's identity is its KEY (change-feed.md, Design constraints): the id a
+// command returns and the id an event carries differ in their TRAILING
+// segment, and the runtime hands out a different trailing segment per event.
+// Keying the buffer on the raw string therefore split ONE style across several
+// entries — an inflated count, a collapse that could not fold, and an id the
+// agent could not match against what create_styles returned.
+describe('ChangeFeed style identity (the KEY, not the id string)', () => {
+  // The id `create_styles` hands back: the key with an EMPTY trailing segment.
+  const RETURNED = 'S:1a2b3c,'
+
+  it('folds every event form of ONE style into ONE entry, reported as the id create_styles returned', () => {
+    const f = new ChangeFeed()
+    f.openBaseline('fk', 'e1')
+    f.ingest(
+      'fk',
+      push([
+        {
+          op: 'style_create',
+          id: 'S:1a2b3c,43:505',
+          name: 'Brand/Primary',
+          type: 'PAINT',
+        },
+      ]),
+      { epoch: 'e1', seq: 0 },
+    )
+    f.ingest(
+      'fk',
+      push([
+        {
+          op: 'style_update',
+          id: 'S:1a2b3c,43:509',
+          props: ['name'],
+        },
+      ]),
+      { epoch: 'e1', seq: 1 },
+    )
+    // ONE style changed, so ONE pending edit — not one per event.
+    expect(f.pendingCount('fk')).toBe(1)
+    const out = f.drain('fk', 100)
+    expect(out?.changes).toHaveLength(1)
+    // …and the id is the one the agent already holds.
+    expect(out?.changes[0].id).toBe(RETURNED)
+  })
+
+  it('reports the SAME id whichever of the three forms the event carries', () => {
+    const f = new ChangeFeed()
+    f.openBaseline('fk', 'e1')
+    for (const [seq, id] of [
+      'S:1a2b3c', // the bare key
+      'S:1a2b3c,', // the form a command returns
+      'S:1a2b3c,43:509', // the form an event carries
+    ].entries()) {
+      f.ingest(
+        'fk',
+        push([{ op: 'style_update', id, props: ['name'] }]),
+        { epoch: 'e1', seq },
+      )
+    }
+    expect(f.pendingCount('fk')).toBe(1)
+    expect(
+      f.drain('fk', 100)?.changes.map(c => c.id),
+    ).toEqual([RETURNED])
+  })
+
+  it('does NOT collapse two DIFFERENT styles, nor touch node ids', () => {
+    const f = new ChangeFeed()
+    f.openBaseline('fk', 'e1')
+    f.ingest(
+      'fk',
+      push([
+        { op: 'style_create', id: 'S:aaa,43:505' },
+        { op: 'style_create', id: 'S:bbb,43:505' },
+        // Node ids are EXACT and never prefix-matched.
+        { op: 'create', id: '1:8' },
+        { op: 'create', id: '1:80' },
+      ]),
+      { epoch: 'e1', seq: 0 },
+    )
+    expect(f.pendingCount('fk')).toBe(4)
+    expect(
+      f.drain('fk', 100)?.changes.map(c => c.id),
+    ).toEqual(['1:8', '1:80', 'S:aaa,', 'S:bbb,'])
+  })
+})

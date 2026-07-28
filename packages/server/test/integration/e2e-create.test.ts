@@ -124,8 +124,14 @@ describe('M3 create tools e2e', () => {
     const data = JSON.parse(
       result.content[0].text,
     ) as Record<string, unknown>
-    expect(data.type).toBe('FRAME')
-    expect(data.name).toBe('Card')
+    // tool-surface: create_tree answers {root, ids[]} — the root's identity
+    // under `root`, and one id per node it created (Card + Title + Divider).
+    expect(data.root).toEqual({
+      id: (data.ids as string[])[0],
+      name: 'Card',
+      type: 'FRAME',
+    })
+    expect(data.ids).toHaveLength(3)
     expect(data.totalNodes).toBe(3) // Card + Title + Divider
 
     // The converted nested structure reached the (mock) plugin: a FRAME with
@@ -180,7 +186,9 @@ describe('M3 create tools e2e', () => {
     const data = JSON.parse(
       result.content[0].text,
     ) as Record<string, unknown>
-    expect(data.type).toBe('RECTANGLE')
+    expect((data.root as { type: string }).type).toBe(
+      'RECTANGLE',
+    )
 
     // The mock echoes the converted params, so a serialization regression
     // (dropped stops, wrong angle) is visible here. The grammar emits a

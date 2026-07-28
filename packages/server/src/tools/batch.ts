@@ -26,9 +26,12 @@
 // is sent as a no-op marker so the plugin's results array stays index-aligned.
 
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { NodeSpec } from '@figma-agent-bridge/shared/node-spec'
+import type { NodeSpecPatch } from '@figma-agent-bridge/shared/node-spec'
 import type { ScopedFigmaClient } from '../figma-client'
-import { specToFigma } from '../serialize/node-spec-writer'
+import {
+  specToFigma,
+  unknownPatchKeyWarnings,
+} from '../serialize/node-spec-writer'
 import {
   type StyleCategory,
   HEX_RE,
@@ -86,15 +89,16 @@ const convertUpdateNode = (
 ): Record<string, unknown> => {
   const { nodeId, patch } = params as {
     nodeId?: string
-    patch?: Partial<NodeSpec>
+    patch?: NodeSpecPatch
   }
   // D3/T7: thread the writer warnings sink so a batched update_node surfaces the
-  // SAME per-op warnings (e.g. per-side stroke collapse) a direct update_node
-  // does — no longer a silent lossy conversion.
-  return {
-    nodeId,
-    spec: specToFigma(patch ?? {}, warnings),
-  }
+  // SAME per-op warnings (e.g. per-side stroke collapse, an unknown patch key)
+  // a direct update_node does — no longer a silent lossy conversion.
+  const spec = specToFigma(patch ?? {}, warnings)
+  warnings?.push(
+    ...unknownPatchKeyWarnings(patch ?? {}, spec),
+  )
+  return { nodeId, spec }
 }
 
 const convertCreateStyles = (

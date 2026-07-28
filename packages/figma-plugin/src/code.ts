@@ -888,21 +888,40 @@ const applyTextProperties = async (
   const text = spec.text as Record<string, unknown>
   if (!text) return
 
-  const font = text.font as {
-    family: string
-    style: string
-    size: number
+  const font = text.font as
+    | {
+        family: string
+        style: string
+        size: number
+      }
+    | undefined
+
+  // A font MUST be loaded before ANY text property is written — including a
+  // content-only patch, which writes the node's EXISTING font. So the patch
+  // that names no font loads what the node already uses (every range of it:
+  // fontName is figma.mixed on a multi-font node, and getRangeAllFontNames
+  // answers uniformly for both). Without this the plainest patch there is —
+  // "change this string" — would demand the agent restate the type.
+  if (font !== undefined) {
+    await figma.loadFontAsync({
+      family: font.family,
+      style: font.style,
+    })
+    // Set font
+    node.fontName = { family: font.family, style: font.style }
+    node.fontSize = font.size
+  } else if (node.characters.length > 0) {
+    for (const existing of node.getRangeAllFontNames(
+      0,
+      node.characters.length,
+    )) {
+      await figma.loadFontAsync(existing)
+    }
+  } else if (node.fontName !== figma.mixed) {
+    // An EMPTY text node has no range to ask about; its single fontName is
+    // the one the first write will use.
+    await figma.loadFontAsync(node.fontName)
   }
-
-  // Load font first — REQUIRED before setting any text property
-  await figma.loadFontAsync({
-    family: font.family,
-    style: font.style,
-  })
-
-  // Set font
-  node.fontName = { family: font.family, style: font.style }
-  node.fontSize = font.size
 
   // Text auto-resize (set before content to avoid resize fighting)
   if (spec.textAutoResize !== undefined) {
@@ -1270,6 +1289,14 @@ const createTreeNode = async (
   // cyclic pool (a→b→a, or a self-ref) is caught and rejected as a clean
   // {error} instead of recursing forever and freezing the Figma UI.
   refStack: string[] = [],
+  // Every node this call realizes, pushed AS IT IS CREATED — parent before
+  // children, so the array is the root first then depth-first creation order.
+  // It is what the tool surface answers as `ids[]` (tool-surface.md:
+  // `create_tree(...) → {root, ids[]}`): without it the N-1 non-root nodes of
+  // a tree are unaddressable until a follow-up read. A `{ id }` clone counts
+  // as ONE realized node — its descendants come along but are not enumerated
+  // (walking every clone's subtree is unbounded work, T10).
+  created?: string[],
 ): Promise<SceneNode> => {
   const type = spec.type as string
 
@@ -1287,10 +1314,16 @@ const createTreeNode = async (
           [...refStack, refKey].join(' -> '),
       )
     }
-    return createTreeNode(refSpec, parent, writer, refs, [
-      ...refStack,
-      refKey,
-    ])
+    // The expansion recurses with the SAME accumulator: a { ref } realizes its
+    // whole rebuilt subtree, and every node of it is a node this call created.
+    return createTreeNode(
+      refSpec,
+      parent,
+      writer,
+      refs,
+      [...refStack, refKey],
+      created,
+    )
   }
 
   // Clone reference: { id } with no type
@@ -1321,6 +1354,7 @@ const createTreeNode = async (
         )
       }
       writeScope.claim(writer, instance)
+      created?.push(instance.id)
       return instance
     }
     if (existing.type === 'INSTANCE') {
@@ -1341,6 +1375,7 @@ const createTreeNode = async (
           )
         }
         writeScope.claim(writer, instance)
+        created?.push(instance.id)
         return instance
       }
     }
@@ -1358,6 +1393,7 @@ const createTreeNode = async (
       )
     }
     writeScope.claim(writer, cloned)
+    created?.push(cloned.id)
     return cloned
   }
 
@@ -1371,6 +1407,8 @@ const createTreeNode = async (
 
   // Regular node: create, apply properties, append
   const node = await createSingleNode(spec, parent, writer)
+  // Pushed BEFORE the children recurse, so the order is root-first depth-first.
+  created?.push(node.id)
 
   // Recurse into children (for FRAME, SECTION, etc.)
   const children = spec.children as
@@ -1388,6 +1426,7 @@ const createTreeNode = async (
         writer,
         refs,
         refStack,
+        created,
       )
     }
   }
@@ -2457,16 +2496,22 @@ const handleCommand = async (
         | Record<string, Record<string, unknown>>
         | undefined
       try {
+        // `createdIds` is the harvest the server answers as `ids[]`: root
+        // first, then depth-first in creation order.
+        const createdIds: string[] = []
         const treeResult = await createTreeNode(
           treeSpec,
           treeParent,
           writer,
           treeRefs,
+          [],
+          createdIds,
         )
         return {
           id: treeResult.id,
           name: treeResult.name,
           type: treeResult.type,
+          ids: createdIds,
         }
       } catch (err) {
         // T7: a blocked append (e.g. into a non-SLOT instance descendant)

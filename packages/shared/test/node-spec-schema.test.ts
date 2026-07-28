@@ -240,6 +240,31 @@ describe('partialNodeSpecSchema (update_node)', () => {
     expect(r.success).toBe(true)
   })
 
+  // The live crash reached the atom tokenizer, which means this boundary let
+  // it through in one path and rejected it in another. It is legitimate: a
+  // patch supplies a SUBSET, and `{text:{content}}` is the plainest one there
+  // is. `nodeSpecSchema` still requires `font` — a TEXT node cannot be created
+  // without one.
+  it('accepts a PARTIAL text struct (content without font, and back)', () => {
+    expect(
+      partialNodeSpecSchema.safeParse({
+        text: { content: 'Updated copy' },
+      }).success,
+    ).toBe(true)
+    expect(
+      partialNodeSpecSchema.safeParse({
+        text: { color: '#FF0000' },
+      }).success,
+    ).toBe(true)
+    // …while CREATE still demands the font.
+    expect(
+      nodeSpecSchema.safeParse({
+        type: 'TEXT',
+        text: { content: 'Hi' },
+      }).success,
+    ).toBe(false)
+  })
+
   it('still rejects a malformed value in a patch', () => {
     const r = partialNodeSpecSchema.safeParse({
       opacity: 'half',

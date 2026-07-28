@@ -84,6 +84,37 @@ export type DocumentChangedParams = {
 // ── The run model ───────────────────────────────────────────────────────────
 
 /**
+ * The identity ONE changed thing is buffered and reported under.
+ *
+ * A STYLE's identity is its KEY (change-feed.md, Design constraints): the id a
+ * command returns and the id an event carries differ in their TRAILING
+ * segment — empty in the result (`S:<key>,`), a page id in the event
+ * (`S:<key>,<pageId>`) — and the runtime is free to hand out a different one
+ * per event. Only the segment before the first comma is stable.
+ *
+ * The CANONICAL form is the one a command returns, `S:<key>,`: reporting it is
+ * what lets an agent match a drained style against the id `create_styles`
+ * handed it by equality, with nothing to strip on either side.
+ *
+ * NODE ids are returned UNTOUCHED. They are exact, and a prefix match would
+ * wrongly equate `1:8` with `1:80`.
+ *
+ * DEFINED here because the plugin's attributor resolves the same three forms
+ * as aliases at source and the server buffer keys on the result: one rule, two
+ * layers, so a second copy cannot drift.
+ */
+export const identityOf = (
+  op: ChangeOp,
+  id: string,
+): string => {
+  if (!op.startsWith('style_')) {
+    return id
+  }
+  const comma = id.indexOf(',')
+  return `${comma === -1 ? id : id.slice(0, comma)},`
+}
+
+/**
  * A run's foreign writers, canonically ordered and joined. EMPTY for the user
  * or an unresolvable cause, and the reserved SELF key for this session's own.
  * Buffer-local, derived from the surviving `by`, never emitted.

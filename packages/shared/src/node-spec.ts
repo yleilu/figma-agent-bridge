@@ -221,6 +221,22 @@ export type NodeSpec = {
 export type NodeSpecOrStub = NodeSpec | IdStub
 
 /**
+ * What `update_node`'s `patch` is: a partial NodeSpec whose `text` STRUCT is
+ * partial too.
+ *
+ * `text.font` is required on a NodeSpec because a TEXT node cannot be CREATED
+ * without one. A PATCH is the other case: `{text:{content}}` rewrites the copy
+ * and leaves the type alone, and `{text:{color}}` recolours it — omitted means
+ * untouched, the same rule every other patch field obeys. Requiring `font` to
+ * change a string would make the partial-patch contract false for exactly one
+ * struct.
+ */
+export type NodeSpecPatch = Omit<
+  Partial<NodeSpec>,
+  'text'
+> & { text?: Partial<TextSpec> }
+
+/**
  * The create_tree node shape: a NodeSpec with recursive children, a
  * ref-pool reuse (`{ ref }`), or a clone-by-id (`{ id }`).
  *
