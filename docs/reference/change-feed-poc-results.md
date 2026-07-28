@@ -231,3 +231,33 @@ batch — a dataset this section declares corrupt — and it contains a counter-
 script) did not, and its `create` survived into the drain. Whether that is a real collapse defect or
 an artifact of split delivery cannot be told apart without a run-1 log, which does not exist. Fold it
 into the idle-delivery investigation. Collapse's only trustworthy evidence today is the unit suite.
+
+### The window cannot be widened out of the problem (tested 2026-07-28)
+
+The obvious fix — raise `SETTLE_MS` until it covers the delivery tail — was tried and **failed**.
+Same rig, same conditions, only the constant changed. Each run: 20 mixed agent writes with the user
+idle and Figma backgrounded, ending in a `create_component` **liveness marker** (it emits a frame
+even when every record is filtered, so "no leak" cannot be confused with "nothing delivered").
+
+| `SETTLE_MS` | runs leaking | leaked payload |
+|---|---|---|
+| 400 ms | 1 of 7 | 1 record |
+| 2000 ms | **2 of 7** | **18 and 9 records** |
+
+Frame arrival relative to the marker's exit, at 2000 ms: **395, 1121, 1239, 1910, 2435, 3907 ms**.
+The deferral routinely exceeds two seconds, so a two-second window does not cover it — it only lets
+more writes accumulate before the leak lands, which is why the payload grew from 1 record to 18.
+
+**A prior 7-run sample at 400 ms with delivery at 304-416 ms was luck, not refutation.** Sampling
+the prompt case repeatedly is not evidence that the deferred case is gone; this is the same
+absence-of-evidence trap as the vacuity note above, and it fooled a full round of investigation.
+
+**Conclusion: no bound has been established on the deferral, so no value of `SETTLE_MS` can be shown
+to close this.** A time-windowed self-write filter is the wrong shape for a delivery channel whose
+latency is unbounded. `SETTLE_MS` is left at 400 — 2000 carries a strictly larger residual (more
+cascade records dropped on closure members) for no demonstrated benefit.
+
+**Gate item 2 remains OPEN.** What would close it is a filter keyed on something other than wall
+clock — e.g. retaining the touched set per COMMAND for the last K commands, so a deferred event
+still matches the command that caused it however late it arrives. That is a design change, not a
+tuning change, and it belongs to a spec revision rather than this branch.
