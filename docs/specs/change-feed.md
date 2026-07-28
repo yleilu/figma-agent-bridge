@@ -258,7 +258,7 @@ Four small pieces, in order. Each is independently testable; none lives inside t
 flowchart TB
     subgraph Sandbox["Figma sandbox"]
         EV["documentchange / currentpagechange / selectionchange"]
-        WS["WriteScope: window, claimed ids, reflow closure"]
+        WS["WriteScope: retained generations, claimed ids, reflow closure"]
         FL["SelfWriteFilter"]
         AC["ChangeAccumulator: node map, style map, slots"]
         FLUSH["Flusher: debounce, max-wait, send budget"]
@@ -279,30 +279,34 @@ flowchart TB
 ```ts
 type WriteScope = {
   /** Called on entry to every command dispatch, including each nested batch op.
-   *  Refcounted. Harvests the command's PARAMS and captures the reflow closure
-   *  of every id they name, while those nodes still exist. */
+   *  Refcounted; the outermost EVENT-CAUSING entry OPENS a generation. Harvests the
+   *  command's PARAMS and captures the reflow closure of every id they name, while
+   *  those nodes still exist. A read-only command refcounts and harvests nothing. */
   enter(params: unknown): Promise<void>
   /** Called ONCE per enter, when that dispatch settles (after the handler's promise
    *  resolves or rejects). Harvests the handler's RETURN. Refcounted; when the count
-   *  returns to 0 the window stays OPEN for SETTLE_MS, then closes. */
+   *  returns to 0 the generation is SEALED — it stops growing and stays RETAINED. */
   exit(result: unknown): void
-  /** True while the window is open (depth > 0, or within SETTLE_MS of the last exit). */
-  isOpen(): boolean
+  /** True while a dispatch is in flight — depth > 0, and no dispatch counts as in
+   *  flight for longer than MAX_DISPATCH_MS. Governs the context slots only. */
+  inFlight(): boolean
   /** Called by every node-CREATING code path at the moment of creation, with the new
-   *  node. Adds the id to the claimed set and folds the node into the closure. */
+   *  node. Adds the id to the open generation's claimed set and folds the node into
+   *  its closure. */
   claim(node: BaseNode): void
   /** Ids the agent is known to have touched: harvested from params and returns, plus
-   *  every id claimed at creation. Monotonic for the window's lifetime. */
+   *  every id claimed at creation. The union over the open generation and every
+   *  retained one — monotonic WITHIN a generation, and shrinking only by eviction. */
   touched(): ReadonlySet<string>
   /** Ids whose GEOMETRY the agent's writes can move without naming them — the reflow
-   *  closure, captured eagerly (below). */
+   *  closure, captured eagerly (below). Union over the same generations. */
   reflow(): ReadonlySet<string>
 }
 ```
 
 **Harvest is generic, and its timing is part of the contract.** `enter` folds the command's params;
-`exit` folds its return; the set only grows. The walk takes every string under
-`id` / `ids` / `nodeId` / `nodeIds` / `parentId` / `root` / `componentId` / `instanceId` /
+`exit` folds its return; within a generation the set only grows. The walk takes every string under
+`id` / `ids` / `nodeId` / `nodeIds` / `parentId` / `pageId` / `root` / `componentId` / `instanceId` /
 `results[].id`, at any depth. Its failure mode is a **smaller** touched set, so the agent's own
 records survive the filter and surface as user edits: a **false nudge**, not a lost edit.
 
@@ -314,16 +318,127 @@ builder's per-node create, single-node create, SVG import, clone, group, duplica
 boolean-op. Those are a small, enumerable set of choke points, and this is the one place the design
 does **not** rely on the generic walk.
 
-**The window is anchored at `exit`, not `enter`.** Commands that await (font load, image fetch)
-mutate seconds after entry; a TTL clocked at entry can expire before the write lands.
+**Only a dispatch that can cause an event is harvested.** A pure read mutates nothing and moves no
+navigation, so it emits no `documentchange`, `currentpagechange` or `selectionchange` — there is
+nothing for its membership to suppress, and every id it names is pure reach. That reach is large:
+`search` returns hundreds of ids and an `inspect` of a page root folds that page's entire reflow
+closure. Since membership outlives the command by design (below), a handful of reads would otherwise
+put most of the document into `touched()`, and the filter would then drop the user's real edits
+wholesale while reporting nothing pending — silence, which is the direction this design refuses.
+Read-only commands therefore open no generation and harvest neither their params nor their return;
+they still refcount, so `inFlight()` is unaffected. Which commands are event-causing is a **static**
+property of each entry in the command switch, not a runtime guess. A command wrongly classed
+read-only leaks its own writes as user edits — a false nudge — so the doubtful case is classed
+event-causing, and a `batch` is always event-causing because its ops may be.
+
+**Retention is keyed on the command, not on the clock.** `documentchange` delivery is batched and
+unbounded: the runtime decides when to hand a batch over and can defer one long past the exit of the
+command that caused it (see Design constraints). Membership that expires on a timer therefore fails
+**open** — when a deferred event finally lands, the timer has run out, the agent's own write is
+admitted, and `pending_edits` reports the agent's work back to itself. So every event-causing dispatch
+instead opens a **generation** holding its own touched set and reflow closure, and the scope keeps
+the most recent `RETAINED_COMMANDS` sealed generations. `touched()` and `reflow()` are the union over
+the open generation and every retained one, so a deferred event still matches the command that caused
+it: how long its delivery took is not part of the question, only how much has happened since.
+
+**A generation is sealed at `exit`, not at `enter`.** Commands that await (font load, image fetch)
+mutate seconds after entry, so a generation must keep absorbing harvests and claims until its dispatch
+settles. `exit` is the first moment the command can no longer touch anything: it is where the set
+stops **growing**, not where it starts expiring.
+
+A generation therefore seals at the earlier of its dispatch settling and `MAX_DISPATCH_MS` after it
+opened — the second sized above the slowest command that honestly finishes, so a forced seal means a
+wedge and not a slow font load. That clause is not a refinement. A dispatch that never settles — a
+promise waiting on a font, an image or an API that never resolves — would leave its generation open
+indefinitely, and an open generation is neither counted out nor released: it would grow without bound
+while every later command merged into it, and `inFlight()` would stay true for the rest of the
+session, suppressing every page and selection record. Sealing on age degrades that to a leak, which
+is the direction the rest of the design already accepts. The forced seal also clears the refcount. A
+harvest that then arrives with no open generation — a `claim`, or the late `exit` of a force-sealed
+dispatch — opens a fresh generation and folds into it, so a genuinely slow command that does return
+is still harvested, into a younger generation that is retained longer than its own would have been.
+That is the conservative side.
 
 **`batch` is refcounted, not re-entered.** A batch re-dispatches N ops through the same switch; the
-outermost `enter` owns the window and the touched set accumulates across all N ops.
+outermost `enter` owns the generation and the touched set accumulates across all N ops into it. The
+same refcount absorbs overlapping dispatches — they share the generation that is open, which is
+conservative: a shared generation is retained as long as the later command's would be.
 
-**The reflow closure is captured eagerly and structurally.** It is computed when an id enters the
-touched set — at `enter` for named ids, at `claim` for created ones — never lazily when a record
-arrives. Two reasons, both fatal to a lazy lookup: a node the command **deleted** can no longer be
-resolved, and deletion inside auto-layout is the largest reflow producer there is; and the
+**Two bounds, and they do different jobs.** A generation is a set of ids, so retention held forever
+would grow without limit; and reach that never lets go would eventually claim everything the agent
+ever touched. One bound answers each:
+
+- **`RETAINED_COMMANDS`** — opening a generation evicts the oldest sealed one beyond this count. This
+  is the whole memory bound: the retained set never exceeds this many generations. It is also what
+  covers a deferred event, because it advances only when commands are *dispatched*: an event that
+  lands long after its own command still finds it, as long as the agent has not dispatched past it.
+- **`RETENTION_CEILING_MS`** — when no dispatch has entered for this long, every sealed generation is
+  evicted at once. It is keyed on **idle time since the last dispatch**, not on a generation's own
+  age: while the agent keeps working nothing is released and `RETAINED_COMMANDS` alone decides, and
+  once the agent stops the whole retained set lets go together. It is evaluated **on read** — an idle
+  plugin dispatches nothing, so there is nothing to wake up, and `admit` is the only reader.
+
+The ceiling exists for **hand-over**. Without it, an agent that builds a screen and stops goes on
+claiming nodes it touched twenty commands ago while the user refines them, and those refinements are
+dropped in silence — the same class of failure the feed exists to prevent, reached from the other
+side, and reached on the normal working pattern rather than an exotic one. Keying it on idle time
+rather than on a generation's age is what keeps `RETAINED_COMMANDS` meaningful: an agent round-trips
+through a model between calls, so under an age-based ceiling a *working* agent's older generations
+would expire mid-task and the count bound would never bind at all, collapsing the design into a
+wall-clock window wearing a larger constant.
+
+Both are sized against the same question — how much can happen between a command and the delivery of
+its events — and both trade the two failures against each other **gradually**, never at a cliff.
+Sized low, retention lets go before a deferred batch lands and the agent's own writes come back as
+user edits; sized high, more of the user's work on nodes the agent touched is dropped in silence.
+Each degradation grows in proportion to how far the sizing is out.
+
+`RETAINED_COMMANDS` counts **dispatches, not work**, and that count is uneven: fifty single-node
+updates spend fifty generations where one `batch` of fifty ops spends one. It is sized in tens of
+commands — above the largest burst an agent issues while one of its earlier events is still
+undelivered — and reads, which open no generation, do not spend it at all. `RETENTION_CEILING_MS` is
+sized in minutes: above the seconds-scale deferral the runtime is known to permit (see Design
+constraints), and above the pause an agent takes between commands, so ordinary thinking time never
+releases retention mid-task.
+
+**The bounds are not sized toward over-reporting.** Everywhere the filter is merely *unsure*, an
+admitted record the agent caused is an occasional false nudge. A leak here would be systematic —
+every command reporting itself back — and a count that is never zero carries no signal at all. So both
+bounds are sized generously and the residual is accepted on the silence side, where it is disclosed
+in Limitations. Eviction itself is silent of necessity: the events it would leak have not arrived, so
+there is nothing to flag.
+
+The ceiling's own weakness, stated: it is a wall-clock bound, and a batch deferred past it is admitted
+exactly as any time-bounded rule would admit it. The difference from a rule that is the *only* thing
+separating the agent's writes from the user's is margin, not kind — such a rule must be tight, so
+every millisecond of slack is a leak, while a ceiling that merely has to let go once dispatching stops
+can sit well above the deferral the runtime is known to permit. That margin is not unlimited: the
+same constant sets how long a user's post-hand-over edits stay invisible, so it cannot simply be
+raised. No upper bound on delivery is established (see Design constraints), so this is a margin, not
+a proof.
+
+**Eviction is not driven by delivery confirmation.** Evicting a generation the moment its events were
+known to have arrived would turn both bounds into rarely-hit backstops. Nothing on the wire can carry
+that confirmation. The events retention suppresses are precisely the ones that never become records,
+so neither a frame nor a drain can report their arrival; Figma marks no end of a command's batch, so
+even an observed arrival could not be told apart from the first of several still to come, and evicting
+on a partial arrival is the fail-open case again under a new trigger; and the plugin broadcasts to
+every member of the channel, so one consumer's drain speaks for that consumer, never for the file.
+Keying a plugin-side rule on a server-side event would additionally make the filter's correctness
+depend on the lossy broadcast channel whose unreliability this design exists to answer.
+
+The filter does observe every suppressed event itself, plugin-side, which is a signal the wire never
+sees — if `documentchange` batches were handed over in the order their commands ran, an event for an
+id claimed *only* by generation M would prove every older generation had finished delivering. The
+design does not rest on that. Batch ordering is not a documented property of the runtime, and ids
+recur across generations (an agent updates the same node repeatedly), so an arriving event rarely
+belongs to exactly one generation. A rule built on it would evict early whenever either assumption
+failed, which is the leak the bounds are sized to avoid.
+
+**The reflow closure is captured eagerly and structurally.** It is computed when an id enters the open
+generation's touched set — at `enter` for named ids, at `claim` for created ones — never lazily when
+a record arrives. Two reasons, both fatal to a lazy lookup: a node the command **deleted** can no
+longer be resolved, and deletion inside auto-layout is the largest reflow producer there is; and the
 `documentchange` handler is synchronous while the node-resolution API this codebase uses is async, so
 a lazy resolve inside the filter would have to use the deprecated synchronous variant and would
 silently pin the plugin manifest to non-dynamic-page document access.
@@ -352,19 +467,21 @@ type SelfWriteFilter = {
   /** Map one Figma DocumentChange to a record, or null if it is the agent's own.
    *  May return a record with a REDUCED props[] (subtraction, below). */
   admit(change: DocumentChange): ChangeRecord | null
-  /** True if a page/selection event should be recorded (false = agent's own navigation). */
-  admitContext(): boolean
+  /** True if a page/select record should be recorded (false = the agent's own navigation). */
+  admitContext(rec: ChangeRecord): boolean
 }
 ```
 
-The rule, in full:
+The rule, in full. Node and style records carry an id and are decided by **membership** — nothing
+else; the context slots carry no mutation and have their own rule below. First matching row wins. A
+style record is matched on its **key**, not on the raw id the event carries (see Design constraints);
+node ids are matched exactly and never by prefix.
 
-| Condition | Node `create` / `delete` | Node `update` (`PROPERTY_CHANGE`) | style records | `page` / `select` |
-|---|---|---|---|---|
-| window closed | keep | keep | keep | keep |
-| window open, `id ∈ touched()` | **drop** | **drop** | **drop** | — |
-| window open, `id ∈ reflow()` | **keep** | **subtract** `CASCADE_PROPS` from `props[]`; drop if empty | keep | — |
-| window open, otherwise | keep | keep | keep | **drop** |
+| Membership of the record's id | Node `create` / `delete` | Node `update` (`PROPERTY_CHANGE`) | style records |
+|---|---|---|---|
+| `id ∈ touched()` | **drop** | **drop** | **drop** |
+| `id ∈ reflow()` | **keep** | **subtract** `CASCADE_PROPS` from `props[]`; drop if empty | keep |
+| neither | keep | keep | keep |
 
 - **`CASCADE_PROPS`** is the geometry a re-flow moves on a node the agent did not name: `x`, `y`,
   `width`, `height`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `rotation`,
@@ -379,22 +496,37 @@ The rule, in full:
   Computing "which Figma property names did this command set" would require a table from every tool's
   expression-object params to `NodeChangeProperty` names — enormous, drift-prone, and defeated by
   T8's grammar (one atom sets many properties).
-- **Context slots drop inside the window.** The agent's own navigation writes fire the same events;
-  without this, the agent's own `set_current_page` returns as "the user just switched page" (a T7
-  violation). The over-report-by-default rule does not bind here: a `page` / `select` record is
-  context, never a mutation, and never counts toward `pending_edits`, so dropping one is harmless.
+- **Context slots are decided per slot, and only the `page` slot can ride retention.**
+  `admitContext(rec)` drops a record that describes the agent's *own* navigation: either slot while a
+  dispatch is in flight, and a `page` record whose id is in `touched()` — the page id a
+  `set_current_page` names is harvested like any other id. Without this the agent's own page switch
+  returns as "the user just switched page" (a **T7** violation), and because delivery is deferred it
+  would return that way long after the command exited, which is why the page slot is decided by
+  membership rather than by the in-flight flag alone. A `select` record cannot be decided that way: it
+  carries **no id**, and its `ids` are the *current selection* rather than an identity, so testing
+  them against `touched()` would drop the user's selection of the very nodes the agent just built —
+  the most likely thing a user selects, and exactly what the slot exists to report. So the agent's own
+  selection changes surface as the user's whenever they arrive after their command. Both slots are
+  latest-wins *context*, never mutations, and never count toward `pending_edits`, so the cost is a
+  wrong hint, never a wrong count; it is disclosed in Limitations.
 
 **The fail direction, stated exactly.** Everywhere the filter is uncertain *whether the agent touched
-a node*, it keeps the record — over-reporting, never silence. The one place it trades that away
-deliberately is the reflow row: a user's own move or resize of a node inside the reflow closure,
-inside the settle window, is indistinguishable at source from the cascade and is dropped. That
-residual is disclosed in Limitations; it is not a case the filter can resolve without before/after
-values it does not have.
+a node*, it keeps the record — over-reporting, never silence. It trades that away deliberately in two
+places, both disclosed in Limitations. The reflow row: a user's own move or resize of a node inside
+the reflow closure, while the command that captured that closure is still retained, is
+indistinguishable at source from the cascade and is dropped — not a case the filter can resolve
+without before/after values it does not have. And retention's reach: a node the agent touched stays
+claimed for as long as its generation is retained, so a user edit landing on it in that span is
+dropped too. Both are the price of source-side attribution, and both are bounded by how long a
+generation lives rather than left open-ended.
 
-**`SETTLE_MS` is determined by measurement, not chosen.** Figma batches `documentchange` callbacks
-with an undocumented period. Below the true period the filter fails **open**: every agent write reads
-as a user edit, `pending_edits` never returns to `0`, and the feature is worse than nothing.
-`SETTLE_MS` is fixed against the runtime's measured batch period, with a stated margin.
+**Membership is asked at event time and answered from what is retained then.** The `documentchange`
+handler is synchronous and performs no node lookups (see Design constraints); it asks only whether the
+record's id is in `touched()` or `reflow()` at the moment the event surfaces. Nothing in that question
+refers to when the event was *delivered*, which is what makes an arbitrarily deferred batch decidable
+at all: the answer moves as commands are dispatched, not as an event's delivery is delayed. The one
+thing elapsed time alone changes is the ceiling, which releases the whole retained set once
+dispatching stops.
 
 ### 3. `ChangeAccumulator` — folds immediately, evicts loudly
 
@@ -877,7 +1009,7 @@ One frame serves both, discriminated by an explicit boolean.
 flowchart TB
     subgraph Plugin["Figma plugin, per file"]
         L["documentchange / currentpagechange / selectionchange"]
-        G["self-write filter: window, touched, reflow closure"]
+        G["self-write filter: retained generations, touched, reflow closure"]
         A["accumulator and flusher"]
         UM["UI stamps meta: fileKey, epoch, seq"]
         R["register frame carries epoch"]
@@ -912,9 +1044,12 @@ Figma Plugin API and architecture facts that shape this design:
 
 - **Events fire only while the plugin runs.** No background delivery; no document version number,
   revision, or mtime is readable. "Since last read" is inherently session-scoped.
-- **`documentchange` is batched with an undocumented period.** The runtime does not call the callback
-  synchronously; it batches updates and delivers them periodically. This is the fact the self-write
-  window's `SETTLE_MS` must clear, and the one parameter that cannot be settled on paper.
+- **`documentchange` delivery is batched and unbounded.** The runtime does not call the callback
+  synchronously; it batches updates and hands them over on its own schedule, and that schedule can
+  defer a batch long past the exit of the command that caused it — seconds, with no documented ceiling
+  and none establishable by measurement, since sampling the prompt case can never bound the deferred
+  one. This is the fact that keys self-write membership on the **command**, which is indifferent to
+  how late its events arrive, rather than on a time bound the delivery has to land inside.
 - **`origin: 'LOCAL'` includes the plugin's own edits** — which is why self-write filtering is
   source-side, not origin-based.
 - **`PropertyChange.properties` is an array** of `NodeChangeProperty` — hence the subtraction rule
@@ -959,12 +1094,31 @@ Figma Plugin API and architecture facts that shape this design:
   with suspicion; the real guard is that acting on a deleted node fails loudly.
 - **The accumulator can discard, and says so.** At its cap it evicts the oldest distinct id and reports
   `overflow`, which breaks the baseline. It never discards *silently*.
-- **The self-write filter has two silent-loss residuals**, both inside the settle window: a user edit
-  on the very node the agent is writing, and **a user move or resize of a node inside the reflow
-  closure** — an ancestor in a hug chain, one of that ancestor's children, or a descendant of a node
-  the agent touched. Both are attributed to the agent and dropped. Source-side filtering cannot
-  eliminate either without before/after values; everywhere else the filter fails toward over-reporting
-  rather than silence.
+- **The self-write filter has two silent-loss residuals**, both for as long as the causing command is
+  retained: a user edit on the very node the agent is writing, and **a user move or resize of a node
+  inside the reflow closure** — an ancestor in a hug chain, one of that ancestor's children, or a
+  descendant of a node the agent touched. Both are attributed to the agent and dropped. Source-side
+  filtering cannot eliminate either without before/after values; everywhere else the filter fails
+  toward over-reporting rather than silence.
+- **Retention reaches past the command it belongs to.** A user edit to a node the agent touched within
+  the last `RETAINED_COMMANDS` dispatches — or, once the agent stops dispatching, before it has been
+  idle for `RETENTION_CEILING_MS` — is attributed to the agent and dropped. The reach that lets a
+  deferred event find its own command is the same reach that claims a user's edit to a node the agent
+  recently worked on; the two are one mechanism and cannot be separated at source. The sharpest case
+  is **undo**: undo restores the original id, so a user undoing a node the agent just created emits a
+  `delete` on a claimed id and is dropped. The consequence there is not an under-count but a **stale
+  reference** — the agent goes on believing a node exists that no longer does, which is the failure
+  the loud `NODE_NOT_FOUND` remains the guard for.
+- **The retention ceiling is a wall-clock bound, and delivery has no proven one.** A batch deferred
+  past the idle release is admitted as a user edit — the agent's own work reported back to it. The
+  ceiling is sized above the deferral the runtime is known to permit, but it cannot be raised freely,
+  because the same constant sets how long a user's post-hand-over edits stay invisible. This is the
+  one place the design still rests on delivery being eventually prompt.
+- **The `select` slot can carry the agent's own selection.** A `select` record has no id to test
+  membership on, so it is suppressed only while a dispatch is in flight; a selection change the agent
+  itself caused, delivered after its command exits, is recorded as the user's. The slot is latest-wins
+  context and never counts toward `pending_edits`, so the count cannot inflate — but `select` may
+  describe where the *agent* last worked rather than where the user is.
 - **Offline edits are invisible.** Every *detected* disconnect is surfaced, but edits made while the
   plugin was closed are reported only as a broken baseline, never reconstructed.
 - **An unsaved file's identity does not survive a plugin reload.** Its buffer and count file are
