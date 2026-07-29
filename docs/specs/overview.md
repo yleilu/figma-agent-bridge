@@ -168,8 +168,13 @@ Every call returns the MCP `ToolResult`:
   or array — **never** a Figma node reference. Node-writes return at minimum `{ id, name, type }`
   plus operation-salient fields, with an optional `warning?: string` as the canonical channel
   for non-fatal notes (e.g. `createSlot` unavailable, auto-layout no-op).
-- **Reads** split by audience: machine readers (`get_*`) emit JSON `ParsedNode`/arrays; human
-  readers (`inspect`, `list_pages`) emit YAML.
+- **Reads** have exactly one YAML reader: **`inspect`**, whose whole job is a compact human- and
+  agent-scannable view of a tree (T3/T4) and whose atom/struct rendering is defined by
+  [[figma-bridge/docs/specs/expression-formats|expression-formats.md]]. **Every other read emits
+  JSON** — `get_node`, `get_nodes`, `get_selection`, `list_pages`, `search`, `get_styles`,
+  `get_variables`, `get_components`, `list_fonts`, `get_plugin_data`, `get_reactions`,
+  `get_annotations`, and every non-facade meta-read. One reader deviates and the deviation is
+  named here; a per-tool serialization choice is exactly the drift B1 forbids.
 - **`export`** returns an `image` block (PNG/JPG/PDF) or a `text` block (SVG).
 
 ### Error envelope — server-owned, typed
