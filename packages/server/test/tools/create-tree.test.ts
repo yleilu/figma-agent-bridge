@@ -382,3 +382,78 @@ describe('handleCreateTree', () => {
     )
   })
 })
+
+// tool-surface.md: `create_tree(tree, {parentId?, refs?}) → {root, ids[]}`.
+// Returning the root ALONE is the bug the change feed's own design names — a
+// generic id-harvester misses N-1 nodes, and an agent that just built a tree
+// cannot address what it built without a follow-up read.
+describe('handleCreateTree reply shape — {root, ids[]}', () => {
+  it('returns the root AND every created id, not the root alone', async () => {
+    const result = await handleCreateTree(
+      {
+        tree: {
+          type: 'FRAME',
+          name: 'Card',
+          children: [
+            { type: 'TEXT', name: 'Title' },
+            { type: 'RECTANGLE', name: 'Divider' },
+          ],
+        },
+      },
+      stubClient({
+        reply: {
+          id: 'created:1',
+          name: 'Card',
+          type: 'FRAME',
+          ids: ['created:1', 'created:2', 'created:3'],
+        },
+      }),
+    )
+    const data = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(data.root).toEqual({
+      id: 'created:1',
+      name: 'Card',
+      type: 'FRAME',
+    })
+    expect(data.ids).toEqual([
+      'created:1',
+      'created:2',
+      'created:3',
+    ])
+  })
+
+  it('is HONEST when the plugin reports no ids: the root only, and it says so', async () => {
+    const result = await handleCreateTree(
+      { tree: { type: 'FRAME', name: 'Card' } },
+      stubClient({
+        reply: {
+          id: 'created:1',
+          name: 'Card',
+          type: 'FRAME',
+        },
+      }),
+    )
+    const [json, ...rest] =
+      result.content[0].text.split('\n\n')
+    const data = JSON.parse(json) as Record<string, unknown>
+    expect(data.root).toEqual({
+      id: 'created:1',
+      name: 'Card',
+      type: 'FRAME',
+    })
+    expect(data.ids).toEqual(['created:1'])
+    expect(rest.join('\n')).toContain('Warning')
+  })
+
+  it('keeps a plugin {error} an error (no root, no ids)', async () => {
+    const result = await handleCreateTree(
+      { tree: { type: 'FRAME' } },
+      stubClient({ reply: { error: 'Parent not found' } }),
+    )
+    expect(result.content[0].text).toBe(
+      'Error: Parent not found',
+    )
+  })
+})

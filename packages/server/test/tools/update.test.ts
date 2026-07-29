@@ -169,3 +169,56 @@ describe('handleUpdateNode', () => {
     ).toBe('---\nx\n---')
   })
 })
+
+// An unrecognised patch key is a SILENT no-op: the zod object strips it, the
+// converter never sees it, and the reply says success with an empty
+// `warnings[]`. `update_node({patch:{x:10}})` therefore reports that it moved
+// a node it did not touch. tool-surface.md is silent on unknown keys but
+// explicit that update_node "warns on no-op" (T7 honesty) — so it warns.
+describe('handleUpdateNode — unknown patch keys are never silent', () => {
+  it('warns, naming the key, and points at the field that DOES exist', async () => {
+    const result = await handleUpdateNode(
+      {
+        nodeId: '1:42',
+        patch: { x: 10 } as Record<string, unknown>,
+      },
+      stubClient({}),
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      warnings: string[]
+    }
+    expect(data.warnings).toHaveLength(1)
+    expect(data.warnings[0]).toContain('x')
+    expect(data.warnings[0]).toContain('position')
+  })
+
+  it('says the patch changed NOTHING when every key is unknown', async () => {
+    const sent: Sent[] = []
+    const result = await handleUpdateNode(
+      {
+        nodeId: '1:42',
+        patch: { x: 10, y: 20 } as Record<string, unknown>,
+      },
+      stubClient({ sent }),
+    )
+    // The converter produced an EMPTY spec — nothing was asked of the plugin.
+    expect(sent[0].params?.spec).toEqual({})
+    const data = JSON.parse(result.content[0].text) as {
+      warnings: string[]
+    }
+    expect(data.warnings.join(' ')).toContain(
+      'nothing was changed',
+    )
+  })
+
+  it('stays silent about keys it DOES know', async () => {
+    const result = await handleUpdateNode(
+      { nodeId: '1:42', patch: { position: [10, 20] } },
+      stubClient({}),
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      warnings?: string[]
+    }
+    expect(data.warnings ?? []).toEqual([])
+  })
+})

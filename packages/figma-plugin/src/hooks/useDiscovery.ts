@@ -1,7 +1,13 @@
 import { useState, useEffect, useCallback } from 'react'
 
-const DEFAULT_RELAY_PORT = 18080
+export const DEFAULT_RELAY_PORT = 18080
 const STORAGE_KEY = 'relay-port'
+
+/** The stored port wins; the default is the fallback. Exported so the
+ *  fallback is pinned by a test — a port that silently resolves to the wrong
+ *  relay reads as "the bridge is not running", not as a bug. */
+export const resolveRelayPort = (saved: unknown): number =>
+  (saved as number | null | undefined) ?? DEFAULT_RELAY_PORT
 
 type StorageMessage = {
   type: 'storage-result'
@@ -72,8 +78,8 @@ export const useDiscovery = () => {
 
   const resolve = useCallback(async () => {
     try {
-      const saved = await getStorageValue(STORAGE_KEY) as number | null
-      setPort(saved ?? DEFAULT_RELAY_PORT)
+      const saved = await getStorageValue(STORAGE_KEY)
+      setPort(resolveRelayPort(saved))
     } catch {
       setPort(DEFAULT_RELAY_PORT)
     }

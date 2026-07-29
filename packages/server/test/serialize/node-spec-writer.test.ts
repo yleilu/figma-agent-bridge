@@ -305,6 +305,40 @@ describe('specToFigma — text', () => {
     expect(text).not.toHaveProperty('ls')
   })
 
+  // A PARTIAL text patch is the whole point of a patch: `{text:{content}}`
+  // renames the copy and leaves the type alone. `font` was converted
+  // UNCONDITIONALLY whenever `text` was present, while every sibling field was
+  // guarded — so the partial patch died in the converter with
+  // "undefined is not an object (evaluating 'raw.trim')".
+  it('accepts a text patch with NO font — content only', () => {
+    const result = specToFigma({
+      text: { content: 'Updated copy' },
+    })
+    const text = result.text as Record<string, unknown>
+    expect(text.content).toBe('Updated copy')
+    // Nothing about the font is asserted downstream: omitted means untouched.
+    expect(text).not.toHaveProperty('font')
+    expect(text).not.toHaveProperty('lineHeight')
+    expect(text).not.toHaveProperty('letterSpacing')
+  })
+
+  it('accepts a text patch with NO content — a font/colour-only restyle', () => {
+    const result = specToFigma({
+      text: {
+        font: 'font(Inter,Bold,32)',
+        color: '#FF0000',
+      },
+    })
+    const text = result.text as Record<string, unknown>
+    expect(text).not.toHaveProperty('content')
+    expect(text.font).toEqual({
+      family: 'Inter',
+      style: 'Bold',
+      size: 32,
+    })
+    expect(text.color).toMatchObject({ type: 'SOLID' })
+  })
+
   it('lifts lh/ls on per-range runs as well', () => {
     const result = specToFigma({
       text: {

@@ -22,6 +22,7 @@ import {
   batchParamsSchema,
   searchComponentsParamsSchema,
   reindexParamsSchema,
+  pullChangesParamsSchema,
   recordFeedbackParamsSchema,
   groupNodesParamsSchema,
   componentPropertyDefSchema,
@@ -876,6 +877,38 @@ describe('fileTargetParamsSchema (per-call fileKey — B3)', () => {
       reindexParamsSchema.safeParse({ fileKey: 'fk' })
         .success,
     ).toBe(true)
+  })
+
+  it('pull_changes requires fileKey and takes an optional positive limit', () => {
+    expect(
+      pullChangesParamsSchema.safeParse({}).success,
+    ).toBe(false)
+    expect(
+      pullChangesParamsSchema.safeParse({ fileKey: '' })
+        .success,
+    ).toBe(false)
+    expect(
+      pullChangesParamsSchema.safeParse({ fileKey: 'fk' })
+        .success,
+    ).toBe(true)
+    expect(
+      pullChangesParamsSchema.safeParse({
+        fileKey: 'fk',
+        limit: 25,
+      }).success,
+    ).toBe(true)
+    expect(
+      pullChangesParamsSchema.safeParse({
+        fileKey: 'fk',
+        limit: 0,
+      }).success,
+    ).toBe(false)
+    expect(
+      pullChangesParamsSchema.safeParse({
+        fileKey: 'fk',
+        limit: 1.5,
+      }).success,
+    ).toBe(false)
   })
 })
 

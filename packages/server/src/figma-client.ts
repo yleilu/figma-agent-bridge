@@ -52,10 +52,13 @@ export type FigmaClient = {
     command: string,
     params: Record<string, unknown>,
   ) => void
+  // A PUSH's identity rides in `meta`, not in `params` (change-feed.md), so
+  // the handler is handed both halves of the frame.
   onRequest: (
     command: string,
     handler: (
       params: Record<string, unknown>,
+      meta: Meta,
     ) => Promise<unknown> | unknown,
   ) => void
   disconnect: () => void
@@ -70,6 +73,11 @@ export type FigmaClient = {
     fileKey: string,
     liveConnectedAt: number | undefined,
   ) => boolean
+  // change-feed.md — the two SERVER-SIDE broken-baseline arms. `onSocketClose`
+  // fires when the client's relay socket drops (arm EVERY open buffer);
+  // `onFileDead` when the command-liveness watchdog declares one file dead.
+  onSocketClose: (cb: () => void) => void
+  onFileDead: (cb: (fileKey: string) => void) => void
   // version-handshake.md — push a plugin↔server major.minor skew to the file's
   // channel so the plugin can show a banner. Fire-and-forget; opens the ws
   // WITHOUT joining (see the impl comment). No-op-safe when the socket is up.
@@ -152,6 +160,9 @@ export const createFigmaClient = (
   // Watchdog-declared-dead instances: fileKey → the dead instance's connectedAt
   // (connection-liveness.md). Set by the watchdog (L6) directly via this closure.
   const deadInstances = new Map<string, number>()
+  // change-feed.md — subscribers to the two server-side disconnect arms.
+  const socketCloseCbs: (() => void)[] = []
+  const fileDeadCbs: ((fileKey: string) => void)[] = []
   // Dedupe concurrent joins for the SAME fileKey; serialize DISTINCT joins
   // through joinQueue so the single-slot handshake state below is never
   // clobbered by an overlapping join.
@@ -168,6 +179,7 @@ export const createFigmaClient = (
     string,
     (
       params: Record<string, unknown>,
+      meta: Meta,
     ) => Promise<unknown> | unknown
   >()
 
@@ -263,7 +275,9 @@ export const createFigmaClient = (
       // `sendReply` is defined later in this same closure; `handleMessage` only
       // runs at runtime (on an inbound message), so the forward reference is safe.
       /* eslint-disable @typescript-eslint/no-use-before-define */
-      Promise.resolve(handler(message.params ?? {}))
+      Promise.resolve(
+        handler(message.params ?? {}, message.meta ?? {}),
+      )
         .then(result => {
           if (rid !== undefined) {
             sendReply(rid, { result })
@@ -347,6 +361,11 @@ export const createFigmaClient = (
           pendingChannel = null
           pendingFileKey = null
           rejectAll('Disconnected')
+          // change-feed.md — the socket carrying every file's pushes is gone,
+          // so EVERY open baseline now has a hole in its history.
+          for (const cb of socketCloseCbs) {
+            cb()
+          }
         }
       }
     })
@@ -593,6 +612,11 @@ export const createFigmaClient = (
                   }
                   // Drop from joined → requireFile fast-fails the next call.
                   joined.delete(fileKey)
+                  // change-feed.md — this file's push stream is dead; its
+                  // baseline is broken even though the socket survives.
+                  for (const cb of fileDeadCbs) {
+                    cb(fileKey)
+                  }
                   clearTimeout(p.timer)
                   pending.delete(requestId)
                   p.teardown?.()
@@ -693,6 +717,7 @@ export const createFigmaClient = (
     command: string,
     handler: (
       params: Record<string, unknown>,
+      meta: Meta,
     ) => Promise<unknown> | unknown,
   ): void => {
     requestHandlers.set(command, handler)
@@ -712,6 +737,13 @@ export const createFigmaClient = (
     joined.clear()
     inFlight.clear()
     rejectAll('Disconnected')
+    // change-feed.md — the same arm socket.onclose fires, because this path
+    // cannot reach it: `ws` is nulled first and that handler is guarded on
+    // `ws !== null`. Every channel membership is gone, so every open baseline
+    // now has a hole; a clean `ok` here would be a lie by omission.
+    for (const cb of socketCloseCbs) {
+      cb()
+    }
     if (socket !== null) {
       socket.close()
     }
@@ -756,6 +788,12 @@ export const createFigmaClient = (
     discover,
     isInstanceDead,
     notifyMismatch,
+    onSocketClose: (cb: () => void): void => {
+      socketCloseCbs.push(cb)
+    },
+    onFileDead: (cb: (fileKey: string) => void): void => {
+      fileDeadCbs.push(cb)
+    },
     // TEST-ONLY seam: the L6 watchdog now sets `deadInstances` directly via
     // this closure on a real death (covered end-to-end by the watchdog tests).
     // This seam is retained for the focused `isInstanceDead` unit tests, which

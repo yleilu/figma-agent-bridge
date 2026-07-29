@@ -124,8 +124,11 @@ describe('M3 compose tools e2e (mock plugin over real relay)', () => {
     ) as Record<string, unknown>
 
     // The root FRAME reached the plugin with its converted leaves.
-    expect(data.type).toBe('FRAME')
-    expect(data.name).toBe('Toolbar')
+    expect(data.root).toEqual({
+      id: (data.ids as string[])[0],
+      name: 'Toolbar',
+      type: 'FRAME',
+    })
     const fills = data.fills as { type: string }[]
     expect(fills[0].type).toBe('SOLID') // atom parsed server-side
 

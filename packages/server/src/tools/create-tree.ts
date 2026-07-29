@@ -125,6 +125,52 @@ const convertRefs = (
   return out
 }
 
+/**
+ * The tool-surface reply: `{root, ids[]}` (tool-surface.md). The plugin builds
+ * N nodes and answers in the create_node family (`{id,name,type}`) plus the
+ * `ids[]` it collected as it built; the tool surface is where that becomes the
+ * declared shape, so the two cannot disagree about it in two places.
+ *
+ * `ids[]` is EVERY node this call created — the root first, then depth-first in
+ * creation order — which is the whole point: a tree's non-root nodes are
+ * otherwise unaddressable without a follow-up read.
+ *
+ * A plugin that reports no `ids` gets the root alone AND a warning (T7): the
+ * agent is told its harvest is incomplete rather than being handed a short list
+ * that looks complete.
+ */
+const shapeReply = (
+  result: {
+    error?: string
+    id?: string
+    name?: string
+    type?: string
+    ids?: string[]
+  } | null,
+  warnings: string[],
+):
+  | (Record<string, unknown> & { error?: string })
+  | null => {
+  if (
+    result === null ||
+    result.error !== undefined ||
+    result.id === undefined
+  ) {
+    return result
+  }
+  const { id, name, type, ids, ...rest } = result
+  if (!Array.isArray(ids)) {
+    warnings.push(
+      'the plugin reported no created ids — only the root is addressable from this reply; re-read the subtree to address its children',
+    )
+  }
+  return {
+    ...rest,
+    root: { id, name, type },
+    ids: Array.isArray(ids) ? ids : [id],
+  }
+}
+
 export const handleCreateTree = async (
   {
     tree,
@@ -152,10 +198,16 @@ export const handleCreateTree = async (
         parentId,
         refs: convertedRefs,
       },
-    )) as { error?: string } | null
+    )) as {
+      error?: string
+      id?: string
+      name?: string
+      type?: string
+      ids?: string[]
+    } | null
 
     const mutation = formatMutationResult(
-      result,
+      shapeReply(result, warnings),
       'Failed to create tree.',
     )
     // Append any lossy-conversion warnings to a SUCCESSFUL result. (On error,

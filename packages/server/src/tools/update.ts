@@ -1,15 +1,19 @@
 // tools/update.ts — the single mutation: update_node.
 //
-// Consumes a Partial<NodeSpec> patch, converts it on the grammar WRITE FACE
+// Consumes a NodeSpecPatch (a partial NodeSpec, `text` struct included),
+// converts it on the grammar WRITE FACE
 // via specToFigma (PURE — only supplied keys, no defaults → omitted-untouched
 // partial semantics), forwards it to the plugin, and reports through
 // formatMutationResult so a plugin-side {error} is surfaced as an error and
 // any warnings[] (e.g. the auto-layout x/y no-op) ride along on success.
 
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { NodeSpec } from '@figma-agent-bridge/shared/node-spec'
+import type { NodeSpecPatch } from '@figma-agent-bridge/shared/node-spec'
 import type { ScopedFigmaClient } from '../figma-client'
-import { specToFigma } from '../serialize/node-spec-writer'
+import {
+  specToFigma,
+  unknownPatchKeyWarnings,
+} from '../serialize/node-spec-writer'
 import { assertContextWithinCap } from '../serialize/context-cap'
 import {
   type ToolResult,
@@ -22,7 +26,7 @@ export const handleUpdateNode = async (
   {
     nodeId,
     patch,
-  }: { nodeId: string; patch: Partial<NodeSpec> },
+  }: { nodeId: string; patch: NodeSpecPatch },
   client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
   try {
@@ -31,6 +35,9 @@ export const handleUpdateNode = async (
     // onto `warnings`.
     const warnings: string[] = []
     const spec = specToFigma(patch, warnings)
+    // A key the write face does not know is DROPPED, not applied — say so
+    // rather than reporting a success that moved nothing (T7).
+    warnings.push(...unknownPatchKeyWarnings(patch, spec))
     const result = (await client.sendCommand(
       COMMANDS.UPDATE_NODE,
       { nodeId, spec },

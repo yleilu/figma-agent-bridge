@@ -11,6 +11,7 @@ import type {
 import {
   APP_VERSION,
   COMMANDS,
+  genId,
   genToken,
 } from '@figma-agent-bridge/shared'
 import { deriveChannel } from '../file-channel'
@@ -46,6 +47,13 @@ export const useRelay = () => {
   // Stable across reconnects within this session; a reload starts a new
   // session. A saved file never uses this — its channel is deterministic.
   const sessionChannelRef = useRef<string | null>(null)
+
+  // Change Feed (change-feed.md): this connection's nonce and its push-frame
+  // counter. epoch is minted per register/reconnect (request-envelope.md, the
+  // random id family); genId is nanoid-based — crypto.randomUUID is
+  // secure-context-only and THROWS in the plugin iframe.
+  const epochRef = useRef<string | null>(null)
+  const seqRef = useRef(0)
 
   // Agent status monitor (status-monitor.md): live per-agent rows fed by
   // the relay's agent-status broadcasts, keyed by StatusRecord.key.
@@ -134,6 +142,38 @@ export const useRelay = () => {
     }
   }, [])
 
+  // The `document_changed` push frame is built HERE, in the UI realm, because
+  // only the UI knows the channel — and an unsaved file's ADDRESSABLE identity
+  // IS its channel (the synthKey, overview.md). The sandbox never needs a
+  // channel or a connection nonce. Identity rides in `meta`, never in `params`
+  // (change-feed.md, "The push frame").
+  const sendFeedFrame = useCallback(
+    (params: Record<string, unknown>) => {
+      const ws = wsRef.current
+      const channel = channelRef.current
+      const epoch = epochRef.current
+      if (!ws || !channel || epoch === null) return
+      const seq = seqRef.current
+      seqRef.current += 1
+      ws.send(
+        JSON.stringify({
+          type: 'message',
+          channel,
+          message: {
+            command: COMMANDS.DOCUMENT_CHANGED,
+            params,
+            meta: {
+              fileKey: fileKeyRef.current ?? channel,
+              epoch,
+              seq,
+            },
+          },
+        }),
+      )
+    },
+    [],
+  )
+
   // Listen for command results and file name from plugin code
   useEffect(() => {
     const handler = (event: MessageEvent) => {
@@ -164,7 +204,7 @@ export const useRelay = () => {
       // register/reconnect carries fresh values, and forward a presence
       // frame to the relay so the channel registry can enrich discovery.
       // MUST sit above the `command-result` gate below (same placement as
-      // index-stale) since this isn't a command-result frame.
+      // feed-flush) since this isn't a command-result frame.
       if (msg.type === 'presence') {
         currentPageRef.current = msg.currentPage ?? null
         selectedRef.current =
@@ -196,38 +236,44 @@ export const useRelay = () => {
         return
       }
 
-      // Unsolicited freshness push: the component index on the server marks
-      // this file stale. This is a PUSH, not a request — it carries a command
-      // the server handles (document_changed) but NO meta and NO requestId, so
-      // the server dispatches it by command + params.fileId and sends back no
-      // reply (a reply would fan a stray frame to every joined channel). No
-      // id/target guard needed (plugin→server, unsolicited).
       // Clean-close signal (Plugin Presence, Task 8): code.ts's
       // figma.on('close') listener pushes this so the UI can tell the
       // relay to drop the channel immediately rather than waiting for the
       // heartbeat. MUST sit above the `command-result` gate below (same
-      // placement as presence/index-stale) since this isn't a
+      // placement as presence/feed-flush) since this isn't a
       // command-result frame.
       if (msg.type === 'leave') {
         sendLeave()
         return
       }
 
-      if (msg.type === 'index-stale') {
-        const staleWs = wsRef.current
-        const staleChannel = channelRef.current
-        if (staleWs && staleChannel) {
-          staleWs.send(
-            JSON.stringify({
-              type: 'message',
-              channel: staleChannel,
-              message: {
-                command: 'document_changed',
-                params: { fileId: msg.fileKey ?? null },
-              },
-            }),
-          )
-        }
+      // Change Feed: the sandbox's flush, stamped with this connection's
+      // identity and forwarded whole. It is a PUSH, not a request — it carries
+      // a command the server handles (document_changed) but NO requestId, so
+      // the server dispatches it by command + meta and sends back no reply (a
+      // reply would fan a stray frame to every joined channel). No id/target
+      // guard needed (plugin→server, unsolicited). MUST sit above the
+      // `command-result` gate below.
+      if (msg.type === 'feed-flush') {
+        sendFeedFrame({
+          changes: msg.changes,
+          // ATTRIBUTION RIDES `params`, never `meta`. `meta` answers "who is
+          // speaking and about which connection" — one value per frame — and
+          // attribution is PER RECORD: one frame carries the work of every
+          // session that wrote inside the flush window, so there is no single
+          // sender identity to put in a header. `meta` is also an enumerated
+          // allow-list the relay enforces, so an addition there would be a
+          // relay change and a stripped field an invisible failure; `params`
+          // is forwarded whole.
+          ...(msg.writers !== undefined
+            ? { writers: msg.writers }
+            : {}),
+          indexStale: msg.indexStale === true,
+          ...(msg.overflow === true
+            ? { overflow: true }
+            : {}),
+          at: msg.at,
+        })
         return
       }
 
@@ -260,7 +306,7 @@ export const useRelay = () => {
     return () => {
       window.removeEventListener('message', handler)
     }
-  }, [sendLeave])
+  }, [sendLeave, sendFeedFrame])
 
   // Ask code.ts for the file identity and resolve when it replies (or
   // after a short timeout, so connect never blocks forever). This is the
@@ -340,6 +386,13 @@ export const useRelay = () => {
           }
 
           if (data.type === 'system') {
+            // A fresh nonce per register/reconnect; seq restarts at 0 with
+            // it, so a seq reset alongside a NEW epoch is a reconnect, not a
+            // gap (change-feed.md). Minted BEFORE the register frame, which
+            // publishes it to the channel registry for late joiners.
+            epochRef.current = genId('epoch')
+            seqRef.current = 0
+
             // Register with the file identity. fileKey lets the server
             // address commands to exactly THIS file (B3).
             ws.send(
@@ -352,6 +405,7 @@ export const useRelay = () => {
                 currentPage:
                   currentPageRef.current ?? undefined,
                 selected: selectedRef.current ?? undefined,
+                epoch: epochRef.current,
               }),
             )
 
@@ -359,6 +413,18 @@ export const useRelay = () => {
               status: 'connected',
               channel,
               error: null,
+            })
+
+            // The opening flush — the ONE deliberately empty frame. It
+            // reaches the members already in the channel, which is exactly
+            // the case the registry path cannot serve: a server already
+            // joined when the plugin died, missed edits, and reconnected
+            // without the user editing again. The reconnect itself becomes
+            // the signal.
+            sendFeedFrame({
+              changes: [],
+              indexStale: false,
+              at: Date.now(),
             })
 
             ws.send(
@@ -474,6 +540,10 @@ export const useRelay = () => {
                         unknown
                       >) ?? {},
                     targetFileKey: meta?.fileKey ?? null,
+                    // The WRITER of this dispatch (change-feed.md). It already
+                    // rides the wire's meta; forwarding it into the sandbox is
+                    // an internal message field, not a wire addition.
+                    sessionId: meta?.sessionId ?? null,
                   },
                 },
                 '*',
@@ -494,6 +564,9 @@ export const useRelay = () => {
         ws.onclose = () => {
           wsRef.current = null
           channelRef.current = null
+          // A stale nonce must never be stamped on a frame sent over a dead
+          // socket: sendFeedFrame bails on a null epoch.
+          epochRef.current = null
 
           // A dropped socket means the rows are stale -> fall to the
           // connection fallback (the invariant "agent shown => connected").
@@ -509,7 +582,12 @@ export const useRelay = () => {
         }
       })
     },
-    [requestIdentity, upsertStatus, removeStatus],
+    [
+      requestIdentity,
+      upsertStatus,
+      removeStatus,
+      sendFeedFrame,
+    ],
   )
 
   const disconnect = useCallback(() => {

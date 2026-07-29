@@ -13,5 +13,10 @@
       ]
     }
   },
-  "include": ["src/code.ts", "src/apply-layout.ts"]
+  "include": [
+    "src/code.ts",
+    "src/apply-layout.ts",
+    "src/feed"
+  ],
+  "exclude": ["src/**/*.test.ts"]
 }

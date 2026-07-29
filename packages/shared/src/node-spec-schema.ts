@@ -197,12 +197,31 @@ export const nodeSpecOrStubSchema: z.ZodType<NodeSpecOrStub> =
 
 // partialNodeSpecSchema — every field optional (for update_node, where a
 // supplied field is replaced wholesale and an omitted field is left
-// untouched). `type` is optional here (a patch need not restate it).
-export const partialNodeSpecSchema = z.object({
-  ...nodeSpecBase,
-  type: z.string().optional(),
-  children: z.array(nodeSpecOrStubSchema).optional(),
-})
+// untouched). `type` is optional here (a patch need not restate it), and so is
+// every member of the `text` STRUCT: `{text:{content}}` rewrites the copy and
+// leaves the type alone. `font` stays REQUIRED on nodeSpecSchema — a TEXT node
+// cannot be created without one — but requiring it to change a string would
+// make the partial-patch contract false for exactly one struct.
+//
+// PASSTHROUGH, deliberately: zod's default STRIPS an unknown key, which turned
+// `update_node({patch:{x:10}})` into a success that changed nothing and warned
+// about nothing. Keeping the key lets the handler SEE it and say so (T7). It is
+// still never written — the converter emits only fields it knows.
+export const partialNodeSpecSchema = z
+  .object({
+    ...nodeSpecBase,
+    type: z.string().optional(),
+    text: textSpecSchema.partial().optional(),
+    children: z.array(nodeSpecOrStubSchema).optional(),
+  })
+  .passthrough()
+
+/**
+ * The keys `update_node`'s patch face knows, read off the schema itself so the
+ * two cannot drift. Anything else in a patch is reported, never applied.
+ */
+export const NODE_SPEC_PATCH_KEYS: ReadonlySet<string> =
+  new Set(Object.keys(partialNodeSpecSchema.shape))
 
 // treeNodeSpecSchema — create_tree shape: a NodeSpec with recursive
 // TreeNodeSpec children, a { ref } pool reference, or an { id } clone.

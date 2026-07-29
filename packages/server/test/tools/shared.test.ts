@@ -119,6 +119,8 @@ const makeClient = (
   discover: () => Promise.resolve([]),
   isInstanceDead: () => false,
   notifyMismatch: () => undefined,
+  onSocketClose: () => undefined,
+  onFileDead: () => undefined,
   ...over,
 })
 
@@ -275,6 +277,57 @@ describe('requireFile', () => {
     expect(pushes).toEqual([
       ['ch-x', '(none)', APP_VERSION],
     ])
+  })
+
+  // change-feed.md — a baseline opens when the server successfully JOINS that
+  // file's channel, seeded with the registry entry's epoch. Seeding it HERE is
+  // what makes a plugin restart detectable without waiting for a push.
+  it('opens the baseline at the join, with the registry epoch', async () => {
+    const opened: [string, string | null][] = []
+    const client = makeClient({
+      discover: () =>
+        Promise.resolve([
+          { ...info('ch-a', 'fk-a', 'A'), epoch: 'ep-7' },
+        ]),
+      joinChannel: () => Promise.resolve('ok'),
+    })
+    await requireFile(client, 'fk-a', (fk, epoch) => {
+      opened.push([fk, epoch])
+    })
+    expect(opened).toEqual([['fk-a', 'ep-7']])
+  })
+
+  it('opens the baseline with a NULL epoch when the registry has none', async () => {
+    const opened: [string, string | null][] = []
+    const client = makeClient({
+      discover: () =>
+        Promise.resolve([info('ch-a', 'fk-a', 'A')]),
+      joinChannel: () => Promise.resolve('ok'),
+    })
+    await requireFile(client, 'fk-a', (fk, epoch) => {
+      opened.push([fk, epoch])
+    })
+    expect(opened).toEqual([['fk-a', null]])
+  })
+
+  it('does NOT signal a join on the already-joined fast path', async () => {
+    let opened = 0
+    const client = makeClient({ channelFor: () => 'ch-a' })
+    await requireFile(client, 'fk-a', () => {
+      opened += 1
+    })
+    expect(opened).toBe(0)
+  })
+
+  it('does NOT signal a join when the gate REFUSES', async () => {
+    let opened = 0
+    const client = makeClient({
+      discover: () => Promise.resolve([]),
+    })
+    await requireFile(client, 'fk-a', () => {
+      opened += 1
+    })
+    expect(opened).toBe(0)
   })
 
   it('does NOT push on a healthy (matching) file', async () => {

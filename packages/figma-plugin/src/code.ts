@@ -13,6 +13,22 @@ import {
   MAX_WINDOW_HEIGHT,
 } from './spring-height'
 import { homogeneousKind } from './selection-label'
+import {
+  ACCUM_CAP,
+  FEED_FRAMES_PER_SEC,
+  FLUSH_DEBOUNCE_MS,
+  FLUSH_MAX_WAIT_MS,
+  SELECT_IDS_CAP,
+  type AttributedRecord,
+} from '@figma-agent-bridge/shared/change-feed'
+import {
+  createWriteScope,
+  UNATTRIBUTED,
+} from './feed/write-scope'
+import { createSelfWriteAttributor } from './feed/self-write-attributor'
+import { createAccumulator } from './feed/accumulator'
+import { mintFrame } from './feed/mint'
+import { createFlusher } from './feed/flusher'
 
 figma.showUI(__html__, {
   width: WINDOW_WIDTH,
@@ -71,45 +87,140 @@ const pushPresence = () => {
 figma.on('currentpagechange', pushPresence)
 figma.on('selectionchange', pushPresence)
 
-// Component-index freshness: on a component-relevant document change, nudge the
-// server to mark this file's index stale (debounced). It only SIGNALS — the
+// ── Change Feed (change-feed.md) ────────────────────────────────────────
+// The agent's own writes are known HERE, in the command path. The filter is
+// source-side because DocumentChange.origin === 'LOCAL' includes them, so a
+// downstream consumer could never tell them apart.
+//
+// Membership is keyed on the COMMAND and OUTLIVES it: every event-causing
+// dispatch opens a generation, and the scope retains the most recent
+// RETAINED_COMMANDS of them (released wholesale once the agent goes idle for
+// RETENTION_CEILING_MS). `documentchange` delivery is batched and unbounded,
+// so a rule that expired on a timer failed OPEN — the deferred event landed
+// after the window shut and the agent's own write was reported as the user's.
+const writeScope = createWriteScope({
+  resolve: id => figma.getNodeByIdAsync(id),
+})
+const feedAttributor = createSelfWriteAttributor(writeScope)
+const feedAccum = createAccumulator(ACCUM_CAP)
+
+// Component-index freshness: a change touching one of these types means the
+// server's index no longer agrees with the DOCUMENT. It only SIGNALS — the
 // server re-projects — so documentchange granularity is not load-bearing.
 const INDEX_STALE_TYPES = new Set([
   'COMPONENT',
   'COMPONENT_SET',
   'INSTANCE',
 ])
-let indexStaleTimer: ReturnType<typeof setTimeout> | undefined
+
+const emitFlush = () => {
+  const out = feedAccum.drain()
+  // The flush window is over: the next one re-walks each id's locator, so a
+  // node the user has since moved to another frame is located where it is
+  // now. Immediately after the drain, and before the early return — a window
+  // that produced no records still ends here.
+  feedAttributor.resetWindow()
+  // The ONLY deliberately empty frame is the opening flush, which the UI
+  // sends on register — never this one. An `overflow` with nothing else to
+  // carry still goes: the arm IS the message.
+  if (
+    out.changes.length === 0 &&
+    !out.indexStale &&
+    !out.overflow
+  )
+    return
+  // Names → masks, ONCE, over the whole drained batch. It cannot happen
+  // earlier: the table is a property of the FRAME, and a writer first
+  // appearing late in the window would renumber bits already stamped.
+  const minted = mintFrame(out.changes)
+  try {
+    figma.ui.postMessage({
+      type: 'feed-flush',
+      changes: minted.changes,
+      ...(minted.writers !== undefined
+        ? { writers: minted.writers }
+        : {}),
+      indexStale: out.indexStale,
+      ...(out.overflow ? { overflow: true as const } : {}),
+      at: Date.now(),
+    })
+  } catch {
+    // The accumulator was drained BEFORE this, so the batch is already gone
+    // and there is nothing to put back. `postMessage` rejects a value it
+    // cannot structured-clone, and this runs from a bare setTimeout: without
+    // the guard the whole flush vanishes with no arm and no record that
+    // anything went missing. A plugin-side loss is reported, never silent.
+    feedAccum.markOverflow()
+    if (out.indexStale) feedAccum.markIndexStale()
+    feedFlusher.schedule()
+  }
+}
+
+const feedFlusher = createFlusher({
+  debounceMs: FLUSH_DEBOUNCE_MS,
+  maxWaitMs: FLUSH_MAX_WAIT_MS,
+  minIntervalMs: Math.ceil(1000 / FEED_FRAMES_PER_SEC),
+  emit: emitFlush,
+})
+
+// ONE documentchange listener: the feed needs every change, and the index's
+// staleness is a projection of the same batch rather than a second pass.
 figma.on('documentchange', event => {
-  let relevant = false
   for (const change of event.documentChanges) {
+    // Per change, not per batch: a removed / inaccessible node costs its own
+    // record and nothing else. Losing the tail of a batch would silently drop
+    // user edits, which is the one failure this feature exists to prevent.
     try {
-      const node = (change as { node?: { type?: string } })
-        .node
+      // indexStale is computed PRE-FILTER, on the RAW batch: the agent's own
+      // component writes must still mark the index stale, because staleness
+      // is the index's agreement with the DOCUMENT (component-index.md).
+      const raw = change as { node?: { type?: string } }
       if (
-        typeof node?.type === 'string' &&
-        INDEX_STALE_TYPES.has(node.type)
+        typeof raw.node?.type === 'string' &&
+        INDEX_STALE_TYPES.has(raw.node.type)
       ) {
-        relevant = true
-        break
+        feedAccum.markIndexStale()
       }
+      const rec = feedAttributor.admit(change)
+      if (rec !== null) feedAccum.add(rec)
     } catch {
       // removed / inaccessible node — ignore
     }
   }
-  if (!relevant) {
-    return
-  }
-  if (indexStaleTimer !== undefined) {
-    clearTimeout(indexStaleTimer)
-  }
-  indexStaleTimer = setTimeout(() => {
-    figma.ui.postMessage({
-      type: 'index-stale',
-      fileKey: figma.fileKey ?? null,
-    })
-  }, 300)
+  feedFlusher.schedule()
 })
+
+// Context listeners, registered separately from the presence ones above: the
+// two consumers debounce differently and must not share a code path.
+// The record is built FIRST: `admitContext` decides the page slot by
+// MEMBERSHIP of the record's own id, so it needs the record.
+figma.on('currentpagechange', () => {
+  const rec: AttributedRecord = {
+    op: 'page',
+    id: figma.currentPage.id,
+    name: figma.currentPage.name,
+  }
+  const stamped = feedAttributor.admitContext(rec)
+  if (stamped === null) return
+  feedAccum.add(stamped)
+  feedFlusher.schedule()
+})
+
+figma.on('selectionchange', () => {
+  const sel = figma.currentPage.selection
+  const rec: AttributedRecord = {
+    op: 'select',
+    ids: sel.slice(0, SELECT_IDS_CAP).map(n => n.id),
+  }
+  // count carries the TRUE size only when the ids were truncated — a marquee
+  // over a thousand nodes must not put a thousand ids on the wire (T10).
+  if (sel.length > SELECT_IDS_CAP) rec.count = sel.length
+  const stamped = feedAttributor.admitContext(rec)
+  if (stamped === null) return
+  feedAccum.add(stamped)
+  feedFlusher.schedule()
+})
+// ── end Change Feed ─────────────────────────────────────────────────────
 
 // Plugin Presence (Task 8): best-effort clean-close signal. On a clean
 // close, tell the UI to send a `leave` frame so the relay drops the
@@ -128,6 +239,10 @@ type PluginMessage =
       command: string
       params: Record<string, unknown>
       targetFileKey?: string | null
+      /** The WRITER of this dispatch — meta.sessionId, forwarded by the UI
+       *  realm. An INTERNAL field: `sessionId` already rides the wire's meta
+       *  (request-envelope.md), so this adds nothing to the protocol. */
+      sessionId?: string | null
     }
   | { type: 'get-identity' }
   | { type: 'storage-get'; key: string }
@@ -773,21 +888,40 @@ const applyTextProperties = async (
   const text = spec.text as Record<string, unknown>
   if (!text) return
 
-  const font = text.font as {
-    family: string
-    style: string
-    size: number
+  const font = text.font as
+    | {
+        family: string
+        style: string
+        size: number
+      }
+    | undefined
+
+  // A font MUST be loaded before ANY text property is written — including a
+  // content-only patch, which writes the node's EXISTING font. So the patch
+  // that names no font loads what the node already uses (every range of it:
+  // fontName is figma.mixed on a multi-font node, and getRangeAllFontNames
+  // answers uniformly for both). Without this the plainest patch there is —
+  // "change this string" — would demand the agent restate the type.
+  if (font !== undefined) {
+    await figma.loadFontAsync({
+      family: font.family,
+      style: font.style,
+    })
+    // Set font
+    node.fontName = { family: font.family, style: font.style }
+    node.fontSize = font.size
+  } else if (node.characters.length > 0) {
+    for (const existing of node.getRangeAllFontNames(
+      0,
+      node.characters.length,
+    )) {
+      await figma.loadFontAsync(existing)
+    }
+  } else if (node.fontName !== figma.mixed) {
+    // An EMPTY text node has no range to ask about; its single fontName is
+    // the one the first write will use.
+    await figma.loadFontAsync(node.fontName)
   }
-
-  // Load font first — REQUIRED before setting any text property
-  await figma.loadFontAsync({
-    family: font.family,
-    style: font.style,
-  })
-
-  // Set font
-  node.fontName = { family: font.family, style: font.style }
-  node.fontSize = font.size
 
   // Text auto-resize (set before content to avoid resize fighting)
   if (spec.textAutoResize !== undefined) {
@@ -898,6 +1032,11 @@ const applyTextProperties = async (
 const createSingleNode = async (
   spec: Record<string, unknown>,
   parent: ParentNode,
+  // THREADED, never inferred: dispatches interleave at every await, so a node
+  // created after a font load would be claimed under whichever session
+  // dispatched in the meantime — and that misattribution lands on the SILENCE
+  // side, suppressing the record for a session that did not cause it.
+  writer: string,
   warnings?: string[],
 ): Promise<SceneNode> => {
   const type = spec.type as string
@@ -1099,6 +1238,12 @@ const createSingleNode = async (
       throw new Error('Unsupported node type: ' + type)
   }
 
+  // Belt-and-braces: the node is still parented to the current page here, so
+  // this contributes the TOUCHED half only (its closure is empty). It exists
+  // for the path where the append below throws and the node is removed again
+  // — Figma still emits CREATE + DELETE for it.
+  writeScope.claim(writer, node)
+
   // Apply common properties (fills, strokes, effects, etc.)
   await applyCommonProperties(node, spec, parent, warnings)
 
@@ -1126,17 +1271,32 @@ const createSingleNode = async (
   // Apply post-append properties (FILL sizing, ABSOLUTE positioning)
   applyPostAppendProperties(node, spec)
 
+  // THE load-bearing claim: the node is in its real parent and its
+  // auto-layout sizing is set, so `hugs()` can decide and the reflow closure
+  // is the true one. The POC measured both — the at-creation closure is
+  // EMPTY every time, so neither call replaces the other.
+  writeScope.claim(writer, node)
+
   return node
 }
 
 const createTreeNode = async (
   spec: Record<string, unknown>,
   parent: ParentNode,
+  writer: string,
   refs?: Record<string, Record<string, unknown>>,
   // refStack tracks the chain of { ref } keys currently being resolved so a
   // cyclic pool (a→b→a, or a self-ref) is caught and rejected as a clean
   // {error} instead of recursing forever and freezing the Figma UI.
   refStack: string[] = [],
+  // Every node this call realizes, pushed AS IT IS CREATED — parent before
+  // children, so the array is the root first then depth-first creation order.
+  // It is what the tool surface answers as `ids[]` (tool-surface.md:
+  // `create_tree(...) → {root, ids[]}`): without it the N-1 non-root nodes of
+  // a tree are unaddressable until a follow-up read. A `{ id }` clone counts
+  // as ONE realized node — its descendants come along but are not enumerated
+  // (walking every clone's subtree is unbounded work, T10).
+  created?: string[],
 ): Promise<SceneNode> => {
   const type = spec.type as string
 
@@ -1154,10 +1314,16 @@ const createTreeNode = async (
           [...refStack, refKey].join(' -> '),
       )
     }
-    return createTreeNode(refSpec, parent, refs, [
-      ...refStack,
-      refKey,
-    ])
+    // The expansion recurses with the SAME accumulator: a { ref } realizes its
+    // whole rebuilt subtree, and every node of it is a node this call created.
+    return createTreeNode(
+      refSpec,
+      parent,
+      writer,
+      refs,
+      [...refStack, refKey],
+      created,
+    )
   }
 
   // Clone reference: { id } with no type
@@ -1187,6 +1353,8 @@ const createTreeNode = async (
             '). To fill a slot, target the slot node.',
         )
       }
+      writeScope.claim(writer, instance)
+      created?.push(instance.id)
       return instance
     }
     if (existing.type === 'INSTANCE') {
@@ -1206,6 +1374,8 @@ const createTreeNode = async (
               '). To fill a slot, target the slot node.',
           )
         }
+        writeScope.claim(writer, instance)
+        created?.push(instance.id)
         return instance
       }
     }
@@ -1222,6 +1392,8 @@ const createTreeNode = async (
           '). To fill a slot, target the slot node.',
       )
     }
+    writeScope.claim(writer, cloned)
+    created?.push(cloned.id)
     return cloned
   }
 
@@ -1234,7 +1406,9 @@ const createTreeNode = async (
   // BOOLEAN_OPERATION / GROUP still works. Booleans are authored via boolean_op.
 
   // Regular node: create, apply properties, append
-  const node = await createSingleNode(spec, parent)
+  const node = await createSingleNode(spec, parent, writer)
+  // Pushed BEFORE the children recurse, so the order is root-first depth-first.
+  created?.push(node.id)
 
   // Recurse into children (for FRAME, SECTION, etc.)
   const children = spec.children as
@@ -1249,8 +1423,10 @@ const createTreeNode = async (
       await createTreeNode(
         childSpec,
         node as ParentNode,
+        writer,
         refs,
         refStack,
+        created,
       )
     }
   }
@@ -1449,6 +1625,7 @@ const resolveStyle = async (entry: {
 const handleCommand = async (
   command: string,
   params: Record<string, unknown>,
+  writer: string,
 ): Promise<unknown> => {
   switch (command) {
     case 'get_document_info':
@@ -2266,6 +2443,7 @@ const handleCommand = async (
         const created = await createSingleNode(
           spec,
           parent,
+          writer,
           warnings,
         )
         return {
@@ -2318,15 +2496,22 @@ const handleCommand = async (
         | Record<string, Record<string, unknown>>
         | undefined
       try {
+        // `createdIds` is the harvest the server answers as `ids[]`: root
+        // first, then depth-first in creation order.
+        const createdIds: string[] = []
         const treeResult = await createTreeNode(
           treeSpec,
           treeParent,
+          writer,
           treeRefs,
+          [],
+          createdIds,
         )
         return {
           id: treeResult.id,
           name: treeResult.name,
           type: treeResult.type,
+          ids: createdIds,
         }
       } catch (err) {
         // T7: a blocked append (e.g. into a non-SLOT instance descendant)
@@ -2357,6 +2542,9 @@ const handleCommand = async (
       }
       const sourceNode = found as SceneNode
       const comp = figma.createComponentFromNode(sourceNode)
+      // The component takes the source node's place in the tree, so its
+      // closure is the real one at this point.
+      writeScope.claim(writer, comp)
       if (ccName !== undefined) comp.name = ccName
       if (ccDescription !== undefined)
         comp.description = ccDescription
@@ -2614,6 +2802,15 @@ const handleCommand = async (
               try {
                 const slot = compWithSlot.createSlot!()
                 if (slot && name) slot.name = name
+                // createSlot() returns a node already inside the component;
+                // the local typing is a minimal { name } shape, hence the
+                // cast.
+                if (slot) {
+                  writeScope.claim(
+                    writer,
+                    slot as unknown as BaseNode,
+                  )
+                }
                 slotsCreated.push(name)
               } catch (e) {
                 slotsSkipped.push(name)
@@ -2728,6 +2925,7 @@ const handleCommand = async (
         )
       }
       const cs = figma.combineAsVariants(cvComps, cvParent)
+      writeScope.claim(writer, cs)
       if (params.name !== undefined)
         cs.name = params.name as string
       return {
@@ -2924,6 +3122,10 @@ const handleCommand = async (
       const svgFrame = figma.createNodeFromSvg(
         params.svg as string,
       )
+      // Paired with the post-append claim below: createNodeFromSvg returns a
+      // frame that already has children but no real parent, so the two
+      // claims differ by the ANCESTOR half of the closure.
+      writeScope.claim(writer, svgFrame)
       if (params.name) {
         svgFrame.name = params.name as string
       }
@@ -2932,6 +3134,7 @@ const handleCommand = async (
         svgFrame.resize(w, h)
       }
       ;(svgParent as FrameNode).appendChild(svgFrame)
+      writeScope.claim(writer, svgFrame)
       return {
         id: svgFrame.id,
         name: svgFrame.name,
@@ -3669,6 +3872,7 @@ const handleCommand = async (
         } else {
           dest.appendChild(clone)
         }
+        writeScope.claim(writer, clone)
         clones.push({
           id: clone.id,
           name: clone.name,
@@ -3874,6 +4078,7 @@ const handleCommand = async (
             error: 'Unknown boolean op: ' + op,
           }
       }
+      writeScope.claim(writer, boolNode)
       return {
         id: boolNode.id,
         name: boolNode.name,
@@ -3920,6 +4125,7 @@ const handleCommand = async (
         }
       }
       const vector = figma.flatten(nodes, flatParent)
+      writeScope.claim(writer, vector)
       return {
         id: vector.id,
         name: vector.name,
@@ -3977,6 +4183,7 @@ const handleCommand = async (
         }
       }
       const group = figma.group(nodes, groupParent)
+      writeScope.claim(writer, group)
       return {
         id: group.id,
         name: group.name,
@@ -4057,6 +4264,9 @@ const handleCommand = async (
           tgIndex,
           modifiers,
         )
+        // A creation choke point like the rest, though the API is absent
+        // from the pinned runtime, so this claim rarely fires.
+        writeScope.claim(writer, tgNode as BaseNode)
         return {
           id: tgNode.id,
           name: tgNode.name,
@@ -4074,6 +4284,7 @@ const handleCommand = async (
     // create_page: add a new page and name it.
     case COMMANDS.CREATE_PAGE: {
       const page = figma.createPage()
+      writeScope.claim(writer, page)
       page.name = params.name as string
       return { id: page.id, name: page.name }
     }
@@ -4100,6 +4311,7 @@ const handleCommand = async (
         return { error: 'Page not found: ' + pageId }
       }
       const dup = (page as PageNode).clone()
+      writeScope.claim(writer, dup)
       if (params.name !== undefined) {
         dup.name = params.name as string
       }
@@ -5239,10 +5451,27 @@ const handleCommand = async (
         error?: string
       }[] = []
       for (const entry of batchOps) {
+        // A nested enter/exit pair, NOT a new generation: the outer dispatch
+        // already holds one, so the refcount keeps it open across the whole
+        // batch and each op's ids fold into it — a batch of fifty ops spends
+        // exactly one of the RETAINED_COMMANDS slots. `finally` closes the
+        // frame even for the ops this loop deliberately swallows.
+        //
+        // This is also the ONLY harvest for a batch: the outer `enter`
+        // opens the generation but folds nothing, so each op's params and
+        // return are classified as that OP, never blanket-claimed under
+        // `batch` (see write-scope.ts).
+        const done = await writeScope.enter(
+          writer,
+          entry.op,
+          entry.params ?? {},
+        )
+        let opResult: unknown = null
         try {
-          const opResult = await handleCommand(
+          opResult = await handleCommand(
             entry.op,
             entry.params ?? {},
+            writer,
           )
           // A handler that returns {error} (e.g. node not found) is a per-op
           // failure, not a success — surface it as this entry's error.
@@ -5261,6 +5490,8 @@ const handleCommand = async (
           }
         } catch (e) {
           results.push({ ok: false, error: String(e) })
+        } finally {
+          done(opResult)
         }
       }
       return { results }
@@ -5295,11 +5526,42 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
       return
     }
 
+    // The generation opens BEFORE the handler and SEALS when the dispatch
+    // settles, INCLUDING when the handler throws: an unsealed generation
+    // keeps absorbing every later command until MAX_DISPATCH_MS force-seals
+    // it, so the disposer is called from `finally`, never inline. It seals at
+    // EXIT rather than at entry because a command that awaits a font load or
+    // an image fetch mutates seconds after it was dispatched. Sealing is not
+    // expiry — a sealed generation stays in the union until one of the two
+    // bounds evicts it (change-feed.md).
+    //
+    // This is the ONE dispatch point, and the command name is what tells the
+    // scope whether to harvest at all: a READ emits no event, so it opens no
+    // generation and folds neither its params nor its return. Harvesting one
+    // would be pure over-claim — `search` returns hundreds of ids and
+    // `inspect(pageRoot)` folds that page's whole reflow closure — and under
+    // retention that reach would silence the user's real edits for minutes.
     let result: unknown
+    // The writer of this dispatch: meta.sessionId, or the reserved literal
+    // when the identity hook is absent. `_unattributed` is a WRITER like any
+    // other, and a server that has never received a sessionId subtracts it —
+    // so the degraded route keeps exactly the single-agent behaviour.
+    const writer = msg.sessionId ?? UNATTRIBUTED
+    const done = await writeScope.enter(
+      writer,
+      msg.command,
+      msg.params,
+    )
     try {
-      result = await handleCommand(msg.command, msg.params)
+      result = await handleCommand(
+        msg.command,
+        msg.params,
+        writer,
+      )
     } catch (err) {
       result = { error: String(err) }
+    } finally {
+      done(result)
     }
 
     figma.ui.postMessage({

@@ -5,14 +5,15 @@ import {
 } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { sanitizeKey } from '@figma-agent-bridge/shared/paths'
 
 export const resolveIndexDir = (): string =>
   process.env.COMPONENT_INDEX_DIR ??
   join(homedir(), '.figma-agent-bridge', 'component-index')
 
-/** Sanitize a fileKey for use as a filename. */
+/** Sanitize a fileKey for use as a filename. The `.json` is the CALLER's. */
 const fileName = (fileKey: string): string =>
-  `${fileKey.replace(/[^a-zA-Z0-9_-]/g, '_')}.json`
+  `${sanitizeKey(fileKey)}.json`
 
 type CachePayload = {
   version: string

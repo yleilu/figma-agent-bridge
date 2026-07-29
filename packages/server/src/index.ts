@@ -3,13 +3,14 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
   APP_NAME,
   APP_VERSION,
-  COMMANDS,
   DEFAULT_PORT,
   OAUTH_CLIENT_ID,
   OAUTH_SCOPE,
   connectParamsSchema,
   createFromSvgParamsSchema,
+  genId,
 } from '@figma-agent-bridge/shared'
+import { COUNT_DEBOUNCE_MS } from '@figma-agent-bridge/shared/change-feed'
 // M2 param schemas live in tool-params (NOT the barrel — they shadow the
 // green-window schemas.ts versions still imported above for the old tools).
 import {
@@ -65,6 +66,7 @@ import {
   recordFeedbackParamsSchema,
   searchComponentsParamsSchema,
   reindexParamsSchema,
+  pullChangesParamsSchema,
   reportStatusParamsSchema,
   listFeedbackParamsSchema,
   sendFeedbackParamsSchema,
@@ -72,14 +74,28 @@ import {
   githubAuthStartParamsSchema,
   githubAuthPollParamsSchema,
 } from '@figma-agent-bridge/shared/tool-params'
+import type { ZodRawShape } from 'zod'
 import {
   createFigmaClient,
   toHttpUrl,
 } from './figma-client'
+import type { ScopedFigmaClient } from './figma-client'
 import {
   registerFileTool,
   registerSessionTool,
 } from './tools/with-file'
+import type { FileHandlerParams } from './tools/with-file'
+import {
+  registerBufferTool,
+  handlePullChanges,
+} from './tools/with-buffer'
+import {
+  ChangeFeed,
+  isImmediateWrite,
+} from './change-feed/feed'
+import { attachChangeFeed } from './change-feed/attach'
+import { createCountMirror } from './change-feed/count-mirror'
+import { sessionIdentity } from './change-feed/session-identity'
 import {
   handleConnect,
   handleStatus,
@@ -195,13 +211,91 @@ if (process.argv.includes('--relay')) {
 
   const indexManager = new IndexManager()
 
-  client.onRequest(COMMANDS.DOCUMENT_CHANGED, params => {
-    const { fileId } = params
-    if (typeof fileId === 'string') {
-      indexManager.markStale(fileId)
-    }
-    return { ok: true }
+  // change-feed.md — the count + state mirror the presence hook reads. It is
+  // written on the PUSH path, which carries no sessionId, so the writer keys on
+  // the REMEMBERED identity and falls back to the `_unattributed` sentinel.
+  const countMirror = createCountMirror({
+    writer: genId('srv'),
+    debounceMs: COUNT_DEBOUNCE_MS,
+    sessionId: () => sessionIdentity.current(),
   })
+  // Adoption: a session's first Figma tool call may come AFTER the user has
+  // already edited — the server writes the sentinel at a nonzero count, then
+  // learns the id and migrates.
+  sessionIdentity.onAdopt(id => {
+    void countMirror.migrate(id)
+  })
+
+  // change-feed.md — the per-fileKey buffer, its push handler and the two
+  // server-side broken-baseline arms. attachChangeFeed OWNS the
+  // document_changed registration: the component index's slice of that frame
+  // rides inside it via markIndexStale.
+  //
+  // The spec's write-trigger rows map one-to-one: `open`, `arm` and `drain`
+  // are immediate BY REASON (isImmediateWrite names them), and `ingest` falls
+  // through to the mirror's leading-edge / state-change / return-to-quiet
+  // conditions. The count is DERIVED, never a separately maintained counter
+  // that could drift under drain/push interleaving — and it is
+  // `feed.pendingCount`, not the map sizes: `pending_edits` means "distinct
+  // things changed OUTSIDE this session", so shadow entries (what this session
+  // itself caused) and the context slots must stay out of the number.
+  const feed: ChangeFeed = new ChangeFeed(
+    (buffer, reason) => {
+      void countMirror.write(
+        buffer.fileKey,
+        feed.pendingCount(buffer.fileKey),
+        buffer.state,
+        { immediate: isImmediateWrite(reason) },
+      )
+    },
+  )
+  attachChangeFeed(client, feed, fileKey => {
+    indexManager.markStale(fileKey)
+  })
+
+  // The sentinel has no session to end — no SessionEnd hook can retire it, so
+  // this process unlinks its own on a clean exit. A kill leaves it behind,
+  // which is why the reader expires one older than SENTINEL_TTL_MS.
+  for (const sig of ['SIGINT', 'SIGTERM'] as const) {
+    process.on(sig, () => {
+      countMirror.shutdown()
+      // eslint-disable-next-line n/no-process-exit -- a signal handler must terminate
+      process.exit(0)
+    })
+  }
+  process.on('exit', () => {
+    countMirror.shutdown()
+  })
+
+  // The baseline hook, bound once and threaded into every file-addressed tool
+  // by `fileTool` below. A re-join after a disconnect does NOT open a clean
+  // baseline — openBaseline preserves the armed buffer, which is what keeps a
+  // server↔relay gap from silently reporting "0 pending edits".
+  const onJoined = (
+    fileKey: string,
+    epoch: string | null,
+  ): void => {
+    feed.openBaseline(fileKey, epoch)
+  }
+
+  /** registerFileTool with `server`, `client` and the baseline hook bound. */
+  const fileTool = <S extends ZodRawShape, R>(
+    name: string,
+    schema: { shape: S },
+    handler: (
+      params: FileHandlerParams<S>,
+      scoped: ScopedFigmaClient,
+    ) => Promise<R>,
+  ): void => {
+    registerFileTool(
+      server,
+      client,
+      name,
+      schema,
+      handler,
+      onJoined,
+    )
+  }
 
   // --- Session tools (NOT file-addressed) ------------------------------------
   // These address the connection, not a per-call file, so they take the REAL
@@ -210,7 +304,14 @@ if (process.argv.includes('--relay')) {
     server,
     'connect',
     connectParamsSchema,
-    p => handleConnect(p, client, relayHttpUrl, port),
+    p =>
+      handleConnect(
+        p,
+        client,
+        relayHttpUrl,
+        port,
+        onJoined,
+      ),
   )
 
   registerSessionTool(
@@ -264,368 +365,243 @@ if (process.argv.includes('--relay')) {
   )
 
   // --- File-addressed tools (B3) ---------------------------------------------
-  // Every tool below is registered through registerFileTool: the wrapper reads
-  // `fileKey` from the validated params, gates via requireFile, and hands the
+  // Every tool below is registered through registerFileTool (via the `fileTool`
+  // binding above): the wrapper reads `fileKey` from the validated params, gates
+  // via requireFile, opens the change-feed baseline on a join, and hands the
   // handler a file-scoped client (identity fields moved into meta). A scoped
   // handler cannot reach server.tool any other way, so a forgotten wrapper is a
   // compile error, not a silent WRONG_FILE.
-  registerFileTool(
-    server,
-    client,
-    'inspect',
-    inspectParamsSchema,
-    handleInspect,
-  )
-  registerFileTool(
-    server,
-    client,
+  fileTool('inspect', inspectParamsSchema, handleInspect)
+  fileTool(
     'get_styles',
     getStylesParamsSchema,
     handleGetStyles,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'get_components',
     getComponentsParamsSchema,
     handleGetComponents,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'list_fonts',
     listFontsParamsSchema,
     handleListFonts,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'get_reactions',
     getReactionsParamsSchema,
     handleGetReactions,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'get_plugin_data',
     getPluginDataParamsSchema,
     handleGetPluginData,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'get_annotations',
     getAnnotationsParamsSchema,
     handleGetAnnotations,
   )
-  registerFileTool(
-    server,
-    client,
-    'search',
-    searchParamsSchema,
-    handleSearch,
-  )
-  registerFileTool(
-    server,
-    client,
-    'get_node',
-    getNodeParamsSchema,
-    handleGetNode,
-  )
-  registerFileTool(
-    server,
-    client,
+  fileTool('search', searchParamsSchema, handleSearch)
+  fileTool('get_node', getNodeParamsSchema, handleGetNode)
+  fileTool(
     'get_nodes',
     getNodesParamsSchema,
     handleGetNodes,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'list_pages',
     listPagesParamsSchema,
     handleListPages,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'get_selection',
     getSelectionParamsSchema,
     handleGetSelection,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'set_selection',
     setSelectionParamsSchema,
     handleSetSelection,
   )
-  registerFileTool(
-    server,
-    client,
-    'export',
-    exportParamsSchema,
-    handleExport,
-  )
-  registerFileTool(
-    server,
-    client,
+  fileTool('export', exportParamsSchema, handleExport)
+  fileTool(
     'create_node',
     createNodeParamsSchema,
     handleCreateNode,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'create_tree',
     createTreeParamsSchema,
     handleCreateTree,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'create_component',
     createComponentParamsSchema,
     handleCreateComponent,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'update_component',
     updateComponentParamsSchema,
     handleUpdateComponent,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'combine_variants',
     combineVariantsParamsSchema,
     handleCombineVariants,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'swap_component',
     swapComponentParamsSchema,
     handleSwapComponent,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'set_instance',
     setInstanceParamsSchema,
     handleSetInstance,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'create_from_svg',
     createFromSvgParamsSchema,
     handleCreateFromSvg,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'update_node',
     updateNodeParamsSchema,
     handleUpdateNode,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'bind_variable',
     bindVariableParamsSchema,
     handleBindVariable,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'get_variables',
     getVariablesParamsSchema,
     handleGetVariables,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'delete_node',
     deleteNodeParamsSchema,
     handleDeleteNode,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'set_focus',
     setFocusParamsSchema,
     handleSetFocus,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'clone_node',
     cloneNodeParamsSchema,
     handleCloneNode,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'reparent_node',
     reparentNodeParamsSchema,
     handleReparentNode,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'reorder_children',
     reorderChildrenParamsSchema,
     handleReorderChildren,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'boolean_op',
     booleanOpParamsSchema,
     handleBooleanOp,
   )
-  registerFileTool(
-    server,
-    client,
-    'flatten',
-    flattenParamsSchema,
-    handleFlatten,
-  )
-  registerFileTool(
-    server,
-    client,
+  fileTool('flatten', flattenParamsSchema, handleFlatten)
+  fileTool(
     'group_nodes',
     groupNodesParamsSchema,
     handleGroupNodes,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'transform_group',
     transformGroupParamsSchema,
     handleTransformGroup,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'create_page',
     createPageParamsSchema,
     handleCreatePage,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'set_current_page',
     setCurrentPageParamsSchema,
     handleSetCurrentPage,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'duplicate_page',
     duplicatePageParamsSchema,
     handleDuplicatePage,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'create_image',
     createImageParamsSchema,
     handleCreateImage,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'set_plugin_data',
     setPluginDataParamsSchema,
     handleSetPluginData,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'set_reactions',
     setReactionsParamsSchema,
     handleSetReactions,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'set_annotations',
     setAnnotationsParamsSchema,
     handleSetAnnotations,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'create_variables',
     createVariablesParamsSchema,
     handleCreateVariables,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'update_variables',
     updateVariablesParamsSchema,
     handleUpdateVariables,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'delete_variables',
     deleteVariablesParamsSchema,
     handleDeleteVariables,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'create_styles',
     createStylesParamsSchema,
     handleCreateStyles,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'update_styles',
     updateStylesParamsSchema,
     handleUpdateStyles,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'delete_styles',
     deleteStylesParamsSchema,
     handleDeleteStyles,
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'apply_style',
     applyStyleParamsSchema,
     handleApplyStyle,
   )
-  registerFileTool(
-    server,
-    client,
-    'batch',
-    batchParamsSchema,
-    handleBatch,
-  )
+  fileTool('batch', batchParamsSchema, handleBatch)
 
   // Component-index tools carry the extra indexManager arg (Task 7 reconciles
   // their bodies onto the scoped client + requireFile).
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'search_components',
     searchComponentsParamsSchema,
     (params, scoped) =>
       handleSearchComponents(params, scoped, indexManager),
   )
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'reindex',
     reindexParamsSchema,
     (params, scoped) =>
@@ -635,12 +611,22 @@ if (process.argv.includes('--relay')) {
   // report_status (status-monitor.md): a fire-and-forget, file-scoped status
   // push — never reaches code.ts/figma.* (not in COMMANDS). Identity rides on
   // the scoped client (scoped.identity), surfaced by forFile (Task 5).
-  registerFileTool(
-    server,
-    client,
+  fileTool(
     'report_status',
     reportStatusParamsSchema,
     (p, scoped) => handleReportStatus(p, scoped),
+  )
+
+  // pull_changes (change-feed.md) — a NON-FACADE meta-tool. It reaches
+  // server.tool through registerBufferTool, the third registration wrapper:
+  // it dispatches nothing to Figma, so it must not run the command gate.
+  registerBufferTool(
+    server,
+    client,
+    feed,
+    'pull_changes',
+    pullChangesParamsSchema,
+    handlePullChanges,
   )
 
   const transport = new StdioServerTransport()

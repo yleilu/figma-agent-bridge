@@ -163,13 +163,23 @@ describe('relay', () => {
     const SECOND_PORT = 3100
     const second = startRelay(SECOND_PORT)
 
-    // join on the first server's port only
+    // join + register on the first server's port only
     const ws = await connect()
     const nextMessage = createMessageQueue(ws)
     ws.send(
       JSON.stringify({ type: 'join', channel: 'iso-ch' }),
     )
     await nextMessage()
+    ws.send(
+      JSON.stringify({
+        type: 'register',
+        channel: 'iso-ch',
+        fileName: null,
+        fileKey: null,
+        version: APP_VERSION,
+      }),
+    )
+    await Bun.sleep(30)
 
     const firstChannels = (await (
       await fetch(`${HTTP_URL}/channels`)
@@ -196,7 +206,7 @@ describe('relay', () => {
       expect(data).toEqual([])
     })
 
-    it('GET /channels returns channel after join', async () => {
+    it('GET /channels returns the channel after REGISTER', async () => {
       const ws = await connect()
       const nextMessage = createMessageQueue(ws)
 
@@ -207,6 +217,18 @@ describe('relay', () => {
         }),
       )
       await nextMessage()
+
+      // Availability requires registration: a bare join lists nothing.
+      ws.send(
+        JSON.stringify({
+          type: 'register',
+          channel: 'registry-ch',
+          fileName: null,
+          fileKey: null,
+          version: APP_VERSION,
+        }),
+      )
+      await Bun.sleep(30)
 
       const res = await fetch(`${HTTP_URL}/channels`)
       const data = (await res.json()) as ChannelInfo[]
@@ -262,14 +284,14 @@ describe('relay', () => {
       )
       await nextMessage()
 
-      // default entry (before register) must carry fileKey:null, not undefined
+      // before register there is NO entry at all — availability is bound to
+      // the registering socket, not to channel membership
       const before = (await (
         await fetch(`${HTTP_URL}/channels`)
       ).json()) as ChannelInfo[]
       expect(
-        before.find(c => c.channel === 'filekey-ch')
-          ?.fileKey,
-      ).toBeNull()
+        before.find(c => c.channel === 'filekey-ch'),
+      ).toBeUndefined()
 
       ws.send(
         JSON.stringify({
@@ -380,6 +402,28 @@ describe('relay', () => {
         }),
       )
       await next2()
+
+      // Each socket registers its own channel — availability is per
+      // registering plugin, so a bare join would list nothing.
+      ws1.send(
+        JSON.stringify({
+          type: 'register',
+          channel: 'multi-ch-1',
+          fileName: null,
+          fileKey: null,
+          version: APP_VERSION,
+        }),
+      )
+      ws2.send(
+        JSON.stringify({
+          type: 'register',
+          channel: 'multi-ch-2',
+          fileName: null,
+          fileKey: null,
+          version: APP_VERSION,
+        }),
+      )
+      await Bun.sleep(30)
 
       const res = await fetch(`${HTTP_URL}/channels`)
       const data = (await res.json()) as ChannelInfo[]
@@ -589,6 +633,230 @@ describe('relay', () => {
 
       await closeWs(ws)
     })
+
+    it('publishes epoch on /channels and refreshes it on re-register', async () => {
+      const ws = await connect()
+      ws.send(
+        JSON.stringify({
+          type: 'join',
+          channel: 'file-ep',
+        }),
+      )
+      await Bun.sleep(30)
+      ws.send(
+        JSON.stringify({
+          type: 'register',
+          channel: 'file-ep',
+          fileName: 'D',
+          fileKey: 'ep',
+          version: APP_VERSION,
+          epoch: 'epoch-one',
+        }),
+      )
+      await Bun.sleep(30)
+      const first = (await (
+        await fetch(`${HTTP_URL}/channels`)
+      ).json()) as ChannelInfo[]
+      expect(
+        first.find(c => c.channel === 'file-ep')?.epoch,
+      ).toBe('epoch-one')
+
+      ws.send(
+        JSON.stringify({
+          type: 'register',
+          channel: 'file-ep',
+          fileName: 'D',
+          fileKey: 'ep',
+          version: APP_VERSION,
+          epoch: 'epoch-two',
+        }),
+      )
+      await Bun.sleep(30)
+      const second = (await (
+        await fetch(`${HTTP_URL}/channels`)
+      ).json()) as ChannelInfo[]
+      expect(
+        second.find(c => c.channel === 'file-ep')?.epoch,
+      ).toBe('epoch-two')
+
+      await closeWs(ws)
+    })
+
+    it('drops the registry entry when the REGISTERING socket closes, even with other members', async () => {
+      const plugin = await connect()
+      const holder = await connect() // the MCP server's socket
+      for (const s of [plugin, holder]) {
+        s.send(
+          JSON.stringify({
+            type: 'join',
+            channel: 'file-sb',
+          }),
+        )
+      }
+      await Bun.sleep(30)
+      plugin.send(
+        JSON.stringify({
+          type: 'register',
+          channel: 'file-sb',
+          fileName: 'D',
+          fileKey: 'sb',
+          version: APP_VERSION,
+          epoch: 'e1',
+        }),
+      )
+      await Bun.sleep(30)
+      expect(
+        (
+          (await (
+            await fetch(`${HTTP_URL}/channels`)
+          ).json()) as ChannelInfo[]
+        ).some(c => c.channel === 'file-sb'),
+      ).toBe(true)
+
+      plugin.close()
+      await Bun.sleep(60)
+      // The server is STILL a member, but the file is no longer AVAILABLE.
+      expect(
+        (
+          (await (
+            await fetch(`${HTTP_URL}/channels`)
+          ).json()) as ChannelInfo[]
+        ).some(c => c.channel === 'file-sb'),
+      ).toBe(false)
+      await closeWs(holder)
+    })
+
+    it('a joiner that never registers creates NO entry', async () => {
+      const ws = await connect()
+      ws.send(
+        JSON.stringify({
+          type: 'join',
+          channel: 'file-nr',
+        }),
+      )
+      await Bun.sleep(40)
+      expect(
+        (
+          (await (
+            await fetch(`${HTTP_URL}/channels`)
+          ).json()) as ChannelInfo[]
+        ).some(c => c.channel === 'file-nr'),
+      ).toBe(false)
+      await closeWs(ws)
+    })
+
+    it('a leave frame from a NON-registrar member keeps the entry', async () => {
+      const plugin = await connect()
+      const other = await connect()
+      for (const s of [plugin, other]) {
+        s.send(
+          JSON.stringify({
+            type: 'join',
+            channel: 'file-nl',
+          }),
+        )
+      }
+      await Bun.sleep(30)
+      plugin.send(
+        JSON.stringify({
+          type: 'register',
+          channel: 'file-nl',
+          fileName: 'N',
+          fileKey: 'nl',
+          version: APP_VERSION,
+        }),
+      )
+      await Bun.sleep(30)
+
+      other.send(
+        JSON.stringify({
+          type: 'leave',
+          channel: 'file-nl',
+        }),
+      )
+      await Bun.sleep(30)
+
+      // Availability tracks the REGISTRAR, not the member count.
+      expect(
+        (
+          (await (
+            await fetch(`${HTTP_URL}/channels`)
+          ).json()) as ChannelInfo[]
+        ).some(c => c.channel === 'file-nl'),
+      ).toBe(true)
+
+      await closeWs(plugin)
+      await closeWs(other)
+    })
+
+    it('a reconnecting plugin rebinds the entry with a FRESH connectedAt', async () => {
+      const first = await connect()
+      const holder = await connect() // an MCP server holding the channel
+      for (const s of [first, holder]) {
+        s.send(
+          JSON.stringify({
+            type: 'join',
+            channel: 'file-rb',
+          }),
+        )
+      }
+      await Bun.sleep(30)
+      first.send(
+        JSON.stringify({
+          type: 'register',
+          channel: 'file-rb',
+          fileName: 'R',
+          fileKey: 'rb',
+          version: APP_VERSION,
+          epoch: 'e1',
+        }),
+      )
+      await Bun.sleep(30)
+      const before = (
+        (await (
+          await fetch(`${HTTP_URL}/channels`)
+        ).json()) as ChannelInfo[]
+      ).find(c => c.channel === 'file-rb')
+      expect(before?.connectedAt).toBeDefined()
+
+      await closeWs(first)
+      await Bun.sleep(30)
+
+      const second = await connect()
+      second.send(
+        JSON.stringify({
+          type: 'join',
+          channel: 'file-rb',
+        }),
+      )
+      await Bun.sleep(30)
+      second.send(
+        JSON.stringify({
+          type: 'register',
+          channel: 'file-rb',
+          fileName: 'R',
+          fileKey: 'rb',
+          version: APP_VERSION,
+          epoch: 'e2',
+        }),
+      )
+      await Bun.sleep(30)
+      const after = (
+        (await (
+          await fetch(`${HTTP_URL}/channels`)
+        ).json()) as ChannelInfo[]
+      ).find(c => c.channel === 'file-rb')
+
+      // connection-liveness.md's dead marker self-clears only if a reconnect
+      // mints a new connectedAt.
+      expect(after?.epoch).toBe('e2')
+      expect(after?.connectedAt).toBeGreaterThan(
+        before?.connectedAt ?? Infinity,
+      )
+
+      await closeWs(second)
+      await closeWs(holder)
+    })
   })
 
   it('ignores register for a channel the client never joined', async () => {
@@ -598,6 +866,16 @@ describe('relay', () => {
       JSON.stringify({ type: 'join', channel: 'guard-ch' }),
     )
     await ownerNext()
+    owner.send(
+      JSON.stringify({
+        type: 'register',
+        channel: 'guard-ch',
+        fileName: 'Owner.fig',
+        fileKey: 'owner',
+        version: APP_VERSION,
+      }),
+    )
+    await Bun.sleep(30)
 
     // attacker joins a DIFFERENT channel, then tries to register guard-ch
     const attacker = await connect()
@@ -619,10 +897,21 @@ describe('relay', () => {
       await fetch(`${HTTP_URL}/channels`)
     ).json()) as ChannelInfo[]
     const guard = data.find(c => c.channel === 'guard-ch')
-    expect(guard?.fileName).toBeNull()
+    // The owner's registration is untouched — and the attacker did not become
+    // the registrar (which would have let its close drop the owner's entry).
+    expect(guard?.fileName).toBe('Owner.fig')
+
+    await closeWs(attacker)
+    await Bun.sleep(30)
+    expect(
+      (
+        (await (
+          await fetch(`${HTTP_URL}/channels`)
+        ).json()) as ChannelInfo[]
+      ).some(c => c.channel === 'guard-ch'),
+    ).toBe(true)
 
     await closeWs(owner)
-    await closeWs(attacker)
   })
 
   it('excludes the sending socket from its own broadcast', async () => {
@@ -903,6 +1192,17 @@ describe('relay', () => {
       'Connected to channel: idem-ch',
     )
 
+    ws.send(
+      JSON.stringify({
+        type: 'register',
+        channel: 'idem-ch',
+        fileName: null,
+        fileKey: null,
+        version: APP_VERSION,
+      }),
+    )
+    await Bun.sleep(30)
+
     // still exactly one registry entry
     const data = (await (
       await fetch(`${HTTP_URL}/channels`)
@@ -1019,6 +1319,17 @@ describe('relay', () => {
     expect(msg.message.result).toBe(
       'Connected to channel: ok-ch',
     )
+
+    ws.send(
+      JSON.stringify({
+        type: 'register',
+        channel: 'ok-ch',
+        fileName: null,
+        fileKey: null,
+        version: APP_VERSION,
+      }),
+    )
+    await Bun.sleep(30)
 
     // registry has only the valid channel
     const data = (await (

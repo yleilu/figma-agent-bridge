@@ -87,6 +87,18 @@ diagnostic). A handshake flags both immediately.
   same class of **breaking wire change** as the `meta{}` wrapping and the per-file-channel additions
   above, so it too **bumps the minor** (B2) and trips *this* handshake on a mixed-version
   plugin/server. Both sides adopt the new push shape atomically; the relay still only routes it (B1).
+- **The change-feed push frame extends once more, for attribution and runs.** The push body gains
+  **`params.writers[]`** — the per-frame table of the sessions its records are attributed to — and
+  each record gains the **`by`** / **`rf`** bitmasks that index into it, the final values
+  **`set`**, the **`pg`** / **`fr`** locator, the **`merged`** flag, and the rule that
+  **one record is one RUN, not one id** (so `params.changes[]` is ordered, and for a given id that
+  order is the run order). All of it rides `params`, which the relay forwards whole — `metaSchema`
+  gains **nothing**, so the allow-list is untouched.
+  It is a **coordinated change, not an optional field bolted on**, and it **bumps the minor** (B2):
+  a peer that ignores the masks does not merely lose an enrichment, it **keeps its own writes and
+  reports them back to itself as foreign** — a count that never returns to zero, tolerable as a
+  transient and wrong as a steady state. This handshake is what keeps that a transient: the file
+  gate refuses the skew with `INCOMPATIBLE` before it can settle in.
 - **On skew, the server pushes a `version-mismatch` frame** so the plugin can surface it visually
   (the banner, owned by [[figma-bridge/docs/specs/status-monitor|status-monitor.md]]):
   `{ channel, plugin, server }` server→relay, routed to `{ plugin, server }` relay→plugin (the

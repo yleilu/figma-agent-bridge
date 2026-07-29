@@ -343,6 +343,12 @@ describe('meta envelope', () => {
   })
 
   it('accepts a meta-less push (document_changed forward-compat)', () => {
+    // The RELAY still forwards a meta-less frame — it is a schema-level
+    // forwarder, not a consumer. `params.fileId` is a legacy fixture: the
+    // server no longer reads it, identity now rides meta.fileKey
+    // (change-feed.md). A frame like this is dropped by the push handler,
+    // which is the point: it must still PARSE, so the drop is a decision and
+    // not a validation error.
     const r = commandMessageSchema.safeParse({
       command: 'document_changed',
       params: { fileId: 'fk-1' },
@@ -362,6 +368,44 @@ describe('meta envelope', () => {
     if (r.success) {
       expect(r.data.agentId).toBe('ad77d15fc6c0a67bb')
       expect(r.data.agentType).toBe('general-purpose')
+    }
+  })
+
+  it('metaSchema carries epoch + seq (change-feed push headers)', () => {
+    const r = metaSchema.safeParse({
+      fileKey: 'fk',
+      epoch: 'epoch-abc123def456',
+      seq: 0,
+    })
+    expect(r.success).toBe(true)
+    if (r.success) {
+      expect(r.data.epoch).toBe('epoch-abc123def456')
+      expect(r.data.seq).toBe(0)
+    }
+  })
+
+  it('STRIPS an undeclared meta field (allow-list, not passthrough)', () => {
+    const r = metaSchema.parse({
+      fileKey: 'fk',
+      notAField: 'x',
+    })
+    expect(
+      (r as Record<string, unknown>).notAField,
+    ).toBeUndefined()
+  })
+
+  it('registerMessageSchema carries epoch', () => {
+    const r = registerMessageSchema.safeParse({
+      type: 'register',
+      channel: 'file-fk',
+      fileName: 'Design',
+      fileKey: 'fk',
+      version: '0.3.0',
+      epoch: 'epoch-abc123def456',
+    })
+    expect(r.success).toBe(true)
+    if (r.success) {
+      expect(r.data.epoch).toBe('epoch-abc123def456')
     }
   })
 })

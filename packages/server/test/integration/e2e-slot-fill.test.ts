@@ -149,7 +149,11 @@ describe('M2b slot-fill e2e (T7 instance-lock wrap)', () => {
     const { text } = result.content[0]
     expect(text).not.toMatch(/^Error:/)
     const data = JSON.parse(text) as Record<string, unknown>
-    expect(data.type).toBe('FRAME')
+    expect((data.root as { type: string }).type).toBe(
+      'FRAME',
+    )
+    // Container + Label — every created node is addressable.
+    expect(data.ids).toHaveLength(2)
   })
 
   it('create_tree: instance-parent WITHOUT badparent prefix is NOT blanket-rejected (T9 slot path stays open)', async () => {

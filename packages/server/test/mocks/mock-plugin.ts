@@ -1216,10 +1216,22 @@ export const createMockPlugin = (
         // (a→b→a, or a self-ref) throws 'Cyclic ref in pool: …' instead of
         // recursing forever — so the mock surfaces a clean {error} the same way
         // the plugin does, never hanging the e2e.
-        const countNodes = (
+        //
+        // The ids are COLLECTED, not counted: the real plugin reports one id
+        // per node it realizes (root first, depth-first in creation order) so
+        // the server can answer the tool-surface `{root, ids[]}`. A `{ ref }`
+        // expands to its whole rebuilt subtree; an `{ id }` clone is ONE
+        // realized node (its descendants come along, unenumerated).
+        const collectIds = (
           node: Record<string, unknown>,
+          out: string[],
           refStack: string[] = [],
-        ): number => {
+        ): void => {
+          const mint = (): string => {
+            out.push(
+              `created:${out.length}:${Math.random().toString(36).slice(2, 8)}`,
+            )
+          }
           // { ref }: rebuild refs[key] FRESH each reuse.
           if (
             node.ref !== undefined &&
@@ -1228,7 +1240,8 @@ export const createMockPlugin = (
             const refKey = node.ref as string
             const refSpec = treeRefs?.[refKey]
             if (!refSpec) {
-              return 1
+              mint()
+              return
             }
             if (refStack.includes(refKey)) {
               throw new Error(
@@ -1236,43 +1249,49 @@ export const createMockPlugin = (
                   [...refStack, refKey].join(' -> '),
               )
             }
-            return countNodes(refSpec, [
-              ...refStack,
-              refKey,
-            ])
+            collectIds(refSpec, out, [...refStack, refKey])
+            return
           }
           // { id } clone: a single realized node.
           if (
             node.id !== undefined &&
             node.type === undefined
           ) {
-            return 1
+            mint()
+            return
           }
-          let count = 1
+          mint()
           const children = node.children as
             | Record<string, unknown>[]
             | undefined
           if (children) {
             for (const child of children) {
-              count += countNodes(child, refStack)
+              collectIds(child, out, refStack)
             }
           }
-          return count
         }
         try {
-          const totalNodes = treeSpec
-            ? countNodes(treeSpec)
-            : 1
+          const ids: string[] = []
+          if (treeSpec) {
+            collectIds(treeSpec, ids)
+          } else {
+            ids.push('created:0')
+          }
           result = {
             ...(treeSpec ?? {}),
-            id: `created:${Math.random().toString(36).slice(2, 8)}`,
+            // The real plugin's reply: the root in the create_node family plus
+            // every id it created. The server maps this to {root, ids[]}. The
+            // echoed tree/refs/parentId around it are a MOCK-ONLY affordance so
+            // e2e can assert what reached the plugin.
+            id: ids[0],
             name:
               (treeSpec?.name as string) ??
               (treeSpec?.type as string),
             type: treeSpec?.type as string,
+            ids,
             parentId: treeParentId,
             refs: treeRefs,
-            totalNodes,
+            totalNodes: ids.length,
           }
         } catch (e) {
           error = String(e instanceof Error ? e.message : e)

@@ -7,6 +7,7 @@ tags:
   - change-feed
   - staleness
   - freshness
+  - attribution
   - hook
 type: spec
 related:
@@ -25,9 +26,10 @@ related:
 # Change Feed
 
 > Governed by [[figma-bridge/docs/principles|the principles]]. This feature spans all three layers
-> and the split is load-bearing: the listeners, the self-write filter, the accumulator, the push
-> frame, the server buffer and the count mirror are **bridge** (**B1** uniform contract, **B3**
-> per-file); `pull_changes` is a no-opinion **tool** (**T6**, **T4**, **T10**); the mechanics of
+> and the split is load-bearing: the listeners, the self-write attributor, the accumulator, the push
+> frame and the attribution it carries, the server buffer with its per-consumer subtraction and its
+> per-id run history, and the count mirror are **bridge** (**B1** uniform contract, **B3** per-file);
+> `pull_changes` is a no-opinion **tool** (**T6**, **T4**, **T10**); the mechanics of
 > reading the block and draining before acting are **tool usage** and belong to the design-loop
 > skill (**P1**). The feed is a **best-effort freshness hint**, never an authoritative guarantee
 > (**T7**). Tool contracts are authoritative in
@@ -37,17 +39,28 @@ related:
 
 ## Overview
 
-Between two agent turns the **user keeps editing Figma** — moving, renaming, restyling and
-**deleting** nodes. The agent's last read is a snapshot that silently goes stale, so it plans
-against nodes that have moved or no longer exist and acts on ghosts.
+Between two agent turns the **file keeps changing without the agent** — the user moves, renames,
+restyles and **deletes** nodes, and a second agent session on the same file writes to it too. The
+agent's last read is a snapshot that silently goes stale, so it plans against nodes that have moved
+or no longer exist and acts on ghosts.
 
-The Change Feed gives the agent a cheap way to ask *"what did the user change since I last
-looked?"* right before it acts. While the plugin is connected it records document mutations into a
-**per-file, in-memory buffer on the MCP server**; a `pull_changes` tool **drains** that buffer on
+The Change Feed gives the agent a cheap way to ask *"what changed that I did not cause, since I last
+looked?"* right before it acts. The *I* in that question is what makes the design hard: one plugin
+serves every session on the file and broadcasts one frame to all of them, so causation has to be
+established where the writes happen — in the plugin, which alone knows which command touched what —
+and applied where they are read, in each session's own server. While the plugin is connected it
+records document mutations into a **per-file, in-memory buffer on the MCP server**; a
+`pull_changes` tool **drains** that buffer on
 demand; and the pending-edit **count and baseline state** are surfaced each turn as the
 `pending_edits` / `pending_edits_state` fields of the always-on presence block
 ([[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]]) — so the agent drains only on turns
 where something actually changed or the baseline is not trustworthy.
+
+What the buffer holds is not one net effect per node but a short **history of runs** — one writer's
+unbroken stretch of work on an id, collapsed to the properties it left changed and the values it left
+them at. That is what lets a drain answer *who caused this value* rather than only *what is it now*,
+and it is the difference between an agent learning that a node's `x` is `20` and learning that its own
+`x = 10` landed and was then overwritten.
 
 It is **pull-based by necessity**: an LLM agent only perceives state when *it* calls a tool. Even
 MCP resource subscriptions never reach the model's reasoning loop, so the design is a pollable tool
@@ -60,11 +73,15 @@ to make that rare, not to replace it.
 
 ## Scope
 
-**Covers:** capturing user edits from Figma events while connected; the source-side self-write
-filter; the plugin-side accumulator and flush policy; the `document_changed` push frame; the
-per-`fileKey` server buffer and its baseline states; the `pull_changes` drain; and the on-disk count
-mirror that feeds `pending_edits` into the always-on presence block (the `UserPromptSubmit` hook
-itself is owned by [[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]]).
+**Covers:** capturing edits from Figma events while connected; the source-side attribution of each
+change to the session whose command caused it; the run model the buffer collapses into and the values
+its records carry; the plugin-side accumulator and flush policy; the
+`document_changed` push frame and the attribution it carries; the per-`fileKey` server buffer, the
+per-consumer subtraction it applies on ingest and the `mine` residue that subtraction leaves behind;
+its baseline states; the `pull_changes` drain; and
+the on-disk count mirror that feeds `pending_edits` into the always-on presence block (the
+`UserPromptSubmit` hook itself is owned by
+[[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]]).
 
 **Does not cover:**
 
@@ -73,10 +90,26 @@ itself is owned by [[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]
   invisible; an untrustworthy baseline is reported as such (re-read fully), it does not reconstruct
   history.
 - **Variables.** `documentchange` does not fire for variable edits (a known Figma gap).
-- **Rich diffs.** Records carry identity + change kind + changed-property *names*, not before/after
-  values. The agent re-reads the affected nodes for detail.
-- **Multi-session change attribution.** One agent per file is the model the filter is correct for;
-  attributing a change to *which* session caused it needs a wire addition and is out of scope.
+- **Before-values.** A record carries the **final** value of each changed property, never the value it
+  held before. `documentchange` supplies no old value and the buffer holds no document snapshot to
+  derive one, so *what it was* is only ever the agent's own last read. A diff is therefore something
+  the agent computes against its snapshot, not something the feed hands it.
+- **Values that do not fit, and values a create would need.** A property whose value exceeds the size
+  cap is reported by name alone (see Values, and the cap that bounds them); `create` and `delete`
+  records carry no values at all, a create's "final value" being an entire node spec. The agent
+  re-reads the node in both cases — the names-only record survives as the **fallback** rather than as
+  the rule.
+- **Write arbitration.** The feed *reports*; it does not lock, queue, order or reconcile concurrent
+  writers. Two sessions writing the same node both succeed, last write wins in Figma, and each is
+  told afterwards what the other did. Whether an agent should then yield, redo or ask is tool usage,
+  not a capability of the feed.
+- **Per-property causation between writers.** Causation is resolved to a **run** — one writer's
+  unbroken stretch of work on an id — never to a property inside one. Where a run names several
+  writers the design does not claim which of them set which property (see Limitations). The one
+  per-property split it does make is *this session versus everyone else*, carried by `mine`.
+- **Sub-session attribution.** The writer key is the session. Subagents inside one session share it,
+  because they share one MCP server, one buffer and one count file (see The writer key is the
+  session).
 - **The component index's own freshness**, which consumes the same push
   ([[figma-bridge/docs/specs/component-index|component-index.md]]); this feed is a parallel consumer
   of one frame, not a replacement.
@@ -85,8 +118,8 @@ itself is owned by [[figma-bridge/docs/specs/plugin-presence|plugin-presence.md]
 
 | Layer | Responsibility here |
 |---|---|
-| **Bridge** | Plugin listeners → self-write filter → accumulator → the enriched `document_changed` push (**B1**); server buffers per `fileKey` (**B3**); the count mirror file. Carries changes faithfully; compacts events but never interprets node *meaning*. |
-| **Tool** | `pull_changes({fileKey, limit?})` — drains and returns the buffer in a compact, bounded envelope (**T4/T10**). Pure capability, **no opinion** (**T6**). |
+| **Bridge** | Plugin listeners → self-write attributor → accumulator → the enriched `document_changed` push (**B1**); server buffers per `fileKey` (**B3**), each subtracting its own session's writes on ingest; the count mirror file. Carries changes faithfully; compacts events into runs, carries the values they left and names their writer, but never interprets node *meaning* (**B1**). |
+| **Tool** | `pull_changes({fileKey, limit?, detail?})` — drains and returns the buffer in a compact, bounded envelope (**T4/T10**), folded per id by default and per run on request. Pure capability, **no opinion** (**T6**). |
 | **Plugin** | The count mirror feeds `pending_edits` / `pending_edits_state` in the always-on presence block; the design-loop skill states the **mechanics** of the loop — which field to read, when the drain is worth a call, what a broken baseline obliges. That is **tool usage** under **P1**, not taste: it is how the surface is operated, and it has no defensible alternative reading. Anything about *how often* to re-verify beyond that (re-read before every batch, not just before a destructive one) is a preference and lives in `figma-bridge-prefs`. |
 
 A client without the skill can still call `pull_changes` deliberately — the tool carries no opinion
@@ -97,17 +130,182 @@ A client without the skill can still call `pull_changes` deliberately — the to
 Three `figma.on(...)` listeners in the plugin sandbox. `documentchange` carries both node and style
 changes (style edits surface as its `STYLE_CREATE` / `STYLE_DELETE` / `STYLE_PROPERTY_CHANGE`
 subtypes — a **separate `stylechange` listener is redundant and is not used**). Node/style changes
-are **accumulated** (each into its own collapsing map); page and selection are **latest-wins single
-slots** so their noise cannot flood the buffer.
+are **accumulated** (each into its own collapsing map, whose entries are that id's runs); page and
+selection are **latest-wins single slots** so their noise cannot flood the buffer.
 
 | Listener | Treatment | Yields | Why captured |
 |---|---|---|---|
-| `documentchange` | accumulate into **node map** and **style map** (keyed by id) | node `create` / `update` / `delete`; style `style_create` / `style_update` / `style_delete` | The core signal — the only source of user moves/renames/**deletes**, and (via STYLE_* subtypes) style edits. |
+| `documentchange` | accumulate into **node map** and **style map** (keyed by id, each entry a run list) | node `create` / `update` / `delete`; style `style_create` / `style_update` / `style_delete` | The core signal — the only source of user moves/renames/**deletes**, and (via STYLE_* subtypes) style edits. |
 | `currentpagechange` | latest-wins slot | `page` record (`id`, `name` of the now-current page) | Context: where the user is. No payload — read from `figma.currentPage`. |
 | `selectionchange` | latest-wins slot | `select` record (bounded `ids`, `count`) | Context: where the user is working. Ephemeral, never a mutation. No payload — read from `figma.currentPage.selection`. |
 
 Deliberately excluded: `stylechange`, `drop`, `run`, `close`, `textreview`, codegen, FigJam timers,
 ui `message`.
+
+## Attribution — which session caused a change
+
+`origin: 'LOCAL'` covers the user's edits and every plugin-issued edit alike (see Design
+constraints), so a change is only ever separable from the agent's own work **at source**, by knowing
+which command was running when it happened. That is the whole reason the write scope exists. It is
+also the reason attribution cannot stop there: **one plugin serves every session on the file**, and
+one `document_changed` frame is broadcast to all of them. A drop decided in the plugin is a drop for
+*everyone*.
+
+That is not a tuning question. A plugin that drops what session A caused makes A's work invisible to
+session B, and B's feed then reports `pending_edits: 0` — which the design defines as *nothing
+changed, the snapshot is good*. B is confidently wrong over a stale snapshot, which is the exact
+failure the feed exists to prevent, reached with another agent in place of the user, and reached
+**silently**.
+
+**So the plugin attributes and the consumer subtracts.** The plugin stamps every record with the
+sessions that caused it; each server drops the records stamped with *its own* session and keeps the
+rest. Every other split fails on a fact of the transport:
+
+- **The plugin cannot subtract per consumer.** The relay is a dumb broadcaster with no unicast — one
+  frame reaches every member of the channel or none does. A per-consumer frame would mean N frames
+  on the socket that also carries command replies, against the one budget the flusher exists to
+  protect.
+- **The server cannot attribute for itself.** It does see other sessions' command frames — the relay
+  re-broadcasts channel messages to every member, so `meta.sessionId` and `params` of another
+  session's command already arrive — but params name only the ids the agent *chose*. They cannot
+  name the nodes a command **created** (the tree builder returns one root for a hundred nodes, which
+  is why `claim` exists) nor the nodes a write **re-flows without naming**, which needs the document
+  the server does not hold. Reconstructing causation server-side would be a second, weaker copy of
+  the write scope, drifting against the real one.
+
+Attribution therefore rides the frame, and the frame is broadcast: **every consumer sees every
+session's records and discards its own.**
+
+### The writer key is the session
+
+The unit of attribution is the **Claude Code session**, named by `meta.sessionId`
+([[figma-bridge/docs/specs/request-envelope|request-envelope.md]]), which already rides every command
+frame the plugin receives. The plugin's UI realm forwards it into the sandbox alongside the B3
+target, so the write scope can key on it; that is an internal message field, not a wire addition.
+
+**Not `agentId`.** A session's subagents share its `sessionId` and are told apart only by `agentId` —
+but they also share one MCP server, one buffer and one count file, so a finer writer key would have
+no distinct consumer to serve. The granularity of attribution is the granularity of consumption, and
+that is the session. Two subagents in one session are one writer here, and each sees the other's
+work as its own — correct, because they read one buffer.
+
+**`_unattributed` is a writer.** A command that carries no `sessionId` — the identity hook absent
+(see Fallback) — opens a generation under the reserved literal `_unattributed`, and its records are
+stamped with it. A server that has never received a `sessionId` subtracts that writer, so the
+degraded route keeps exactly the single-agent behaviour. The literal is the same
+sentinel the count mirror keys on, and it is one value in both places by construction, not by
+coincidence: the writer a server subtracts and the count file it writes are both
+`sessionIdentity.current() ?? '_unattributed'`. No platform session id collides with it (the same
+format argument the count mirror makes), and a stray agent-supplied one is the same benign misroute.
+
+### A record names its LATEST writer, not everyone who has touched the id
+
+Two sessions can both have touched one id — A moved a node, B moved it again, and both generations
+are still retained when a change on it is delivered. `by` names **only the later toucher**.
+
+Attributing it to the set of everyone retaining the id is the tempting reading — it is a truthful
+answer to *"who has a claim here"* — but it answers the wrong question and it **cancels itself**.
+Ingest drops a record whose `by` names the reader; with both sessions named, both drop it, and the
+change reaches **nobody**. Retention is what makes this reachable rather than exotic: it deliberately
+remembers an id for many dispatches, so *"who has touched this"* keeps growing while *"who caused
+this change"* stays singular. The two coincide only while one session writes, which is why a set
+looks equivalent to the one-agent rule and is not.
+
+Naming the later toucher costs an over-report to the superseded session — it is told a node it had
+written has changed. That is not a false nudge: its snapshot **is** stale, which is the signal the
+feed exists to carry, and `mine` names the properties it wrote earlier so it reads the record as
+*superseded*, not as *never landed*. Set against silence to both parties, an accurate nudge to one
+is the cheaper failure — and this design consistently prefers over-reporting to silence.
+
+Later is decided by **touch order**, not by wall clock: every touch takes a monotonic tick, and
+re-touching an id makes that writer latest again. Elapsed time is not evidence of causation anywhere
+in this design, and a coarse clock would make two touches in the same millisecond unorderable.
+Figma applies last-write-wins, so the value a record carries belongs to its latest toucher — which
+is what makes that session, and only that session, the one for whom the record is not news.
+
+### Two masks, because the reflow rule is per consumer
+
+**`rf` stays a set, and the asymmetry with `by` is deliberate.** The two masks make different
+claims. `by` claims authorship of one change, and a run has one writer — so two names there is not a
+richer answer but a self-cancelling one. `rf` claims only that a change is *explicable* as this
+writer's cascade, which is genuinely true of several sessions at once: two sessions working inside
+one auto-layout parent each hold every child of it in their closure. A set there is a true statement.
+The ingest rule keeps the asymmetry safe — a reader subtracts on `rf` only when `by` is empty, so an
+`rf` bit can never suppress a named write; it acts only on a pure cascade, where "any of these could
+have caused it" is the honest answer. Narrowing `rf` would strip the bit from the loser and report
+that session its own cascade as foreign news, which is the one thing the mask exists to prevent.
+
+Membership in the reflow closure is as session-scoped as membership in the touched set: an id can
+sit inside A's cascade and be untouched by B. A record therefore carries **two** attributions — the
+writers that **touched** the id, and the writers whose **reflow closure** contains it — and each
+consumer reads its own bit out of each.
+
+This is what keeps property-level subtraction alive under N writers rather than degrading it. It
+also makes it *more* informative than the single-agent case: a cascade is noise to the session that
+caused it and **news to a session that did not**, whose snapshot of that node's geometry has just
+gone stale. A single global subtraction, performed in the plugin, would destroy that for every
+consumer at once. Where two sessions' closures overlap the news is lost to both, and that residual is
+stated in Limitations.
+
+**The closure is computed in the plugin and consumed in the server.** Only the plugin can compute
+it — it alone holds the document and the command that named the ids. The rule that *consumes* it —
+subtract `CASCADE_PROPS` from `props[]`, keep the remainder, drop only when nothing survives — runs
+once per consumer, at ingest, against that consumer's own `rf` bit. The algebra is the same
+subtraction either way; what is session-scoped is whose closure it is evaluated against.
+
+### What it costs
+
+Every agent write crosses the wire, including on a file with one agent, where the sole consumer
+will discard it. That cost is paid deliberately, and the shape of it matters:
+
+- **A file only the agent writes to still emits a frame every flush window.** An eliding design emits
+  nothing at all there — nothing survives to accumulate, and an empty flush is suppressed — so this is
+  where carrying the agent's own writes shows most plainly: a frame per flush window for as long as a
+  build runs, on a file where no other party is editing. Above that floor the cost is bytes rather
+  than frames: the rate stays bounded by the accumulator plus `FLUSH_MAX_WAIT_MS` and capped again at
+  `FEED_FRAMES_PER_SEC`, neither of which changes when more records fold into one flush. The budget a
+  command **reply** needs is therefore preserved — the constraint that would otherwise have made this
+  design impossible — but `FEED_FRAMES_PER_SEC` is a live bound during a build rather than a
+  theoretical one, and the excess it refuses folds back into the accumulator.
+- **The accumulator's cap is spent by the agent's own work too.** Its maps are keyed by id, so a
+  hundred-node build folds to about a hundred entries rather than one per raw event. It cannot be
+  sized against the largest build, because build size has no bound — a tree spec is arbitrarily
+  large and a `batch` can chain several inside one flush window. So `ACCUM_CAP` is a memory bound
+  that a big enough build reaches, and reaching it sets `overflow`, which breaks every consumer's
+  baseline **including the builder's**: the one operation this design makes able to oblige a session
+  a re-read of the file it just wrote. Disclosed in Limitations rather than argued away.
+- **Values are the largest per-record cost, and they are paid on records their author discards.**
+  Every `update` carries the final value of each changed property that fits, the agent's own writes
+  included — and the agent's own server drops those at ingest. On a file with one agent that is the
+  whole population, so the full value cost is paid for zero delivered information. It is the same
+  deliberate trade as carrying own-writes at all (the plugin cannot know who is listening), now paid
+  in bytes as well as frames, and it is bounded per record by `VALUE_MAX_BYTES` × `RECORD_VALUE_BUDGET`
+  rather than by the flush rate — so a build makes frames no more frequent and each frame heavier.
+- **A co-agent's build inflates the count.** A session that builds three hundred nodes leaves three
+  hundred pending things in every *other* session's buffer — honest (they did change, and none of
+  them by that reader), but no longer drainable in one bounded call. The design keeps the drain
+  bounded rather than special-casing size; what an agent does with a large foreign count — re-read a
+  region rather than consume three hundred records — is tool usage under **P1**.
+
+The alternative — eliding at source whenever the plugin believes it is the only session's work in
+the frame — is refused, because the plugin cannot know. The relay announces no membership, a `join`
+is invisible to it, and a session that joined through an explicit connect and has only ever drained
+has issued no command the plugin could have seen. Eliding on that guess starves exactly the consumer
+that is quietest: silence, when the guess is wrong, to save bytes.
+
+### What a second session can stand in for
+
+Because a second session's writes are foreign to the first **by construction**, the conditions that
+otherwise need a person at the keyboard — a not-the-agent create, update, delete or rename surviving
+attribution, at the same instant the agent is writing — are producible by a second agent.
+Attribution is checkable without a human.
+
+**Event-shape fidelity does not.** An agent's edits enter through the plugin's command switch; a
+person's enter through Figma's own editor, and the runtime does not emit them identically. Inside an
+auto-layout frame a person's arrow key **reorders** a child among its siblings and carries `parent`
+alongside the positional properties (see Design constraints) — a shape no command dispatch produces.
+A second session can therefore stand in for *who* caused a change, never for *what a human's change
+looks like on the wire*. The two are separate claims and only the first is machine-producible.
 
 ## The change record
 
@@ -117,32 +315,167 @@ type ChangeOp =
   | 'style_create' | 'style_update' | 'style_delete'     // styles
   | 'page' | 'select'                                    // context slots
 
-type ChangeRecord = {
+type ChangeRecord = {                 // the shape on the wire — ONE RUN of one id
   op:     ChangeOp
   id?:    string      // node / style / page id. ABSENT for op:'select'.
   type?:  string      // node/style type. On delete this plus id is ALL Figma gives.
   name?:  string      // best-effort; present on create/update/page, ABSENT on delete.
   props?: string[]    // update / style_update ONLY: changed property names, sorted, deduped.
+  set?:   Record<string, unknown>
+                      // update / style_update ONLY: the FINAL value of each changed property
+                      // small enough to carry. Always a SUBSET of props, never a different
+                      // key set (see Values, and the cap that bounds them).
+  pg?:    string      // best-effort locator: the page the changed node is on.
+  fr?:    string      // best-effort locator: the ancestor that is a direct child of a page —
+                      // the node's own id when it IS one. ABSENT on delete and when the walk
+                      // cannot be performed (see The locator).
   ids?:   string[]    // select ONLY: the current selection, capped at SELECT_IDS_CAP.
   count?: number      // select ONLY: the TRUE selection size when it exceeds SELECT_IDS_CAP.
+  by?:    number      // bitmask over the frame's writers[]: sessions that TOUCHED this id.
+  rf?:    number      // bitmask over the frame's writers[]: sessions whose REFLOW closure holds it.
+  merged?: true       // this run is two runs the accumulator folded under one of its run
+                      // bounds: order lost, no change and no value lost (see The run cap).
+}
+
+// Plugin-internal, from the attributor to the flush. Writers are NAMES here: the
+// bit table does not exist until a frame is assembled (see The attributor stamps names).
+type AttributedRecord = Omit<ChangeRecord, 'by' | 'rf'> & {
+  by?: ReadonlySet<string>
+  rf?: ReadonlySet<string>
+}
+
+// What `pull_changes` returns: ONE ENTRY PER ID, whichever detail was asked for. The
+// masks are spent at ingest and never reach the agent; `src` is the residue the buffer
+// keeps (see `src` labels the residue).
+type DrainedRun =
+  | (Omit<ChangeRecord, 'by' | 'rf' | 'id' | 'type' | 'name' | 'pg' | 'fr' | 'ids' | 'count'>
+     & { src?: 'agent' })          // a foreign run: {op, props?, set?, merged?} + src
+  | { src: 'self', mine: string[] } // a POSITION-ONLY run: this session's own work, held to keep
+                                    // the boundary it sits on. No op, no props, no values.
+
+type DrainedRecord = {
+  id?:    string
+  type?:  string
+  name?:  string
+  pg?:    string
+  fr?:    string
+  mine?:  string[]    // ops and property NAMES this session is known to have caused on this id,
+                      // union over its self runs — the evidence that its own write LANDED. On the
+                      // folded view, narrowed to what this record reports on (see `mine`).
+  // detail:'folded' (the default) — the runs projected down to one net effect for the id.
+  op?:    ChangeOp
+  props?: string[]
+  set?:   Record<string, unknown>
+  src?:   'agent'
+  // detail:'runs' — node and style entries carry the runs themselves, oldest first, and NONE
+  // of the four fields above. The context slots are unaffected by `detail`: they are
+  // latest-wins values, never histories, so they keep `op` and have no runs.
+  runs?:  DrainedRun[]
+  // context slots only.
+  ids?:   string[]
+  count?: number
 }
 ```
 
-- **No `source` field.** Every record that reaches the server *is* a user-attributed change by
-  construction of the source-side filter — a per-record constant with one value and no reader is
-  pure wire cost on a T4 surface. Multi-session attribution needs a wire change (an optional
-  per-record `source`, or a per-push session map); adding an optional field is non-breaking under
-  **B2**, so nothing is reserved for it. It cannot ride in `meta`: a push is unsolicited and
-  broadcast, so it carries no session identity at all.
+Four shapes, because the same change is four different things on its way through: a set of causes in
+the plugin, a bitmask on the wire, a run inside a per-id history, and a folded net effect in the
+drain. Naming them separately is what keeps each end's field set decidable.
+
+- **Attribution is a bitmask over a per-frame table, not a `source` string.** The writers are named
+  once per frame in `params.writers[]` (see The push frame) and each record carries the *indices*
+  into it. Three reasons, in order of weight. A record needs a **set** of writers, which a single
+  string cannot express. Records are numerous — one flush can carry a whole build — so the field is
+  paid per record and a session id is a long opaque value to pay repeatedly; an integer is a few
+  bytes against roughly fifty, and the ids themselves are paid once per frame however many records
+  reference them (**T4**). And the two-letter names are the same economy: a field name on a numerous
+  record is wire cost like any other, which is why the verbose alternative is the frame table, where
+  it is paid once.
+- **Absent means unattributed, and unattributed means everybody keeps it.** A record with no `by` is
+  kept by every consumer, so every failure of attribution — a writer that won no bit, a harvest that
+  missed an id, an older peer that stamps nothing — surfaces as an over-report to someone, never as
+  silence. The masks fail in the same direction the rest of the attributor does. Under the run model
+  it costs one thing more: an unattributed record resolves to the **empty** writer key, which is the
+  user's, so it merges into an adjacent user run and reads as the user's work. The failure stays an
+  over-report and becomes a **mislabel** as well; both are stated in Limitations.
+- **`rf` is node-only.** No real `StyleChangeProperty` is a cascade property, so a style record never
+  carries one; styles are decided by `by` alone. A `select` record carries **neither** mask — it has
+  no id, so there is nothing to attribute it on, which is the same fact that keeps it on the
+  in-flight rule.
 - `name` is included on create/update/page because it materially helps the agent reason
   (*"Button/Primary was moved"*) and is cheap for non-deletes; a deleted node becomes a
   `RemovedNode` exposing only `id`, `type`, `removed:true`, so `name` is honestly absent there.
 - `props[]` exists only on `update` / `style_update`. Create and delete carry no changed-property
   list — the reader re-reads the whole node.
+- **A wire record is one run, not one id.** Where a flush window contains a writer change on one node
+  it carries two records for that id, in order. `params.changes[]` is therefore **ordered**, and for a
+  given id the order is the run order; a consumer that reorders them corrupts the history it is
+  reconstructing. Ordering across *different* ids carries no meaning. A record the accumulator
+  produced by merging two runs under `RUNS_PER_ID_CAP` carries `merged`, so a loss of order at source
+  is visible to the server rather than indistinguishable from a genuine single run.
 - **`select` is bounded (T10).** A marquee over a thousand nodes must not put a thousand ids on the
   wire. `ids` is truncated to `SELECT_IDS_CAP` and `count` carries the true size when truncated. The
   cap is a tuning constant, not a contract; the invariant is that a `select` record is O(1) in wire
   size.
+
+### Values, and the cap that bounds them
+
+A record that names `x` as changed poses a question; a record that says `x = 20` answers one. The
+difference is a re-read per node per drain, on the surface **T4** governs most tightly — so values are
+carried where they are cheap and withheld where they are not, and the withholding is per property
+rather than per record, so one expensive property never costs the twenty cheap ones beside it.
+
+- **Values are read at admit time, from the node the event hands over.** That is synchronous property
+  access on a node already in hand, never an id resolution, so it does not disturb the constraint that
+  the `documentchange` handler performs no lookups (see Design constraints). An access that throws —
+  a node on a page the runtime has not loaded — yields **no value**: the property keeps its place in
+  `props` and gains no entry in `set`. Reading fails toward the names-only record, never toward an
+  exception in the handler.
+- **The per-property cap is `VALUE_MAX_BYTES`**, measured on the value's JSON serialization. Sized in
+  the low hundreds of bytes, it admits a number, a boolean, a short string, a single paint, one
+  effect, a constraints object or a layout mode, and refuses a vector path, an image fill, a long
+  text-run array and a variable-mode map. It is the size, never the property name, that decides: a
+  table of expensive property names would drift against the runtime, while a byte count cannot.
+- **Measuring is bounded too, not only the value.** Learning that an eight-kilobyte string, a vector
+  network or a sixty-paint array is over the cap must not cost a full serialization inside the
+  synchronous handler, per property, per event, on records every consumer may drop. So an **O(1)
+  pre-check refuses the obvious offenders before anything is serialized** — a string longer than
+  `VALUE_MAX_BYTES`, an array longer than `VALUE_MAX_ITEMS` — and only what survives it is serialized,
+  by a serializer free to abort the moment it passes the cap. The rule that size decides is intact:
+  the pre-check is a size test too, and it is the same test performed on the cheapest available
+  measure of size.
+- **The per-record budget is `RECORD_VALUE_BUDGET`.** Properties are considered in **ascending
+  serialized size, ties broken by name**, and each is carried while it fits both the per-property cap
+  and the record's remaining budget. Ascending order maximises how many properties one budget answers;
+  the tie-break makes the outcome deterministic, and therefore testable, rather than dependent on the
+  order the runtime happened to list them in.
+- **A third budget bounds the response, not the record.** `DRAIN_VALUE_BUDGET` (see Bounding) caps
+  what one drain spends on values across all its entries, past which entries render names-only. A
+  value these two caps admit therefore still reaches the agent only if the response has budget left
+  for it.
+- **`props` is complete and unconditional; `set` is a subset of it.** A property in `props` and absent
+  from `set` is the honest form of *this changed and you must re-read it*, which is exactly the record
+  the design carries when it can carry nothing better.
+- **`create` and `delete` carry no `set`.** A create's final value is an entire node spec — arbitrarily
+  large, and useless in pieces to a reader that has never seen the node and must read it whole
+  anyway — and a delete has no value to report at all. This is the same judgement that already drops
+  `props` on a create, applied to the field that would have cost the most.
+- **Within a run, a property's value is last-writer-wins**; across runs the folded view takes the last
+  run that set it (see Runs). Union is right for property *names* and wrong for values: two writes to
+  `x` have one final value, and a union of values is not a value.
+
+### The locator
+
+Each node record carries a best-effort **`pg`** (the page the node is on) and **`fr`** (the ancestor
+that is a direct child of that page, or the node's own id when it is one). Both are computed once, on
+an id's first admission in a flush window, by walking `parent` on the node already in hand — property
+access, not resolution, the same access the reflow closure already relies on — and both are **absent**
+when the walk cannot be performed. A `RemovedNode` has no parent, so **a delete is never located**.
+
+Two ids per record is a real per-record cost under **T4**, and it buys two things. It makes a
+truncated drain able to say *where* the remaining changes are rather than only how many (see
+Bounding), and it makes the standing advice for a large foreign count — re-read the affected region
+rather than consume the list — actionable, where without a locator the agent has no way to name the
+region. Styles are never located: a style has no place in the node tree.
 
 ## The push frame
 
@@ -155,7 +488,10 @@ the body is what changed, the headers are who and which connection is speaking:
 {
   command: 'document_changed',
   params: {
-    changes:    ChangeRecord[],   // may be EMPTY (see the opening flush)
+    changes:    ChangeRecord[],   // ORDERED runs; may be EMPTY (see the opening flush)
+    writers?:   string[],         // the sessions this frame's records are attributed to; the
+                                  // table `by` / `rf` index into. Minted per frame, capped at
+                                  // WRITERS_CAP, ABSENT when no record in the flush is attributed.
     indexStale: boolean,          // component-index discriminator — see Integration
     overflow?:  true,             // plugin-side accumulator hit its cap; records were dropped
     at:         number,           // flush timestamp, epoch ms (plugin clock)
@@ -172,6 +508,36 @@ the body is what changed, the headers are who and which connection is speaking:
 header: the relay parses every frame and re-broadcasts the *parsed* object, so any `meta` field not
 enumerated there is silently stripped before it reaches the server. A field described here that is
 not in `metaSchema` does not exist on the wire. `params` is a free record and is forwarded whole.
+
+### Why attribution rides `params`, not `meta`
+
+`meta` answers *who is speaking and about which connection* — one value per frame. Attribution is
+**per record**: one frame carries the work of every session that wrote inside the flush window, so
+there is no single sender identity to put in a header. This is the same fact request-envelope.md
+states from the other side: a push is unsolicited and broadcast, so it has no frame-level sender.
+
+The allow-list makes the choice practical as well as correct. `meta` is enumerated and enforced by
+the relay, so an addition there is a relay change and a stripped field is an invisible failure;
+`params` is forwarded whole, so the plugin and the server can agree on the body without the
+broadcaster having to know what it is carrying. The **body** is what changed and who changed it; the
+**headers** stay the routing envelope.
+
+It also keeps the realms as they are. The masks are minted in the **sandbox**, which is where the
+write scope and the events live, so the sandbox assembles `writers[]` at flush and posts the whole
+body across; the UI still stamps only `meta`, and still needs to know nothing about causation — the
+same division that lets it stamp an unsaved file's identity without the sandbox knowing a channel.
+
+### Wire version
+
+`writers[]`, `by`, `rf`, `set`, `pg`, `fr`, `merged` and the one-record-per-**run** rule all change the
+frame the server parses, so the plugin and server adopt them together and the change **bumps the
+MINOR** under
+**B2**
+([[figma-bridge/docs/specs/version-handshake|version-handshake.md]] enumerates the frame changes that
+do). It is a coordinated change, not an optional field bolted on: a peer that ignores the masks does
+not merely lose an enrichment, it keeps its own writes and reports them back to itself as foreign —
+tolerable as a degrade, wrong as a steady state. The handshake refuses a minor skew at the file gate
+before that can settle in, which is why the degrade is a transient rather than a mode.
 
 ### Identity — `meta.fileKey`, and it is the synthKey
 
@@ -257,15 +623,17 @@ Four small pieces, in order. Each is independently testable; none lives inside t
 ```mermaid
 flowchart TB
     subgraph Sandbox["Figma sandbox"]
+        CMD["command dispatch, carrying meta.sessionId as the writer"]
         EV["documentchange / currentpagechange / selectionchange"]
-        WS["WriteScope: window, claimed ids, reflow closure"]
-        FL["SelfWriteFilter"]
-        AC["ChangeAccumulator: node map, style map, slots"]
-        FLUSH["Flusher: debounce, max-wait, send budget"]
+        WS["WriteScope: writer-tagged generations, claimed ids, reflow closure"]
+        FL["SelfWriteAttributor: stamp writer names"]
+        AC["ChangeAccumulator: node map, style map, runs per id, slots"]
+        FLUSH["Flusher: debounce, max-wait, send budget; mints the writer table and the masks"]
     end
     subgraph UI["Figma plugin UI iframe"]
         ST["stamp meta: fileKey, epoch, seq"]
     end
+    CMD --> WS
     EV --> FL
     WS --> FL
     FL --> AC
@@ -274,147 +642,428 @@ flowchart TB
     ST -->|document_changed| Relay["relay broadcast"]
 ```
 
-### 1. `WriteScope` — where the agent's own writes are known
+### 1. `WriteScope` — where each session's own writes are known
 
 ```ts
 type WriteScope = {
-  /** Called on entry to every command dispatch, including each nested batch op.
-   *  Refcounted. Harvests the command's PARAMS and captures the reflow closure
-   *  of every id they name, while those nodes still exist. */
-  enter(params: unknown): Promise<void>
+  /** Called on entry to every command dispatch, including each nested batch op, with
+   *  the WRITER it belongs to — meta.sessionId, or '_unattributed' — and the COMMAND
+   *  NAME, which is what decides event-causing versus read-only. Refcounted PER
+   *  WRITER; that writer's outermost EVENT-CAUSING entry OPENS a generation tagged
+   *  with it. Harvests the command's PARAMS and captures the reflow closure of every
+   *  id they name, while those nodes still exist. A read-only command refcounts and
+   *  harvests nothing. */
+  enter(writer: string, command: string, params: unknown): Promise<void>
   /** Called ONCE per enter, when that dispatch settles (after the handler's promise
-   *  resolves or rejects). Harvests the handler's RETURN. Refcounted; when the count
-   *  returns to 0 the window stays OPEN for SETTLE_MS, then closes. */
-  exit(result: unknown): void
-  /** True while the window is open (depth > 0, or within SETTLE_MS of the last exit). */
-  isOpen(): boolean
-  /** Called by every node-CREATING code path at the moment of creation, with the new
-   *  node. Adds the id to the claimed set and folds the node into the closure. */
-  claim(node: BaseNode): void
-  /** Ids the agent is known to have touched: harvested from params and returns, plus
-   *  every id claimed at creation. Monotonic for the window's lifetime. */
-  touched(): ReadonlySet<string>
-  /** Ids whose GEOMETRY the agent's writes can move without naming them — the reflow
-   *  closure, captured eagerly (below). */
-  reflow(): ReadonlySet<string>
+   *  resolves or rejects). Harvests the handler's RETURN into that writer's open
+   *  generation. Refcounted; when that writer's count returns to 0 its generation is
+   *  SEALED — it stops growing and stays RETAINED. */
+  exit(writer: string, result: unknown): void
+  /** True while ANY writer has a dispatch in flight, and no dispatch counts as in
+   *  flight for longer than MAX_DISPATCH_MS. Governs the context slots only. */
+  inFlight(): boolean
+  /** Called by every node-CREATING code path at the moment of creation, with the
+   *  dispatch's writer and the new node. Adds the id to that writer's open generation
+   *  and folds the node into its closure. */
+  claim(writer: string, node: BaseNode): void
+  /** The writers known to have touched this id: harvested from params and returns,
+   *  plus every id claimed at creation. Read over the open generations and every
+   *  retained one — monotonic WITHIN a generation, and shrinking only by eviction. */
+  writersOf(id: string): ReadonlySet<string>
+  /** The writers whose writes can move this id's GEOMETRY without naming it — the
+   *  reflow closure, captured eagerly (below). Read over the same generations. */
+  reflowWritersOf(id: string): ReadonlySet<string>
 }
 ```
 
-**Harvest is generic, and its timing is part of the contract.** `enter` folds the command's params;
-`exit` folds its return; the set only grows. The walk takes every string under
-`id` / `ids` / `nodeId` / `nodeIds` / `parentId` / `root` / `componentId` / `instanceId` /
-`results[].id`, at any depth. Its failure mode is a **smaller** touched set, so the agent's own
-records survive the filter and surface as user edits: a **false nudge**, not a lost edit.
+**Generations interleave; they do not nest.** Every session's commands funnel through one dispatch
+switch, so a second session's dispatch can open, seal and be evicted inside the lifetime of the
+first's. The scope therefore holds **one ordered ring of writer-tagged generations**, not a ring per
+session, and the refcount that decides when a generation seals is **per writer** — overlapping
+dispatches from *one* writer still share its open generation, the conservative merge a single
+writer's own overlapping dispatches get, but dispatches from different writers never share one.
+Merging across writers would fuse A's ids into B's attribution, which is not a loss of precision but
+a wrong answer.
+
+**Harvest is generic, and its timing is part of the contract.** `enter` folds the command's params
+into its writer's generation; `exit` folds its return; within a generation the set only grows. The
+walk takes every string under `id` / `ids` / `nodeId` / `nodeIds` / `parentId` / `pageId` / `root` /
+`componentId` / `instanceId` / `results[].id`, at any depth. Its failure mode is a **smaller**
+touched set, so that writer's own records come back to it as foreign: a **false nudge**, not a lost
+edit.
 
 **Creation is claimed, not harvested.** A generic walk cannot recover ids that do not exist when the
 command is dispatched: a tree-building command takes a nested *spec* of nodes-to-be and returns only
-the root, so a hundred-node build would harvest exactly one id and report the other ninety-nine as
-user edits. Every code path that creates a node therefore calls `claim(node)` at creation — the tree
-builder's per-node create, single-node create, SVG import, clone, group, duplicate-page, flatten and
-boolean-op. Those are a small, enumerable set of choke points, and this is the one place the design
-does **not** rely on the generic walk.
+the root, so a hundred-node build would harvest exactly one id and report the other ninety-nine back
+to their author. Every code path that creates a node therefore calls `claim(writer, node)` at
+creation — the tree builder's per-node create, single-node create, SVG import, clone, group,
+duplicate-page, flatten and boolean-op. Those are a small, enumerable set of choke points, and this
+is the one place the design does **not** rely on the generic walk.
 
-**The window is anchored at `exit`, not `enter`.** Commands that await (font load, image fetch)
-mutate seconds after entry; a TTL clocked at entry can expire before the write lands.
+**The writer is threaded to the claim site, never inferred there.** A claim happens deep inside a
+handler, and the obvious economy — let the scope remember whose dispatch is running — is unsound
+here: dispatches interleave at every `await`, so a node created after a font load or an image fetch
+would be claimed under whichever session dispatched in the meantime. That misattribution is silent
+and lands on the silence side, since the record is then suppressed for a session that did not cause
+it. So the writer is a **parameter of the dispatch**, threaded from the message that carried it in
+exactly the way the B3 target already is, through the same enumerable set of creating paths. The
+cost is a parameter on each of them, paid once.
 
-**`batch` is refcounted, not re-entered.** A batch re-dispatches N ops through the same switch; the
-outermost `enter` owns the window and the touched set accumulates across all N ops.
+**Only a dispatch that can cause an event is harvested.** A pure read mutates nothing and moves no
+navigation, so it emits no `documentchange`, `currentpagechange` or `selectionchange` — there is
+nothing for its membership to suppress, and every id it names is pure reach. That reach is large:
+`search` returns hundreds of ids and an `inspect` of a page root folds that page's entire reflow
+closure. Since membership outlives the command by design (below), a handful of reads would otherwise
+put most of the document into that session's touched set, and its own server would then drop the
+user's real edits wholesale while reporting nothing pending — silence, which is the direction this
+design refuses. Read-only commands therefore open no generation and harvest neither their params nor
+their return; they still refcount, so `inFlight()` is unaffected. Which commands are event-causing is
+a **static** property of each entry in the command switch, not a runtime guess. A command wrongly
+classed read-only leaves its own writes unattributed — a false nudge to its author — so the doubtful
+case is classed event-causing, and a `batch` is always event-causing because its ops may be. A
+session that only ever reads therefore claims nothing and sees everything, which is the right answer
+for an observer.
 
-**The reflow closure is captured eagerly and structurally.** It is computed when an id enters the
-touched set — at `enter` for named ids, at `claim` for created ones — never lazily when a record
-arrives. Two reasons, both fatal to a lazy lookup: a node the command **deleted** can no longer be
-resolved, and deletion inside auto-layout is the largest reflow producer there is; and the
+**Retention is keyed on the command, not on the clock.** `documentchange` delivery is batched and
+unbounded: the runtime decides when to hand a batch over and can defer one long past the exit of the
+command that caused it (see Design constraints). Membership that expires on a timer therefore fails
+**open** — when a deferred event finally lands, the timer has run out, the agent's own write is
+admitted, and `pending_edits` reports the agent's work back to itself. So every event-causing dispatch
+instead opens a **generation** holding its own touched set, reflow closure and writer, and the scope
+keeps each writer's most recent `RETAINED_COMMANDS` sealed generations. `writersOf()` and
+`reflowWritersOf()` read over the open generations and every retained one, so a deferred event still
+matches the command that caused it: how long its delivery took is not part of the question, only how
+much that writer has done since.
+
+**A generation is sealed at `exit`, not at `enter`.** Commands that await (font load, image fetch)
+mutate seconds after entry, so a generation must keep absorbing harvests and claims until its dispatch
+settles. `exit` is the first moment the command can no longer touch anything: it is where the set
+stops **growing**, not where it starts expiring.
+
+A generation therefore seals at the earlier of its dispatch settling and `MAX_DISPATCH_MS` after it
+opened — the second sized above the slowest command that honestly finishes, so a forced seal means a
+wedge and not a slow font load. That clause is not a refinement. A dispatch that never settles — a
+promise waiting on a font, an image or an API that never resolves — would leave its generation open
+indefinitely, and an open generation is neither counted out nor released: it would grow without bound
+while every later command merged into it, and `inFlight()` would stay true for the rest of the
+session, suppressing every page and selection record. Sealing on age degrades that to a leak, which
+is the direction the rest of the design already accepts. The forced seal also clears the refcount. A
+harvest that then arrives with no open generation — a `claim`, or the late `exit` of a force-sealed
+dispatch — opens a fresh generation and folds into it, so a genuinely slow command that does return
+is still harvested, into a younger generation that is retained longer than its own would have been.
+That is the conservative side.
+
+**`batch` is refcounted, not re-entered.** A batch re-dispatches N ops through the same switch under
+the **same writer**; the outermost `enter` owns the generation and the touched set accumulates across
+all N ops into it. The same refcount absorbs that writer's overlapping dispatches — they share the
+generation that is open, which is conservative: a shared generation is retained as long as the later
+command's would be. Another writer's dispatch arriving mid-batch opens its own generation and shares
+nothing.
+
+**Three bounds, and they do different jobs.** A generation is a set of ids, so retention held forever
+would grow without limit; reach that never lets go would eventually claim everything the agent ever
+touched; and a plugin that outlives many sessions would accumulate a retained set per session. One
+bound answers each, and **all three are scoped to the writer**:
+
+- **`RETAINED_COMMANDS`** — opening a writer's generation evicts that **writer's** oldest sealed one
+  beyond this count. It is what covers a deferred event, because it advances only when *that writer*
+  dispatches: an event that lands long after its own command still finds it, as long as its own
+  session has not dispatched past it.
+- **`RETENTION_CEILING_MS`** — when a writer has entered no dispatch for this long, **that writer's**
+  sealed generations are evicted at once. It is keyed on **idle time since that writer's last
+  dispatch**, not on a generation's own age: while a session keeps working none of its generations is
+  released and `RETAINED_COMMANDS` alone decides, and once it stops, its whole retained set lets go
+  together. It is evaluated **on read** — an idle plugin dispatches nothing, so there is nothing to
+  wake up, and the attributor is the only reader.
+- **`RETAINED_WRITERS`** — the number of writers that may hold a retained set at once. A writer
+  beyond it evicts the **whole** set of the writer that has been idle longest, never part of one:
+  half-evicting a writer's ring would silently shorten its reach on somebody else's activity, which
+  is the coupling this scoping exists to remove. It is a backstop, not a working bound — the ceiling
+  releases an idle session's set long before a file plausibly carries this many concurrently active
+  ones.
+
+**The memory bound is the product, and it is a constant.** `RETAINED_COMMANDS × RETAINED_WRITERS`
+caps the generations the scope holds however many sessions are on the file, so per-writer scoping
+costs a known multiple rather than unbounded growth. That is what makes writer-scoping affordable,
+and it is the reason to prefer it: **a shared ring would hand one session control of another's
+correctness.** Under a global ring a peer issuing a burst of single-node updates spends the ring in
+its own dispatches, and a quieter session's generations are evicted after a handful of commands it
+did not issue — so that session's own deferred events return to it as foreign, at a rate its peer
+sets. That is not the occasional false nudge the design accepts; it is the **systematic** leak it
+rules out by name, a count that is never zero and therefore carries no signal. Hand-over is
+session-scoped for the mirror-image reason: another session's activity is no evidence that the first
+has handed over, and a global ceiling would let a busy session hold an idle one's claims open while
+the user refines its abandoned nodes. The residual coupling that survives is `RETAINED_WRITERS`, and
+it is far weaker: it takes more concurrently active sessions than the cap, not merely a fast one, and
+it costs the longest-idle writer its retained set — a **false nudge** to a session that has stopped
+working, the accepted direction.
+
+The ceiling exists for **hand-over**. Without it, an agent that builds a screen and stops goes on
+claiming nodes it touched twenty commands ago while the user refines them, and those refinements are
+dropped in silence *for that agent* — the same class of failure the feed exists to prevent, reached
+from the other side, and reached on the normal working pattern rather than an exotic one. Keying it
+on idle time rather than on a generation's age is what keeps `RETAINED_COMMANDS` meaningful: an agent
+round-trips through a model between calls, so under an age-based ceiling a *working* agent's older
+generations would expire mid-task and the count bound would never bind at all, collapsing the design
+into a wall-clock window wearing a larger constant.
+
+The count and the ceiling are sized against the same question — how much can happen between a command
+and the delivery of its events — and both trade the two failures against each other **gradually**,
+never at a cliff. Sized low, retention lets go before a deferred batch lands and the agent's own
+writes come back as user edits; sized high, more of the user's work on nodes the agent touched is
+dropped in silence. Each degradation grows in proportion to how far the sizing is out.
+
+The silence residual is a property of one reader, not of the file. A generation suppresses only for
+**its own writer**, so a user edit lost to retention is lost to the session that claimed the node and
+not to a session whose masks are clear of it — though where two sessions' reflow closures overlap it
+can be lost to both (see Limitations). The sizing question is the same one either way; the failure it
+sizes is narrower.
+
+`RETAINED_COMMANDS` counts **dispatches, not work**, and that count is uneven: fifty single-node
+updates spend fifty generations where one `batch` of fifty ops spends one. It is sized in tens of
+commands — above the largest burst an agent issues while one of its earlier events is still
+undelivered — and reads, which open no generation, do not spend it at all. Because the ring is that
+writer's own, a peer's dispatch rate does not spend it either. `RETENTION_CEILING_MS` is sized in
+minutes: above the seconds-scale deferral the runtime is known to permit (see Design constraints),
+and above the pause an agent takes between commands, so ordinary thinking time never releases
+retention mid-task. `RETAINED_WRITERS` is sized in single digits — above the number of agent sessions
+a single file plausibly carries at once.
+
+**The bounds are not sized toward over-reporting.** Everywhere the attributor is merely *unsure*, an
+admitted record the agent caused is an occasional false nudge. A leak here would be systematic —
+every command reporting itself back — and a count that is never zero carries no signal at all. So both
+bounds are sized generously and the residual is accepted on the silence side, where it is disclosed
+in Limitations. Eviction itself is silent of necessity: the events it would leak have not arrived, so
+there is nothing to flag.
+
+The ceiling's own weakness, stated: it is a wall-clock bound, and a batch deferred past it is admitted
+exactly as any time-bounded rule would admit it. The difference from a rule that is the *only* thing
+separating the agent's writes from the user's is margin, not kind — such a rule must be tight, so
+every millisecond of slack is a leak, while a ceiling that merely has to let go once dispatching stops
+can sit well above the deferral the runtime is known to permit. That margin is not unlimited: the
+same constant sets how long a user's post-hand-over edits stay invisible, so it cannot simply be
+raised. No upper bound on delivery is established (see Design constraints), so this is a margin, not
+a proof.
+
+**Eviction is not driven by delivery confirmation.** Evicting a generation the moment its events were
+known to have arrived would turn both bounds into rarely-hit backstops. Nothing on the wire can carry
+that confirmation. The events retention suppresses are precisely the ones that never become records,
+so neither a frame nor a drain can report their arrival; Figma marks no end of a command's batch, so
+even an observed arrival could not be told apart from the first of several still to come, and evicting
+on a partial arrival is the fail-open case again under a new trigger; and the plugin broadcasts to
+every member of the channel, so one consumer's drain speaks for that consumer, never for the file.
+Keying a plugin-side rule on a server-side event would additionally make attribution's correctness
+depend on the lossy broadcast channel whose unreliability this design exists to answer.
+
+The attributor does observe every event itself, plugin-side, which is a signal the wire never
+sees — if `documentchange` batches were handed over in the order their commands ran, an event for an
+id claimed *only* by generation M would prove every older generation had finished delivering. The
+design does not rest on that. Batch ordering is not a documented property of the runtime, and ids
+recur across generations (an agent updates the same node repeatedly), so an arriving event rarely
+belongs to exactly one generation. A rule built on it would evict early whenever either assumption
+failed, which is the leak the bounds are sized to avoid.
+
+**The reflow closure is captured eagerly and structurally.** It is computed when an id enters the open
+generation's touched set — at `enter` for named ids, at `claim` for created ones — never lazily when
+a record arrives. Two reasons, both fatal to a lazy lookup: a node the command **deleted** can no
+longer be resolved, and deletion inside auto-layout is the largest reflow producer there is; and the
 `documentchange` handler is synchronous while the node-resolution API this codebase uses is async, so
-a lazy resolve inside the filter would have to use the deprecated synchronous variant and would
+a lazy resolve inside the attributor would have to use the deprecated synchronous variant and would
 silently pin the plugin manifest to non-dynamic-page document access.
 
-The closure is the set of nodes whose geometry an agent write can move without naming them:
+The closure is the set of nodes whose geometry an agent write can move without naming them.
+Hugging governs whether the **frame** resizes, not whether its **children** reflow: an auto-layout
+frame re-lays its children whether or not it hugs, so a fixed-size stack still moves every sibling
+after the one that changed.
 
 ```
 reflow(id) =
+    ∅                                        when id is a PAGE or the DOCUMENT
     descendants(id)
-  ∪ { for each ancestor A of id, walking UP while A is an auto-layout frame that
-      HUGS along the axis its child can grow:  A  ∪  children(A) }
+  ∪ { for each ancestor A of id, walking UP while A is an auto-layout frame:
+      children(A), plus A itself when A HUGS along the axis its child can grow }
 ```
 
+**A page and the document have an empty closure.** Neither has geometry of its own, so naming one
+moves nothing — but `descendants()` of a page is every node on it, and of the document every node in
+the file. Since a page id enters a writer's touched set legitimately (`set_current_page` names it,
+`duplicate_page` claims one, `create_node` takes it as a parent), the general formula would put the
+whole page into the closure and subtract `CASCADE_PROPS` from every record on it. The closure exists
+for nodes an agent write can move *without naming*; a container with no layout moves nothing.
+
 The walk **stops at the first ancestor that cannot resize** — a fixed-size frame absorbs the change,
-so its siblings cannot move. This is narrower than "all ancestors and their children" (which on a
+so its own siblings cannot move, though its children already have. This is narrower than "all ancestors and their children" (which on a
 page-root write would swallow every top-level frame) and wider than "siblings and direct children"
 (which misses the nested hug chains that design-system-first construction makes the common shape).
 
-### 2. `SelfWriteFilter` — the drop rule
+### 2. `SelfWriteAttributor` — the attribution rule
 
 ```ts
-type SelfWriteFilter = {
-  /** Map one Figma DocumentChange to a record, or null if it is the agent's own.
-   *  May return a record with a REDUCED props[] (subtraction, below). */
-  admit(change: DocumentChange): ChangeRecord | null
-  /** True if a page/selection event should be recorded (false = agent's own navigation). */
-  admitContext(): boolean
+type SelfWriteAttributor = {
+  /** Map one Figma DocumentChange to a STAMPED record — the writers that touched
+   *  the id in `by`, the writers whose reflow closure holds it in `rf`, both as
+   *  NAMES — or null if the change is not one this feed represents. Also reads the
+   *  final value of each changed property under the size caps, and the page/frame
+   *  locator, from the node the change hands over. */
+  admit(change: DocumentChange): AttributedRecord | null
+  /** True if a page/select record should be recorded (false = a navigation caused
+   *  by some dispatch in flight). */
+  admitContext(rec: AttributedRecord): boolean
 }
 ```
 
-The rule, in full:
+It **attributes**; it does not filter self-writes. The name is the behaviour: the plugin's job here
+is to say who caused each change, and the drop that decision feeds belongs to the consumer, once
+each, at ingest.
 
-| Condition | Node `create` / `delete` | Node `update` (`PROPERTY_CHANGE`) | style records | `page` / `select` |
-|---|---|---|---|---|
-| window closed | keep | keep | keep | keep |
-| window open, `id ∈ touched()` | **drop** | **drop** | **drop** | — |
-| window open, `id ∈ reflow()` | **keep** | **subtract** `CASCADE_PROPS` from `props[]`; drop if empty | keep | — |
-| window open, otherwise | keep | keep | keep | **drop** |
+Node and style records carry an id and are stamped by **membership** — nothing else; the context
+slots carry no mutation and have their own rule below. A style record is matched on its **key**, not
+on the raw id the event carries (see Design constraints); node ids are matched exactly and never by
+prefix.
+
+| Membership of the record's id | Stamp |
+|---|---|
+| in writer W's touched set | add W to `by` |
+| in writer W's reflow closure | add W to `rf` |
+| in neither, for every writer | no mask — the record is unattributed and everyone keeps it |
+
+A record can carry both stamps and can name several writers in each; the two are read independently.
+**No record is dropped on attribution here.** A change the feed does not represent still yields
+`null`, and `admitContext` still suppresses a context slot while a dispatch is in flight; what does
+not happen here is a drop because of *who* caused it. **That drop belongs to the server** (see
+Subtraction at ingest), for the reason the Attribution section states: one frame serves every
+session, so a drop taken here is a drop taken for readers whose answer is different.
 
 - **`CASCADE_PROPS`** is the geometry a re-flow moves on a node the agent did not name: `x`, `y`,
   `width`, `height`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `rotation`,
   `relativeTransform`. All are real `NodeChangeProperty` values. `name`, `parent`, `fills`,
   `characters` and everything else are **not** cascade properties — a user renaming a node the agent
-  re-flowed must survive.
-- **Subtraction, not whole-record drop.** `PropertyChange.properties` is an array, and one batch can
-  carry the agent's cascade *and* the user's rename on the same node. Dropping the whole record on a
-  partial match silently loses the rename. Subtracting the matched names and keeping the remainder is
-  strictly more honest and costs nothing.
-- **For an id in `touched()` the whole record is dropped**, with no per-property attribution.
-  Computing "which Figma property names did this command set" would require a table from every tool's
+  re-flowed must survive. The set is defined here because the closure is computed here; it is
+  *applied* at ingest.
+- **A writer in `by` loses the whole record**, with no per-property attribution. Computing
+  "which Figma property names did this command set" would require a table from every tool's
   expression-object params to `NodeChangeProperty` names — enormous, drift-prone, and defeated by
-  T8's grammar (one atom sets many properties).
-- **Context slots drop inside the window.** The agent's own navigation writes fire the same events;
-  without this, the agent's own `set_current_page` returns as "the user just switched page" (a T7
-  violation). The over-report-by-default rule does not bind here: a `page` / `select` record is
-  context, never a mutation, and never counts toward `pending_edits`, so dropping one is harmless.
+  T8's grammar (one atom sets many properties). It is the same refusal that makes per-prop
+  attribution impossible between two writers.
+- **Context slots are decided per slot, and only the `page` slot can ride retention.**
+  `admitContext(rec)` drops a record that describes a navigation some dispatch is causing: either
+  slot while **any** writer has a dispatch in flight. The `page` slot is not dropped beyond that — it
+  carries an id, so it is stamped like any other record and the session that navigated discards its
+  own at ingest, while the others learn that the page changed under them. Without attribution the
+  agent's own page switch would return as "the user just switched page" (a **T7** violation), and
+  because delivery is deferred it would return that way long after the command exited, which is why
+  the page slot rides membership rather than the in-flight flag alone. A `select` record cannot ride
+  membership: it carries **no id**, and its `ids` are the *current selection* rather than an
+  identity, so testing them against a touched set would drop the user's selection of the very nodes
+  the agent just built — the most likely thing a user selects, and exactly what the slot exists to
+  report. So a selection change surfaces to everyone, including the session that caused it, whenever
+  it arrives after its command. Both slots are latest-wins *context*, never mutations, and never
+  count toward `pending_edits`, so the cost is a wrong hint, never a wrong count; with more sessions
+  on the file the in-flight window is open more often, so the slots are suppressed more often too.
+  Both are disclosed in Limitations.
 
-**The fail direction, stated exactly.** Everywhere the filter is uncertain *whether the agent touched
-a node*, it keeps the record — over-reporting, never silence. The one place it trades that away
-deliberately is the reflow row: a user's own move or resize of a node inside the reflow closure,
-inside the settle window, is indistinguishable at source from the cascade and is dropped. That
-residual is disclosed in Limitations; it is not a case the filter can resolve without before/after
-values it does not have.
+**The fail direction, stated exactly.** Everywhere the attributor is uncertain *whether a given
+writer touched a node*, it leaves that writer out of the mask, and the record is kept by that
+session — over-reporting, never silence. It trades that away deliberately in two places, both
+disclosed in Limitations. The reflow mask: a user's own move or resize of a node inside a writer's
+reflow closure, while the command that captured that closure is still retained, is indistinguishable
+at source from the cascade and is dropped **for that writer** — not a case the design can resolve
+without before/after values it does not have. And retention's reach: a node a session touched stays
+claimed for as long as its generation is retained, so a user edit landing on it in that span is
+dropped for that session too. Both are the price of source-side attribution, both are bounded by how
+long a generation lives rather than left open-ended, and both cost the readers that hold the bit —
+one, or the several whose reflow closures overlap on that node — rather than every reader on the
+file.
 
-**`SETTLE_MS` is determined by measurement, not chosen.** Figma batches `documentchange` callbacks
-with an undocumented period. Below the true period the filter fails **open**: every agent write reads
-as a user edit, `pending_edits` never returns to `0`, and the feature is worse than nothing.
-`SETTLE_MS` is fixed against the runtime's measured batch period, with a stated margin.
+**Membership is asked at event time and answered from what is retained then.** The `documentchange`
+handler is synchronous and performs no node lookups (see Design constraints); it asks only which
+writers hold the record's id at the moment the event surfaces. Nothing in that question refers to
+when the event was *delivered*, which is what makes an arbitrarily deferred batch decidable at all:
+the answer moves as commands are dispatched, not as an event's delivery is delayed. The one thing
+elapsed time alone changes is the ceiling, which releases a writer's retained set once that writer
+stops dispatching.
+
+**The attributor stamps names; the masks are minted at the flush.** A bit index is meaningful only
+against a table, and the table is a property of a *frame*: `writers[]` holds the sessions named by
+the records in that flush. It cannot exist while records are being admitted — the `documentchange`
+handler runs one event at a time, `FLUSH_DEBOUNCE_MS` before the frame is assembled, and a writer
+first appearing late in the window would renumber bits already stamped. So `admit` returns writer
+**names** (`AttributedRecord`), the accumulator folds names, and the flusher assigns indices once,
+over the drained batch, in a stable order.
+
+That is also what gives `WRITERS_CAP` its meaning: it bounds the distinct writers named **in one
+flush window**, not the sessions a plugin has ever seen. A frame is a few hundred milliseconds of
+document activity, so reaching the cap takes that many sessions writing *concurrently* — the mask is
+an integer, so the cap sits below the platform's safe bitwise width, an order above the number of
+agents a single file plausibly carries. A writer beyond the cap contributes no bit, so its records go
+out unattributed and are kept by everyone including itself: over-reporting, on the safe side, and
+never a wrong drop. Under the run model it costs one thing more than a drop would have: an
+unattributed record resolves to the **empty** writer key, so that writer's work merges into an
+adjacent user run instead of opening its own — a run boundary is lost and `src` reads as the user
+rather than as an agent. Still over-reporting, now also a mislabel, and stated in Limitations.
+Minting per frame is what keeps both a per-flush accident rather than a state the connection can
+settle into.
 
 ### 3. `ChangeAccumulator` — folds immediately, evicts loudly
 
 ```ts
 type ChangeAccumulator = {
-  /** Fold one admitted record into the right map/slot under the collapse algebra. */
-  add(rec: ChangeRecord): void
-  /** Record that this batch touched an INDEX_STALE_TYPES node — set PRE-filter. */
+  /** Fold one stamped record into the right map/slot under the collapse algebra:
+   *  into the id's LAST run when the writer sets match, otherwise as a NEW run. */
+  add(rec: AttributedRecord): void
+  /** Record that this batch touched an INDEX_STALE_TYPES node — set PRE-attribution. */
   markIndexStale(): void
-  /** nodes.size + styles.size — mutations only; context slots never count. */
+  /** Runs held across the node and style maps — the unit ACCUM_CAP bounds. Context
+   *  slots never count. */
+  runCount(): number
+  /** nodes.size + styles.size — distinct ids, for the eviction stage only. */
   size(): number
   indexStale(): boolean
-  /** True if a map hit ACCUM_CAP and a distinct id was evicted. */
+  /** True if ACCUM_CAP pressure reached its LAST stage and forced a distinct id out.
+   *  Run merges do NOT set it. */
   overflowed(): boolean
-  /** Take everything and reset (including the flags). */
-  drain(): { changes: ChangeRecord[]; indexStale: boolean; overflow: boolean }
+  /** Take everything and reset (including the flags), runs flattened into ORDERED
+   *  records. Writers are still NAMES here; the flusher mints the table and the
+   *  masks from this batch. */
+  drain(): { changes: AttributedRecord[]; indexStale: boolean; overflow: boolean }
 }
 ```
 
 Every event folds in immediately; the timer only decides *when to flush*, never *what to keep*. The
-accumulator is not lossless in the limit: at `ACCUM_CAP` it evicts the oldest distinct id and sets
-`overflow` on the next frame, which the server treats as a broken baseline. A plugin-side loss is
-reported, never silent.
+accumulator is not lossless in the limit: under `ACCUM_CAP` pressure it applies the **same
+order-before-changes escalation the server buffer does**, less the shadow stage it holds no shadows
+for — first merging runs, then, once every entry is a single run, evicting the oldest distinct id and
+setting `overflow` on the next frame, which the server treats as a broken baseline. A plugin-side loss
+is reported, never silent.
+
+**The escalation matters more here than it does server-side**, which is why it is not left out as a
+simplification. A server-side eviction arms `gap` on the buffer that took it; `overflow` arms `gap` on
+**every** consumer of the file at once, the builder included. So the cheap stage is worth taking twice
+over: a flush window that is run-heavy and id-light is exactly the shape that merging resolves for
+free, and spending an id there would oblige a full re-read from every session on the file to buy back
+ordering nobody asked for.
+
+**Attribution folds with the record, within a run.** The maps are keyed by id and each entry holds
+that id's runs, so two changes by the **same** writer set to one node inside one flush window become
+one run, its `props` the union of theirs and its `set` the later value per property. A change by a
+**different** writer set opens a new run instead of merging: the union that is right for one writer's
+`props` would, across writers, fuse two causes into one entry and destroy the order that says which of
+them left the node as it is. Union is still what happens to the writer sets of a record that folds
+into an existing run — a set that lost a writer would send that writer its own work back.
+
+Because the maps are id-keyed, carrying the agent's own records costs a run per distinct node rather
+than an entry per raw event. What it changes is who spends `ACCUM_CAP`: the agent's own building as
+well as the user's editing. **`ACCUM_CAP` bounds runs**, not ids, a run being the unit that costs
+memory — so `runCount()` is the quantity the cap is tested against, and `size()` serves only its last
+stage. Two bounds act on runs, and only one of them is global: an id exceeding `RUNS_PER_ID_CAP`
+merges its two oldest runs (see The run cap), and global `ACCUM_CAP` pressure merges runs on the ids
+holding the most of them, oldest first, flagging each survivor `merged`. Both lose order and no
+change, so neither sets `overflow`. Only when every entry is a single run and the cap is still
+exceeded does the accumulator evict the oldest **distinct id**, which does. The cap cannot be sized to
+accommodate a build, because build size has no bound — a tree spec is arbitrarily large and a `batch`
+can chain several inside one window — so it stays a **memory** bound, and a build that reaches its
+last stage takes the `overflow` arm and breaks every consumer's baseline, the builder's included (see
+Limitations).
 
 ### 4. Flusher — emission policy
 
@@ -432,23 +1081,59 @@ reported, never silent.
   and the flusher additionally caps itself at `FEED_FRAMES_PER_SEC` — an order below the bucket's
   refill — folding any excess back into the accumulator rather than dropping it. If measured peak
   frame rate ever approaches the bucket, the answer is a longer `FLUSH_MAX_WAIT_MS`, never an
-  exemption.
-- **Collapse has one owner and one subordinate.** The **server's** collapse is authoritative — it
-  defines the net effect the agent reads. The **plugin's** collapse is an optimisation that reduces
-  frame count, and it applies the **same algebra**, so the two can never disagree; a plugin that
-  collapsed differently would be a bug, not a variant.
+  exemption. Carrying the agent's own writes changes *when* that cap binds rather than what it
+  protects: a file whose only writer is the agent emits a frame per flush window for the length of a
+  build, where an eliding design would emit none, so `FEED_FRAMES_PER_SEC` is a bound that actually
+  engages during a build. The excess it refuses folds back into the accumulator, so the ceiling is
+  paid in records per frame, and the budget a reply needs stays intact.
+- **The flusher mints `writers[]` and the masks.** It takes the drained batch, collects the writer
+  names it carries into a stable-ordered table, and rewrites each record's name sets as integer `by`
+  / `rf` masks over it. This is the one place the two representations meet, and it is the only place
+  that can be: the table is a property of the frame (see The attributor stamps names).
+- **Collapse has one owner and one subordinate, and one part of it is not discretionary.** The
+  **server's** collapse is authoritative — it defines the net effect the agent reads, and it applies
+  the **same algebra** as the plugin's, so the two can never disagree; a plugin that collapsed
+  differently would be a bug, not a variant. What is an *optimisation* is the plugin's folding of
+  repeated events into one record: it reduces frame size and frame count and nothing downstream
+  depends on it having happened. What is **authoritative at source** is the run boundary. The server
+  can only fold what the frame carries, so a boundary lost in the plugin cannot be recovered
+  downstream — a plugin that merged across a writer change would destroy history the server has no
+  way to reconstruct. Frame economy is discretionary; the break at a writer change is not.
 
 ## Server buffer model
 
 Per `fileKey`, held in the **MCP server's memory** (not the plugin, not the relay).
 
 ```ts
+type WriterKey = string        // the run's foreign writers, canonically ordered and joined;
+                               // EMPTY for the user or an unresolvable cause, and the reserved
+                               // SELF key for this session's own. Buffer-local, derived from
+                               // the surviving `by`, never emitted.
+
+const SELF = '\0self'          // the reserved self key: not a session id, not the empty key,
+                               // so it matches nothing the attributor can produce
+
+type BufferRun =
+  | {                          // a FOREIGN run — somebody else's unbroken stretch
+      w:       WriterKey       // never SELF
+      op:      'create' | 'update' | 'delete'
+             | 'style_create' | 'style_update' | 'style_delete'
+      props?:  Set<string>     // update / style_update only
+      set?:    Map<string, unknown>  // update / style_update only; a subset of props
+      merged?: true            // two runs were folded under a run cap: order lost
+    }
+  | {                          // a SELF run — this session's own, kept for its POSITION
+      w:    typeof SELF        // nothing ever folds into it and nothing folds across it
+      mine: Set<string>        // ops and property names this session caused at this point
+    }
+
 type BufferEntry = {
-  op:    'create' | 'update' | 'delete'
-       | 'style_create' | 'style_update' | 'style_delete'
   type?: string
   name?: string
-  props?: Set<string>          // update / style_update only
+  pg?:   string
+  fr?:   string
+  runs:  BufferRun[]           // oldest first; NO FOREIGN RUN makes this a shadow entry
+  mine?: Set<string>           // the union of its self runs' names — the shadow
 }
 
 type BaselineState = 'ok' | 'no_baseline' | 'gap'
@@ -460,44 +1145,302 @@ type FileBuffer = {
   lastSeq:  number | null      // last seq seen for that epoch
   nodes:    Map<string, BufferEntry>
   styles:   Map<string, BufferEntry>
-  page:     ChangeRecord | null   // latest-wins slot
-  select:   ChangeRecord | null   // latest-wins slot
+  page:     DrainedRecord | null  // latest-wins slot; masks stripped at ingest, never `src`
+  select:   DrainedRecord | null  // latest-wins slot; masks stripped at ingest, never `src`
 }
 ```
 
-`pendingCount = nodes.size + styles.size`. **Context slots never count** — a selection or page push
-must not inflate the number, or the block would nudge on pure navigation and claim edits when nothing
-was edited (**T7/T4**).
+`pendingCount` counts the entries **holding at least one foreign run**, across both maps. **Shadow
+entries never count** — they record what this session itself did, and a count that rose on the agent's
+own writing would be the exact signal this design subtracts at ingest to avoid. **Context slots never
+count**
+either — a selection or page push must not inflate the number, or the block would nudge on pure
+navigation and claim edits when nothing was edited (**T7/T4**).
 
-`pendingCount` counts **distinct changed things, not actions**. Collapse means forty drags of one
-node render as `1`. Every surface that shows it says so.
+`pendingCount` counts **distinct changed things, not actions, and not runs**. Collapse means forty
+drags of one node render as `1`, and so does a node the user moved, an agent restyled and the user
+moved again — three runs, one changed thing. Every surface that shows it says so.
 
 **Why per-server, not per-plugin:** the buffer belongs to the *consumer*. The plugin pushes one
 change; the relay **broadcasts** it to every other channel member; each session's server buffers and
 drains **independently**. Both topologies then work for free — *one session, many files* (one buffer
 per `fileKey`), and *many sessions, one file* (each server holds its own buffer fed by the broadcast,
 so one session's drain never empties another's view). A plugin-side buffer would be one shared thing
-with a drain race.
+with a drain race. Attribution makes that split load-bearing rather than merely convenient: the
+buffer is where a record stops being *a change* and becomes *a change relative to a reader*.
 
-### Collapse algebra — total
+### Runs — the collapse breaks at a writer change
 
-Applied per id, in both the plugin accumulator and the server buffer. Rows are the entry already
-held; columns are the arriving record.
+Collapsing an id to its net effect answers *what is it now* and destroys *how it got there*, and the
+second question is not optional. An agent that set `x = 10`, and drains a record saying `x = 20`,
+cannot tell **its write landed and was superseded** from **its write never landed**: identical
+evidence, opposite conclusions, and the wrong reading is the likelier one, because the record names
+the very property the agent just wrote. Pure final-state collapse makes *who caused this value* a
+question with no answer, on exactly the nodes an agent is working on.
+
+So the buffer holds, per id, an ordered list of **runs**. A run is one writer's unbroken stretch of
+work on that id: continuous changes by the same writer collapse into it, and a change by a different
+writer **breaks** it and opens the next.
+
+```mermaid
+flowchart TB
+    subgraph EV["events on one id, in order"]
+        direction LR
+        E1["user · x→10"] --> E2["user · x→20"]
+        E2 --> E3["user · y→10"]
+        E3 --> E4["agent · x→30"]
+        E4 --> E5["user · x→40"]
+    end
+    subgraph RU["the runs held for that id"]
+        direction LR
+        R1["user · x=20, y=10"] --> R2["agent · x=30"]
+        R2 --> R3["user · x=40"]
+    end
+    EV --> RU
+```
+
+Three runs is what a **third** session's buffer holds. In the agent's own buffer the middle run is
+this session's work and carries no payload, but it still occupies its place — the boundary is what the
+fold reads, so erasing it would let the two user runs become one and put a value's last writer on the
+wrong side of the agent's own (see `mine`).
+
+Three properties make this affordable and correct:
+
+- **Runs are per id, never global.** A writer change on one node must not shatter the collapse on
+  every other node: a co-agent writing one node while the user drags another would otherwise turn a
+  forty-tick drag into forty runs. The run boundary is a property of the id's own history.
+- **Within a run, last-writer-wins per property.** That is what keeps a forty-tick drag at one entry
+  with one final value, and it is the only merge that is meaningful for a *value*: two writes to `x`
+  have one final `x`. Property **names** still merge by union, so a rename inside the same run is not
+  lost behind a later move.
+- **The break is decided on the writer, not on time.** Two writers alternating inside one flush window
+  produce two runs; one writer working for ten minutes produces one. Elapsed time is not evidence of
+  causation and does not enter the rule.
+
+**The run key is the surviving `by` set**, resolved at ingest into a buffer-local `WriterKey` and
+never emitted. Two runs merge only if their keys are **equal** as sets: `{A}` and `{A,B}` are
+different writers of the same node, and the empty key — the user, or a cause the attributor could not
+resolve — is different from both. Session ids stay inside the process; what leaves it is `src`, the
+one bit the agent can act on.
+
+**A boundary the frame carried is not the buffer's to discard.** The rule that binds the plugin binds
+the server for the same reason: the frame is the only evidence of the order, so two runs the plugin
+separated must stay separate through ingest, whatever the buffer does with the records between them.
+This is what forces the session's *own* records to leave a run behind rather than vanish — dropping
+them outright would let the two foreign runs that surrounded them become adjacent and merge, fusing a
+history the plugin had correctly split (see `mine`).
+
+**The run cap.** A pathological alternation — a user dragging a node an agent keeps restyling — would
+grow one id's history without limit, so an id holds at most `RUNS_PER_ID_CAP` runs. The cap governs
+**both layers** — the plugin accumulator's map and the server buffer — because the same alternation
+reaches both. Beyond it the **two oldest foreign runs that are immediately adjacent merge**: their
+`props` union, their `set` takes the later value per property, their keys union, and the survivor is
+flagged `merged`. A self run is never merged away and is never merged *across* — adjacency admits
+nothing between the two runs, self runs included — because its whole purpose is to hold a position,
+and two foreign runs fused over it would put a property's last writer on the wrong side of this
+session's own. This loses **order between two foreign runs and nothing else** — no change, no
+property, no value — so it never arms `gap`, and it degrades an id
+smoothly back toward the pure-collapse answer, oldest history first, which is the part a reader is
+least likely to be asking about. The flag surfaces only in the runs view, where the loss is visible;
+the folded view is unaffected by construction.
+
+### Subtraction at ingest — each consumer drops its own
+
+Every arriving record is resolved against **this server's own writer** —
+`sessionIdentity.current() ?? '_unattributed'`, the same value the count mirror keys its file on —
+by looking that writer up in the frame's `writers[]` table to get its bit. A server whose writer is
+absent from the table holds no bit and subtracts nothing, which is the correct answer: it caused
+none of this frame.
+
+| This server's bit | Node `create` / `delete` | Node `update` (`PROPERTY_CHANGE`) | style records | `page` slot |
+|---|---|---|---|---|
+| in `by` | **drop → self run** | **drop → self run** | **drop → self run** | **drop** — the slot already held is left as it was |
+| in `rf`, with `by` naming another writer | keep | **keep whole** | n/a (`rf` is node-only) | n/a |
+| in `rf` only, `by` empty | keep | **subtract** `CASCADE_PROPS` from `props[]` and the matching keys from `set`; the subtracted names go to a self run; drop the run if nothing survives | keep | n/a — a page's closure is empty |
+| in neither | keep | keep | keep | keep — replaces the slot |
+
+A kept record folds into the id's last run when its `WriterKey` matches, and opens a new one when it
+does not — and a self run's key matches nothing, so a foreign record arriving after one always opens a
+new run. A **dropped** record is not reported as a change to anyone, but it does not vanish: what it
+touched is appended to the id's history as a **self run**, position and all (below). Dropping a run's
+whole `props` by cascade subtraction removes **the run**, not the entry — the earlier runs of that id
+are untouched, and the subtracted names still land in a self run at that position.
+
+The **`select` slot** appears in no row: it carries no id and therefore neither mask (see The change
+record), so it is always kept and always replaces the slot. Both slots have their masks **stripped as
+they are stored**, which is what makes the drain's records mask-free by construction rather than by a
+later filter.
+
+Read one session at a time, this is the same rule a lone session sees. Four things follow, and each
+is a deliberate consequence rather than a side effect:
+
+- **Subtraction, not whole-record drop, still.** `PropertyChange.properties` is an array, and one
+  batch can carry another party's cascade *and* a rename on the same node. Dropping the whole record
+  on a partial match silently loses the rename. Subtracting the matched names and keeping the
+  remainder is strictly more honest and costs nothing — and it is evaluated against **this reader's**
+  closure, so it cannot discard a cascade that is news to somebody else.
+- **A cascade is noise to its causer and news to a session that did not cause it.** A node moved by
+  A's reflow reaches B as a plain geometry `update` whenever B's bit is in neither mask. B's snapshot
+  of that node's position has genuinely gone stale, so telling B is right; telling A would be
+  reporting A's work back to A. Where B's own closure also contains the node the news is lost to B as
+  well, which is the overlap residual in Limitations.
+- **An explicit write by somebody else outranks a cascade explanation.** Reflow closures overlap:
+  two sessions working in one auto-layout parent each hold every child of it in `rf`, so a node A
+  deliberately resized carries B's `rf` bit as well. If B subtracted there it would lose a named
+  write to a cascade it merely *could* have caused — silence, on the most natural shape of
+  multi-agent work. So a reader subtracts only when it is the sole available explanation: its bit in
+  `rf` and **no other writer in `by`**. The design's fail direction applied to the cell where two
+  writers meet, and it costs nothing but the extra test.
+- **Ingest is where the drop is cheap, and what it leaves behind is a position and names.** The
+  dropped record never becomes a *foreign* run, so `pendingCount`, the count mirror and everything the
+  drain reports as a change still only ever see foreign work. What it leaves is a **self run** holding
+  the names it touched — no values, no `type`, no `props`, nothing that renders — so a session's own
+  build costs its own buffer a set of short strings per node it touched rather than a history of it.
+  The position is not an extravagance: it is the difference between a fold that can say *your write
+  was superseded* and one that says it when the opposite is true.
+
+### `mine` — the evidence that a write landed
+
+Subtracting a session's own writes is what makes the feed answer *what changed that I did not cause*.
+It is also what would make the superseded-versus-never-landed question unanswerable, since the
+evidence a reader needs about its own write is precisely what the subtraction throws away. So the
+drop leaves a residue **in place**: for every record it discards as this session's own, the buffer
+appends a **self run** to that id's history holding the record's changed property names — or the
+literal `create` / `delete` / `style_create` / `style_delete` for a structural op. The entry's
+**`mine`** is the union of those names across its self runs, and it is what the drain carries.
+
+The residue is a run and not a side-set because **the question is about order**, and a set has none.
+A session that wrote `x` after the user did is current on `x`; a session that wrote it before is
+superseded on `x`; the names involved are identical and only the position tells the two apart. A
+side-set would answer the second case and get the first exactly backwards — reporting the user's
+older value as current and calling this session's live write superseded — which is a worse failure
+than the ambiguity the run model exists to remove.
+
+- **It is proof of landing, not of intent.** `mine` is built from `documentchange` records, which the
+  runtime emits only for changes it actually applied. A property in `mine` therefore says *this
+  session's write to it reached the document*, which a record of the command dispatched could not
+  say. That is the whole value of deriving it here rather than from the tool call.
+- **The folded projection is the collapse algebra, then a suppression.** The foreign runs fold left to
+  right under the across-boundary table exactly as they would with no self run present. What the self
+  runs then decide is which of that result still reaches the reader, and they decide it on **position**
+  alone.
+- **Per property: the last run that carried it wins.** If the last run carrying `p` is **foreign**, `p`
+  stays in `props`, `set[p]` keeps the folded value, and `p` in `mine` then means this session's
+  earlier write to `p` landed and was **superseded** — the worked failure, answered. If the last run
+  carrying `p` is **this session's**, `p` is dropped from `props` and `set` entirely: this session's
+  own value is the current one, there is no foreign change to report on `p`, and reporting a stale
+  foreign value for it would be the bug.
+- **Existence is one dimension for the whole id, decided the same way.** If the last run whose op is
+  `create` or `delete` is **this session's**, the id's existence is not news to the reader and the
+  folded `op` degrades to `update`, carrying whatever properties survive the rule above. Otherwise the
+  table's answer stands — and a folded `create` or `delete` carries no `props` and no `set`, as it
+  never does.
+- **The folded `mine` carries only what the record reports on** — the names it shares with `props`,
+  plus any structural literal it holds. A property in `mine` that no foreign run overwrote raises no
+  question, so naming it would spend tokens to say nothing (**T4**); the structural literals stay
+  unconditionally, because they are what pairs with `op`. The runs view is unnarrowed: each self run
+  carries the names it caused.
+- **An entry with nothing left to report becomes a shadow.** When the suppression has degraded the
+  folded `op` to `update` and left no property standing, the entry's runs are dropped and its `mine`
+  is kept. That is not a special case but the same rule reaching zero: the reader's own work is current
+  on everything the entry held, so there is no change relative to it. `pendingCount` falls with it.
+- **Absence is not a negative.** `mine` missing a property means the buffer holds no evidence, which
+  is *usually* "the write never landed" and is *sometimes* eviction, overflow, or a write that
+  predates this buffer. It is evidence in one direction only, and Limitations says so.
+- **Cascade names are included, undistinguished.** A property subtracted from a run because it sits in
+  this session's reflow closure enters the self run like any other: the claim *this session caused
+  this property's value here* is true whether the session named the property or merely re-flowed the
+  node. Splitting the two would cost a field to answer a question with no different action behind it
+  (**T4**).
+- **Vocabularies do not collide.** No `NodeChangeProperty` or `StyleChangeProperty` is named `create`
+  or `delete`, so one flat list carries both ops and property names without ambiguity.
+
+**A shadow entry is an entry with `mine` and no foreign runs.** It is invisible to `pendingCount`, to
+the count mirror and to `changes[]` — it exists only to answer a later foreign change on the same id.
+It **survives a drain**, because it is not a change and draining it would consume the answer while the
+question is still open; it is bounded, and released first, by `BUFFER_CAP` (see Bounding).
+
+**`src` labels the residue.** A run whose `WriterKey` is non-empty was caused by another session; an
+empty key means the user, or something the attributor could not resolve. The drain renders that as
+`src: 'agent'` and nothing finer: another session's id is an opaque value the reader cannot act on,
+and expanding it per record would spend wire on a distinction without a decision behind it (**T4**).
+`src` is therefore **derived** from the key at drain time rather than stored, which is what keeps the
+key private and the label cheap.
+
+**On the folded view `src` is conjunctive**, present only when **every** foreign run that contributed
+to the record carried it — self runs contribute nothing to the record and nothing to the label, so
+they neither set it nor clear it. Values fold last-writer-wins because a property has one final value;
+the label does not, because it drives care rather than content, and a record that read `src: 'agent'`
+while the user had also edited the node would under-warn on the one axis this design refuses to
+under-warn on. So a node touched by both another agent and the user reads as unlabelled, degrading
+toward *the user may have done this*. The cost is real and bounded: a foreign agent's write can be
+reported without its label whenever a user edit shares the record. A reader that needs the per-run
+answer asks for `detail: 'runs'`, where each run carries its own `src` and the alternation — including
+this session's own place in it — is visible.
+
+### Collapse algebra — total, and it takes the writer as an argument
+
+Applied per id, in both the plugin accumulator and the server buffer. The arriving record's writer
+decides **which** table applies: matching the last run's writer folds under the within-run table;
+differing from it opens a new run, and the tables below say what a **fold across** those runs then
+produces when the drain projects them down. Both tables are over **foreign** runs; a self run is not
+an operand — it takes its place in the order and then decides, per property and once for existence,
+which foreign runs still reach the reader (see `mine`).
+
+**Within a run** — rows are the run already held, columns the arriving record:
 
 | held ↓ / arriving → | `create` | `update` | `delete` |
 |---|---|---|---|
-| *(none)* | `create` | `update` (props = arriving) | `delete` |
-| `create` | `create` | **`create`** (props dropped) | *(cancel — remove the entry)* |
-| `update` | `create` (props dropped) | **`update`, props = UNION** | `delete` (props, name dropped) |
-| `delete` | **`create`** (undo/redo restores the same id) | `update` (props = arriving) | `delete` |
+| *(none)* | `create` | `update` (props, set = arriving) | `delete` |
+| `create` | `create` | **`create`** (props, set dropped) | *(cancel — remove the run)* |
+| `update` | `create` (props, set dropped) | **`update`, props = UNION, set = LATEST per property** | `delete` (props, set, name dropped) |
+| `delete` | **`create`** (undo/redo restores the same id) | `update` (props, set = arriving) | `delete` |
 
+**Across a run boundary** — the folded projection, applied left to right over the id's runs. It is the
+same table with **one cell amended**, and the amendment is the whole reason the writer is an argument:
+
+| earlier run ↓ / later run → | `create` | `update` | `delete` |
+|---|---|---|---|
+| `create` | `create` | `create` (props, set dropped) | **`delete` — never cancel** |
+| `update` | `create` (props, set dropped) | `update`, props = UNION, set = LATEST per property | `delete` (props, set, name dropped) |
+| `delete` | `create` | `update` (props, set = later run's) | `delete` |
+
+- **`create → delete` cancels within a run and never across one.** Under one writer inside one
+  unbroken stretch, a node that appeared and vanished is a node no reader can have seen, and the
+  cancel is the economy that keeps a transient scaffold out of everyone's buffer. Across a writer
+  change the same cancel is a lie by omission: one party created the node, another destroyed it, and
+  the party whose work was undone learns nothing. It is also unsafe in general — a reader can have
+  read the node in between, so an id it holds would be silently gone — and the run boundary is what
+  makes the safe answer cheap to detect. Cancelling only inside a run pays for it with an occasional
+  `delete` on an id the reader never knew, which it ignores: over-reporting, the accepted direction.
+- **An entry that loses its last foreign run does not become nothing.** Cancelling the only foreign
+  run leaves the entry holding just its self runs and their `mine` — a shadow, still able to explain a
+  later foreign change on the same id — and the entry is removed outright only when there is no `mine`
+  to keep. `pendingCount` falls either way, since a shadow was never counted.
+- **The creator is told through the order, not through the table.** When this session created the
+  node, its own `create` became a self run and the last existence-changing run is another writer's
+  `delete`; the drained record is `op: 'delete'` with `mine: ['create']`, which says *the node you
+  built has been deleted* in one record. The mirror case reads out of the same rule and reads
+  differently: when another session created the node and **this** one deleted it, the last
+  existence-changing run is this session's, so the id's existence is not news, nothing survives, and
+  the entry is a shadow — silence, which is correct, because there is no node left to act on and a
+  record announcing one as newly created would send the reader to an id that will not resolve. The
+  generic mechanism answers both, so the table carries no creator-aware cell.
 - **`update → update` merges `props` by UNION, never latest-wins.** A rename followed by a move must
-  not lose `name`; a set union is the only merge that cannot lose a changed-property name.
-- **`create → update` drops `props`.** The reader never saw the node and re-reads it whole, so a
-  changed-property list on a create is meaningless.
-- `name` and `type` on a merge take the **latest defined** value; a `delete` clears `name`
-  (`RemovedNode` has none).
-- **Styles use the identical table** over `style_create` / `style_update` / `style_delete`, with
+  not lose `name`; a set union is the only merge that cannot lose a changed-property name. **`set`
+  merges latest-wins per property**, for the mirror-image reason: a property has one final value.
+- **`create → update` drops `props` and `set`.** The reader never saw the node and re-reads it whole,
+  so a changed-property list on a create is meaningless and a value list on one is meaningless and
+  expensive.
+- `name`, `type`, `pg` and `fr` on a merge take the **latest defined** value; a `delete` clears `name`
+  (`RemovedNode` has none) and leaves `pg` / `fr` at whatever an earlier run established, since a
+  delete can never locate itself.
+- **`src` survives a fold only if every contributing foreign run carried it** (above). In the
+  plugin's accumulator, where the equivalent field is the pair of writer masks, a fold *within* a run
+  is instead a **union** — the plugin is combining causes, the server is combining what is left after
+  its own cause is removed, and the two directions are not the same operation. The accumulator holds
+  no self runs at all: it subtracts nothing, so every run it builds is a foreign run to somebody.
+- **Styles use the identical tables** over `style_create` / `style_update` / `style_delete`, with
   `props` drawn from `StyleChangeProperty`. Node and style ids live in **separate maps** — the id
   spaces are distinct and a collision between them would be a silent corruption.
 - Cells that "cannot happen" (`update → create`, `delete → update`) are specified anyway. Event
@@ -517,7 +1460,8 @@ file's broadcasts, so it is the only event that can start a continuous history.
 - **`state` clears to `'ok'` only on a drain that (a) empties the buffer and (b) has an established
   `epoch`.** A buffer that has never been anchored to a connection can never report `ok`, however many
   times it is drained. This is the rule that stops an empty-and-unwatched buffer from claiming a
-  continuous history.
+  continuous history. **Empty means no foreign run remains**: shadow entries survive a drain and do
+  not hold the state open, since they record what this session did and never what it is owed.
 - **Re-joining after a close does not open a clean baseline.** Opening a baseline for a file that
   already has a buffer preserves the buffer and its state — and every server-side disconnect has
   already marked it broken.
@@ -541,7 +1485,7 @@ are not one value:
 | Plugin reconnect | `gap` | incoming `meta.epoch` ≠ the buffer's `epoch` (in-band via the opening flush; also visible as a changed registry `epoch`) |
 | Relay frame drop | `gap` | `meta.seq` gap for the current epoch |
 | Plugin-side accumulator overflow | `gap` | `params.overflow === true` |
-| Server-side buffer overflow | `gap` | a map exceeded `BUFFER_CAP`; the oldest distinct id is evicted |
+| Server-side buffer overflow | `gap` | `BUFFER_CAP` reached its **last** stage and evicted a distinct id (the earlier stages lose no change and arm nothing — see Bounding) |
 | Server↔relay socket close | `gap` | the client socket closed → arm on **every** open buffer |
 | Watchdog death | `gap` | the command-liveness watchdog dropped this file ([[figma-bridge/docs/specs/connection-liveness|connection-liveness.md]]) |
 
@@ -556,8 +1500,12 @@ surfaced, not hidden.
 ### Drain-on-read
 
 `pull_changes` returns buffered records **and removes exactly the records it returned**, so there is
-no cursor: everything unretrieved is new, and the buffer *is* the position. Consequences, accepted
-deliberately:
+no cursor: everything unretrieved is new, and the buffer *is* the position. An entry it returns is
+removed **with all its runs**, self runs included — a partial drain of one id's history would leave a
+fragment whose first run is not the first run — while its `mine` stays behind, because a shadow is not
+a change and the question it answers outlives the answer. Nothing is lost by dropping the positions:
+every run the entry held has been reported, so any foreign run arriving afterwards is necessarily
+later than everything `mine` records. Consequences, accepted deliberately:
 
 - *Single consumer per buffer.* Fine — each session has its own buffer.
 - *Mid-turn gap.* Edits the user makes *after* a drain surface on the next drain. The agent re-drains
@@ -569,7 +1517,8 @@ deliberately:
 // params
 {
   fileKey:    string,   // required (B3)
-  limit?:     number,   // max records this call returns; default DRAIN_LIMIT (100)
+  limit?:     number,   // max ENTRIES this call returns; default DRAIN_LIMIT (100)
+  detail?:    'folded' | 'runs',   // default 'folded'
   sessionId?: string,   // reserved, hook-injected — do not set
   agentId?:   string,   // reserved, hook-injected — do not set
   agentType?: string,   // reserved, hook-injected — do not set
@@ -577,34 +1526,138 @@ deliberately:
 
 // success
 {
-  changes:   ChangeRecord[],
+  changes:   DrainedRecord[],                    // masks spent at ingest; may carry `src`
   truncated: boolean,                            // more remain — call again
+  remaining?: {                                  // ONLY when truncated (see Bounding)
+    total:  number,                              // entries with at least one FOREIGN run still
+                                                 // buffered after this call — the same population
+                                                 // pendingCount counts; shadows never appear
+    frames: { fr: string, pg?: string, name?: string, n: number }[],  // biggest first, capped
+    other:  number,                              // entries no frame bucket could hold: the
+                                                 // unlocatable, and everything past HOTSPOT_CAP
+  },
   state:     'ok' | 'no_baseline' | 'gap',
 }
 ```
 
-`changes` is ordered: node records in buffer-insertion order, then style records, then the `page`
-slot, then the `select` slot. Records count against `limit` in that order, so a truncated drain
-returns mutations first and context slots last — the slots are latest-wins and lose nothing by
-waiting.
+### Two tiers of detail
 
-**Bounding (T10).** Two different numbers do two different jobs and are decoupled:
+`detail` decides only **what crosses the wire**; the buffer holds runs either way.
 
-- **`limit`** is the *context* bound. It caps what one call puts in the agent's context; the
+- **`'folded'` (the default)** returns one entry per id with the runs projected down: one `op`, the
+  union of `props`, the last value per property in `set`, and a conjunctive `src`. This is the answer
+  to *is my snapshot stale, and what is it now* — the question almost every drain is asking, and one
+  that does not want the story.
+- **`'runs'`** returns the same entries carrying `runs[]` instead — oldest first, each with its own
+  `op` / `props` / `set` / `src`. This is the answer to *how did it get here*: whether a value the
+  agent wrote survived, who set the one that is there now, and whether a node was fought over. It
+  costs more tokens per entry and is asked for deliberately.
+- **A self run renders as a position and nothing more**, `{src: 'self', mine: [...]}`, carrying no
+  `op`, no `props` and no values. It is what makes the alternation legible to the one reader who
+  cannot see it any other way: without it a node this session and the user took turns on would look,
+  in runs mode, exactly like a node the user edited alone.
+- **The context slots ignore `detail` entirely.** `page` and `select` are latest-wins values rather
+  than histories, so they have no runs to show and render identically in both modes, keeping their
+  `op`. The exclusion of `op` / `props` / `set` / `src` in favour of `runs[]` is a rule about **node
+  and style** entries only.
+- **`mine` rides both**, because the superseded-versus-never-landed question is the one a folded
+  reader most needs answered and the one folding would otherwise destroy. A folded record with
+  `props: ['x']`, `set: {x: 20}` and `mine: ['x']` says *your write to `x` landed and someone has
+  since set it to 20* — and the folded projection only ever produces that pairing when a foreign run
+  really did follow this session's, so the reading holds without the reader asking for the history.
+
+`runs` as the default is refused. The story is longer than the answer on every entry, and a surface
+governed by **T4** must not charge every drain for the case the run model exists to answer; making
+that case *reachable* is what the model is for, and the default stays the cheap question.
+
+**Every *mutation* returned is a change this session did not cause** — the buffer subtracts its own
+at ingest, so the guarantee is structural rather than a promise the tool makes. The `select` slot is
+the one exception, and it is exempt for a stated reason: it has no id to attribute on (see The change
+record), so it may describe this session's own selection. A record may carry `src: 'agent'`, meaning
+another session on this file caused it; its absence means the user did, or that the change could not
+be attributed. Nothing else about the other session is exposed — the drain reports *what changed and
+roughly by whom*, never a roster (**T6**: the tool carries no opinion about what to do with a
+co-agent).
+
+**`mine` is the one thing the drain says about this session's own work**, and it is not an exception
+to the rule above: it names properties, never changes. A drained record still reports only what
+somebody else did; `mine` says which of those properties this session had also written, so the reader
+can tell a superseded write from one that never landed. It never carries values — the session knows
+what it wrote — and it never adds an entry, so a node only this session touched stays absent.
+
+The wire-level masks (`by`, `rf`), the frame's `writers[]` table and the buffer's `WriterKey` do
+**not** appear here. They are transport between the plugin and the buffer, spent at ingest; putting
+session ids in the agent's context would cost tokens for an identifier it has nothing to do with
+(**T4**).
+
+`changes` is ordered: node entries in buffer-insertion order, then style entries, then the `page`
+slot, then the `select` slot; within an entry, runs are oldest first. Entries count against `limit` in
+that order, so a truncated drain returns mutations first and context slots last — the slots are
+latest-wins and lose nothing by waiting.
+
+**Bounding (T10).** Three numbers do three different jobs and are decoupled:
+
+- **`limit`** is the *entry* bound. It caps how many ids one call puts in the agent's context; the
   continuation handle is simply calling again, because consumption is the position. This is what T10
-  asks for — resumable pieces, not one flood.
-- **`BUFFER_CAP`** is the *memory* bound. Exceeding it evicts and marks the baseline `gap`; it
-  destroys records rather than paging them, so it can never be the T10 mechanism. It is chosen as a
-  multiple of `limit`, large enough that ordinary editing never trips it.
+  asks for — resumable pieces, not one flood. It counts **entries in both detail modes**, so the
+  bound stays comparable while a runs-mode entry is the larger one.
+- **`DRAIN_VALUE_BUDGET`** is the *byte* bound, and it exists because a values-carrying entry has a
+  size a count cannot capture. It is spent the way `RECORD_VALUE_BUDGET` is, one layer up: entries are
+  **considered in ascending serialized size of their values, ties broken by their position in
+  `changes`**, and each keeps its `set` while the budget holds; the rest render `props` without `set`.
+  The same reason applies — the budget answers the most entries per byte, and the tie-break makes the
+  outcome deterministic and therefore testable. Allocation order is not render order: `changes` stays
+  in the order stated above, so `limit` and truncation are unaffected by which entries kept values.
+  **No entry is ever dropped for it** — the response degrades to names-only, which is the record the
+  design carries when it can carry nothing better, and the reader re-reads. A budget that dropped
+  entries instead would trade a reported change for a reported value, which is the wrong way round.
+- **`BUFFER_CAP`** is the *memory* bound, and it bounds **runs, plus shadow entries** — a run being
+  the unit that costs memory and a shadow the unit that costs it invisibly. It destroys state
+  rather than paging it, so it can never be the T10 mechanism. It is chosen as a multiple of `limit`,
+  large enough that ordinary editing never trips it, and it degrades in **three stages, spending order
+  before it spends changes**:
+
+  | Stage | What goes | Baseline |
+  |---|---|---|
+  | 1 | shadow entries, longest-untouched first | untouched — a lost shadow costs an *explanation*, never a change, so arming `gap` over one would oblige a full re-read to recover a label |
+  | 2 | merges of adjacent foreign runs on the ids holding the most, oldest first (`merged`) | untouched — order is lost, no change is |
+  | 3 | the oldest distinct id, once no entry has two adjacent foreign runs left | **`gap`** — a change has been destroyed |
+
+  Only stage 3 is a loss of a change, and only stage 3 arms the baseline. Reaching stage 1 or 2 is a
+  buffer under pressure telling the reader less about *how*; reaching stage 3 is a buffer that can no
+  longer be trusted about *what*, which is a different claim and gets the different state.
+
+**A truncated drain returns a prefix and a map.** A thousand-record backlog handed back a hundred at a
+time is not actionable — ten more calls to learn what one re-read would have told the agent — so when
+`truncated` is set the response also carries `remaining`: the count still buffered, and per-frame
+counts over the locator each entry carries (see The locator), biggest first and capped at
+`HOTSPOT_CAP` buckets. `other` absorbs **both** what cannot be bucketed and what the cap left out —
+deletes, styles and nodes whose walk failed, plus every locatable entry whose frame fell past
+`HOTSPOT_CAP` — so the counts always close: **`total` = Σ `frames[].n` + `other`**. A map whose
+numbers do not reconcile is a map a reader cannot act on. `total` counts the same population
+`pendingCount` does — entries holding at least one foreign run — so shadow entries appear in neither
+`total` nor any bucket, and `total` after a drain equals the `pending_edits` the presence block will
+render from the same buffer. A bucket also carries `name` when the buffer already holds one for that
+`fr` (an entry exists for the frame itself and its `name` is set): free where available, absent
+otherwise, and **never** worth a lookup to obtain. That is a **map of where to look**, and it is what
+lets the agent take the sensible response to a flood — re-read the affected region — instead of
+consuming the list to find out where the region is.
+
+The prefix is kept alongside it rather than replaced by it. A drain that overran its limit by three
+records would otherwise return a map and no changes, obliging a second call to learn anything at all,
+and the first entries are real changes whatever their number. So truncation returns both: the records
+that fit, and a mechanical count of what did not. Mechanical is the operative word — `remaining`
+buckets by ancestor id and counts, and never says what the changes *mean* (**B1**); *"142 changes
+under `12:7`"* is a fact, *"the header was redesigned"* is an interpretation the feed does not make.
 
 **State survives truncation.** `state` is reported on every drain, and a broken state clears only on a
 drain that leaves the buffer empty. A truncated drain can therefore never downgrade `gap` to `ok`.
 
 | Result | When |
 |---|---|
-| `{changes, truncated, state}` | a buffer exists for `fileKey` |
+| `{changes, truncated, remaining?, state}` | a buffer exists for `fileKey` |
 | `{changes: [], truncated: false, state: 'no_baseline'}` | `fileKey` matches an available file but no buffer exists — the server has never watched it. The call does **not** create a buffer and does **not** join: a read must not have a join as a side effect, so this answer repeats until a real join opens a baseline. |
-| `INVALID_PARAM` | `fileKey` missing or empty |
+| `INVALID_PARAM` | `fileKey` missing or empty, or `detail` outside its two values |
 | `WRONG_FILE` | no buffer exists for `fileKey` **and** no available file matches it — the ASK error, listing `available[]` (**B3**: never guess) |
 
 **`pull_changes` does NOT return `DISCONNECTED`, `INCOMPATIBLE`, or `TIMEOUT`, and it never
@@ -653,11 +1706,13 @@ wrapper does.
 - A **consumption verb**, not `get_*`: it mutates server state on read (a queue pop, non-idempotent —
   a second immediate call returns an empty `ok`), so a `get_` prefix would falsely imply an idempotent
   read (**D5**, T1).
-- The envelope is `{changes, truncated, state}` — the bounding contract (`limit` + `truncated`) with
-  two deliberate differences: the payload is named `changes` because these are events, not results;
-  and there is no `cursor`, because a destructive drain has no position to resume from — the buffer's
-  remaining contents *are* the cursor. It is the **third output shape** under D1, alongside list reads
-  and tree reads ([[figma-bridge/docs/specs/tool-surface|tool-surface.md]]).
+- The envelope is `{changes, truncated, remaining?, state}` — the bounding contract (`limit` +
+  `truncated`) with three deliberate differences: the payload is named `changes` because these are
+  events, not results; there is no `cursor`, because a destructive drain has no position to resume
+  from — the buffer's remaining contents *are* the cursor; and truncation carries a **receipt**,
+  `remaining`, because what is left of an event backlog has a shape worth reporting where what is left
+  of a query result does not. It is the **third output shape** under D1, alongside list reads and tree
+  reads ([[figma-bridge/docs/specs/tool-surface|tool-surface.md]]).
 - It is a **non-facade meta-tool** and must not inflate the facade count.
 
 **Relationship to current-state reads (T1).** `select` / `page` records report *events* ("the user
@@ -694,7 +1749,9 @@ export const sanitizeKey = (key: string): string =>
   a filesystem path.
 - `_unattributed` is a fixed point of `sanitizeKey`. No session id in the platform's UUID format can
   sanitize to it, so the sentinel cannot collide with a real session's file; that guarantee is a
-  property of the id format, not of the sanitizer.
+  property of the id format, not of the sanitizer. The same literal is the reserved **writer** name a
+  frame's `writers[]` may carry, for the same reason and with the same collision argument — one
+  degrade, named once.
 - **The presence hook cannot import TypeScript**, so it pins an equivalent shell expression instead.
   That expression, the locale it must be run under, and the checked-in fixture table that holds the
   two implementations together over the ASCII alphabet real keys are drawn from live with the hook,
@@ -708,18 +1765,24 @@ export const sanitizeKey = (key: string): string =>
 {
   schema:       1,
   fileKey:      string,          // the unsanitized addressable identity, for debuggability
-  writer:       string,          // genId('srv') — identifies the writing process
-  pendingCount: number,          // nodes.size + styles.size — distinct changed things
+  writer:       string,          // genId('srv') — the writing PROCESS, not a change's writer
+  pendingCount: number,          // entries holding at least one FOREIGN run — distinct changed things
   state:        'ok' | 'no_baseline' | 'gap',
   updatedAt:    number,          // epoch ms
 }
 ```
 
+`writer` here names the **process** that owns the file, and exists only for the adoption check below;
+it is not the per-change writer of the attribution model, which never reaches disk. The count already
+has attribution folded into it — the buffer subtracted this session's own records on the way in — so
+`pendingCount` is *things changed by anyone but this session*, and the session it is relative to is
+the one in the file's own name.
+
 The file **carries an explicit state field** rather than overloading `pendingCount: 0`. Overloading
 `0` is precisely what makes a broken baseline unobservable: every arm leaves the buffer empty, the
-count mirrors `0`, the block renders "no user edits — safe to act", and a drain gated on `> 0` never
-runs. Two facts need two fields — and they are the same two the drain returns, so the block mirrors
-the tool envelope exactly.
+count mirrors `0`, the block renders "nothing changed under me — safe to act", and a drain gated on
+`> 0` never runs. Two facts need two fields — and they are the same two the drain returns, so the
+block mirrors the tool envelope exactly.
 
 **A missing file is not `0`.** Three states are distinguishable and all three are meaningful:
 
@@ -770,6 +1833,27 @@ export const sessionIdentity = {
 Every tool-registration wrapper calls `remember`. The count writer keys on
 `sessionIdentity.current() ?? '_unattributed'`.
 
+**One identity, two uses.** That same expression is the writer the buffer subtracts at ingest, and it
+must be: a server that filed its counts under one identity while discarding another session's records
+would report a number it did not compute. The two are one lookup, so they cannot drift.
+
+**A buffer can exist before its server has an identity, and that window is not a hazard.** It is
+reachable — the session-addressed wrappers do not `remember`, because their schemas do not carry the
+injected `sessionId`, yet an explicit `connect` joins the channel and opens a baseline — so a buffer
+can ingest frames while `current()` is still undefined and its writer resolves to `_unattributed`.
+That is the right writer for it, not a placeholder: a server with no identity also sends no
+`sessionId`, so the commands it issued in that window were stamped `_unattributed` at source, and
+subtracting that writer discards exactly its own work. Two consequences follow and both are benign.
+The **user's** edits are never at risk: they carry no writer at all, so `by` is empty and no reader
+subtracts them — being unattributed is not the same as being attributed to `_unattributed`. And
+subtraction is destructive where the count file's name is repairable, so the one record this window
+can wrongly discard is a *concurrent unattributed peer's* — the residual Fallback already states,
+reached the same way and no wider for being reached here.
+
+Adoption then flips the writer, and the pre-adoption records still in flight cease to match it: a
+server that dispatched before adopting sees that work returned to it as foreign. A **false nudge**,
+bounded by retention, and on the accepted side.
+
 **Adoption.** A session's first Figma tool call may come *after* the user has already edited: the
 server has no id yet, writes the sentinel at a nonzero count, then learns the id. On adoption the
 store **migrates**: for each file directory it has written a sentinel into, it rewrites that
@@ -799,8 +1883,32 @@ The hook, finding no session-scoped file for its `session_id`, **falls back to t
 renders it identically**, because under the always-on block the hook nudges nothing: it reports, and
 the skill decides.
 
+The degrade extends to attribution unchanged, because it is the same value: a command carrying no
+`sessionId` opens its generation under `_unattributed`, and a server that has never received one
+subtracts that writer. A lone unattributed session therefore behaves exactly as a lone attributed one
+— its own writes suppressed, the user's kept — which is what makes this a *degrade* rather than a
+second design.
+
+**The two sides adopt at different granularities**, and the asymmetry is deliberate rather than
+unnoticed. The plugin's writer is **per command** — whatever `meta.sessionId` that frame carried —
+while the server's is **sticky**, the first identity it ever saw. So a route where the injector fires
+for some calls and not others stamps those calls `_unattributed` while the server subtracts a real
+id, and that session's own work returns to it as foreign. A false nudge, never silence, which is why
+the sticky side is the one that can afford to be coarse.
+
 Residuals, stated:
 
+- **Two concurrent unattributed sessions on one file are mutually invisible.** They share the one
+  writer name, so each subtracts the other's records as its own: the single-agent blind spot, exactly,
+  confined to the routes where the identity hook is absent for both. This is the one place the design
+  cannot see a second agent, and it is the same shared-name problem as the sentinel count file below,
+  reached through the same missing hook. Installing the identity hook resolves both. **Which routes
+  those are is worth naming:** `sessionId` reaches the plugin only where the identity `PreToolUse`
+  hook runs, which is the Claude Code plugin route
+  ([[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]]). On the Desktop `.mcpb` and manual-MCP
+  routes no hooks run at all, so every session there is `_unattributed` and mutual invisibility is the
+  normal case rather than an edge — the seeing-a-second-agent property is scoped to the hook-bearing
+  install, and the fix for the others is the hook, not the feed.
 - **Two concurrent unattributed sessions on one file share the sentinel**, last-writer-wins, and
   either may adopt an id and migrate it away — which reads to the other as a transiently missing signal
   (fields omitted), restored on its next write. This is the shared path per-session namespacing exists
@@ -824,7 +1932,7 @@ figma_bridge:
       version: "0.3.0"
       current_page: "Icons"
       selected: 2
-      pending_edits: 3                     # distinct nodes/styles the user changed
+      pending_edits: 3                     # distinct nodes/styles changed outside this session
       pending_edits_state: gap             # only when the baseline is broken
   recently_offline:
     - name: Mockups
@@ -834,6 +1942,24 @@ figma_bridge:
 
 - `pending_edits` is **always a number** when present, and it counts **distinct changed things, not
   actions**. Both fields are **omitted together** when no count file exists — "unknown, no signal".
+- **It means *changed by anyone outside this session*, and the reading session is what "outside"
+  is measured from.** The same file at the same instant shows a different number to each session on
+  it, because each subtracted its own writes. That is not an inconsistency to reconcile: a staleness
+  signal is only ever relative to a snapshot, and each session holds its own. The per-session count
+  file, which serves multi-tenancy, is what carries it — the block reads the file named for the
+  session whose turn it is.
+- **The session is the unit, not the individual agent.** A session's subagents write under its
+  `sessionId` while carrying their own `agentId`
+  ([[figma-bridge/docs/specs/request-envelope|request-envelope.md]]), and attribution keys on the
+  session, so a subagent's write is the session's own and is subtracted like any other. This is the
+  intended reading rather than a limitation of the key: a subagent acts *for* the session that
+  dispatched it, and surfacing its work back as a foreign change would report the session's own plan
+  to itself — the same failure as reporting an agent its own writes, one level down. What lies
+  outside is another session on the file, or the user.
+- **The block does not split the count by cause.** One number, whether it is the user, another agent
+  or both; the drain's `src` carries the distinction where there is room for it. Splitting it here
+  would spend a field on every file every turn to answer a question the agent asks only on the turns
+  it drains (**T4**), and the decision the block drives — drain or don't — is the same either way.
 - `pending_edits_state` carries the same vocabulary as the tool (`no_baseline` / `gap`), so the block
   and the drain envelope name a broken baseline identically.
 - The block never carries change *records*; the hook is a separate process that cannot read server
@@ -856,12 +1982,13 @@ One frame serves both, discriminated by an explicit boolean.
 - The plugin computes `params.indexStale` in the same pass as the feed, using the `INDEX_STALE_TYPES`
   gate that [[figma-bridge/docs/specs/component-index|component-index.md]] owns, and the server marks
   the index stale only when it is `true`. Frame arrival is not the signal.
-- **`indexStale` is computed PRE-filter**, over the raw `documentchange` batch, on `change.node.type`.
-  The feed's `changes[]` is post-filter and answers a different question. If the flag were derived
-  from admitted records, the agent's *own* component writes — dropped by the self-write filter, as
-  they should be — would stop marking the index stale, and a component the agent just created would be
-  missing from the next search. Staleness is about the index's agreement with the document, and the
-  agent's writes change the document.
+- **`indexStale` is computed PRE-attribution**, over the raw `documentchange` batch, on
+  `change.node.type`. The feed's `changes[]` answers a different question and is read through a
+  consumer's own masks. If the flag were derived from what survived that reading, a session's *own*
+  component writes — subtracted by that session, as they should be — would stop marking **its** index
+  stale, and a component it had just created would be missing from its next search. Staleness is
+  about the index's agreement with the document, and every session's writes change the document. The
+  flag is therefore attribution-blind by design: one boolean, true for every consumer, whoever wrote.
 - Not a second command: it would double the plugin's frame rate against the one token bucket the feed
   is trying not to trip, to carry a single boolean.
 - Not re-derived server-side: the gate tests the changed node's type, and the server would have to
@@ -874,17 +2001,18 @@ One frame serves both, discriminated by an explicit boolean.
 flowchart TB
     subgraph Plugin["Figma plugin, per file"]
         L["documentchange / currentpagechange / selectionchange"]
-        G["self-write filter: window, touched, reflow closure"]
-        A["accumulator and flusher"]
+        G["self-write attributor: writer-tagged generations, touched, reflow closure"]
+        A["accumulator and flusher: records plus the writer table"]
         UM["UI stamps meta: fileKey, epoch, seq"]
         R["register frame carries epoch"]
     end
     subgraph Relay["relay"]
         REG["channel registry: epoch on /channels"]
-        BC["broadcast to other channel members"]
+        BC["broadcast to every other channel member"]
     end
     subgraph Server["MCP server, per session"]
-        BUF["per-fileKey buffer: maps, slots, state, epoch"]
+        SUB["subtract my writer: drop by, subtract cascade on rf"]
+        BUF["per-fileKey buffer: runs per id, shadows, slots, state, epoch"]
         CF["changes dir: count and state mirror"]
         IDX["component index markStale, gated on indexStale"]
     end
@@ -894,13 +2022,13 @@ flowchart TB
     L --> G --> A --> UM -->|document_changed| BC
     R --> REG
     REG -->|epoch seeds the baseline at join| BUF
-    BC --> BUF
+    BC --> SUB --> BUF
     BC --> IDX
     BUF -->|leading-edge count and state| CF
     CF -->|reads| HK
     HK -->|pending_edits and state| Agent
     Agent -->|pull_changes when pending or gap| BUF
-    BUF -->|collapsed diff, truncated, state| Agent
+    BUF -->|folded or runs, values, truncated, remaining, state| Agent
 ```
 
 ## Design constraints
@@ -909,11 +2037,15 @@ Figma Plugin API and architecture facts that shape this design:
 
 - **Events fire only while the plugin runs.** No background delivery; no document version number,
   revision, or mtime is readable. "Since last read" is inherently session-scoped.
-- **`documentchange` is batched with an undocumented period.** The runtime does not call the callback
-  synchronously; it batches updates and delivers them periodically. This is the fact the self-write
-  window's `SETTLE_MS` must clear, and the one parameter that cannot be settled on paper.
-- **`origin: 'LOCAL'` includes the plugin's own edits** — which is why self-write filtering is
-  source-side, not origin-based.
+- **`documentchange` delivery is batched and unbounded.** The runtime does not call the callback
+  synchronously; it batches updates and hands them over on its own schedule, and that schedule can
+  defer a batch long past the exit of the command that caused it — seconds, with no documented ceiling
+  and none establishable by measurement, since sampling the prompt case can never bound the deferred
+  one. This is the fact that keys self-write membership on the **command**, which is indifferent to
+  how late its events arrive, rather than on a time bound the delivery has to land inside.
+- **`origin: 'LOCAL'` includes the plugin's own edits**, and carries no sender within them — which is
+  why attribution is source-side rather than origin-based, and why it has to be the *command* that
+  names the writer.
 - **`PropertyChange.properties` is an array** of `NodeChangeProperty` — hence the subtraction rule
   rather than a whole-record drop.
 - **Deletes yield only `id` + `type` (+ `removed: true`)** (`RemovedNode`) — hence `name` is
@@ -922,8 +2054,25 @@ Figma Plugin API and architecture facts that shape this design:
 - **Node resolution is asynchronous**, and the synchronous variant is deprecated and unusable under
   dynamic-page document access. The `documentchange` handler is synchronous, so the filter performs
   **no** node lookups: everything it needs is captured eagerly in the command path.
+- **A change hands over the node itself**, not merely its id — so reading a changed property's current
+  value, and walking `parent` to locate it, are property accesses on an object already in hand rather
+  than resolutions, and are available to the synchronous handler. That access can still throw (a node
+  on a page the runtime has not loaded), and the value it returns is the node's state **at handler
+  time**, which batching can place after the event that reported it. Both are why values and locators
+  are best-effort and fail toward absence.
+- **A removed node exposes no parent**, which is the same fact that leaves `name` absent on a delete —
+  so a delete can never carry a locator, and a deleted node's neighbourhood is knowable only if it was
+  captured before the delete.
 - **Style changes are part of `documentchange`** (STYLE_* subtypes) — no separate `stylechange`
   listener; variable changes are not covered.
+- **A style's identity is its KEY, not its id string.** The id a command returns and the id the
+  event carries differ in their trailing segment — empty in the result (`S:<key>,`), the page id in
+  the event (`S:<key>,<pageId>`). Only the key is stable, so self-write matching and collapse key on
+  it. Node ids are exact and are never prefix-matched: `1:8` and `1:80` are different nodes.
+- **Inside an auto-layout frame a child cannot be freely positioned** — a drag or an arrow key
+  **reorders** it among its siblings. A user reorder therefore emits `parent` alongside the
+  positional properties, so `parent` is a cascade property, and one record can carry a structural
+  change and a positional one together.
 - **Undo/redo restores the original id**, and `documentchange` may not fire reliably on undo/redo in
   some cases — a residual soft spot the re-read backstop covers.
 - **Nesting rule:** creating or deleting a parent emits one change for the top-level node only;
@@ -933,6 +2082,18 @@ Figma Plugin API and architecture facts that shape this design:
   member that joins later. That is why the buffer is per-consumer, why the plugin accumulates instead
   of emitting per event, and why a late-joining server takes its baseline anchor from the channel
   registry rather than from a frame.
+- **There is no unicast, and no membership signal.** A frame addressed to a channel reaches every
+  member of it, and a `join` is announced to nobody — the plugin is never told that a consumer
+  arrived or left, and cannot enumerate them. So the plugin cannot tailor a frame to one consumer,
+  and cannot know whether a second one exists.
+- **Command frames are broadcast too.** A server's command to the plugin reaches every other member
+  of the channel, `meta.sessionId` included, so session ids already traverse the channel between
+  peers; carrying them in a push's `writers[]` discloses nothing the transport does not already
+  carry. It is also why a peer cannot derive attribution from what it overhears: params name chosen
+  ids, never created ones or a reflow closure.
+- **A single command switch serves every session.** Dispatches from different sessions interleave
+  through it and suspend at every `await`, so *which session is currently dispatching* is not a
+  well-defined ambient value — a writer must be carried by the dispatch, not read from a global.
 - **The relay validates and re-broadcasts the parsed frame**, so the meta schema is an allow-list: an
   undeclared `meta` field is dropped in transit without error.
 - **The sandbox and the UI iframe are separate realms.** The sandbox owns the events; the UI owns the
@@ -946,22 +2107,132 @@ Figma Plugin API and architecture facts that shape this design:
   **A drop of the last frame of a burst, with no successor, stays invisible** until the next connection
   event; the count silently under-reports until then. A large manual editing session should be treated
   with suspicion; the real guard is that acting on a deleted node fails loudly.
-- **The accumulator can discard, and says so.** At its cap it evicts the oldest distinct id and reports
-  `overflow`, which breaks the baseline. It never discards *silently*.
-- **The self-write filter has two silent-loss residuals**, both inside the settle window: a user edit
-  on the very node the agent is writing, and **a user move or resize of a node inside the reflow
-  closure** — an ancestor in a hug chain, one of that ancestor's children, or a descendant of a node
-  the agent touched. Both are attributed to the agent and dropped. Source-side filtering cannot
-  eliminate either without before/after values; everywhere else the filter fails toward over-reporting
-  rather than silence.
+- **The accumulator can discard, and says so.** At the last stage of its cap it evicts the oldest
+  distinct id and reports `overflow`, which breaks the baseline. It never discards *silently*.
+- **A writer past `WRITERS_CAP` is mislabelled, not only over-reported.** A frame names at most
+  `WRITERS_CAP` writers; a session beyond that wins no bit, so its records go out unattributed. Every
+  consumer keeps them, which is the safe direction — but an unattributed record carries the **empty**
+  writer key, which is the user's, so that session's work merges into an adjacent user run instead of
+  opening its own. A run boundary is lost for that flush and `src` reads as the user rather than as an
+  agent. It takes that many sessions writing inside one flush window to reach, and minting the table
+  per frame keeps it a per-flush accident rather than a state.
+- **A session's own build can break its own baseline.** Every write crosses the wire, so `ACCUM_CAP`
+  is spent by the agent's building as well as the user's editing, and build size has no bound. Run
+  merging absorbs the run-heavy shape without arming anything, but a build that touches enough
+  **distinct ids** inside one flush window exhausts that stage too and reports `overflow`, and the
+  resulting `gap` obliges a re-read from every consumer — the builder included, over the file it has
+  just written. This is the one operation the design makes able to break the baseline of the session
+  that caused it, and the escalation raises the threshold rather than removing it.
+- **Attribution has two silent-loss residuals**, both for as long as the causing command is retained
+  and both scoped to the sessions that caused them: an edit on the very node a session is writing,
+  and **a move or resize of a node inside its reflow closure** — an ancestor in a hug chain, one of
+  that ancestor's children, or a descendant of a node it touched. Both are dropped for a session
+  holding the corresponding bit. A session whose masks are clear of the node still receives them, but
+  *"every other session"* would overstate it: reflow closures overlap, so where two sessions are
+  working in one auto-layout parent both hold every child of it in `rf`, and a user's geometry edit on
+  a shared child is dropped for both. Source-side attribution cannot eliminate either without
+  before/after values it does not have; everywhere else it fails toward over-reporting rather than
+  silence.
+- **A cascade with several writers cannot always be attributed.** Masks are per record, not per
+  property. Where two sessions' reflow closures overlap — the shared auto-layout parent above — a
+  user's move of a node inside both is explained away by each of them independently, and coalescing
+  aggravates it: one `documentchange` batch can carry two sessions' reflows and the user's edit on one
+  node as a single record, so the loss needs no coincidence of timing to occur, only overlapping
+  closures. The loss is visible to a third session, or on the user's next distinct edit. Resolving it
+  would need per-property causation, which requires a table from every tool's expression-object params
+  to `NodeChangeProperty` names — the same enormous, drift-prone mapping the design refuses for the
+  whole-record drop, defeated the same way by T8's grammar. So the honest statement is that with N
+  writers a cascade is attributable to the *set* of sessions whose closures contain the node, and no
+  further. What the design does buy back is the deliberate write: a record another session's `by`
+  names is kept whole (see Subtraction at ingest), so only an *unclaimed* geometry change can be lost
+  this way.
+- **Retention reaches past the command it belongs to.** An edit to a node a session touched within its
+  own last `RETAINED_COMMANDS` dispatches — or, once it stops dispatching, before it has been idle for
+  `RETENTION_CEILING_MS` — is attributed to that session and dropped for it. The reach that lets a
+  deferred event find its own command is the same reach that claims a user's edit to a node the agent
+  recently worked on; the two are one mechanism and cannot be separated at source. A peer's activity
+  does not shorten that reach, because the ring is that writer's own; only `RETAINED_WRITERS` couples
+  the sessions, and it releases the longest-idle writer's whole set at once, which returns *its* own
+  deferred work to it as foreign. The sharpest case is **undo**: undo restores the original id, so a
+  user undoing a node the agent just created emits a `delete` on a claimed id and is dropped. The
+  consequence there is not an under-count but a **stale reference** — the agent goes on believing a
+  node exists that no longer does, which is the failure the loud `NODE_NOT_FOUND` remains the guard
+  for.
+- **The retention ceiling is a wall-clock bound, and delivery has no proven one.** A batch deferred
+  past the idle release is admitted as a user edit — the agent's own work reported back to it. The
+  ceiling is sized above the deferral the runtime is known to permit, but it cannot be raised freely,
+  because the same constant sets how long a user's post-hand-over edits stay invisible. This is the
+  one place the design still rests on delivery being eventually prompt.
+- **The `select` slot can carry the agent's own selection, and is suppressed more with company.** A
+  `select` record has no id to attribute on, so it is suppressed only while some dispatch is in
+  flight; a selection change a session itself caused, delivered after its command exits, is recorded
+  as somebody else's. With more sessions on the file the in-flight window is open more of the time,
+  so more genuine selection changes are dropped as well. The slot is latest-wins context and never
+  counts toward `pending_edits`, so the count cannot inflate — but `select` may describe where *an
+  agent* last worked rather than where the user is, and may go unreported on a busy file.
 - **Offline edits are invisible.** Every *detected* disconnect is surfaced, but edits made while the
   plugin was closed are reported only as a broken baseline, never reconstructed.
 - **An unsaved file's identity does not survive a plugin reload.** Its buffer and count file are
   orphaned and its history restarts as a new file.
-- **Two concurrent unattributed sessions share one count file.** With no `sessionId` to key on, both
-  write the sentinel last-writer-wins and either may migrate it away on adoption, so the count either
-  side reads can be mis-scaled or briefly absent (see Fallback). Never a data hazard — the value
-  selects a path and grants no access.
-- **Single-agent-per-file attribution.** With two sessions driving one file, session A's writes are
-  filtered by the plugin for *everyone*, so session B does not see them as external changes. Correct
-  handling needs per-session attribution and a wire addition.
+- **Two concurrent unattributed sessions share one count file — and one writer.** With no `sessionId`
+  to key on, both write the sentinel last-writer-wins and either may migrate it away on adoption, so
+  the count either side reads can be mis-scaled or briefly absent (see Fallback); and because they
+  also share the reserved writer name, each subtracts the other's records as its own and neither sees
+  the other's work. This is the one configuration in which a second agent stays invisible, and it is
+  reached only when the identity hook is absent for both. Never a data hazard — the value selects a
+  path and a mask, and grants no access.
+- **A co-agent's build arrives as a flood, honestly counted.** A session that creates several hundred
+  nodes leaves several hundred pending things in every other session's buffer. The count is true and
+  the drain stays bounded, so the records come back `limit` at a time, with `remaining` naming the
+  frames they fall under — the sensible response to a large foreign count is to re-read the affected
+  region rather than consume the list, and that judgement is tool usage, not something the feed
+  decides. `remaining` makes the region nameable; it does not make the choice.
+- **`mine` is evidence in one direction.** A property listed there is proof that this session's write
+  reached the document, because the runtime emitted a change for it, and a folded record pairing it
+  with `props` is proof that a foreign run followed — the projection reports a property only when its
+  last writer is foreign, so the pairing cannot arise the other way round. A property *not* listed is
+  not proof of the opposite: the shadow may have been released under `BUFFER_CAP`'s first stage, lost
+  with the buffer on a reconnect, or never recorded because the write predates the buffer. So `mine`
+  upgrades *unknown* to *superseded* and never upgrades anything to *never landed* — which is the
+  useful direction, since a write believed lost is re-issued and a write wrongly believed to have
+  landed is not.
+- **Subtraction costs the subtractor a little memory.** A session's own writes are never reported, but
+  they are not free either: each leaves a self run of short strings on the id it touched, which is the
+  price of being able to say *superseded* rather than *unknown*. It is bounded by `BUFFER_CAP`, whose
+  first stage releases shadows before anything else and does so silently — so under pressure the
+  answer degrades to the one the design would have given without it.
+- **Values are the node's state at capture, not at the event.** Batched delivery means the value read
+  when a change surfaces can already include a later change — one the feed will also report. Within a
+  run the final value still converges, because the run's value is last-writer-wins over the same
+  property; what is unavailable is the intermediate reading a fast alternation passed through. A drain
+  therefore describes where the document arrived, never every step it took.
+- **A value withheld is indistinguishable from one that could not be read.** A property in `props` and
+  not in `set` may have been too large, over the record's budget, past the response's budget, or on a
+  node whose access threw. All four say the same thing to the reader — *re-read this* — and
+  distinguishing them would spend a field per property to change nothing the agent does.
+- **The run cap loses order, silently.** Beyond `RUNS_PER_ID_CAP` an id's two oldest adjacent foreign
+  runs merge, and the folded view cannot show it; the runs view flags the survivor `merged`, whichever
+  layer performed the merge, since the flag rides the wire. No change and no value is
+  lost, so the baseline stays intact — but a reader asking *who set this first* about a heavily
+  contested node can be told only *one of these writers*. Deliberate: the alternative is either an
+  unbounded history per id or the loss of a change, and the design will spend order before it spends
+  either.
+- **The folded `src` is conjunctive, so it can under-label another agent's work.** A record whose runs
+  include both a foreign agent and the user carries no `src`, reading as *the user may have done
+  this*. That is the direction that obliges more care, and it costs a foreign agent's write its label
+  whenever a user edit shares the entry. `detail: 'runs'` recovers it; the folded view will not
+  guess.
+- **A delete locates itself only if something earlier did.** A `RemovedNode` has no parent, so a
+  delete carries no `pg` / `fr` of its own. Where the buffer already holds an entry for that id — an
+  earlier run on the same node established the locator, and the collapse keeps the latest defined
+  value — the delete inherits it and buckets normally. Where the node's first appearance in the buffer
+  *is* its deletion, it falls into `remaining.other`. So the map of where to look is weakest about the
+  change class that matters most, and a drain dominated by deletions of nodes the reader never saw
+  change degrades toward a bare count. Recovering that case would need the neighbourhood captured
+  before every delete, for every node, against no command that named it.
+- **Attribution is checkable without a human; event shape is not.** A second session produces foreign
+  writes by construction, so the attribution rules can be exercised end to end without anyone at the
+  keyboard. It does not reproduce how a *person's* edits reach the runtime — an arrow key inside an
+  auto-layout frame reorders a child and emits `parent` alongside the positional properties, a shape
+  no command dispatch produces. Confidence in the masks is therefore transferable; confidence in the
+  handling of human event shapes is not.

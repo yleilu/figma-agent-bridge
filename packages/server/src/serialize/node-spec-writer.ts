@@ -42,8 +42,10 @@
 
 import type {
   NodeSpec,
+  NodeSpecPatch,
   LayoutSpec,
 } from '@figma-agent-bridge/shared/node-spec'
+import { NODE_SPEC_PATCH_KEYS } from '@figma-agent-bridge/shared/node-spec-schema'
 import {
   atomToPaint,
   atomToEffect,
@@ -155,6 +157,64 @@ const convertLayout = (
 // ─── specToFigma ─────────────────────────────────────────────────────────────
 
 /**
+ * The keys a patch names that the write face does not know, and what to say
+ * about them (T7).
+ *
+ * zod STRIPS an unknown key by default, so `update_node({patch:{x:10}})` used
+ * to report success with an empty `warnings[]` having changed nothing at all —
+ * the one failure mode a mutation must never have. `partialNodeSpecSchema` is
+ * a passthrough so the key survives to here, where it is REPORTED and still
+ * never written.
+ *
+ * The hints cover the near-misses that produced the bug: the flat CSS-ish
+ * geometry names, which NodeSpec carries as tuples.
+ */
+const PATCH_KEY_HINTS: Record<string, string> = {
+  x: 'position',
+  y: 'position',
+  width: 'size',
+  height: 'size',
+  characters: 'text',
+  fill: 'fills',
+  effect: 'effects',
+  cornerRadius: 'radius',
+}
+
+export const unknownPatchKeyWarnings = (
+  patch: object,
+  converted: FigmaWritePayload,
+): string[] => {
+  const unknown = Object.keys(patch).filter(
+    k => !NODE_SPEC_PATCH_KEYS.has(k),
+  )
+  if (unknown.length === 0) {
+    return []
+  }
+  const hints = [
+    ...new Set(
+      unknown
+        .map(k => PATCH_KEY_HINTS[k])
+        .filter((h): h is string => h !== undefined),
+    ),
+  ]
+  const plural = unknown.length > 1
+  // "nothing was changed" only when the whole patch was inert: a patch that
+  // also carried a real field DID land, and saying otherwise would be a
+  // second dishonesty.
+  const inert = Object.keys(converted).length === 0
+  return [
+    `${plural ? 'keys' : 'key'} ${unknown
+      .map(k => `\`${k}\``)
+      .join(', ')} ${plural ? 'are' : 'is'} not ` +
+      `a NodeSpec field and ${plural ? 'were' : 'was'} ignored` +
+      (hints.length > 0
+        ? ` — did you mean ${hints.join(' / ')}?`
+        : '') +
+      (inert ? ' (nothing was changed by this call)' : ''),
+  ]
+}
+
+/**
  * Convert a (partial) NodeSpec to a FigmaWritePayload.
  *
  * PURE — emits ONLY keys present in `spec`. Never injects defaults.
@@ -167,7 +227,7 @@ const convertLayout = (
  * exact same return value.
  */
 export const specToFigma = (
-  spec: Partial<NodeSpec>,
+  spec: NodeSpecPatch,
   warnings?: string[],
 ): FigmaWritePayload => {
   const out: FigmaWritePayload = {}
@@ -313,12 +373,19 @@ export const specToFigma = (
   // ── text ─────────────────────────────────────────────────────────────────
   if (spec.text !== undefined) {
     const t = spec.text
-    const textOut: Record<string, unknown> = {
-      content: t.content,
+    const textOut: Record<string, unknown> = {}
+    // EVERY member is guarded, `content` and `font` included: a patch may
+    // supply any subset of the struct and omitted means untouched. `font` was
+    // converted unconditionally, so `{text:{content}}` — the plainest patch
+    // there is — died in the atom tokenizer instead of rewriting the copy.
+    if (t.content !== undefined) {
+      textOut.content = t.content
     }
     // lh/ls ride on the font atom and are lifted into
     // text.lineHeight / text.letterSpacing for the plugin.
-    convertFontInto(textOut, t.font)
+    if (t.font !== undefined) {
+      convertFontInto(textOut, t.font)
+    }
     if (t.color !== undefined) {
       textOut.color = atomToPaint(t.color)
     }
