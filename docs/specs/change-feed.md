@@ -469,7 +469,16 @@ Each node record carries a best-effort **`pg`** (the page the node is on) and **
 that is a direct child of that page, or the node's own id when it is one). Both are computed once, on
 an id's first admission in a flush window, by walking `parent` on the node already in hand — property
 access, not resolution, the same access the reflow closure already relies on — and both are **absent**
-when the walk cannot be performed. A `RemovedNode` has no parent, so **a delete is never located**.
+when the walk cannot be performed. A `RemovedNode` has no parent, so **a delete cannot locate
+itself**.
+
+It can still INHERIT one. A delete folds onto whatever the buffer already holds for that id, and the
+collapse carries `pg`/`fr` forward from the earlier run — so a node that was updated in one delivery
+window and deleted in a later one arrives located, and the map can say which frame lost it. What
+decides locatability is therefore not the operation but whether anything was already buffered for
+that id: a node created and deleted with no delivery boundary between them has nothing to inherit,
+because the update is admitted on a node the runtime has already removed and the walk finds no
+parent.
 
 Two ids per record is a real per-record cost under **T4**, and it buys two things. It makes a
 truncated drain able to say *where* the remaining changes are rather than only how many (see
@@ -1632,12 +1641,16 @@ time is not actionable — ten more calls to learn what one re-read would have t
 `truncated` is set the response also carries `remaining`: the count still buffered, and per-frame
 counts over the locator each entry carries (see The locator), biggest first and capped at
 `HOTSPOT_CAP` buckets. `other` absorbs **both** what cannot be bucketed and what the cap left out —
-deletes, styles and nodes whose walk failed, plus every locatable entry whose frame fell past
-`HOTSPOT_CAP` — so the counts always close: **`total` = Σ `frames[].n` + `other`**. A map whose
+styles, and every entry with no locator to bucket by, plus every locatable entry whose frame fell
+past `HOTSPOT_CAP` — so the counts always close: **`total` = Σ `frames[].n` + `other`**. Deletes are
+the commonest unlocated class but not a synonym for it: one that inherited a locator buckets like any
+other entry (see The locator). A map whose
 numbers do not reconcile is a map a reader cannot act on. `total` counts the same population
 `pendingCount` does — entries holding at least one foreign run — so shadow entries appear in neither
 `total` nor any bucket, and `total` after a drain equals the `pending_edits` the presence block will
-render from the same buffer. A bucket also carries `name` when the buffer already holds one for that
+render from the same buffer. In practice a bucket carries only its id: `name` is looked up in what the buffer still holds after
+the prefix has been removed, and a frame's own entry is normally IN that prefix. The map is a list of
+places to look, not a legible summary. A bucket carries `name` when the buffer already holds one for that
 `fr` (an entry exists for the frame itself and its `name` is set): free where available, absent
 otherwise, and **never** worth a lookup to obtain. That is a **map of where to look**, and it is what
 lets the agent take the sensible response to a flood — re-read the affected region — instead of

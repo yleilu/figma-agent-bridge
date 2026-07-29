@@ -109,6 +109,30 @@ agents run), not the tools. Both verified live on a skill-in-loop Northwind buil
   — placed explicitly, never relying on the `[0,0]` default. (Complements the tool-side
   collision-aware auto-placement idea, but the skill should not depend on a tool fix landing.)
 
+## Skill guidance (figma-design) — deferred improvements (surfaced 2026-07-29 — change-feed)
+
+- **A large foreign count means RE-EVALUATE, not replay.** The Change Feed's turn-start block
+  carries `pending_edits` — the number of distinct things changed outside this session
+  ([[figma-bridge/docs/specs/change-feed|change-feed.md]]). The skill teaches the agent to drain
+  and act on the diff, which is right for a handful of changes and wrong for a large one: past
+  roughly the drain's own limit, consuming a change list is both more expensive and less reliable
+  than re-reading, because the agent is reconstructing a document from deltas instead of observing
+  it. Measured on a 40-child frame: draining 41 entries cost ~1.1k tokens against ~3k to re-read
+  the same subtree — so the diff wins while it is small, and the crossover sits near the default
+  drain limit rather than far above it.
+
+  Fix: the skill should state a re-evaluation rule — when `pending_edits` is large, or a drain
+  comes back `truncated`, **re-read the affected region and re-assess current state** rather than
+  replaying the change list. A drain that truncates already returns `remaining.frames`, a map of
+  which ancestors hold the changes, so the region to re-read is named rather than guessed.
+
+  Note the decision is really about **concentration, not count**: a hundred changes inside one
+  frame is one cheap re-read, while a hundred spread across twenty frames is twenty. The frame
+  buckets are the evidence for that judgement, and emitting them on every drain rather than only
+  on truncation is the tool-side change that would make the rule mechanical instead of a
+  heuristic — tracked here rather than specced, since it is worth doing only if the rule proves
+  hard to follow in practice.
+
 ## See also
 
 - `docs/principles.md` (T1/T2/T6 — why these are obligations)
