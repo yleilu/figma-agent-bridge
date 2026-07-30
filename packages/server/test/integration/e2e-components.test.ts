@@ -164,8 +164,12 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
       { componentIds: ['c:1'] },
       scoped,
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain('at least 2')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('at least 2')
+    expect(data.code).toBe('INVALID_PARAM')
   })
 
   // The genuine plugin-side {error} boundary: the handler's raw-length <2 guard
@@ -177,8 +181,11 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
       { componentIds: ['c:1', 'bad:9'] },
       scoped,
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain('at least 2')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('at least 2')
   })
 
   it('set_instance echo is SPLIT into the read-twin shape (C3 / T2)', async () => {
@@ -462,16 +469,18 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
   })
 
   // Genuine T7 {error} boundary #1: an unresolvable componentId is a not-found
-  // error (distinct from a degrade) — surfaced as 'Error:', not a warning.
+  // error (distinct from a degrade) — surfaced as {error,code}, not a warning.
   it('update_component surfaces a {error} when the component is not found', async () => {
     const result = await handleUpdateComponent(
       { componentId: 'err:gone' },
       scoped,
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'Component not found',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Component not found')
+    expect(data.code).toBe('NODE_NOT_FOUND')
   })
 
   // Genuine T7 {error} boundary #2: a node that resolves but is NOT a component
@@ -481,9 +490,10 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
       { componentId: 'notcomp:1' },
       scoped,
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'not a component',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('not a component')
   })
 })

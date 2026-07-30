@@ -264,13 +264,15 @@ describe('handleCreateTree', () => {
       stubClient({ sent }),
     )
     expect(sent).toHaveLength(0)
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'BOOLEAN_OPERATION',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('UNSUPPORTED_NODE_TYPE')
+    expect(data.error).toContain('BOOLEAN_OPERATION')
     // The message points the agent at the right tool + self-documents valids.
-    expect(result.content[0].text).toContain('boolean_op')
-    expect(result.content[0].text).toContain('FRAME')
+    expect(data.error).toContain('boolean_op')
+    expect(data.error).toContain('FRAME')
   })
 
   it('rejects a GROUP child with a clear error before sending', async () => {
@@ -285,8 +287,12 @@ describe('handleCreateTree', () => {
       stubClient({ sent }),
     )
     expect(sent).toHaveLength(0)
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain('GROUP')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('UNSUPPORTED_NODE_TYPE')
+    expect(data.error).toContain('GROUP')
   })
 
   it('forwards an { id } clone marker untouched (clone path unaffected)', async () => {
@@ -379,9 +385,10 @@ describe('handleCreateTree', () => {
       { tree: { type: 'FRAME' } },
       client,
     )
-    expect(result.content[0].text).toBe(
-      'Error: plugin exploded',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'plugin exploded',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })
 

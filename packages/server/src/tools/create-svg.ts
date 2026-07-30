@@ -2,9 +2,8 @@ import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { ScopedFigmaClient } from '../figma-client'
 import {
   type ToolResult,
-  textResult,
   formatMutationResult,
-  errorMessage,
+  toolError,
 } from './shared'
 
 export const handleCreateFromSvg = async (
@@ -32,6 +31,6 @@ export const handleCreateFromSvg = async (
       'Failed to create from SVG.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

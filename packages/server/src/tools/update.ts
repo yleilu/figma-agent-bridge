@@ -18,7 +18,7 @@ import { assertContextWithinCap } from '../serialize/context-cap'
 import {
   type ToolResult,
   formatMutationResult,
-  errorMessage,
+  toolError,
   isErrorResult,
   textResult,
 } from './shared'
@@ -59,6 +59,6 @@ export const handleUpdateNode = async (
     }
     return textResult(JSON.stringify(merged, null, 2))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

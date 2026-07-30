@@ -403,9 +403,11 @@ describe('handleBatch', () => {
       { op: 'delete_node', ops: [{ nodeId: '1:1' }] },
       stubClient({ reply: { error: 'relay exploded' } }),
     )
-    expect(result.content[0].text).toContain('Error:')
-    expect(result.content[0].text).toContain(
-      'relay exploded',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('relay exploded')
+    expect(data.code).toBe('PLUGIN_ERROR')
   })
 })

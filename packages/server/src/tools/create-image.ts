@@ -13,9 +13,9 @@ import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { ScopedFigmaClient } from '../figma-client'
 import {
   type ToolResult,
-  textResult,
   formatMutationResult,
-  errorMessage,
+  toolError,
+  errorEnvelope,
 } from './shared'
 
 export const handleCreateImage = async (
@@ -25,8 +25,9 @@ export const handleCreateImage = async (
   const hasUrl = url !== undefined
   const hasBytes = bytes !== undefined
   if (hasUrl === hasBytes) {
-    return textResult(
-      'Error: create_image requires exactly one of url or bytes.',
+    return errorEnvelope(
+      'INVALID_PARAM',
+      'create_image requires exactly one of url or bytes.',
     )
   }
 
@@ -40,6 +41,6 @@ export const handleCreateImage = async (
       'Failed to create image.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

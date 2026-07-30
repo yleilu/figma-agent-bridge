@@ -44,6 +44,9 @@ import {
   type ToolResult,
   errorMessage,
   textResult,
+  toolError,
+  pluginError,
+  errorEnvelope,
 } from './shared'
 
 type BatchEntry = Record<string, unknown> & { op?: string }
@@ -362,13 +365,16 @@ export const handleBatch = async (
       | null
 
     if (pluginReply === null) {
-      return textResult('Failed to run batch.')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Failed to run batch.',
+      )
     }
     if (
       'error' in pluginReply &&
       pluginReply.error !== undefined
     ) {
-      return textResult(`Error: ${pluginReply.error}`)
+      return pluginError(pluginReply.error)
     }
 
     const pluginResults =
@@ -441,6 +447,6 @@ export const handleBatch = async (
       JSON.stringify({ results, errors }, null, 2),
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

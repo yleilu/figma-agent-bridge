@@ -1,6 +1,10 @@
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { ScopedFigmaClient } from '../figma-client'
-import { textResult, errorMessage } from './shared'
+import {
+  toolError,
+  pluginError,
+  errorEnvelope,
+} from './shared'
 
 type ExportParams = {
   nodeId: string
@@ -37,24 +41,23 @@ export const handleExport = async (
     } | null
 
     if (result === null) {
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: 'Export failed: no response from plugin.',
-          },
-        ],
-      }
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Export failed: no response from plugin.',
+      )
     }
 
     // The plugin resolves (does not reject) a genuine not-found as {error};
     // surface it honestly (T7) rather than masking it as "Unexpected response".
     if (typeof result.error === 'string') {
-      return textResult(`Error: ${result.error}`)
+      return pluginError(result.error)
     }
 
     if (typeof result.data !== 'string') {
-      return textResult('Unexpected response from plugin')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Unexpected response from plugin',
+      )
     }
 
     if (format === 'SVG') {
@@ -78,13 +81,6 @@ export const handleExport = async (
       ],
     }
   } catch (err) {
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `Error: ${errorMessage(err)}`,
-        },
-      ],
-    }
+    return toolError(err)
   }
 }

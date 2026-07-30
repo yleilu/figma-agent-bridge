@@ -514,8 +514,12 @@ describe('handleCombineVariants', () => {
       { componentIds: ['c:1'] },
       stubClient({ sent }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain('at least 2')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INVALID_PARAM')
+    expect(data.error).toContain('at least 2')
     expect(sent).toHaveLength(0)
   })
 
@@ -696,8 +700,12 @@ describe('handleSwapComponent', () => {
       { instanceId: 'i:1' },
       stubClient({ sent }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INVALID_PARAM')
+    expect(data.error).toContain(
       'mainComponentId (local) or key (remote)',
     )
     expect(sent).toHaveLength(0)

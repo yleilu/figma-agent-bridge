@@ -26,6 +26,7 @@ import {
 import {
   handleDeleteNode,
   handleSetFocus,
+  handleReparentNode,
 } from '@figma-agent-bridge/server/tools/structure'
 import { withFile } from '@figma-agent-bridge/server/tools/with-file'
 import { createMockPlugin } from '../mocks/mock-plugin'
@@ -154,6 +155,24 @@ describe('handleSetFocus', () => {
     expect(JSON.parse(result.content[0].text)).toEqual({
       error: 'Failed to set focus.',
       code: 'PLUGIN_ERROR',
+    })
+  })
+})
+
+describe('handleReparentNode', () => {
+  it('a thrown transport failure envelopes DISCONNECTED', async () => {
+    const client: ScopedFigmaClient = {
+      fileKey: 'fk-test',
+      sendCommand: () =>
+        Promise.reject(new Error('Not connected')),
+    }
+    const result = await handleReparentNode(
+      { nodeId: '1:1', parentId: '1:2' },
+      client,
+    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Not connected',
+      code: 'DISCONNECTED',
     })
   })
 })

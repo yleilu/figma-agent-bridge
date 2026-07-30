@@ -43,7 +43,7 @@ import {
   type ToolResult,
   formatMutationResult,
   isErrorResult,
-  errorMessage,
+  toolError,
   textResult,
 } from './shared'
 
@@ -224,6 +224,6 @@ export const handleCreateTree = async (
       `${mutation.content[0].text}\n\n${warningText}`,
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

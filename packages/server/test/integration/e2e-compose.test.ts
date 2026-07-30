@@ -180,10 +180,11 @@ describe('M3 compose tools e2e (mock plugin over real relay)', () => {
       },
       scoped,
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'Cyclic ref in pool',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Cyclic ref in pool')
   })
 
   it('create_tree rejects a self-referential { ref } pool with a clean {error}', async () => {
@@ -201,10 +202,11 @@ describe('M3 compose tools e2e (mock plugin over real relay)', () => {
       },
       scoped,
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'Cyclic ref in pool',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Cyclic ref in pool')
   })
 
   it('boolean_op combines nodes into a BooleanOperationNode', async () => {
@@ -224,8 +226,12 @@ describe('M3 compose tools e2e (mock plugin over real relay)', () => {
       { op: 'UNION', nodeIds: ['1:1'] },
       scoped,
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain('at least 2')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('at least 2')
+    expect(data.code).toBe('INVALID_PARAM')
   })
 
   it('flatten produces a single VECTOR', async () => {
@@ -257,12 +263,13 @@ describe('M3 compose tools e2e (mock plugin over real relay)', () => {
       { nodeId: '1:42', parentId: '1:9', index: 99 },
       scoped,
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain('out of range')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('out of range')
     // The actionable bound is named, not a bare RangeError.
-    expect(result.content[0].text).not.toContain(
-      'RangeError',
-    )
+    expect(data.error).not.toContain('RangeError')
   })
 
   it('reparent_node echoes {id,…,parentId}', async () => {
