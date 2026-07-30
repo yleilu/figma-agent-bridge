@@ -181,7 +181,14 @@ Every call returns the MCP `ToolResult`:
 
 Errors are uniform: `{ error: string, code: ErrorCode }`, emitted as one JSON `text` block.
 
-`ErrorCode = 'NODE_NOT_FOUND' | 'INVALID_PARAM' | 'FONT_LOAD_FAILED' | 'DISCONNECTED' | 'TIMEOUT' | 'UNSUPPORTED_NODE_TYPE' | 'API_UNAVAILABLE' | 'WRONG_EDITOR' | 'LIBRARY_UNPUBLISHED' | 'WRONG_FILE' | 'INCOMPATIBLE'`.
+`ErrorCode = 'NODE_NOT_FOUND' | 'INVALID_PARAM' | 'FONT_LOAD_FAILED' | 'DISCONNECTED' | 'TIMEOUT' | 'UNSUPPORTED_NODE_TYPE' | 'API_UNAVAILABLE' | 'WRONG_EDITOR' | 'LIBRARY_UNPUBLISHED' | 'WRONG_FILE' | 'INCOMPATIBLE' | 'PLUGIN_ERROR'`.
+
+**Every failure carries a code.** `PLUGIN_ERROR` is the honest fallback for a failure the
+server cannot place in any other code — "Figma failed and the server cannot say more". Because
+it exists, the classifier never has to choose between a wrong code and no code, and an agent can
+branch on `code` without first testing whether the field is there. A failure the server does not
+recognise is **never** reported as `INVALID_PARAM`: naming the agent's parameters as the cause
+when they were not sends it into a retry it can never win.
 
 `INCOMPATIBLE` is the plugin↔server **version skew** code (B2): distinct from `DISCONNECTED` (you *are* connected, just to an incompatible build — retrying `connect` won't help). Surfaced when the major.minor compare fails; see [[figma-bridge/docs/specs/version-handshake|version-handshake.md]].
 
