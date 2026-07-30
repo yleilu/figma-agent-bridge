@@ -174,6 +174,92 @@ describe('handleConnect auto-discovery', () => {
     )
   })
 
+  it('a version-skewed explicit channel is refused as INCOMPATIBLE', async () => {
+    const ws = await connectRaw()
+    ws.send(
+      JSON.stringify({ type: 'join', channel: 'skew-ch' }),
+    )
+    await waitForMessage(ws)
+    ws.send(
+      JSON.stringify({
+        type: 'register',
+        channel: 'skew-ch',
+        fileName: null,
+        version: '0.0.1',
+      }),
+    )
+    await Bun.sleep(30)
+
+    const mockClient: FigmaClient = {
+      joinChannel: () => Promise.resolve('joined skew-ch'),
+      sendCommand: () => Promise.resolve(null),
+      disconnect: () => undefined,
+      isConnected: () => true,
+      notifyMismatch: () => undefined,
+    } as unknown as FigmaClient
+
+    const result = await handleConnect(
+      { channel: 'skew-ch' },
+      mockClient,
+      HTTP_URL,
+      TEST_PORT,
+    )
+
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INCOMPATIBLE')
+    expect(data.error).toContain('0.0.1')
+
+    await closeWs(ws)
+  })
+
+  it('a version-skewed resolved target is refused as INCOMPATIBLE', async () => {
+    const ws = await connectRaw()
+    ws.send(
+      JSON.stringify({
+        type: 'join',
+        channel: 'skew-target-ch',
+      }),
+    )
+    await waitForMessage(ws)
+    ws.send(
+      JSON.stringify({
+        type: 'register',
+        channel: 'skew-target-ch',
+        fileName: 'Skewed Doc',
+        version: '0.0.1',
+      }),
+    )
+    await Bun.sleep(30)
+
+    const mockClient: FigmaClient = {
+      joinChannel: () =>
+        Promise.resolve('joined skew-target-ch'),
+      sendCommand: () => Promise.resolve(null),
+      disconnect: () => undefined,
+      isConnected: () => true,
+      notifyMismatch: () => undefined,
+    } as unknown as FigmaClient
+
+    const result = await handleConnect(
+      { fileName: 'Skewed Doc' },
+      mockClient,
+      HTTP_URL,
+      TEST_PORT,
+    )
+
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INCOMPATIBLE')
+    expect(data.error).toContain('0.0.1')
+
+    await closeWs(ws)
+  })
+
   it('explicit channel bypasses discovery', async () => {
     const calls: string[] = []
     const mockClient: FigmaClient = {

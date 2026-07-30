@@ -10,6 +10,7 @@ import {
   type ToolResult,
   textResult,
   errorMessage,
+  errorEnvelope,
   protocolMismatch,
   synthKey,
 } from './shared'
@@ -164,7 +165,7 @@ export const handleConnect = async (
             info.version ?? '(none)',
             APP_VERSION,
           )
-          return textResult(mismatch)
+          return errorEnvelope('INCOMPATIBLE', mismatch)
         }
       }
     }
@@ -231,7 +232,7 @@ export const handleConnect = async (
       info.version ?? '(none)',
       APP_VERSION,
     )
-    return textResult(mismatch)
+    return errorEnvelope('INCOMPATIBLE', mismatch)
   }
 
   try {
