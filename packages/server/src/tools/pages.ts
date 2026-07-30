@@ -12,9 +12,8 @@ import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { ScopedFigmaClient } from '../figma-client'
 import {
   type ToolResult,
-  textResult,
   formatMutationResult,
-  errorMessage,
+  toolError,
 } from './shared'
 
 export const handleCreatePage = async (
@@ -31,7 +30,7 @@ export const handleCreatePage = async (
       'Failed to create page.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -49,7 +48,7 @@ export const handleSetCurrentPage = async (
       'Failed to set current page.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -67,6 +66,6 @@ export const handleDuplicatePage = async (
       'Failed to duplicate page.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

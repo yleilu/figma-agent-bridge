@@ -18,7 +18,8 @@ import { paginateList, CursorError } from '../read/paginate'
 import {
   type ToolResult,
   textResult,
-  errorMessage,
+  toolError,
+  pluginError,
   cursorRejected,
 } from './shared'
 
@@ -118,6 +119,12 @@ export const handleInspect = async (
         `Node not found: ${nodeId ?? pageId ?? 'selection'}`,
       )
     }
+    if (
+      raw !== null &&
+      typeof (raw as { error?: unknown }).error === 'string'
+    ) {
+      return pluginError((raw as { error: string }).error)
+    }
 
     // Multi-selection → assemble a forest under a synthetic SELECTION root so
     // depth/budget/receipt bound the WHOLE set at once. Single export (array or
@@ -174,7 +181,7 @@ export const handleInspect = async (
       YAML.stringify({ view: projected, truncated }),
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -213,13 +220,19 @@ export const handleGetNode = async (
     if (raw === null) {
       return textResult(`Node not found: ${nodeId}`)
     }
+    if (
+      raw !== null &&
+      typeof (raw as { error?: unknown }).error === 'string'
+    ) {
+      return pluginError((raw as { error: string }).error)
+    }
 
     const spec = toNodeSpec(raw, { depth: depth ?? 0 })
     const projected = projectNode(spec, { fields, profile })
 
     return textResult(JSON.stringify(projected, null, 2))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -286,7 +299,7 @@ export const handleGetNodes = async (
       JSON.stringify({ results, errors }, null, 2),
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -350,6 +363,6 @@ export const handleListPages = async (
     }
     return textResult(JSON.stringify(out, null, 2))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

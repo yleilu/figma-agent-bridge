@@ -357,8 +357,12 @@ describe('handleSearch (rebuilt — Rule A)', () => {
       errorClient,
     )
     const { text } = result.content[0]
-    expect(text).toContain('Error')
-    expect(text).toContain('Node not found: 1:99')
+    const data = JSON.parse(text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Node not found: 1:99')
+    expect(data.code).toBe('NODE_NOT_FOUND')
     // A typo'd id must not read as a clean zero-match.
     expect(text).not.toContain('results: []')
   })

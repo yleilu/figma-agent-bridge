@@ -11,7 +11,7 @@ import {
   type ToolResult,
   textResult,
   formatMutationResult,
-  errorMessage,
+  toolError,
 } from './shared'
 
 export const handleGetSelection = async (
@@ -32,7 +32,7 @@ export const handleGetSelection = async (
     }
     return textResult(JSON.stringify(raw, null, 2))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -50,6 +50,6 @@ export const handleSetSelection = async (
       'Failed to set selection.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

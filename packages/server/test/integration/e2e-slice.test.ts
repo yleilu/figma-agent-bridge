@@ -640,8 +640,12 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
       scoped,
     )
     const { text } = result.content[0]
-    expect(text).toContain('Error')
-    expect(text).toContain('Node not found: nope:1')
+    const data = JSON.parse(text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Node not found: nope:1')
+    expect(data.code).toBe('NODE_NOT_FOUND')
     expect(text).not.toContain('results: []')
   })
 

@@ -30,7 +30,8 @@ import { paginateList, CursorError } from '../read/paginate'
 import {
   type ToolResult,
   textResult,
-  errorMessage,
+  toolError,
+  pluginError,
   cursorRejected,
 } from './shared'
 
@@ -128,7 +129,7 @@ export const handleSearch = async (
     // An unresolvable node/page scope qualifier resolves as {error} (not a WS
     // reject); surface it (T7) so a typo'd id is distinguishable from no-match.
     if (raw.error !== undefined) {
-      return textResult(`Error: ${raw.error}`)
+      return pluginError(raw.error)
     }
     if (!Array.isArray(raw.results)) {
       return textResult('Unexpected response from plugin')
@@ -194,6 +195,6 @@ export const handleSearch = async (
 
     return textResult(JSON.stringify(out, null, 2))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
