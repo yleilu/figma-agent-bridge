@@ -30,6 +30,7 @@ import {
 import { withFile } from '@figma-agent-bridge/server/tools/with-file'
 import {
   createFigmaClient,
+  PluginDisconnectedError,
   type FigmaClient,
   type ScopedFigmaClient,
 } from '@figma-agent-bridge/server/figma-client'
@@ -161,6 +162,39 @@ describe('handleReindex', () => {
     const out = parse(res.content[0].text)
     expect(out.count).toBe(1)
     expect(out.indexState).toBe('warm')
+  })
+})
+
+describe('a plugin disconnect is DISCONNECTED, not bare text', () => {
+  const disconnected: ScopedFigmaClient = {
+    fileKey: 'fk-test',
+    sendCommand: async () => {
+      throw new PluginDisconnectedError('fk-test')
+    },
+  }
+
+  it('handleSearchComponents envelopes DISCONNECTED', async () => {
+    const mgr = new IndexManager()
+    const res = await handleSearchComponents(
+      { query: 'button' },
+      disconnected,
+      mgr,
+    )
+    const data = JSON.parse(res.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('DISCONNECTED')
+  })
+
+  it('handleReindex envelopes DISCONNECTED', async () => {
+    const mgr = new IndexManager()
+    const res = await handleReindex({}, disconnected, mgr)
+    const data = JSON.parse(res.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('DISCONNECTED')
   })
 })
 

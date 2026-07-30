@@ -3,7 +3,7 @@ import type { ScopedFigmaClient } from '../figma-client'
 import type { IndexManager } from '../component-index/manager'
 import {
   textResult,
-  errorMessage,
+  toolError,
   type ToolResult,
 } from './shared'
 
@@ -67,7 +67,7 @@ export const handleSearchComponents = async (
       ),
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -83,6 +83,6 @@ export const handleReindex = async (
     )
     return textResult(JSON.stringify(out, null, 2))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
