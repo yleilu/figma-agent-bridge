@@ -462,10 +462,12 @@ describe('handleSetPluginData', () => {
         reply: { error: 'Node not found: nope' },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'Node not found',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Node not found')
+    expect(data.code).toBe('NODE_NOT_FOUND')
   })
 
   it('returns failure text on a null reply', async () => {
@@ -473,9 +475,10 @@ describe('handleSetPluginData', () => {
       { nodeId: '1:1', key: 'k', value: 'v' },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to set plugin data.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to set plugin data.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })
 
@@ -534,7 +537,12 @@ describe('handleSetReactions', () => {
         reply: { error: 'Node not found: nope' },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Node not found')
+    expect(data.code).toBe('NODE_NOT_FOUND')
   })
 
   it('returns failure text on a null reply', async () => {
@@ -542,9 +550,10 @@ describe('handleSetReactions', () => {
       { nodeId: '1:1', reactions: [] },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to set reactions.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to set reactions.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })
 
@@ -598,8 +607,9 @@ describe('handleSetAnnotations', () => {
       { nodeId: '1:1', annotations: [] },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to set annotations.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to set annotations.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })

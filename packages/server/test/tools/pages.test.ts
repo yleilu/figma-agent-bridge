@@ -55,9 +55,10 @@ describe('handleCreatePage', () => {
       { name: 'New' },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to create page.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to create page.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })
 
@@ -88,10 +89,12 @@ describe('handleSetCurrentPage', () => {
         reply: { error: 'Page not found: nope' },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'Page not found',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Page not found')
+    expect(data.code).toBe('NODE_NOT_FOUND')
   })
 
   it('returns failure text on a null reply', async () => {
@@ -99,9 +102,10 @@ describe('handleSetCurrentPage', () => {
       { pageId: 'page:1' },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to set current page.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to set current page.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })
 
@@ -141,8 +145,9 @@ describe('handleDuplicatePage', () => {
       { pageId: 'page:1' },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to duplicate page.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to duplicate page.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })

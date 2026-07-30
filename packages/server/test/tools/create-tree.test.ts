@@ -361,10 +361,12 @@ describe('handleCreateTree', () => {
         },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'Parent not found',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Parent not found')
+    expect(data.code).toBe('NODE_NOT_FOUND')
   })
 
   it('maps a thrown plugin error to a tool-formatted message', async () => {
@@ -452,8 +454,9 @@ describe('handleCreateTree reply shape — {root, ids[]}', () => {
       { tree: { type: 'FRAME' } },
       stubClient({ reply: { error: 'Parent not found' } }),
     )
-    expect(result.content[0].text).toBe(
-      'Error: Parent not found',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Parent not found',
+      code: 'NODE_NOT_FOUND',
+    })
   })
 })

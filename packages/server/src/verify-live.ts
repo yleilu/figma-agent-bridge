@@ -37,6 +37,7 @@ import type {
 import { handleExport } from './tools/export'
 import { handleSetFocus } from './tools/structure'
 import { handleDeleteNode } from './tools/structure'
+import { isErrorResult } from './tools/shared'
 import {
   CHECK_LIST,
   ALL_TOOLS,
@@ -419,7 +420,12 @@ const main = async (): Promise<number> => {
           { nodeId: id },
           scoped,
         )
-        if (!r.content[0]?.text.startsWith('Error:')) {
+        // Transitional: recognize the typed envelope AND the not-yet-converted
+        // bare-text prefix (this task only rewires formatMutationResult).
+        const failed =
+          isErrorResult(r) ||
+          (r.content[0]?.text.startsWith('Error:') ?? false)
+        if (!failed) {
           deleted++
         }
       } catch {

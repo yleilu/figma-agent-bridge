@@ -122,8 +122,9 @@ describe('handleCreateImage', () => {
       { url: 'https://x/y.png' },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to create image.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to create image.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })

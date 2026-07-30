@@ -22,6 +22,7 @@ import {
   type ToolResult,
   formatMutationResult,
   errorMessage,
+  isErrorResult,
   textResult,
 } from './shared'
 
@@ -99,9 +100,9 @@ export const handleCreateNode = async (
       return mutation
     }
     // Append the warnings to a SUCCESSFUL mutation result. (If the mutation
-    // errored, formatMutationResult already returned an Error: text — do not
-    // muddy it with the warning notes.)
-    if (mutation.content[0].text.startsWith('Error')) {
+    // errored, formatMutationResult already returned the error envelope — do
+    // not muddy it with the warning notes.)
+    if (isErrorResult(mutation)) {
       return mutation
     }
     const warningText = warnings

@@ -86,10 +86,12 @@ describe('handleCloneNode', () => {
         },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'not cloneable',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('not cloneable')
+    expect(data.code).toBe('NODE_NOT_FOUND')
   })
 
   it('returns failure text on a null reply', async () => {
@@ -97,9 +99,10 @@ describe('handleCloneNode', () => {
       { nodeId: '1:1' },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to clone node.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to clone node.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })
 
@@ -154,7 +157,12 @@ describe('handleReparentNode', () => {
         },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Parent not found')
+    expect(data.code).toBe('NODE_NOT_FOUND')
   })
 })
 
@@ -229,7 +237,12 @@ describe('handleReorderChildren', () => {
         },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Parent not found')
+    expect(data.code).toBe('NODE_NOT_FOUND')
   })
 })
 
@@ -286,7 +299,12 @@ describe('handleBooleanOp', () => {
         },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('requires at least')
+    expect(data.code).toBe('INVALID_PARAM')
   })
 })
 
@@ -338,7 +356,12 @@ describe('handleFlatten', () => {
         },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('requires at least')
+    expect(data.code).toBe('INVALID_PARAM')
   })
 })
 
@@ -390,7 +413,12 @@ describe('handleGroupNodes', () => {
         },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('requires at least')
+    expect(data.code).toBe('INVALID_PARAM')
   })
 
   it('returns failure text on a null reply', async () => {
@@ -398,8 +426,9 @@ describe('handleGroupNodes', () => {
       { nodeIds: ['1:1'] },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to group nodes.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to group nodes.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })

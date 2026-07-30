@@ -55,10 +55,12 @@ describe('handleBindVariable', () => {
         reply: { error: 'Variable not found: v:9' },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'Variable not found',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Variable not found')
+    expect(data.code).toBe('NODE_NOT_FOUND')
   })
 
   it('surfaces a {id,warnings:[...]} degrade as success-with-warning (never thrown)', async () => {

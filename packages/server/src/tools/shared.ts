@@ -5,6 +5,17 @@ import {
 } from '@figma-agent-bridge/shared'
 import type { FigmaClient } from '../figma-client'
 import type { CursorError } from '../read/paginate'
+import {
+  ToolError,
+  classify,
+  classifyMessage,
+  errorMessage,
+  type ErrorCode,
+} from '../errors'
+
+// Re-exported so the existing importers of `./shared` keep working untouched —
+// the classifier itself lives in ../errors (Task 1).
+export { errorMessage, ToolError, type ErrorCode }
 
 export type ToolResult = {
   content: { type: 'text'; text: string }[]
@@ -14,9 +25,6 @@ export const textResult = (text: string): ToolResult => ({
   content: [{ type: 'text', text }],
 })
 
-export const errorMessage = (err: unknown): string =>
-  err instanceof Error ? err.message : String(err)
-
 // The one "cursor rejected" surface for every bounded list read (T10). A
 // STALE/MALFORMED opaque cursor is reported, never silently resumed (T7); every
 // list-read handler renders the SAME message so the agent's recovery action
@@ -25,39 +33,59 @@ export const errorMessage = (err: unknown): string =>
 export const cursorRejected = (err: CursorError): string =>
   `Cursor rejected (${err.reason}) — re-run the read to get a fresh cursor.`
 
-export const formatMutationResult = (
-  result: { error?: string } | null,
-  failMsg: string,
-): ToolResult => {
-  if (result === null) {
-    return textResult(failMsg)
-  }
-  if (result.error !== undefined) {
-    return textResult(`Error: ${result.error}`)
-  }
-  return textResult(JSON.stringify(result, null, 2))
-}
-
-// The typed error codes the tool contract owns (overview.md → Error envelope).
-export type ErrorCode =
-  | 'NODE_NOT_FOUND'
-  | 'INVALID_PARAM'
-  | 'FONT_LOAD_FAILED'
-  | 'DISCONNECTED'
-  | 'TIMEOUT'
-  | 'UNSUPPORTED_NODE_TYPE'
-  | 'API_UNAVAILABLE'
-  | 'WRONG_EDITOR'
-  | 'LIBRARY_UNPUBLISHED'
-  | 'WRONG_FILE'
-  // B2 skew (extends the overview list; reconciled into the spec in Task 11).
-  | 'INCOMPATIBLE'
-
 /** The server-owned typed error envelope, emitted as one JSON text block. */
 export const errorEnvelope = (
   code: ErrorCode,
   error: string,
 ): ToolResult => textResult(JSON.stringify({ error, code }))
+
+/** Classify a caught throwable and render the typed envelope. */
+export const toolError = (err: unknown): ToolResult =>
+  errorEnvelope(classify(err), errorMessage(err))
+
+/** Classify a plugin `{error}` string and render the typed envelope. */
+export const pluginError = (message: string): ToolResult =>
+  errorEnvelope(classifyMessage(message), message)
+
+export const formatMutationResult = (
+  result: { error?: string } | null,
+  failMsg: string,
+): ToolResult => {
+  if (result === null) {
+    return errorEnvelope('PLUGIN_ERROR', failMsg)
+  }
+  if (result.error !== undefined) {
+    return pluginError(result.error)
+  }
+  return textResult(JSON.stringify(result, null, 2))
+}
+
+/**
+ * True only for the error envelope — EXACTLY {error, code}. A success payload
+ * that happens to carry an `error` key (e.g. a partial-success `errors[]`
+ * entry surfaced elsewhere) is not one, which is why this checks the key set
+ * rather than sniffing text for a leading "Error".
+ */
+export const isErrorResult = (r: ToolResult): boolean => {
+  const text = r.content[0]?.text ?? ''
+  if (!text.startsWith('{')) {
+    return false
+  }
+  try {
+    const parsed = JSON.parse(text) as Record<
+      string,
+      unknown
+    >
+    const keys = Object.keys(parsed)
+    return (
+      keys.length === 2 &&
+      typeof parsed.error === 'string' &&
+      typeof parsed.code === 'string'
+    )
+  } catch {
+    return false
+  }
+}
 
 /**
  * The addressable identity of a connected file. A saved file uses its stable

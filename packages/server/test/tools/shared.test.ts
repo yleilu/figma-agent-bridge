@@ -23,7 +23,14 @@ import {
   errorEnvelope,
   synthKey,
   requireFile,
+  toolError,
+  pluginError,
 } from '@figma-agent-bridge/server/tools/shared'
+
+const parseEnvelope = (r: {
+  content: { text?: string }[]
+}): { error: string; code: string } =>
+  JSON.parse(r.content[0].text ?? '')
 
 describe('textResult', () => {
   it('wraps a string in the ToolResult shape', () => {
@@ -62,18 +69,32 @@ describe('cursorRejected', () => {
 })
 
 describe('formatMutationResult', () => {
-  it('returns the fail message when result is null', () => {
+  it('envelopes a null reply as PLUGIN_ERROR carrying the fallback message', () => {
     expect(
-      formatMutationResult(null, 'Failed to create node.')
-        .content[0].text,
-    ).toBe('Failed to create node.')
+      parseEnvelope(
+        formatMutationResult(
+          null,
+          'Failed to create node.',
+        ),
+      ),
+    ).toEqual({
+      error: 'Failed to create node.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 
-  it('prefixes Error: when result.error is set', () => {
+  it('envelopes a plugin error with a classified code', () => {
     expect(
-      formatMutationResult({ error: 'boom' }, 'fail')
-        .content[0].text,
-    ).toBe('Error: boom')
+      parseEnvelope(
+        formatMutationResult(
+          { error: 'Node not found: 1:2' },
+          'fallback',
+        ),
+      ),
+    ).toEqual({
+      error: 'Node not found: 1:2',
+      code: 'NODE_NOT_FOUND',
+    })
   })
 
   it('pretty-prints JSON otherwise', () => {
@@ -84,6 +105,30 @@ describe('formatMutationResult', () => {
     expect(r.content[0].text).toBe(
       JSON.stringify({ id: '1:2' }, null, 2),
     )
+  })
+})
+
+describe('renderers', () => {
+  it('toolError classifies a thrown Error', () => {
+    expect(
+      parseEnvelope(toolError(new Error('Not connected'))),
+    ).toEqual({
+      error: 'Not connected',
+      code: 'DISCONNECTED',
+    })
+  })
+
+  it('pluginError classifies a plugin string', () => {
+    expect(
+      parseEnvelope(
+        pluginError('Node is not an instance: 0:1'),
+      ).code,
+    ).toBe('UNSUPPORTED_NODE_TYPE')
+  })
+
+  it('the envelope is NOT pretty-printed', () => {
+    const t = toolError(new Error('x')).content[0].text
+    expect(t).not.toContain('\n')
   })
 })
 

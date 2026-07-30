@@ -26,7 +26,10 @@ import type {
   FigmaClient,
   ScopedFigmaClient,
 } from './figma-client'
-import type { ToolResult } from './tools/shared'
+import {
+  type ToolResult,
+  isErrorResult,
+} from './tools/shared'
 
 import { handleStatus } from './tools/session'
 import {
@@ -132,8 +135,14 @@ export type Check = {
 const text = (r: ToolResult): string =>
   r.content[0]?.text ?? ''
 
-/** A handler that returned "Error: …" is a hard failure (T7 surfaces errors). */
+// A handler that returned the typed error envelope is a hard failure (T7
+// surfaces errors). The bare-text prefixes are a transitional fallback: the
+// typed-error-envelope migration converts one call site at a time (this task
+// only rewires formatMutationResult), so a handler whose own catch(err) has
+// not converted yet may still emit bare "Error: …"/"Not connected" text —
+// remove the OR once every handler in tools/ emits the envelope.
 const isError = (r: ToolResult): boolean =>
+  isErrorResult(r) ||
   text(r).startsWith('Error:') ||
   text(r).startsWith('Not connected')
 

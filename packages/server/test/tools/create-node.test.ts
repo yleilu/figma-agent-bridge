@@ -182,10 +182,12 @@ describe('handleCreateNode (rebuilt — single NodeSpec)', () => {
         },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'Parent not found',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Parent not found')
+    expect(data.code).toBe('NODE_NOT_FOUND')
   })
 
   it('surfaces plugin warnings on success', async () => {
