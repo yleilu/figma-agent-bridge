@@ -48,7 +48,12 @@ describe('handleGithubAuthStart', () => {
       'repo',
       seq({}),
     )
-    expect(res.content[0].text).toContain('not configured')
+    const data = JSON.parse(res.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('not configured')
+    expect(data.code).toBe('API_UNAVAILABLE')
   })
 
   it('returns the user code + verification uri', async () => {

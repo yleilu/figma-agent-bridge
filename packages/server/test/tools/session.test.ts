@@ -81,6 +81,28 @@ describe('handleConnect', () => {
     expect(result.content[0].type).toBe('text')
     expect(result.content[0].text).toContain('test-ch')
   })
+
+  it('returns a typed envelope when joinChannel throws (explicit channel)', async () => {
+    const mockClient: FigmaClient = {
+      joinChannel: () =>
+        Promise.reject(new Error('Not connected')),
+      sendCommand: () => Promise.resolve(null),
+      disconnect: () => undefined,
+      isConnected: () => true,
+    }
+
+    const result = await handleConnect(
+      { channel: 'test-ch' },
+      mockClient,
+    )
+
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toBe('Not connected')
+    expect(data.code).toBe('DISCONNECTED')
+  })
 })
 
 describe('handleConnect auto-discovery', () => {
@@ -256,6 +278,50 @@ describe('handleConnect auto-discovery', () => {
     }
     expect(data.code).toBe('INCOMPATIBLE')
     expect(data.error).toContain('0.0.1')
+
+    await closeWs(ws)
+  })
+
+  it('returns a typed envelope when joinChannel throws (resolved target)', async () => {
+    const ws = await connectRaw()
+    ws.send(
+      JSON.stringify({
+        type: 'join',
+        channel: 'resolve-throw-ch',
+      }),
+    )
+    await waitForMessage(ws)
+    ws.send(
+      JSON.stringify({
+        type: 'register',
+        channel: 'resolve-throw-ch',
+        fileName: 'test-file',
+        version: APP_VERSION,
+      }),
+    )
+    await Bun.sleep(30)
+
+    const mockClient: FigmaClient = {
+      joinChannel: () =>
+        Promise.reject(new Error('Not connected')),
+      sendCommand: () => Promise.resolve(null),
+      disconnect: () => undefined,
+      isConnected: () => true,
+    } as unknown as FigmaClient
+
+    const result = await handleConnect(
+      { fileName: 'test-file' },
+      mockClient,
+      HTTP_URL,
+      TEST_PORT,
+    )
+
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toBe('Not connected')
+    expect(data.code).toBe('DISCONNECTED')
 
     await closeWs(ws)
   })

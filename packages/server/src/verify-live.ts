@@ -420,11 +420,7 @@ const main = async (): Promise<number> => {
           { nodeId: id },
           scoped,
         )
-        // Transitional: recognize the typed envelope AND the not-yet-converted
-        // bare-text prefix (this task only rewires formatMutationResult).
-        const failed =
-          isErrorResult(r) ||
-          (r.content[0]?.text.startsWith('Error:') ?? false)
+        const failed = isErrorResult(r)
         if (!failed) {
           deleted++
         }

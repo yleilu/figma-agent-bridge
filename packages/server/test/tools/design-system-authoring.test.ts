@@ -491,13 +491,18 @@ describe('handleDeleteVariables', () => {
     )
     const out = JSON.parse(result.content[0].text) as {
       results: { id: string; kind: string }[]
-      errors: { id: string; error: string }[]
+      errors: {
+        id: string
+        error: string
+        code: string
+      }[]
     }
     expect(out.results).toHaveLength(1)
     expect(out.results[0].id).toBe('var:1')
     expect(out.results[0].kind).toBe('variable')
     expect(out.errors).toHaveLength(1)
     expect(out.errors[0].id).toBe('err:missing')
+    expect(out.errors[0].code).toBe('NODE_NOT_FOUND')
   })
 
   it('returns partial success — collection id with cascade shape', async () => {
@@ -517,10 +522,15 @@ describe('handleDeleteVariables', () => {
     )
     const out = JSON.parse(result.content[0].text) as {
       results: { id: string; kind: string }[]
-      errors: { id: string; error: string }[]
+      errors: {
+        id: string
+        error: string
+        code: string
+      }[]
     }
     expect(out.results[0].kind).toBe('collection')
     expect(out.errors[0].id).toBe('err:bad')
+    expect(out.errors[0].code).toBe('NODE_NOT_FOUND')
   })
 
   it('surfaces a plugin-side {error} as an error (entire call failed)', async () => {
@@ -612,12 +622,17 @@ describe('handleDeleteStyles', () => {
     )
     const out = JSON.parse(result.content[0].text) as {
       results: { id: string; index: number }[]
-      errors: { index: number; error: string }[]
+      errors: {
+        index: number
+        error: string
+        code: string
+      }[]
     }
     expect(out.results).toHaveLength(1)
     expect(out.results[0].id).toBe('S:1')
     expect(out.errors).toHaveLength(1)
     expect(out.errors[0].index).toBe(1)
+    expect(out.errors[0].code).toBe('NODE_NOT_FOUND')
   })
 
   it('returns partial success — name+type resolve + not-found', async () => {
@@ -864,12 +879,17 @@ describe('handleCreateStyles', () => {
     ])
     const out = JSON.parse(result.content[0].text) as {
       results: { index: number; name: string }[]
-      errors: { index: number; error: string }[]
+      errors: {
+        index: number
+        error: string
+        code: string
+      }[]
     }
     // Results keep their ORIGINAL indices (0 and 2); the error is index 1.
     expect(out.results.map(r => r.index)).toEqual([0, 2])
     expect(out.errors).toHaveLength(1)
     expect(out.errors[0].index).toBe(1)
+    expect(out.errors[0].code).toBe('PLUGIN_ERROR')
   })
 
   it('surfaces a plugin-side per-entry error in the errors[] array', async () => {
@@ -1093,10 +1113,15 @@ describe('handleUpdateStyles', () => {
     expect(result.content[0].text).not.toContain('Error:')
     const out = JSON.parse(result.content[0].text) as {
       results: unknown[]
-      errors: { index: number; error: string }[]
+      errors: {
+        index: number
+        error: string
+        code: string
+      }[]
     }
     expect(out.results).toEqual([])
     expect(out.errors[0].error).toContain('Style not found')
+    expect(out.errors[0].code).toBe('NODE_NOT_FOUND')
   })
 
   it('isolates a malformed value atom to its entry (never throws; valid entries still sent)', async () => {

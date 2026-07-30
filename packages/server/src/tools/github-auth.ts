@@ -7,7 +7,8 @@ import { setToken } from '../credential-store'
 import {
   type ToolResult,
   textResult,
-  errorMessage,
+  toolError,
+  errorEnvelope,
 } from './shared'
 
 interface PendingAuth {
@@ -43,8 +44,9 @@ export const handleGithubAuthStart = async (
   fetchImpl: typeof fetch = fetch,
 ): Promise<ToolResult> => {
   if (!clientId) {
-    return textResult(
-      'Error: GitHub login is not configured (no OAuth client id). Use anonymous.',
+    return errorEnvelope(
+      'API_UNAVAILABLE',
+      'GitHub login is not configured (no OAuth client id). Use anonymous.',
     )
   }
   try {
@@ -68,7 +70,7 @@ export const handleGithubAuthStart = async (
       }),
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -134,6 +136,6 @@ export const handleGithubAuthPoll = async (
     // budget elapsed, still pending — the agent re-invokes
     return textResult(JSON.stringify({ status: 'pending' }))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

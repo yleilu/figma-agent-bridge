@@ -77,12 +77,17 @@ describe('handleGetNodes (rebuilt — NodeSpec)', () => {
     )
     const out = YAML.parse(result.content[0].text) as {
       results: Record<string, unknown>[]
-      errors: { id: string; error: string }[]
+      errors: {
+        id: string
+        error: string
+        code: string
+      }[]
     }
     expect(out.results).toHaveLength(1)
     expect(out.errors).toHaveLength(1)
     expect(out.errors[0].id).toBe('nope')
     expect(out.errors[0].error).toContain('not found')
+    expect(out.errors[0].code).toBe('NODE_NOT_FOUND')
   })
 
   it('applies a fields projection to each result', async () => {
@@ -103,7 +108,10 @@ describe('handleGetNodes (rebuilt — NodeSpec)', () => {
       { nodeIds: ['1:42'] },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toContain('Failed')
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to get nodes from plugin.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 
   it('returns Unexpected response when the plugin returns a non-array', async () => {
@@ -111,8 +119,9 @@ describe('handleGetNodes (rebuilt — NodeSpec)', () => {
       { nodeIds: ['1:42'] },
       stubClient({ reply: { not: 'an array' } }),
     )
-    expect(result.content[0].text).toBe(
-      'Unexpected response from plugin',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Unexpected response from plugin',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })

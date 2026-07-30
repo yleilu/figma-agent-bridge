@@ -366,4 +366,28 @@ describe('handleSearch (rebuilt — Rule A)', () => {
     // A typo'd id must not read as a clean zero-match.
     expect(text).not.toContain('results: []')
   })
+
+  it('returns a typed envelope when the plugin returns null (defensive path)', async () => {
+    const nullClient: ScopedFigmaClient = {
+      fileKey: 'fk-test',
+      sendCommand: async () => null,
+    }
+    const result = await handleSearch({}, nullClient)
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Search failed: no response from plugin.',
+      code: 'PLUGIN_ERROR',
+    })
+  })
+
+  it('returns a typed envelope when results is not an array (defensive path)', async () => {
+    const malformedClient: ScopedFigmaClient = {
+      fileKey: 'fk-test',
+      sendCommand: async () => ({ results: 'not-array' }),
+    }
+    const result = await handleSearch({}, malformedClient)
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Unexpected response from plugin',
+      code: 'PLUGIN_ERROR',
+    })
+  })
 })

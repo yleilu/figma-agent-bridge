@@ -17,7 +17,7 @@
 //
 // PARTIAL-SUCCESS SHAPE (documented):
 //   results: [{ index, op, ok, result?, error?, warnings? }] — one per op, in order
-//   errors:  [{ index, op, error }]                   — the failures, summarized
+//   errors:  [{ index, op, error, code }]              — the failures, summarized
 // `warnings?` carries the SAME server-side writer warnings a direct call would
 // emit (e.g. update_node per-side stroke collapse), so a batched op is not a
 // silent lossy conversion (D3/T7).
@@ -48,6 +48,7 @@ import {
   pluginError,
   errorEnvelope,
 } from './shared'
+import { classifyMessage } from '../errors'
 
 type BatchEntry = Record<string, unknown> & { op?: string }
 
@@ -435,6 +436,7 @@ export const handleBatch = async (
         index: r.index,
         op: r.op,
         error: r.error,
+        code: classifyMessage(r.error ?? ''),
       }))
 
     // batch ALWAYS succeeds at the tool level (D3 partial success): a per-op

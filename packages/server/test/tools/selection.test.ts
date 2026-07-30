@@ -70,7 +70,10 @@ describe('handleGetSelection', () => {
       {},
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toContain('Failed')
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to get selection from plugin.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })
 

@@ -9,10 +9,10 @@ import { ensureRelay } from '../ensure-relay'
 import {
   type ToolResult,
   textResult,
-  errorMessage,
   errorEnvelope,
   protocolMismatch,
   synthKey,
+  toolError,
 } from './shared'
 
 // --- target resolution (B3): match a connect request to exactly ONE file ---
@@ -186,7 +186,7 @@ export const handleConnect = async (
         available,
       })
     } catch (err) {
-      return textResult(`Error: ${errorMessage(err)}`)
+      return toolError(err)
     }
   }
 
@@ -245,7 +245,7 @@ export const handleConnect = async (
       available,
     })
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 

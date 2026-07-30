@@ -32,6 +32,7 @@ import {
   textResult,
   toolError,
   pluginError,
+  errorEnvelope,
   cursorRejected,
 } from './shared'
 
@@ -122,7 +123,8 @@ export const handleSearch = async (
     } | null
 
     if (raw === null) {
-      return textResult(
+      return errorEnvelope(
+        'PLUGIN_ERROR',
         'Search failed: no response from plugin.',
       )
     }
@@ -132,7 +134,10 @@ export const handleSearch = async (
       return pluginError(raw.error)
     }
     if (!Array.isArray(raw.results)) {
-      return textResult('Unexpected response from plugin')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Unexpected response from plugin',
+      )
     }
 
     // 1 — match (server-side filter, incl. type array via buildMatcher).

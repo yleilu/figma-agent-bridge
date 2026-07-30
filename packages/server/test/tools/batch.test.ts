@@ -71,6 +71,7 @@ type BatchOut = {
     index: number
     op: string | null
     error?: string
+    code: string
   }[]
 }
 
@@ -224,12 +225,13 @@ describe('handleBatch', () => {
       'Node not found: bad-1',
     )
     expect(out.results[2].ok).toBe(true)
-    // errors[] summarizes only the failures, with index + op.
+    // errors[] summarizes only the failures, with index + op + code.
     expect(out.errors).toEqual([
       {
         index: 1,
         op: 'delete_node',
         error: 'Node not found: bad-1',
+        code: 'NODE_NOT_FOUND',
       },
     ])
   })
@@ -385,6 +387,7 @@ describe('handleBatch', () => {
     expect(out.results[1].error).toContain('6/8-char hex')
     expect(out.results[2].ok).toBe(true)
     expect(out.errors.map(e => e.index)).toEqual([1])
+    expect(out.errors[0].code).toBe('INVALID_PARAM')
   })
 
   it('an entry with neither a top-level nor a per-entry op records an error', async () => {
@@ -396,6 +399,10 @@ describe('handleBatch', () => {
     expect(out.results[0].ok).toBe(false)
     expect(out.results[0].error).toContain('No op')
     expect(out.errors).toHaveLength(1)
+    // No RULES pattern matches this message — the honest PLUGIN_ERROR
+    // fallback, never INVALID_PARAM (classifyMessage never blames the
+    // agent's parameters for a message it does not recognize).
+    expect(out.errors[0].code).toBe('PLUGIN_ERROR')
   })
 
   it('surfaces a plugin-level {error} as an error', async () => {

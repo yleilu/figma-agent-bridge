@@ -20,8 +20,10 @@ import {
   textResult,
   toolError,
   pluginError,
+  errorEnvelope,
   cursorRejected,
 } from './shared'
+import { classifyMessage, type ErrorCode } from '../errors'
 
 type ReadSelectors = {
   fields?: string[]
@@ -115,7 +117,8 @@ export const handleInspect = async (
       | Record<string, unknown>[]
       | null
     if (raw === null) {
-      return textResult(
+      return errorEnvelope(
+        'NODE_NOT_FOUND',
         `Node not found: ${nodeId ?? pageId ?? 'selection'}`,
       )
     }
@@ -218,7 +221,10 @@ export const handleGetNode = async (
       },
     )) as Record<string, unknown> | null
     if (raw === null) {
-      return textResult(`Node not found: ${nodeId}`)
+      return errorEnvelope(
+        'NODE_NOT_FOUND',
+        `Node not found: ${nodeId}`,
+      )
     }
     if (
       raw !== null &&
@@ -271,15 +277,25 @@ export const handleGetNodes = async (
       },
     )) as Record<string, unknown>[] | null
     if (raw === null) {
-      return textResult('Failed to get nodes from plugin.')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Failed to get nodes from plugin.',
+      )
     }
 
     if (!Array.isArray(raw)) {
-      return textResult('Unexpected response from plugin')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Unexpected response from plugin',
+      )
     }
 
     const results: Partial<NodeSpec>[] = []
-    const errors: { id: string; error: string }[] = []
+    const errors: {
+      id: string
+      error: string
+      code: ErrorCode
+    }[] = []
     for (const entry of raw) {
       if (
         entry !== null &&
@@ -288,6 +304,7 @@ export const handleGetNodes = async (
         errors.push({
           id: (entry.id as string) ?? '',
           error: entry.error,
+          code: classifyMessage(entry.error),
         })
         continue
       }
@@ -331,7 +348,10 @@ export const handleListPages = async (
       }[]
     } | null
     if (raw === null) {
-      return textResult('Failed to get pages from plugin.')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Failed to get pages from plugin.',
+      )
     }
 
     // T10 — bound the AGENT-CONTEXT: slice the page list to one page.

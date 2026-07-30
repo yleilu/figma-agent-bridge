@@ -12,6 +12,7 @@ import {
   textResult,
   formatMutationResult,
   toolError,
+  errorEnvelope,
 } from './shared'
 
 export const handleGetSelection = async (
@@ -26,7 +27,8 @@ export const handleGetSelection = async (
       | { id: string; name: string; type: string }[]
       | null
     if (raw === null) {
-      return textResult(
+      return errorEnvelope(
+        'PLUGIN_ERROR',
         'Failed to get selection from plugin.',
       )
     }
