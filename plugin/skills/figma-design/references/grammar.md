@@ -15,8 +15,8 @@ ships with the plugin since the spec file does not.
 
 | Category | What | Rendered as |
 |---|---|---|
-| **Struct** | composite with named fields | YAML |
-| **Atom** | single leaf value | compact string (this grammar) |
+| **Struct** | composite with named fields | YAML in `inspect`; JSON in every other read |
+| **Atom** | single leaf value | compact string (this grammar) — identical either way |
 
 Structs contain atoms as field values. All atoms share one shape.
 
@@ -37,7 +37,7 @@ Three parts, always in this order:
 3. **`{ … }`** *(optional)* — optional/rare fields, comma-separated `key=val`.
    Omitted when empty; always trailing.
 
-A field holding many atoms (e.g. `fills`) is a YAML array of atoms.
+A field holding many atoms (e.g. `fills`) is an array of atoms.
 
 **Canonical form (what reads emit):** `{…}` trailing, head args unspaced
 (`font(Inter,SemiBold,18)`), gradient stops spaced (`linear(135, #FF0000@0, #00FF00@100)`).
@@ -145,9 +145,11 @@ Bare literals: `opacity` `0.5` · `rotation` `45` · `blendMode` `MULTIPLY` ·
 
 ---
 
-## Node struct fields (inspect / get_node view)
+## Node struct fields (inspect / get_node)
 
-The YAML struct wrapping atom values:
+The struct wrapping atom values. Shown as `inspect` renders it — YAML, the one
+YAML reader. `get_node` / `get_nodes` return the **same fields with the same
+atom strings**, serialized as JSON; only the container differs, never an atom.
 
 ```yaml
 type: FRAME
