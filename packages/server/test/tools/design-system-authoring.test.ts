@@ -241,7 +241,12 @@ describe('handleCreateVariables', () => {
       },
       stubClient({ reply: { collectionId: 'c' } }),
     )
-    expect(result.content[0].text).toContain('Error')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INVALID_PARAM')
+    expect(data.error).toContain('hex')
   })
 
   it('returns failure text on a null reply', async () => {
@@ -549,8 +554,12 @@ describe('handleDeleteVariables', () => {
       {},
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain('At least one')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INVALID_PARAM')
+    expect(data.error).toContain('At least one')
   })
 })
 
@@ -648,8 +657,12 @@ describe('handleDeleteStyles', () => {
         reply: { error: 'Styles API unavailable' },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain('unavailable')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('unavailable')
+    expect(data.code).toBe('API_UNAVAILABLE')
   })
 
   it('returns failure text on a null reply', async () => {
@@ -657,9 +670,10 @@ describe('handleDeleteStyles', () => {
       { styles: [{ id: 'S:1' }] },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to delete styles.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to delete styles.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })
 
@@ -894,9 +908,10 @@ describe('handleCreateStyles', () => {
       },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to create styles.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to create styles.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })
 
@@ -1116,9 +1131,10 @@ describe('handleUpdateStyles', () => {
       { styles: [{ id: 'S:1' }] },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to update styles.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to update styles.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })
 

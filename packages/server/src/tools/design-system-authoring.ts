@@ -25,6 +25,9 @@ import {
   type ToolResult,
   formatMutationResult,
   errorMessage,
+  errorEnvelope,
+  toolError,
+  pluginError,
   textResult,
 } from './shared'
 
@@ -93,7 +96,7 @@ export const handleCreateVariables = async (
       'Failed to create variables.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -174,7 +177,7 @@ export const handleUpdateVariables = async (
       'Failed to update variables.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -202,8 +205,9 @@ export const handleDeleteVariables = async (
   const hasCollections =
     collections !== undefined && collections.length > 0
   if (!hasVariables && !hasCollections) {
-    return textResult(
-      'Error: At least one of `variables` or `collections` must be a non-empty array.',
+    return errorEnvelope(
+      'INVALID_PARAM',
+      'At least one of `variables` or `collections` must be a non-empty array.',
     )
   }
   try {
@@ -216,7 +220,7 @@ export const handleDeleteVariables = async (
       'Failed to delete variables.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -292,10 +296,13 @@ export const handleCreateStyles = async (
     } | null
 
     if (reply === null) {
-      return textResult('Failed to create styles.')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Failed to create styles.',
+      )
     }
     if (reply.error !== undefined) {
-      return textResult(`Error: ${reply.error}`)
+      return pluginError(reply.error)
     }
 
     // Merge the plugin's per-entry results/errors with the server-side
@@ -310,7 +317,7 @@ export const handleCreateStyles = async (
       JSON.stringify({ results, errors }, null, 2),
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -391,10 +398,13 @@ export const handleUpdateStyles = async (
     } | null
 
     if (reply === null) {
-      return textResult('Failed to update styles.')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Failed to update styles.',
+      )
     }
     if (reply.error !== undefined) {
-      return textResult(`Error: ${reply.error}`)
+      return pluginError(reply.error)
     }
 
     const results = reply.results ?? []
@@ -407,7 +417,7 @@ export const handleUpdateStyles = async (
       JSON.stringify({ results, errors }, null, 2),
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -450,10 +460,13 @@ export const handleDeleteStyles = async (
     } | null
 
     if (reply === null) {
-      return textResult('Failed to delete styles.')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Failed to delete styles.',
+      )
     }
     if (reply.error !== undefined) {
-      return textResult(`Error: ${reply.error}`)
+      return pluginError(reply.error)
     }
 
     const results = reply.results ?? []
@@ -465,7 +478,7 @@ export const handleDeleteStyles = async (
       JSON.stringify({ results, errors }, null, 2),
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -500,6 +513,6 @@ export const handleApplyStyle = async (
       'Failed to apply style.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

@@ -88,9 +88,10 @@ describe('handleGetReactions', () => {
       { nodeId: '1:1' },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to get reactions from plugin.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to get reactions from plugin.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 
   // T10 — server-side pagination over the reactions list.
@@ -263,9 +264,10 @@ describe('handleGetPluginData', () => {
       { nodeId: '1:1' },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to get plugin data from plugin.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to get plugin data from plugin.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })
 
@@ -321,9 +323,10 @@ describe('handleGetAnnotations', () => {
       {},
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to get annotations from plugin.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to get annotations from plugin.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 
   // T10 — server-side pagination over the annotations list.

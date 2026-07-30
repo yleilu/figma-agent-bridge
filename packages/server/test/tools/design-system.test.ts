@@ -107,11 +107,16 @@ describe('handleGetStyles', () => {
         },
       }),
     )
-    const { text } = result.content[0]
-    expect(text).toContain('Error')
-    expect(text).toContain('getLocalGridStylesAsync')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('getLocalGridStylesAsync')
+    expect(data.code).toBe('PLUGIN_ERROR')
     // Must NOT degrade a hard failure into a clean empty list.
-    expect(text).not.toContain('results: []')
+    expect(result.content[0].text).not.toContain(
+      'results: []',
+    )
   })
 
   it('round-trips letterSpacing PERCENT for a text style (T1/T2)', async () => {
@@ -196,9 +201,10 @@ describe('handleGetStyles', () => {
       {},
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to get styles from plugin.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to get styles from plugin.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 
   it('is defensive when a category is missing or not an array', async () => {
@@ -589,9 +595,10 @@ describe('handleGetComponents', () => {
       {},
       stubClient({ reply: { local: null, remote: [] } }),
     )
-    expect(result.content[0].text).toBe(
-      'Unexpected response from plugin',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Unexpected response from plugin',
+      code: 'PLUGIN_ERROR',
+    })
   })
 
   // Bug B: a genuine plugin-side {error} (e.g. a ComponentSet with conflicting
@@ -734,9 +741,10 @@ describe('handleGetComponents', () => {
       {},
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to get components from plugin.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to get components from plugin.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 
   // B8 — get_components(includeRemote:true) scan-budget + truncation warning.
@@ -904,9 +912,10 @@ describe('handleListFonts', () => {
       {},
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to list fonts from plugin.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to list fonts from plugin.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 
   it('surfaces a plugin-throw {error} reply instead of an empty success (T7)', async () => {
@@ -916,11 +925,16 @@ describe('handleListFonts', () => {
         reply: { error: 'Figma API unavailable' },
       }),
     )
-    const { text } = result.content[0]
-    expect(text).toContain('Error')
-    expect(text).toContain('Figma API unavailable')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Figma API unavailable')
+    expect(data.code).toBe('API_UNAVAILABLE')
     // A hard failure must NOT degrade to a clean empty list.
-    expect(text).not.toContain('results: []')
+    expect(result.content[0].text).not.toContain(
+      'results: []',
+    )
   })
 
   it('treats a non-array results payload as an error, not empty success', async () => {
@@ -928,9 +942,10 @@ describe('handleListFonts', () => {
       {},
       stubClient({ reply: { results: 'oops' } }),
     )
-    expect(result.content[0].text).toBe(
-      'Unexpected response from plugin',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Unexpected response from plugin',
+      code: 'PLUGIN_ERROR',
+    })
   })
 
   // T10 — server-side pagination. The host font list is large, so list_fonts is

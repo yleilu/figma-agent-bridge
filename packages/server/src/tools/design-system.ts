@@ -19,7 +19,9 @@ import {
   type ToolResult,
   textResult,
   formatMutationResult,
-  errorMessage,
+  errorEnvelope,
+  toolError,
+  pluginError,
   cursorRejected,
 } from './shared'
 
@@ -110,12 +112,15 @@ export const handleGetStyles = async (
     )) as (StylesReply & { error?: string }) | null
 
     if (raw === null) {
-      return textResult('Failed to get styles from plugin.')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Failed to get styles from plugin.',
+      )
     }
     // A style getter that throws plugin-side resolves as {error} (not a WS
     // reject); surface it (T7) instead of swallowing it into an empty list.
     if (raw.error !== undefined) {
-      return textResult(`Error: ${raw.error}`)
+      return pluginError(raw.error)
     }
 
     const results: {
@@ -170,7 +175,7 @@ export const handleGetStyles = async (
     }
     return textResult(JSON.stringify(out, null, 2))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -237,7 +242,8 @@ export const handleGetComponents = async (
     } | null
 
     if (raw === null) {
-      return textResult(
+      return errorEnvelope(
+        'PLUGIN_ERROR',
         'Failed to get components from plugin.',
       )
     }
@@ -247,14 +253,17 @@ export const handleGetComponents = async (
     // instead of masking it behind the generic "Unexpected response" — the
     // sibling reads get_styles/list_fonts already do this.
     if (raw.error !== undefined) {
-      return textResult(`Error: ${raw.error}`)
+      return pluginError(raw.error)
     }
 
     if (
       !Array.isArray(raw.local) ||
       !Array.isArray(raw.remote)
     ) {
-      return textResult('Unexpected response from plugin')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Unexpected response from plugin',
+      )
     }
 
     let local = raw.local as ComponentEntry[]
@@ -334,7 +343,7 @@ export const handleGetComponents = async (
 
     return textResult(JSON.stringify(envelope, null, 2))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -374,17 +383,23 @@ export const handleListFonts = async (
     )) as { results?: unknown; error?: string } | null
 
     if (raw === null) {
-      return textResult('Failed to list fonts from plugin.')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Failed to list fonts from plugin.',
+      )
     }
     // A thrown listAvailableFontsAsync() resolves as {error} (not a WS reject);
     // surface it (T7) rather than masking a hard failure as "no fonts".
     if (raw.error !== undefined) {
-      return textResult(`Error: ${raw.error}`)
+      return pluginError(raw.error)
     }
     // A non-array results payload is a malformed reply, not an empty font set —
     // do not coerce it to [] (which would read as a clean "no fonts available").
     if (!Array.isArray(raw.results)) {
-      return textResult('Unexpected response from plugin')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Unexpected response from plugin',
+      )
     }
 
     let results = raw.results as FontFamily[]
@@ -423,7 +438,7 @@ export const handleListFonts = async (
     }
     return textResult(JSON.stringify(out, null, 2))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -471,8 +486,9 @@ export const handleBindVariable = async (
   const hasModeMap =
     mode !== undefined && Object.keys(mode).length > 0
   if (!hasFieldBinding && !hasModeMap) {
-    return textResult(
-      'Error: INVALID_PARAM — bind_variable requires at least one of: (variableId + field) for a field binding, or mode for a mode pin.',
+    return errorEnvelope(
+      'INVALID_PARAM',
+      'bind_variable requires at least one of: (variableId + field) for a field binding, or mode for a mode pin.',
     )
   }
 
@@ -498,7 +514,7 @@ export const handleBindVariable = async (
       `Failed to bind variable${variableId ? ` ${variableId} to ${field ?? ''}` : ''} / mode on node ${nodeId}`,
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -619,7 +635,8 @@ export const handleGetVariables = async (
     )) as { results?: VariableCollection[] } | null
 
     if (raw === null) {
-      return textResult(
+      return errorEnvelope(
+        'PLUGIN_ERROR',
         'Failed to get variables from plugin.',
       )
     }
@@ -681,6 +698,6 @@ export const handleGetVariables = async (
     }
     return textResult(JSON.stringify(out, null, 2))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

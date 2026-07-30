@@ -156,10 +156,12 @@ describe('handleBindVariable — mode param (M13)', () => {
       { nodeId: '1:42' },
       stubClient({}),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'INVALID_PARAM',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INVALID_PARAM')
+    expect(data.error).toContain('bind_variable requires')
   })
 
   it('returns warning (not error) when plugin reports unknown-mode degrade', async () => {

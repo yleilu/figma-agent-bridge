@@ -401,10 +401,12 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
       },
       scoped,
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'Variable not found',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Variable not found')
+    expect(data.code).toBe('NODE_NOT_FOUND')
   })
 
   // 6 — bind_variable happy + read-back shows var()
@@ -493,10 +495,11 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
       { nodeId: '1:42' },
       scoped,
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'INVALID_PARAM',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INVALID_PARAM')
   })
 
   // ── chunk B — core reads + single-node create + navigation ────────────────
@@ -1545,10 +1548,12 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
       { collection: 'err:Brand', variables: [] },
       scoped,
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'createVariableCollection',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('createVariableCollection')
+    expect(data.code).toBe('PLUGIN_ERROR')
   })
 
   // 27d — create_variables: when renameMode is feature-detected ABSENT, the
@@ -1805,10 +1810,12 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
       },
       scoped,
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'Style not found',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Style not found')
+    expect(data.code).toBe('NODE_NOT_FOUND')
   })
 
   // 31b — apply_style with a WRONG-CATEGORY style (e.g. a PAINT style applied
@@ -1823,9 +1830,11 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
       },
       scoped,
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text.toLowerCase()).toContain(
-      'category',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error.toLowerCase()).toContain('category')
+    expect(data.code).toBe('PLUGIN_ERROR')
   })
 })
