@@ -13,10 +13,9 @@
 // limit+cursor are applied by the shared `paginateList` helper (read/paginate),
 // the one implementation behind every bounded list read (T10).
 //
-// Emits { results, truncated, cursor? } as YAML. `cursor` is present only when
+// Emits { results, truncated, cursor? } as JSON. `cursor` is present only when
 // more results remain after this page.
 
-import YAML from 'yaml'
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import type {
   Match,
@@ -193,7 +192,7 @@ export const handleSearch = async (
       out.cursor = bounded.cursor
     }
 
-    return textResult(YAML.stringify(out))
+    return textResult(JSON.stringify(out, null, 2))
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }

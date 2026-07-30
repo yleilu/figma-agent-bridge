@@ -6,7 +6,6 @@
 // gated. The server surfaces those warnings in the emitted object and NEVER
 // throws on the degrade path. A plugin-side {error} is surfaced as an error.
 
-import YAML from 'yaml'
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { ScopedFigmaClient } from '../figma-client'
 import { paginateList, CursorError } from '../read/paginate'
@@ -87,7 +86,7 @@ export const handleGetReactions = async (
     if (raw.warnings !== undefined) {
       out.warnings = raw.warnings
     }
-    return textResult(YAML.stringify(out))
+    return textResult(JSON.stringify(out, null, 2))
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }
@@ -145,7 +144,7 @@ export const handleGetPluginData = async (
     if (raw.warnings !== undefined) {
       out.warnings = raw.warnings
     }
-    return textResult(YAML.stringify(out))
+    return textResult(JSON.stringify(out, null, 2))
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }
@@ -221,7 +220,7 @@ export const handleGetAnnotations = async (
     if (raw.warnings !== undefined) {
       out.warnings = raw.warnings
     }
-    return textResult(YAML.stringify(out))
+    return textResult(JSON.stringify(out, null, 2))
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }

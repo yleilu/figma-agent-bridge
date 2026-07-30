@@ -185,7 +185,7 @@ export const handleInspect = async (
  *
  * Fidelity-first: sends COMMANDS.GET_NODE → toNodeSpec(depth) (children past
  * the boundary collapse to IdStubs; depth=0 default) → projectNode(fields/
- * profile) → YAML. It does NOT route through read/budget — get_node is never
+ * profile) → JSON. It does NOT route through read/budget — get_node is never
  * size-truncated.
  */
 export const handleGetNode = async (
@@ -217,7 +217,7 @@ export const handleGetNode = async (
     const spec = toNodeSpec(raw, { depth: depth ?? 0 })
     const projected = projectNode(spec, { fields, profile })
 
-    return textResult(YAML.stringify(projected))
+    return textResult(JSON.stringify(projected, null, 2))
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }
@@ -282,7 +282,9 @@ export const handleGetNodes = async (
       results.push(projectNode(spec, { fields, profile }))
     }
 
-    return textResult(YAML.stringify({ results, errors }))
+    return textResult(
+      JSON.stringify({ results, errors }, null, 2),
+    )
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }
@@ -346,7 +348,7 @@ export const handleListPages = async (
     if (bounded.cursor !== undefined) {
       out.cursor = bounded.cursor
     }
-    return textResult(YAML.stringify(out))
+    return textResult(JSON.stringify(out, null, 2))
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }

@@ -1,4 +1,3 @@
-import YAML from 'yaml'
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { ScopedFigmaClient } from '../figma-client'
 import type { IndexManager } from '../component-index/manager'
@@ -57,11 +56,15 @@ export const handleSearchComponents = async (
       validType,
     )
     return textResult(
-      YAML.stringify({
-        results: out.results,
-        indexState: out.indexState,
-        truncated: out.truncated,
-      }),
+      JSON.stringify(
+        {
+          results: out.results,
+          indexState: out.indexState,
+          truncated: out.truncated,
+        },
+        null,
+        2,
+      ),
     )
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
@@ -78,7 +81,7 @@ export const handleReindex = async (
       client.fileKey,
       getComponentsVia(client),
     )
-    return textResult(YAML.stringify(out))
+    return textResult(JSON.stringify(out, null, 2))
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }

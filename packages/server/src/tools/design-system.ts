@@ -1,4 +1,3 @@
-import YAML from 'yaml'
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import {
   paintToAtom,
@@ -169,7 +168,7 @@ export const handleGetStyles = async (
     if (bounded.cursor !== undefined) {
       out.cursor = bounded.cursor
     }
-    return textResult(YAML.stringify(out))
+    return textResult(JSON.stringify(out, null, 2))
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }
@@ -197,7 +196,7 @@ type ComponentEntry = {
  * (key, type, page, `properties` [== update_component's property array, T2],
  * variantAxes, defaults); the SERVER applies the case-insensitive substring
  * `query` filter (literal, not glob), flattens local ⧺ remote into the Rule-A
- * list shape, and emits YAML.
+ * list shape, and emits JSON.
  *
  * T10 — two layers of bounding:
  *  - `includeRemote` (default **false**) is threaded to the plugin and gates the
@@ -333,7 +332,7 @@ export const handleGetComponents = async (
       envelope.warnings = warnings
     }
 
-    return textResult(YAML.stringify(envelope))
+    return textResult(JSON.stringify(envelope, null, 2))
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }
@@ -422,7 +421,7 @@ export const handleListFonts = async (
     if (bounded.cursor !== undefined) {
       out.cursor = bounded.cursor
     }
-    return textResult(YAML.stringify(out))
+    return textResult(JSON.stringify(out, null, 2))
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }
@@ -680,7 +679,7 @@ export const handleGetVariables = async (
     if (bounded.cursor !== undefined) {
       out.cursor = bounded.cursor
     }
-    return textResult(YAML.stringify(out))
+    return textResult(JSON.stringify(out, null, 2))
   } catch (err) {
     return textResult(`Error: ${errorMessage(err)}`)
   }
