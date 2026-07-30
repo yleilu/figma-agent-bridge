@@ -82,6 +82,22 @@ describe('context round-trip e2e (mock plugin over real relay)', () => {
     expect(ins.view.context).toBeUndefined()
   })
 
+  it('over-cap context is a typed INVALID_PARAM envelope naming the cap', async () => {
+    const res = await handleUpdateNode(
+      {
+        nodeId: '1:42',
+        patch: { context: 'a'.repeat(2049) },
+      },
+      scoped,
+    )
+    const data = JSON.parse(res.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INVALID_PARAM')
+    expect(data.error).toContain('limit is 2048')
+  })
+
   it('over-cap via the set_plugin_data escape hatch is read-only', async () => {
     const big = '🙂'.repeat(600) // 2400 bytes
     await handleSetPluginData(
