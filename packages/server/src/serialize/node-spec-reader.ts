@@ -171,6 +171,10 @@ type RawPaint = {
   imageRef?: string
   imageHash?: string
   scaleMode?: string
+  /** Image `{tile=}` — Figma's ImagePaint.scalingFactor (TILE mode only). */
+  scalingFactor?: number
+  /** Image `{rot=}` — confirmed present on a live raw export (90/180/270). */
+  rotation?: number
   boundVariables?: { color?: RawBoundVariable }
 }
 
@@ -435,6 +439,24 @@ const rawToFigmaPaint = (
     }
     if (p.scaleMode !== undefined) {
       out.scaleMode = p.scaleMode
+    }
+    if (p.scalingFactor !== undefined) {
+      out.scalingFactor = p.scalingFactor
+    }
+    if (p.rotation !== undefined && p.rotation !== 0) {
+      out.rotation = p.rotation
+    }
+    if (p.opacity !== undefined && p.opacity < 1) {
+      out.opacity = p.opacity
+    }
+    if (p.visible === false) {
+      out.visible = false
+    }
+    if (
+      p.blendMode !== undefined &&
+      p.blendMode !== 'NORMAL'
+    ) {
+      out.blendMode = p.blendMode
     }
     return out
   }

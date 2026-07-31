@@ -1533,6 +1533,32 @@ describe('toNodeSpec — layoutGrids read-back', () => {
     ])
   })
 
+  it('maps a raw auto-count of -1 (what the live plugin actually sends) to columns(auto,...)', () => {
+    // Live-verified: creating columns(auto,60,20){align=MIN} and reading it
+    // back off the real plugin yields raw layoutGrids count -1, not Infinity
+    // (JSON can't carry Infinity anyway, so Figma never actually sends it).
+    const spec = toNodeSpec(
+      {
+        id: '4:8',
+        type: 'FRAME',
+        layoutGrids: [
+          {
+            pattern: 'COLUMNS',
+            alignment: 'MIN',
+            count: -1,
+            gutterSize: 20,
+            sectionSize: 60,
+            offset: 0,
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.grids).toEqual([
+      'columns(auto,60,20){align=MIN}',
+    ])
+  })
+
   it('omits grids when layoutGrids is absent or empty', () => {
     expect(
       toNodeSpec({ id: '4:5', type: 'FRAME' } as never, {
@@ -1578,5 +1604,61 @@ describe('toNodeSpec — layoutGrids read-back', () => {
         offset: 16,
       },
     ])
+  })
+})
+
+// ─── IMAGE paint read-back (rot/tile/op/blend/vis) ────────────────────────────
+//
+// Live-verified: writing image(HASH){scale=TILE, rot=90, tile=0.5, op=0.6,
+// blend=MULTIPLY} and reading it back used to drop rot/tile/op/blend,
+// surviving only scale=TILE. The raw JSON_REST_V1 export DOES carry
+// scalingFactor/rotation/opacity/blendMode/visible for an IMAGE paint (this
+// fixture mirrors the live-captured raw shape) — rawToFigmaPaint just
+// discarded them.
+describe('toNodeSpec — IMAGE paint read-back (rot/tile/op/blend/vis)', () => {
+  it('carries scalingFactor, rotation, opacity and blendMode into the image(...) atom', () => {
+    const spec = toNodeSpec(
+      {
+        id: '5:1',
+        type: 'RECTANGLE',
+        fills: [
+          {
+            type: 'IMAGE',
+            imageRef: 'deadbeef',
+            scaleMode: 'TILE',
+            scalingFactor: 0.5,
+            rotation: 90,
+            opacity: 0.6,
+            blendMode: 'MULTIPLY',
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    const fill = spec.fills?.[0] ?? ''
+    expect(fill).toContain('image(deadbeef)')
+    expect(fill).toContain('scale=TILE')
+    expect(fill).toContain('tile=0.5')
+    expect(fill).toContain('rot=90')
+    expect(fill).toContain('op=0.6')
+    expect(fill).toContain('blend=MULTIPLY')
+  })
+
+  it('omits rotation when it is the Figma default (0)', () => {
+    const spec = toNodeSpec(
+      {
+        id: '5:2',
+        type: 'RECTANGLE',
+        fills: [
+          {
+            type: 'IMAGE',
+            imageRef: 'deadbeef',
+            rotation: 0,
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.fills?.[0]).not.toContain('rot=')
   })
 })

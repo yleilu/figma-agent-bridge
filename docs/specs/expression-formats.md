@@ -205,9 +205,42 @@ dropped: paint `op`/`blend`/`vis`, image `scale`/`rot`/`filter`, shadow `spread`
 `behind`, per-side stroke + `cap`/`join`/arbitrary `dash`, gradient `tf`,
 `video()`/`pattern()` paints. Two struct-level additions:
 
-- **node layout grids** — `grids: ["columns(12,32,auto){align=STRETCH, offset=16, color=#FF000010}", "rows(...)"]` (the grid head + the same `{…}` channel).
+- **node layout grids** — `grids: ["columns(12,0,24){offset=16, color=#FF000010}", "columns(12,80,20){align=MIN}"]` (the grid head + the same `{…}` channel; full contract below).
 - **vector paths** — `vectorPaths: ["path(NONZERO,\"M0 0 L100 0 L100 100 Z\")", "path(EVENODD,\"M...\")"]` (VECTOR nodes only; read back from `node.vectorPaths`).
 - **text per-range runs** — `runs: [{ at:[0,4], font: font(Inter,Bold,16), color: #FF0000 }]`; each run is the same atoms scoped by `at:[start,end]`; base `text.*` is the default, runs override.
+
+## columns(count, sectionSize, gutterSize) / rows(...) / grid(sectionSize)
+
+Layout-grid atoms for a FRAME's `grids[]` field — Figma's own property is `layoutGrids`.
+
+| Variant | Form |
+|---|---|
+| columns | `columns(count, sectionSize, gutterSize)` |
+| rows | `rows(count, sectionSize, gutterSize)` — identical shape, ROWS pattern |
+| square grid | `grid(sectionSize)` |
+
+- **`columns`/`rows` positional args:** `count` (a number, or the literal `auto`
+  — the **only** place `auto` is legal in this grammar); `sectionSize`
+  (column/row width in px); `gutterSize` (a number — there is no auto gutter).
+- **`{…}` keys (`columns`/`rows`):** `align=` (`MIN`/`MAX`/`CENTER`/`STRETCH`,
+  default `STRETCH`), `offset=` (leading margin, px), `color=` (hex, the
+  grid's display color), `vis=false` (hidden grid).
+- **`align=STRETCH` (the default) ignores `sectionSize`:** under STRETCH,
+  Figma derives the section size from the frame and **rejects** an explicit
+  `sectionSize` — give `sectionSize` a real value only alongside a
+  non-STRETCH `align`.
+- **`grid(sectionSize)`** is the square-cell pattern: one positional arg
+  (required — Figma rejects a missing `sectionSize`), plus the shared
+  `color=`/`vis=` keys. No `align=`/`offset=` — those are columns/rows-only.
+
+Examples:
+```
+columns(12,0,24){offset=16, color=#FF000010}
+columns(12,80,20){align=MIN}
+grid(8)
+```
+
+Read back on the `grids` field of a FRAME node. Write: supply in `create_node`/`update_node` spec as `grids: [columns(...), ...]`.
 
 ## path(windingRule, "data")
 

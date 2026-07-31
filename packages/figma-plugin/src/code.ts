@@ -705,38 +705,33 @@ const applyCommonProperties = async (
     })[]
     const paintArray: Paint[] = []
     for (const fill of fills) {
-      if (
-        fill.type === 'IMAGE' &&
-        (fill as unknown as Record<string, unknown>)
-          .imageUrl
-      ) {
-        // Fetch image from URL and create ImagePaint
+      const raw = fill as unknown as Record<string, unknown>
+      if (fill.type === 'IMAGE' && raw.imageUrl) {
+        // Fetch image from URL and create ImagePaint.
+        // Spread the server's already-parsed paint (it
+        // carries rot/tile/op/blend/vis) and override only
+        // what needs plugin-side work: resolve the URL to a
+        // hash and drop the write-only imageUrl key.
+        const { imageUrl, ...rest } = raw
         const image = await figma.createImageAsync(
-          (fill as unknown as Record<string, unknown>)
-            .imageUrl as string,
+          imageUrl as string,
         )
         paintArray.push({
+          ...rest,
           type: 'IMAGE',
           imageHash: image.hash,
           scaleMode:
-            ((fill as unknown as Record<string, unknown>)
-              .scaleMode as ImagePaint['scaleMode']) ??
+            (rest.scaleMode as ImagePaint['scaleMode']) ??
             'FILL',
         } as ImagePaint)
-      } else if (
-        fill.type === 'IMAGE' &&
-        (fill as unknown as Record<string, unknown>)
-          .imageHash
-      ) {
-        // Use existing image hash directly
+      } else if (fill.type === 'IMAGE' && raw.imageHash) {
+        // Already carries a hash - spread through so
+        // rot/tile/op/blend/vis survive, just default
+        // scaleMode.
         paintArray.push({
-          type: 'IMAGE',
-          imageHash: (
-            fill as unknown as Record<string, unknown>
-          ).imageHash as string,
+          ...raw,
           scaleMode:
-            ((fill as unknown as Record<string, unknown>)
-              .scaleMode as ImagePaint['scaleMode']) ??
+            (raw.scaleMode as ImagePaint['scaleMode']) ??
             'FILL',
         } as ImagePaint)
       } else {
