@@ -207,13 +207,8 @@ Visually dominant by design; only one primary per screen.
   writing docs: link out via `## Links` instead. The hard cap is 2 KB; a write over it
   is rejected with a clean size error.
 
-Two boundaries to respect:
+One boundary to respect:
 
-- **Root-only read-back (v1).** `context` can be _written_ on any node — including
-  `create_tree` descendants — but it is only _read back_ when that node is the read /
-  export **root**. A deep `get_node` returns `context` on the root, not on descendants.
-  Do not rely on a deep read or a `create_tree` round-trip to preserve descendant
-  context; write it, then read each node _as its own root_ to confirm.
 - **Over-cap writes are read-only.** The raw `set_plugin_data(figmabridge/context, …)`
   escape hatch is unopinionated and can store a value above the 2 KB cap. Such a value
   reads back faithfully but is **read-only** — a full-spec write-back through

@@ -267,6 +267,49 @@ const readContext = (n: BaseNode): string | undefined => {
   return v !== '' ? v : undefined
 }
 
+// context lives in shared pluginData, which reads SYNCHRONOUSLY — so unlike
+// the style/variable name resolution below (ROOT-ONLY, because it is async),
+// walking descendants here costs no round trips. exportAsync has already
+// paid O(subtree) to serialize these same nodes, so this walk adds nothing
+// asymptotically. Scoped to the exported subtree, so it is never O(document).
+const collectContexts = (
+  n: BaseNode,
+  into: Record<string, string>,
+): void => {
+  const ctx = readContext(n)
+  if (ctx !== undefined) {
+    into[n.id] = ctx
+  }
+  if ('children' in n) {
+    for (const child of (n as ChildrenMixin).children) {
+      collectContexts(child, into)
+    }
+  }
+}
+
+// Merges the collected id → context map into the exported JSON_REST_V1
+// document tree by id. Covers the root (its id is in the map too) and every
+// descendant, replacing what used to be a root-only assignment.
+const applyContexts = (
+  doc: Record<string, unknown>,
+  contexts: Record<string, string>,
+): void => {
+  const ctx = contexts[doc.id as string]
+  if (ctx !== undefined) {
+    doc.context = ctx
+  }
+  if (Array.isArray(doc.children)) {
+    for (const child of doc.children) {
+      if (typeof child === 'object' && child !== null) {
+        applyContexts(
+          child as Record<string, unknown>,
+          contexts,
+        )
+      }
+    }
+  }
+}
+
 const exportNodeDocument = async (
   node: BaseNode,
   isRoot: boolean,
@@ -289,10 +332,12 @@ const exportNodeDocument = async (
     (exported as Record<string, unknown>).document
   ) {
     const doc = (exported as Record<string, unknown>).document as Record<string, unknown>
-    const ctx = readContext(node)
-    if (ctx !== undefined) {
-      doc.context = ctx
-    }
+    // Collect context for the whole exported subtree (root + every
+    // descendant) via a synchronous walk of the real Figma nodes, then merge
+    // by id into the JSON_REST_V1 tree exportAsync just produced.
+    const contexts: Record<string, string> = {}
+    collectContexts(node, contexts)
+    applyContexts(doc, contexts)
     if (node.type === 'VECTOR' && 'vectorPaths' in node) {
       doc.vectorPaths = (node as VectorNode).vectorPaths
     }
