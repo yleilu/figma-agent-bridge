@@ -1430,6 +1430,7 @@ export const batchOpSchema = z.enum([
   'bind_variable',
   'create_styles',
   'update_styles',
+  'delete_styles',
   'create_variables',
   'update_variables',
   'delete_variables',

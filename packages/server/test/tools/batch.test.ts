@@ -15,6 +15,7 @@ import { describe, expect, it } from 'bun:test'
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
 import { handleBatch } from '@figma-agent-bridge/server/tools/batch'
+import { batchParamsSchema } from '@figma-agent-bridge/shared/tool-params'
 
 type SentOp = {
   op: string
@@ -416,5 +417,81 @@ describe('handleBatch', () => {
     }
     expect(data.error).toContain('relay exploded')
     expect(data.code).toBe('PLUGIN_ERROR')
+  })
+})
+
+// The fan-out op set is enumerated in tool-surface.md's "The one generic batch".
+// delete_styles sat in that list and not in the enum, so batch({op:'delete_styles'})
+// was rejected at validation while its sibling delete_variables went through.
+// The op-set tests below assert only that batchParamsSchema ACCEPTS the op —
+// they never execute a batch, which is why they could not see that the
+// execution path forwarded delete_styles entries untagged. This one runs the
+// handler and inspects what actually reaches the plugin.
+describe('batch delete_styles — index-tagged like the standalone handler', () => {
+  it('tags every style entry with its index (tool-surface.md:371)', async () => {
+    const sent: Record<string, unknown>[] = []
+    const client = {
+      fileKey: 'FK',
+      sendCommand: (_cmd: string, params: unknown) => {
+        sent.push(params as Record<string, unknown>)
+        return Promise.resolve({ results: [], errors: [] })
+      },
+    } as unknown as Parameters<typeof handleBatch>[1]
+
+    await handleBatch(
+      {
+        op: 'delete_styles',
+        ops: [
+          {
+            styles: [
+              { id: 'S:1' },
+              { id: 'bogus' },
+              { name: 'X', type: 'paint' },
+            ],
+          },
+        ],
+      } as unknown as Parameters<typeof handleBatch>[0],
+      client,
+    )
+
+    const fanout = sent[0] as {
+      ops: { params: { styles: { index?: number }[] } }[]
+    }
+    const styles = fanout.ops[0].params.styles
+    // The plugin builds its reply from entry.index; undefined would be dropped
+    // by JSON.stringify, leaving a failure the agent cannot map to its input.
+    expect(styles.map(s => s.index)).toEqual([0, 1, 2])
+  })
+})
+
+describe('batch op set matches the spec', () => {
+  it('accepts delete_styles', () => {
+    expect(() =>
+      batchParamsSchema.parse({
+        fileKey: 'fk',
+        op: 'delete_styles',
+        ops: [{ id: 'S:1' }],
+      }),
+    ).not.toThrow()
+  })
+
+  it('still accepts its sibling delete_variables', () => {
+    expect(() =>
+      batchParamsSchema.parse({
+        fileKey: 'fk',
+        op: 'delete_variables',
+        ops: [{ variables: ['VariableID:1:2'] }],
+      }),
+    ).not.toThrow()
+  })
+
+  it('still rejects a create op (D3 excludes creation)', () => {
+    expect(() =>
+      batchParamsSchema.parse({
+        fileKey: 'fk',
+        op: 'create_node',
+        ops: [{}],
+      }),
+    ).toThrow()
   })
 })
