@@ -391,11 +391,11 @@ describe('requireFile', () => {
   })
 
   // connection-liveness.md: the watchdog (L6) declares an unresponsive instance
-  // dead by fileKey → connectedAt. requireFile must fast-fail DISCONNECTED while
-  // the /channels entry's connectedAt still matches the declared-dead value,
+  // dead by fileKey → epoch. requireFile must fast-fail DISCONNECTED while
+  // the /channels entry's epoch still matches the declared-dead value,
   // BEFORE auto-joining — the server is not joined here (channelFor → null), so
   // the discover() branch is reached and the marker check applies.
-  it('DISCONNECTED when the watchdog has declared this instance dead (connectedAt still matches)', async () => {
+  it('DISCONNECTED when the watchdog has declared this instance dead (epoch still matches)', async () => {
     let joinCalled = false
     const client = makeClient({
       channelFor: () => null,
@@ -403,10 +403,10 @@ describe('requireFile', () => {
         Promise.resolve([
           info('ch-dead', 'fk-dead', 'Dead Design'),
         ]).then(list =>
-          list.map(c => ({ ...c, connectedAt: 100 })),
+          list.map(c => ({ ...c, epoch: 'e-dead' })),
         ),
-      isInstanceDead: (fileKey, connectedAt) =>
-        fileKey === 'fk-dead' && connectedAt === 100,
+      isInstanceDead: (fileKey, epoch) =>
+        fileKey === 'fk-dead' && epoch === 'e-dead',
       joinChannel: () => {
         joinCalled = true
         return Promise.resolve('ok')

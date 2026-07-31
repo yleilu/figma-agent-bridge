@@ -180,8 +180,8 @@ export const requireFile = async (
     }
   }
   // Watchdog declared this instance dead — fast-fail until it reconnects (fresh
-  // connectedAt) or the heartbeat reaps it. connection-liveness.md.
-  if (client.isInstanceDead(fileKey, match.connectedAt)) {
+  // epoch) or the heartbeat reaps it. connection-liveness.md.
+  if (client.isInstanceDead(fileKey, match.epoch)) {
     return {
       ok: false,
       result: errorEnvelope(

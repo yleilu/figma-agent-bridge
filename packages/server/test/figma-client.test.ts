@@ -866,42 +866,44 @@ describe('isInstanceDead', () => {
   const seedDead = (
     client: FigmaClient,
     fileKey: string,
-    connectedAt: number,
+    epoch: string,
   ): void => {
     const withSeam = client as unknown as {
       __markDeadForTest: (
         fileKey: string,
-        connectedAt: number,
+        epoch: string,
       ) => void
     }
-    withSeam.__markDeadForTest(fileKey, connectedAt)
+    withSeam.__markDeadForTest(fileKey, epoch)
   }
 
-  it('is true while the live connectedAt matches the declared-dead value', () => {
+  it('is true while the live epoch matches the declared-dead value', () => {
     const client = createFigmaClient(WS_URL)
-    seedDead(client, 'fk-dead', 100)
+    seedDead(client, 'fk-dead', 'e-100')
 
-    expect(client.isInstanceDead('fk-dead', 100)).toBe(true)
+    expect(client.isInstanceDead('fk-dead', 'e-100')).toBe(
+      true,
+    )
   })
 
-  it('self-clears on a fresher connectedAt (reconnect) and stays clear', () => {
+  it('self-clears on a fresh epoch (reconnect) and stays clear', () => {
     const client = createFigmaClient(WS_URL)
-    seedDead(client, 'fk-dead', 100)
+    seedDead(client, 'fk-dead', 'e-100')
 
-    expect(client.isInstanceDead('fk-dead', 200)).toBe(
+    expect(client.isInstanceDead('fk-dead', 'e-200')).toBe(
       false,
     )
     // Marker was cleared by the mismatch above — still false on a second call.
-    expect(client.isInstanceDead('fk-dead', 200)).toBe(
+    expect(client.isInstanceDead('fk-dead', 'e-200')).toBe(
       false,
     )
   })
 
   it('returns false for a fileKey with no declared-dead entry', () => {
     const client = createFigmaClient(WS_URL)
-    expect(client.isInstanceDead('fk-never-dead', 1)).toBe(
-      false,
-    )
+    expect(
+      client.isInstanceDead('fk-never-dead', 'e-1'),
+    ).toBe(false)
   })
 })
 
@@ -1293,12 +1295,12 @@ describe('command-liveness watchdog (L6)', () => {
   // production cadence. grace/ping = 100ms, 2 consecutive misses → dead.
   const FAST = { graceMs: 100, pingMs: 100, maxMisses: 2 }
 
-  const connectedAtFor = async (
+  const epochFor = async (
     fileKey: string,
-  ): Promise<number | undefined> =>
+  ): Promise<string | undefined> =>
     (await discoverChannels(HTTP_URL)).find(
       c => (c.fileKey ?? c.channel) === fileKey,
-    )?.connectedAt
+    )?.epoch
 
   it('keeps a slow-but-alive command alive via pings (does NOT reject)', async () => {
     const client = createFigmaClient(
@@ -1331,8 +1333,8 @@ describe('command-liveness watchdog (L6)', () => {
     })
     // The watchdog probed (armed) but never declared death.
     expect(plugin.pings()).toBeGreaterThan(0)
-    const at = await connectedAtFor('fk-wd-slow')
-    expect(client.isInstanceDead('fk-wd-slow', at)).toBe(
+    const epoch = await epochFor('fk-wd-slow')
+    expect(client.isInstanceDead('fk-wd-slow', epoch)).toBe(
       false,
     )
     expect(client.channelFor('fk-wd-slow')).toBe(
@@ -1357,10 +1359,10 @@ describe('command-liveness watchdog (L6)', () => {
     await plugin.start()
     await client.joinChannel('wd-dead-ch', 'fk-wd-dead')
 
-    // Capture the live connectedAt BEFORE death: the relay never reaps on a
-    // watchdog death, so the entry (and its connectedAt) persist.
-    const deadAt = await connectedAtFor('fk-wd-dead')
-    expect(deadAt).not.toBeUndefined()
+    // Capture the live epoch BEFORE death: the relay never reaps on a
+    // watchdog death, so the entry (and its epoch) persist.
+    const deadEpoch = await epochFor('fk-wd-dead')
+    expect(deadEpoch).not.toBeUndefined()
 
     plugin.setSilent(true)
 
@@ -1379,15 +1381,96 @@ describe('command-liveness watchdog (L6)', () => {
     // Rejected in ~grace + 2 ping cycles with the typed error — NOT the 30s
     // command timeout.
     expect(caught).toBeInstanceOf(PluginDisconnectedError)
-    // Dead-channel marker set on the declared-dead connectedAt.
+    // Dead-channel marker set on the declared-dead epoch.
     expect(
-      client.isInstanceDead('fk-wd-dead', deadAt),
+      client.isInstanceDead('fk-wd-dead', deadEpoch),
     ).toBe(true)
     // Dropped from joined → the channel is gone for the next call.
     expect(client.channelFor('fk-wd-dead')).toBeNull()
 
     plugin.stop()
     client.disconnect()
+  })
+
+  // connection-liveness.md — the reconnect race defect 2 fixes: if the
+  // instance's identity CHANGES between the pre-probe sample and the
+  // mark-time check, a reconnect landed mid-probe and the dying instance's
+  // marker must NOT be recorded against the fresh, healthy one. We stub the
+  // `/channels` HTTP lookup itself (rather than racing a real reconnect,
+  // which can't be staged deterministically): it answers with the OLD epoch
+  // until the first ping has gone out, then flips to a DIFFERENT ("NEW")
+  // epoch — modeling a reconnect that completes somewhere during the probe
+  // window, discovered only once the watchdog re-checks at mark time.
+  it('reconnect race: identity change between sample and mark skips the mark (no false-dead)', async () => {
+    const client = createFigmaClient(
+      WS_URL,
+      undefined,
+      FAST,
+    )
+    const plugin = createMockPlugin({
+      relayUrl: WS_URL,
+      channel: 'wd-race-ch',
+      fileKey: 'fk-wd-race',
+    })
+    await plugin.start()
+    await client.joinChannel('wd-race-ch', 'fk-wd-race')
+    plugin.setSilent(true)
+
+    const OLD_EPOCH = 'epoch-old'
+    const NEW_EPOCH = 'epoch-new'
+    let fetchCalls = 0
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => {
+      fetchCalls++
+      const epoch =
+        plugin.pings() === 0 ? OLD_EPOCH : NEW_EPOCH
+      return new Response(
+        JSON.stringify([
+          {
+            channel: 'wd-race-ch',
+            fileName: null,
+            fileKey: 'fk-wd-race',
+            connectedAt: 0,
+            epoch,
+          },
+        ]),
+      )
+    }) as typeof fetch
+
+    try {
+      let caught: Error | null = null
+      try {
+        await client.sendCommand(
+          'fk-wd-race',
+          COMMANDS.STATUS,
+          {},
+          30_000,
+        )
+      } catch (err) {
+        caught = err as Error
+      }
+
+      // The command itself still fails — the watchdog correctly gives up on
+      // the silent instance either way.
+      expect(caught).toBeInstanceOf(PluginDisconnectedError)
+      // The stub was actually exercised for both the pre-probe sample AND
+      // the mark-time re-check (else this test would prove nothing).
+      expect(fetchCalls).toBeGreaterThanOrEqual(2)
+      // No mark recorded for the NEW epoch — the live/current identity must
+      // never be declared dead just because the OLD one went silent.
+      expect(
+        client.isInstanceDead('fk-wd-race', NEW_EPOCH),
+      ).toBe(false)
+      // Nor for the OLD one — it turned over, so there is nothing live left
+      // to fast-fail against; the marker is skipped entirely, not re-keyed.
+      expect(
+        client.isInstanceDead('fk-wd-race', OLD_EPOCH),
+      ).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+      plugin.stop()
+      client.disconnect()
+    }
   })
 
   it('fast path: a prompt reply never arms the watchdog (no ping sent)', async () => {
@@ -1419,8 +1502,8 @@ describe('command-liveness watchdog (L6)', () => {
     // fire, then assert it never probed and left no death marker.
     await Bun.sleep(FAST.graceMs + FAST.pingMs + 100)
     expect(plugin.pings()).toBe(0)
-    const at = await connectedAtFor('fk-wd-fast')
-    expect(client.isInstanceDead('fk-wd-fast', at)).toBe(
+    const epoch = await epochFor('fk-wd-fast')
+    expect(client.isInstanceDead('fk-wd-fast', epoch)).toBe(
       false,
     )
 

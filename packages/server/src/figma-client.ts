@@ -66,12 +66,12 @@ export type FigmaClient = {
   joinedFiles: () => string[]
   channelFor: (fileKey: string) => string | null
   discover: () => Promise<ChannelInfo[]>
-  // connection-liveness.md: true while `fileKey`'s /channels entry's connectedAt
+  // connection-liveness.md: true while `fileKey`'s /channels entry's epoch
   // still matches the watchdog's declared-dead value; self-clears (returns false
-  // thereafter) on a reconnect (fresher connectedAt) or once the entry is gone.
+  // thereafter) on a reconnect (fresh epoch) or once the entry is gone.
   isInstanceDead: (
     fileKey: string,
-    liveConnectedAt: number | undefined,
+    liveEpoch: string | undefined,
   ) => boolean
   // change-feed.md — the two SERVER-SIDE broken-baseline arms. `onSocketClose`
   // fires when the client's relay socket drops (arm EVERY open buffer);
@@ -157,9 +157,12 @@ export const createFigmaClient = (
   let disconnected = false
   // Joined files: fileKey → channel. One socket, many channels (B3 multi-file).
   const joined = new Map<string, string>()
-  // Watchdog-declared-dead instances: fileKey → the dead instance's connectedAt
-  // (connection-liveness.md). Set by the watchdog (L6) directly via this closure.
-  const deadInstances = new Map<string, number>()
+  // Watchdog-declared-dead instances: fileKey → the dead instance's epoch
+  // (connection-liveness.md — keyed on epoch, NOT connectedAt: epoch is minted
+  // by the PLUGIN on every register/reconnect, so it is what a reconnect
+  // actually refreshes; connectedAt is a relay-side stamp and the two are not
+  // interchangeable). Set by the watchdog (L6) directly via this closure.
+  const deadInstances = new Map<string, string>()
   // change-feed.md — subscribers to the two server-side disconnect arms.
   const socketCloseCbs: (() => void)[] = []
   const fileDeadCbs: ((fileKey: string) => void)[] = []
@@ -577,6 +580,22 @@ export const createFigmaClient = (
         let live = true
         const graceTimer = setTimeout(() => {
           void (async () => {
+            if (!live || !pending.has(requestId)) {
+              return
+            }
+            // Sample the suspected instance's identity NOW, BEFORE we've
+            // probed even once — never after we've already decided it's
+            // dead. Sampling only at mark time (as this used to) is unsafe:
+            // that fetch's own await can straddle a reconnect, so the value
+            // it returns would belong to the NEW, healthy instance — and
+            // we'd mark THAT one dead instead of the one that actually went
+            // silent. Do not move this fetch later; compare against it
+            // again right before marking (below) instead.
+            const initialEpoch = (
+              await discoverChannels(relayHttpUrl)
+            ).find(
+              c => (c.fileKey ?? c.channel) === fileKey,
+            )?.epoch
             let misses = 0
             while (live && pending.has(requestId)) {
               try {
@@ -593,29 +612,53 @@ export const createFigmaClient = (
                   break
                 }
                 if (++misses >= maxMisses) {
-                  // Ownership FIRST — the real reply may have landed during the
-                  // pings; declare dead ONLY if we still own the pending, else
-                  // we'd mark a LIVE instance dead.
-                  const at = (
+                  // Cheap ownership check before paying for the fetch below.
+                  if (!pending.has(requestId)) {
+                    return
+                  }
+                  // Re-check identity against the epoch sampled BEFORE we
+                  // started probing. A mismatch means the instance already
+                  // turned over (a reconnect landed somewhere during the
+                  // probe window) — skip the mark entirely rather than
+                  // declaring the fresh, healthy instance dead.
+                  const currentEpoch = (
                     await discoverChannels(relayHttpUrl)
                   ).find(
                     c =>
                       (c.fileKey ?? c.channel) === fileKey,
-                  )?.connectedAt
+                  )?.epoch
+                  // Ownership again, and this time it is the load-bearing one:
+                  // discoverChannels is a round-trip, and the real reply can
+                  // land inside it. Declare dead ONLY if we still own the
+                  // pending, else we mark a LIVE instance dead — the guard the
+                  // comment above has always described, which stopped covering
+                  // the fetch window when the epoch sample moved in above it.
                   const p = pending.get(requestId)
                   if (p === undefined) {
                     // Settled during the await → no-op, no mark.
                     return
                   }
-                  if (at !== undefined) {
-                    deadInstances.set(fileKey, at)
-                  }
-                  // Drop from joined → requireFile fast-fails the next call.
-                  joined.delete(fileKey)
-                  // change-feed.md — this file's push stream is dead; its
-                  // baseline is broken even though the socket survives.
-                  for (const cb of fileDeadCbs) {
-                    cb(fileKey)
+                  // "Skip the mark entirely" means all of it — not just the
+                  // deadInstances entry. A turned-over instance is not a dead
+                  // FILE: marking it, dropping the join, or firing the
+                  // file-dead callbacks would break a healthy file's
+                  // change-feed baseline (change-feed.md).
+                  //
+                  // The pending command is a separate matter and still fails
+                  // below either way: it was sent to the instance that is now
+                  // gone, so nothing will ever answer it.
+                  const sameInstance =
+                    initialEpoch !== undefined &&
+                    currentEpoch === initialEpoch
+                  if (sameInstance) {
+                    deadInstances.set(fileKey, initialEpoch)
+                    // Drop from joined → requireFile fast-fails the next call.
+                    joined.delete(fileKey)
+                    // change-feed.md — this file's push stream is dead; its
+                    // baseline is broken even though the socket survives.
+                    for (const cb of fileDeadCbs) {
+                      cb(fileKey)
+                    }
                   }
                   clearTimeout(p.timer)
                   pending.delete(requestId)
@@ -762,16 +805,16 @@ export const createFigmaClient = (
 
   const isInstanceDead = (
     fileKey: string,
-    liveConnectedAt: number | undefined,
+    liveEpoch: string | undefined,
   ): boolean => {
     const dead = deadInstances.get(fileKey)
     if (dead === undefined) {
       return false
     }
-    if (liveConnectedAt === dead) {
+    if (liveEpoch === dead) {
       return true
     }
-    deadInstances.delete(fileKey) // reconnect (fresh connectedAt) or gone → self-clear
+    deadInstances.delete(fileKey) // reconnect (fresh epoch) or gone → self-clear
     return false
   }
 
@@ -797,15 +840,15 @@ export const createFigmaClient = (
     // TEST-ONLY seam: the L6 watchdog now sets `deadInstances` directly via
     // this closure on a real death (covered end-to-end by the watchdog tests).
     // This seam is retained for the focused `isInstanceDead` unit tests, which
-    // must seed an EXACT connectedAt to exercise the marker's match / self-clear
-    // logic — a value the relay mints and a live death can't deterministically
+    // must seed an EXACT epoch to exercise the marker's match / self-clear
+    // logic — a value the plugin mints and a live death can't deterministically
     // control. NOT part of the public FigmaClient type/contract — production
     // code must never call it.
     __markDeadForTest: (
       fileKey: string,
-      connectedAt: number,
+      epoch: string,
     ): void => {
-      deadInstances.set(fileKey, connectedAt)
+      deadInstances.set(fileKey, epoch)
     },
   }
 
