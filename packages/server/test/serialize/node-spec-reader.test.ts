@@ -997,3 +997,399 @@ describe('toNodeSpec — componentPropertyReferences read-back', () => {
     )
   })
 })
+
+// ─── stroke geometry read-back: cap/join/miter into the stroke atom ──────────
+//
+// strokeCap is present in JSON_REST_V1; strokeJoin / strokeMiterLimit are NOT
+// (plugin-enriched — see exportNodeDocument in code.ts). The reader must fold
+// all three into the ONE stroke(...) atom's {…} channel via strokeToAtom, same
+// as align/dash already do.
+
+describe('toNodeSpec — stroke cap/join/miter read-back', () => {
+  it('reads strokeCap into the stroke atom {cap=…}', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:1',
+        type: 'RECTANGLE',
+        strokeWeight: 2,
+        strokeCap: 'ROUND',
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe('stroke(2){cap=ROUND}')
+  })
+
+  it('omits cap when strokeCap is the Figma default NONE', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:2',
+        type: 'RECTANGLE',
+        strokeWeight: 2,
+        strokeCap: 'NONE',
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe('stroke(2)')
+  })
+
+  it('reads strokeJoin and strokeMiterLimit when NON-default', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:3',
+        type: 'RECTANGLE',
+        strokeWeight: 2,
+        strokeJoin: 'ROUND',
+        strokeMiterLimit: 8,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe(
+      'stroke(2){join=ROUND, miter=8}',
+    )
+  })
+
+  // This test used to assert `stroke(2){join=MITER, miter=4}` — the default
+  // noise itself — which locked the defect in place. expression-formats.md:276
+  // says a key is "only emitted when non-default (T4)", and the spec's worked
+  // example of a read (:286) is `stroke(1, {align=INSIDE})`, carrying neither.
+  // Eliding a default is lossless: the writer sends nothing and Figma keeps the
+  // same value, so the round-trip is unaffected.
+  it('omits join/miter at their Figma defaults (MITER/4)', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:3b',
+        type: 'RECTANGLE',
+        strokeWeight: 2,
+        strokeJoin: 'MITER',
+        strokeMiterLimit: 4,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe('stroke(2)')
+  })
+
+  it('combines align/cap/join/miter/dash into the one canonical atom', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:4',
+        type: 'RECTANGLE',
+        strokeWeight: 2,
+        strokeAlign: 'INSIDE',
+        strokeCap: 'ROUND',
+        strokeJoin: 'BEVEL',
+        strokeMiterLimit: 8,
+        dashPattern: [4, 4],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe(
+      'stroke(2){align=INSIDE, cap=ROUND, join=BEVEL, miter=8, dash=[4,4]}',
+    )
+  })
+
+  it('omits cap/join/miter when absent (no {…} channel at all)', () => {
+    const spec = toNodeSpec(
+      { id: '2:5', type: 'RECTANGLE', strokeWeight: 3 } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe('stroke(3)')
+  })
+
+  it('the stroke atom survives a read → write round-trip', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:6',
+        type: 'RECTANGLE',
+        strokeWeight: 2,
+        strokeAlign: 'INSIDE',
+        strokeCap: 'ROUND',
+        strokeJoin: 'BEVEL',
+        strokeMiterLimit: 8,
+      } as never,
+      { depth: 0 },
+    )
+    const written = specToFigma({ stroke: spec.stroke }) as {
+      strokeWeight: number
+      strokeAlign: string
+      strokeCap: string
+      strokeJoin: string
+      strokeMiterLimit: number
+    }
+    expect(written.strokeWeight).toBe(2)
+    expect(written.strokeAlign).toBe('INSIDE')
+    expect(written.strokeCap).toBe('ROUND')
+    expect(written.strokeJoin).toBe('BEVEL')
+    expect(written.strokeMiterLimit).toBe(8)
+  })
+
+  // A DEFAULT-valued key round-trips by absence, which is why eliding it is
+  // lossless: the read omits it, the write sends nothing for it, and Figma
+  // keeps the same value it already had. This is the half the old assertion
+  // could not distinguish, because it round-tripped MITER/4 explicitly.
+  it('a default-valued stroke round-trips as absence, not as loss', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:7',
+        type: 'RECTANGLE',
+        strokeWeight: 2,
+        strokeAlign: 'INSIDE',
+        strokeJoin: 'MITER',
+        strokeMiterLimit: 4,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe('stroke(2){align=INSIDE}')
+
+    const written = specToFigma({
+      stroke: spec.stroke,
+    }) as Record<string, unknown>
+    // Nothing is sent for join/miter — Figma keeps MITER/4 untouched.
+    expect(written.strokeJoin).toBeUndefined()
+    expect(written.strokeMiterLimit).toBeUndefined()
+    expect(written.strokeAlign).toBe('INSIDE')
+  })
+})
+
+// ─── exportSettings read-back (raw.exportSettings → NodeSpec.exportSettings) ──
+//
+// The raw/Figma constraint shape is an OBJECT {type, value}; the NodeSpec/
+// grammar shape is the tuple ['SCALE'|'WIDTH'|'HEIGHT', number] — the mirror
+// of the revive applyExportSettings does on the way in (apply-node-fields.ts).
+
+describe('toNodeSpec — exportSettings read-back', () => {
+  it('converts a raw export preset with a SCALE constraint to the tuple form', () => {
+    const spec = toNodeSpec(
+      {
+        id: '3:1',
+        type: 'FRAME',
+        exportSettings: [
+          {
+            format: 'PNG',
+            suffix: '@2x',
+            constraint: { type: 'SCALE', value: 2 },
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.exportSettings).toEqual([
+      {
+        format: 'PNG',
+        suffix: '@2x',
+        constraint: ['SCALE', 2],
+      },
+    ])
+  })
+
+  it('converts a WIDTH constraint and omits an empty suffix', () => {
+    const spec = toNodeSpec(
+      {
+        id: '3:2',
+        type: 'FRAME',
+        exportSettings: [
+          {
+            format: 'SVG',
+            suffix: '',
+            constraint: { type: 'WIDTH', value: 512 },
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.exportSettings).toEqual([
+      { format: 'SVG', constraint: ['WIDTH', 512] },
+    ])
+  })
+
+  it('handles multiple presets and a preset with no constraint', () => {
+    const spec = toNodeSpec(
+      {
+        id: '3:3',
+        type: 'FRAME',
+        exportSettings: [
+          { format: 'JPG' },
+          {
+            format: 'PDF',
+            constraint: { type: 'HEIGHT', value: 100 },
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.exportSettings).toEqual([
+      { format: 'JPG' },
+      { format: 'PDF', constraint: ['HEIGHT', 100] },
+    ])
+  })
+
+  it('omits exportSettings when absent or empty on the raw node', () => {
+    expect(
+      toNodeSpec({ id: '3:4', type: 'FRAME' } as never, {
+        depth: 0,
+      }).exportSettings,
+    ).toBeUndefined()
+    expect(
+      toNodeSpec(
+        { id: '3:5', type: 'FRAME', exportSettings: [] } as never,
+        { depth: 0 },
+      ).exportSettings,
+    ).toBeUndefined()
+  })
+
+  it('exportSettings survives a read → write round-trip (mirrors applyExportSettings revive)', () => {
+    const spec = toNodeSpec(
+      {
+        id: '3:6',
+        type: 'FRAME',
+        exportSettings: [
+          {
+            format: 'PNG',
+            suffix: '@2x',
+            constraint: { type: 'SCALE', value: 2 },
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    const written = specToFigma({
+      exportSettings: spec.exportSettings,
+    })
+    expect(written.exportSettings).toEqual([
+      {
+        format: 'PNG',
+        suffix: '@2x',
+        constraint: ['SCALE', 2],
+      },
+    ])
+  })
+})
+
+// ─── layoutGrids read-back (raw.layoutGrids → NodeSpec.grids) ────────────────
+//
+// Figma's own property is layoutGrids; the NodeSpec/grammar field is grids.
+// Each raw LayoutGrid converts to a grid atom via the existing gridToAtom
+// (the inverse of the writer's atomToGrid, already in grammar/heads/grid.ts).
+
+describe('toNodeSpec — layoutGrids read-back', () => {
+  it('converts a COLUMNS layoutGrid to a columns(...) atom', () => {
+    const spec = toNodeSpec(
+      {
+        id: '4:1',
+        type: 'FRAME',
+        layoutGrids: [
+          {
+            pattern: 'COLUMNS',
+            alignment: 'STRETCH',
+            count: 12,
+            gutterSize: 32,
+            offset: 16,
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.grids).toEqual([
+      'columns(12,0,32){offset=16}',
+    ])
+  })
+
+  it('converts a GRID pattern layoutGrid to a grid(...) atom', () => {
+    const spec = toNodeSpec(
+      {
+        id: '4:2',
+        type: 'FRAME',
+        layoutGrids: [{ pattern: 'GRID', sectionSize: 8 }],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.grids).toEqual(['grid(8)'])
+  })
+
+  it('converts a ROWS layoutGrid with non-STRETCH alignment + sectionSize', () => {
+    const spec = toNodeSpec(
+      {
+        id: '4:3',
+        type: 'FRAME',
+        layoutGrids: [
+          {
+            pattern: 'ROWS',
+            alignment: 'MIN',
+            count: 4,
+            gutterSize: 10,
+            sectionSize: 20,
+            offset: 0,
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.grids).toEqual(['rows(4,20,10){align=MIN}'])
+  })
+
+  it('handles multiple grids on one node', () => {
+    const spec = toNodeSpec(
+      {
+        id: '4:4',
+        type: 'FRAME',
+        layoutGrids: [
+          {
+            pattern: 'COLUMNS',
+            alignment: 'STRETCH',
+            count: 12,
+            gutterSize: 20,
+            offset: 0,
+          },
+          { pattern: 'GRID', sectionSize: 10 },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.grids).toEqual([
+      'columns(12,0,20)',
+      'grid(10)',
+    ])
+  })
+
+  it('omits grids when layoutGrids is absent or empty', () => {
+    expect(
+      toNodeSpec({ id: '4:5', type: 'FRAME' } as never, {
+        depth: 0,
+      }).grids,
+    ).toBeUndefined()
+    expect(
+      toNodeSpec(
+        { id: '4:6', type: 'FRAME', layoutGrids: [] } as never,
+        { depth: 0 },
+      ).grids,
+    ).toBeUndefined()
+  })
+
+  it('round-trips through specToFigma (grids atom → complete Figma LayoutGrid)', () => {
+    const spec = toNodeSpec(
+      {
+        id: '4:7',
+        type: 'FRAME',
+        layoutGrids: [
+          {
+            pattern: 'COLUMNS',
+            alignment: 'STRETCH',
+            count: 12,
+            gutterSize: 32,
+            offset: 16,
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    const written = specToFigma({ grids: spec.grids })
+    expect(written.grids).toEqual([
+      {
+        pattern: 'COLUMNS',
+        alignment: 'STRETCH',
+        count: 12,
+        gutterSize: 32,
+        offset: 16,
+      },
+    ])
+  })
+})

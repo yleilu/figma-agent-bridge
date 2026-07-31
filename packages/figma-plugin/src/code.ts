@@ -356,6 +356,21 @@ const exportNodeDocument = async (
       doc.width = (node as unknown as { width: number }).width
       doc.height = (node as unknown as { height: number }).height
     }
+    // strokeJoin / strokeMiterLimit — JSON_REST_V1 carries strokeCap but NOT
+    // these two (live-confirmed absent, 2026-07-31). Plain synchronous
+    // property reads, like width/height above — NOT gated on isRoot (unlike
+    // bindingNames/componentKey, this needs no async lookup). Feature-detect
+    // (T7): a node type without a strokes mixin silently no-ops.
+    if ('strokeJoin' in node) {
+      doc.strokeJoin = (
+        node as unknown as { strokeJoin: string }
+      ).strokeJoin
+    }
+    if ('strokeMiterLimit' in node) {
+      doc.strokeMiterLimit = (
+        node as unknown as { strokeMiterLimit: number }
+      ).strokeMiterLimit
+    }
     // pointCount (POLYGON + STAR) and innerRadius (STAR-only) are NOT carried by
     // JSON_REST_V1 — enrich like vectorPaths so they round-trip via get_node
     // (live-verified 2026-07-17). Feature-detect by PROPERTY (only POLYGON/STAR

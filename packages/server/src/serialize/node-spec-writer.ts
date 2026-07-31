@@ -25,9 +25,11 @@
 //       — see apply-node-fields.ts for the three most recently landed
 //       (strokeCap/strokeJoin/strokeMiterLimit, exportSettings, grids). Each
 //       is confirmed APPLIED to the live node (verified against the raw
-//       plugin GET_NODE reply, pre-serialization); none round-trip through
-//       get_node yet — that is a separate READ-face gap (node-spec-reader.ts
-//       does not project them back into NodeSpec), not a write gap.
+//       plugin GET_NODE reply, pre-serialization), and all three now ROUND-TRIP
+//       — node-spec-reader.ts projects them back (strokeCap/Join/MiterLimit as
+//       the stroke atom's {…} keys, layoutGrids as `grids`, exportSettings with
+//       its constraint tuple). Each is elided at its Figma default, so a read
+//       emits only what differs (T4).
 //     applyTextProperties    — text.content, text.font, text.align, text.valign,
 //       text.color, text.decoration, text.case, text.paragraphSpacing,
 //       text.lineHeight / text.letterSpacing ({value,unit}), textAutoResize

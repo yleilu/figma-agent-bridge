@@ -31,6 +31,7 @@ import type {
   TextSpec,
   TextRun,
   OverrideEntry,
+  ExportSetting,
 } from '@figma-agent-bridge/shared/node-spec'
 import {
   paintToAtom,
@@ -38,11 +39,13 @@ import {
   fontToAtom,
   strokeToAtom,
   pathToAtom,
+  gridToAtom,
   renderWrapper,
   type FigmaPaint,
   type FigmaEffect,
   type FigmaFontName,
   type FigmaStrokeGeom,
+  type FigmaLayoutGrid,
   type RGBA,
   type Transform,
 } from '../grammar'
@@ -519,6 +522,33 @@ const strokeGeom = (
   if (align !== undefined && align !== 'CENTER') {
     geom.align = align
   }
+  // strokeCap IS carried by JSON_REST_V1; strokeJoin / strokeMiterLimit are
+  // NOT — they are plugin-enriched (see exportNodeDocument in code.ts), since
+  // JSON_REST_V1 omits them.
+  //
+  // Every key here is elided at its Figma default: align/CENTER, cap/NONE,
+  // join/MITER, miter/4. expression-formats.md:276 — "only emitted when
+  // non-default (T4)" — and its worked example of a read (:286) is
+  // `stroke(1, {align=INSIDE})`, carrying neither join nor miter. The
+  // all-keys example at :174 is the SYNTAX reference, not a depiction of what
+  // a read emits; reading it as the latter is what put default noise on every
+  // stroked node.
+  //
+  // Eliding a default is lossless for the round-trip (T2): the writer then
+  // sends nothing for that key and Figma keeps the same default, so the node
+  // is unchanged. Only a NON-default value has to survive, and it still does.
+  const cap = str(raw.strokeCap)
+  if (cap !== undefined && cap !== 'NONE') {
+    geom.cap = cap
+  }
+  const join = str(raw.strokeJoin)
+  if (join !== undefined && join !== 'MITER') {
+    geom.join = join
+  }
+  const miter = num(raw.strokeMiterLimit)
+  if (miter !== undefined && miter !== 4) {
+    geom.miter = miter
+  }
   const dash = raw.dashPattern
   if (Array.isArray(dash) && dash.length > 0) {
     geom.dash = dash as number[]
@@ -606,6 +636,58 @@ const radiusAtom = (
     bindingNames,
   )
   return wrapperFor(undefined, varName) + base
+}
+
+// ─── layout grids ─────────────────────────────────────────────────────────────
+
+/**
+ * Convert raw.layoutGrids (Figma's own property name) → NodeSpec.grids atoms.
+ * `gridToAtom` is the exact inverse of the writer's `atomToGrid`
+ * (grammar/heads/grid.ts) — this is the read face of that same head.
+ */
+const gridArray = (raw: unknown): string[] | undefined => {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return undefined
+  }
+  return (raw as FigmaLayoutGrid[]).map(g => gridToAtom(g))
+}
+
+// ─── export presets ───────────────────────────────────────────────────────────
+
+type RawExportSetting = {
+  format: string
+  suffix?: string
+  constraint?: { type: string; value: number }
+}
+
+/**
+ * Convert raw.exportSettings → NodeSpec.exportSettings. Figma's own
+ * `constraint` is an OBJECT `{type, value}`; the NodeSpec/grammar shape is
+ * the JSON-friendly tuple `['SCALE'|'WIDTH'|'HEIGHT', number]` — the mirror
+ * of the revive `applyExportSettings` does on the way in
+ * (figma-plugin/src/apply-node-fields.ts's `reviveExportSetting`).
+ */
+const exportSettingsArray = (
+  raw: unknown,
+): ExportSetting[] | undefined => {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return undefined
+  }
+  return (raw as RawExportSetting[]).map(s => {
+    const out: ExportSetting = {
+      format: s.format as ExportSetting['format'],
+    }
+    if (s.suffix !== undefined && s.suffix !== '') {
+      out.suffix = s.suffix
+    }
+    if (s.constraint !== undefined) {
+      out.constraint = [
+        s.constraint.type as 'SCALE' | 'WIDTH' | 'HEIGHT',
+        s.constraint.value,
+      ]
+    }
+    return out
+  })
 }
 
 // ─── layout ───────────────────────────────────────────────────────────────────
@@ -1056,6 +1138,12 @@ const buildNode = (
     out.radius = radius
   }
 
+  // grids — Figma's own property is layoutGrids; the NodeSpec field is grids.
+  const grids = gridArray(raw.layoutGrids)
+  if (grids !== undefined) {
+    out.grids = grids
+  }
+
   // vectorPaths — VECTOR nodes only; enriched by the plugin's exportNodeDocument.
   const vp = raw.vectorPaths
   if (Array.isArray(vp)) {
@@ -1165,6 +1253,16 @@ const buildNode = (
   const text = textSpec(raw, bindingNames)
   if (text !== undefined) {
     out.text = text
+  }
+
+  // exportSettings — persistent export presets (round-trips via get_node /
+  // update_node); constraint is revived from the raw {type,value} object to
+  // the NodeSpec tuple.
+  const exportSettings = exportSettingsArray(
+    raw.exportSettings,
+  )
+  if (exportSettings !== undefined) {
+    out.exportSettings = exportSettings
   }
 
   const meta = componentMeta(raw)
