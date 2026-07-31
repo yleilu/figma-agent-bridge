@@ -35,6 +35,9 @@ export {
   strokeToAtom,
   angleToTransform,
   transformToAngle,
+  handlesToTransform,
+  isPureRotation,
+  isIdentityTransform,
   hexToRgba,
   rgbaToHex,
 } from './figma-paint'
@@ -43,6 +46,7 @@ export type {
   RGB,
   RGBA,
   Transform,
+  GradientHandle,
   FigmaPaint,
   FigmaSolidPaint,
   FigmaGradientPaint,

@@ -41,6 +41,7 @@ import {
   pathToAtom,
   gridToAtom,
   renderWrapper,
+  handlesToTransform,
   type FigmaPaint,
   type FigmaEffect,
   type FigmaFontName,
@@ -98,7 +99,9 @@ const variableNameFor = (
   id: string | undefined,
   bindingNames: BindingNames | undefined,
 ): string | undefined =>
-  id === undefined ? undefined : bindingNames?.variables?.[id]
+  id === undefined
+    ? undefined
+    : bindingNames?.variables?.[id]
 
 /**
  * Node-level `boundVariables` (scalar fields — radius, stroke weight, …).
@@ -352,15 +355,26 @@ const rawToFigmaPaint = (
     // and emits gradientHandlePositions instead — falling back to the identity
     // matrix gives linear(0) regardless of the real direction (B1 / T2).
     //
-    // NOTE: RADIAL / ANGULAR / DIAMOND also emit gradientHandlePositions, but
-    // their geometry (center, radius, rotation) requires all three handles and
-    // the derivation is substantially more involved. They are left on the
-    // transform path for now; a follow-up should extend this logic to those
-    // types before they are exposed in production workflows.
+    // A real JSON_REST_V1 export always sends all 3 handles (start/end/width
+    // for LINEAR; center/major/minor for RADIAL, ANGULAR, DIAMOND), and the
+    // full transform (skew, non-uniform scale included) is recoverable from
+    // that triple for all four gradient types — see handlesToTransform
+    // (grammar/figma-paint.ts) and its live-verify notes (issue-5).
     const handles = p.gradientHandlePositions
     const tf = p.gradientTransform
     const gradientTransform: Transform = (() => {
-      // Handle-positions path: derive transform from the start→end vector.
+      // Full-geometry path: 3 handles recover the exact transform (incl.
+      // skew / non-uniform scale) for any of the four gradient types.
+      if (handles !== undefined && handles.length >= 3) {
+        const derived = handlesToTransform(handles, p.type)
+        if (derived !== undefined) {
+          return derived
+        }
+      }
+      // 2-handle fallback: angle-only derivation from the start→end vector.
+      // LINEAR only — legacy/defensive path. Real JSON_REST_V1 exports
+      // always send 3 handles; this only matters for a hand-built fixture
+      // (or a degenerate 3-handle triple handlesToTransform declined).
       // p1 = handles[0] (gradient start), p2 = handles[1] (gradient end).
       if (
         p.type === 'GRADIENT_LINEAR' &&

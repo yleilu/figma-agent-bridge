@@ -920,6 +920,179 @@ describe('toNodeSpec — gradient angle from gradientHandlePositions (B1)', () =
   })
 })
 
+// ─── issue-5: full gradient geometry from 3 handles (tf attr) ─────────────────
+//
+// JSON_REST_V1 always sends 3 gradientHandlePositions (start/end/width for
+// LINEAR; center/major/minor for RADIAL, ANGULAR, DIAMOND). These fixtures
+// are NOT hand-derived — they were captured live against the real Figma
+// plugin (write a known {tf=[...]}, read back the raw handles Figma computed
+// for it). A pure rotation (or, for radial/angular/diamond, the identity
+// transform) must keep reading back WITHOUT a tf attr; anything with skew or
+// non-uniform scale must carry {tf=[a,b,c,d,e,f]} or the geometry is silently
+// flattened (the bug this fixes).
+//
+// FLOAT_TOLERANCE mirrors figma-paint.test.ts: round3's 3-decimal precision.
+const FLOAT_TOLERANCE = 1e-3
+
+describe('toNodeSpec — full gradient geometry from 3 handles (issue-5)', () => {
+  const makeNode = (
+    type:
+      | 'GRADIENT_LINEAR'
+      | 'GRADIENT_RADIAL'
+      | 'GRADIENT_ANGULAR'
+      | 'GRADIENT_DIAMOND',
+    handles: { x: number; y: number }[],
+  ): Record<string, unknown> => ({
+    id: 'issue5:1',
+    name: 'Rect',
+    type: 'RECTANGLE',
+    fills: [
+      {
+        type,
+        gradientHandlePositions: handles,
+        gradientStops: [
+          {
+            position: 0,
+            color: { r: 1, g: 0, b: 0, a: 1 },
+          },
+          {
+            position: 1,
+            color: { r: 0, g: 0, b: 1, a: 1 },
+          },
+        ],
+      },
+    ],
+  })
+
+  const atomOf = (
+    type: Parameters<typeof makeNode>[0],
+    handles: { x: number; y: number }[],
+  ): string => {
+    const spec = toNodeSpec(
+      makeNode(type, handles) as never,
+      {
+        depth: -1,
+      },
+    )
+    return (spec.fills as string[])[0]
+  }
+
+  const expectGradientTransformClose = (
+    atom: string,
+    expected: number[][],
+  ): void => {
+    const paint = atomToPaint(atom)
+    if (
+      paint.type !== 'GRADIENT_LINEAR' &&
+      paint.type !== 'GRADIENT_RADIAL' &&
+      paint.type !== 'GRADIENT_ANGULAR' &&
+      paint.type !== 'GRADIENT_DIAMOND'
+    ) {
+      throw new Error('expected a gradient paint')
+    }
+    const t = paint.gradientTransform
+    for (let i = 0; i < 2; i++) {
+      for (let j = 0; j < 3; j++) {
+        expect(
+          Math.abs(t[i][j] - expected[i][j]),
+        ).toBeLessThanOrEqual(FLOAT_TOLERANCE)
+      }
+    }
+  }
+
+  it('LINEAR identity handles -> linear(0, ...) with NO tf', () => {
+    const atom = atomOf('GRADIENT_LINEAR', [
+      { x: 0, y: 0.5 },
+      { x: 1, y: 0.5 },
+      { x: 0, y: 1 },
+    ])
+    expect(atom).toStartWith('linear(0')
+    expect(atom).not.toContain('tf=')
+  })
+
+  it('LINEAR rot90 handles -> linear(90, ...) with NO tf', () => {
+    const atom = atomOf('GRADIENT_LINEAR', [
+      { x: 0.5, y: 0 },
+      { x: 0.5, y: 1 },
+      { x: 0, y: 0 },
+    ])
+    expect(atom).toStartWith('linear(90')
+    expect(atom).not.toContain('tf=')
+  })
+
+  it('LINEAR skew+scale handles (proven-live bug case) -> carries tf and round-trips', () => {
+    const atom = atomOf('GRADIENT_LINEAR', [
+      { x: -0.32352941447166406, y: 0.20588234430469043 },
+      { x: 2.0294117784984795, y: -0.3823529539378455 },
+      { x: -0.7647058991103022, y: 0.9411764561511243 },
+    ])
+    expect(atom).toContain('tf=')
+    expectGradientTransformClose(atom, [
+      [0.5, 0.3, 0.1],
+      [0.2, 0.8, 0.4],
+    ])
+  })
+
+  it('RADIAL identity handles -> radial(...) with NO tf', () => {
+    const atom = atomOf('GRADIENT_RADIAL', [
+      { x: 0.5, y: 0.5 },
+      { x: 1, y: 0.5 },
+      { x: 0.5, y: 1 },
+    ])
+    expect(atom).toStartWith('radial(')
+    expect(atom).not.toContain('tf=')
+  })
+
+  it('RADIAL custom center/radius geometry -> carries tf and round-trips', () => {
+    const atom = atomOf('GRADIENT_RADIAL', [
+      { x: 0.5, y: 0.5 },
+      { x: 1.5, y: 0.5 },
+      { x: 0.5, y: 1.5 },
+    ])
+    expect(atom).toContain('tf=')
+    expectGradientTransformClose(atom, [
+      [0.5, 0, 0.25],
+      [0, 0.5, 0.25],
+    ])
+  })
+
+  it('ANGULAR custom geometry -> carries tf and round-trips', () => {
+    const atom = atomOf('GRADIENT_ANGULAR', [
+      { x: 0.8529411820134077, y: -0.08823530481657754 },
+      { x: 2.0294117784984795, y: -0.3823529539378455 },
+      { x: 0.4117646973747698, y: 0.6470588070298563 },
+    ])
+    expect(atom).toContain('tf=')
+    expectGradientTransformClose(atom, [
+      [0.5, 0.3, 0.1],
+      [0.2, 0.8, 0.4],
+    ])
+  })
+
+  it('DIAMOND custom geometry -> carries tf and round-trips', () => {
+    const atom = atomOf('GRADIENT_DIAMOND', [
+      { x: 0.8529411820134077, y: -0.08823530481657754 },
+      { x: 2.0294117784984795, y: -0.3823529539378455 },
+      { x: 0.4117646973747698, y: 0.6470588070298563 },
+    ])
+    expect(atom).toContain('tf=')
+    expectGradientTransformClose(atom, [
+      [0.5, 0.3, 0.1],
+      [0.2, 0.8, 0.4],
+    ])
+  })
+
+  it('DIAMOND identity handles -> diamond(...) with NO tf', () => {
+    const atom = atomOf('GRADIENT_DIAMOND', [
+      { x: 0.5, y: 0.5 },
+      { x: 1, y: 0.5 },
+      { x: 0.5, y: 1 },
+    ])
+    expect(atom).toStartWith('diamond(')
+    expect(atom).not.toContain('tf=')
+  })
+})
+
 // ─── B7: rotated node size — prefer raw.width/height over absoluteBoundingBox ──
 // JSON_REST_V1 omits unrotated width/height; the plugin enrichment adds them.
 // sizeOf must prefer the enriched raw.width/height (unrotated geometry) over
@@ -1089,7 +1262,11 @@ describe('toNodeSpec — stroke cap/join/miter read-back', () => {
 
   it('omits cap/join/miter when absent (no {…} channel at all)', () => {
     const spec = toNodeSpec(
-      { id: '2:5', type: 'RECTANGLE', strokeWeight: 3 } as never,
+      {
+        id: '2:5',
+        type: 'RECTANGLE',
+        strokeWeight: 3,
+      } as never,
       { depth: 0 },
     )
     expect(spec.stroke).toBe('stroke(3)')
@@ -1108,7 +1285,9 @@ describe('toNodeSpec — stroke cap/join/miter read-back', () => {
       } as never,
       { depth: 0 },
     )
-    const written = specToFigma({ stroke: spec.stroke }) as {
+    const written = specToFigma({
+      stroke: spec.stroke,
+    }) as {
       strokeWeight: number
       strokeAlign: string
       strokeCap: string
@@ -1230,7 +1409,11 @@ describe('toNodeSpec — exportSettings read-back', () => {
     ).toBeUndefined()
     expect(
       toNodeSpec(
-        { id: '3:5', type: 'FRAME', exportSettings: [] } as never,
+        {
+          id: '3:5',
+          type: 'FRAME',
+          exportSettings: [],
+        } as never,
         { depth: 0 },
       ).exportSettings,
     ).toBeUndefined()
@@ -1358,7 +1541,11 @@ describe('toNodeSpec — layoutGrids read-back', () => {
     ).toBeUndefined()
     expect(
       toNodeSpec(
-        { id: '4:6', type: 'FRAME', layoutGrids: [] } as never,
+        {
+          id: '4:6',
+          type: 'FRAME',
+          layoutGrids: [],
+        } as never,
         { depth: 0 },
       ).grids,
     ).toBeUndefined()
