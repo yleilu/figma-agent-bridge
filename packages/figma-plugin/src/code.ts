@@ -417,6 +417,99 @@ const exportNodeDocument = async (
         doc.componentRemote = main.remote
       }
     }
+    // T1 (wrapper-names) — bindingNames: resolves the four styleId fields
+    // and every boundVariables id to their NAMES, so the server can wrap a
+    // bound fill/stroke/effect/text as style(name) and a bound property as
+    // var(name) instead of emitting the bare resolved value. Only the plugin
+    // can turn a Figma id into a name. ROOT-ONLY (isRoot===true), mirroring
+    // the componentKey enrichment above — O(targets) not O(document); a
+    // descendant inside a deep inspect keeps its cheap id-only projection.
+    // Feature-detect each resolver independently: if either API is missing
+    // on this Figma runtime, omit that half and continue — never throw.
+    if (isRoot) {
+      const bindingNames: {
+        styles?: Record<string, string>
+        variables?: Record<string, string>
+      } = {}
+      if (typeof figma.getStyleByIdAsync === 'function') {
+        const styleIdFields = {
+          fillStyleId: 'fill',
+          strokeStyleId: 'stroke',
+          effectStyleId: 'effect',
+          textStyleId: 'text',
+        } as const
+        const styles: Record<string, string> = {}
+        for (const [idField, gramField] of Object.entries(
+          styleIdFields,
+        )) {
+          if (!(idField in node)) continue
+          const styleId = (
+            node as unknown as Record<string, unknown>
+          )[idField]
+          if (
+            typeof styleId !== 'string' ||
+            styleId.length === 0
+          ) {
+            continue
+          }
+          const style = await figma
+            .getStyleByIdAsync(styleId)
+            .catch(() => null)
+          if (style !== null && style !== undefined) {
+            styles[gramField] = style.name
+          }
+        }
+        if (Object.keys(styles).length > 0) {
+          bindingNames.styles = styles
+        }
+      }
+      if (
+        typeof figma.variables.getVariableByIdAsync ===
+          'function' &&
+        'boundVariables' in node
+      ) {
+        const bound = (
+          node as unknown as {
+            boundVariables?: Record<string, unknown>
+          }
+        ).boundVariables
+        if (bound) {
+          // Dedupe ids first — a node bound to the same variable on
+          // five fields costs one lookup, not five.
+          const ids = new Set<string>()
+          const pushAlias = (a: unknown): void => {
+            const id = (a as { id?: string } | null)?.id
+            if (typeof id === 'string') {
+              ids.add(id)
+            }
+          }
+          for (const val of Object.values(bound)) {
+            if (Array.isArray(val)) {
+              for (const a of val) {
+                pushAlias(a)
+              }
+            } else {
+              pushAlias(val)
+            }
+          }
+          const variables: Record<string, string> = {}
+          for (const id of ids) {
+            const v = await figma.variables
+              .getVariableByIdAsync(id)
+              .catch(() => null)
+            if (v !== null && v !== undefined) {
+              variables[id] = v.name
+            }
+          }
+          if (Object.keys(variables).length > 0) {
+            bindingNames.variables = variables
+          }
+        }
+      }
+      if (Object.keys(bindingNames).length > 0) {
+        doc.bindingNames = bindingNames
+      }
+    }
     return doc
   }
   throw new Error(
