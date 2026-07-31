@@ -196,7 +196,10 @@ Key struct fields:
   separate top-level keys.
 - **`sizing`** — `[horizontal, vertical]` atom (FIXED/HUG/FILL).
 - **`layoutPositioning`** — `AUTO` | `ABSOLUTE` (child's flow participation).
-- **`componentProperties`** *(INSTANCE)* — current property values.
+- **`componentProperties`** *(INSTANCE)* — current property values. **Read-only** —
+  set them with `set_instance`, which validates each against the component's
+  definitions. Same for `variantProperties`, and for `id`, which Figma assigns.
+  Echoing them back in a spec is safe; they are ignored, not applied.
 - **`overrides`** *(INSTANCE)* — structured delta from main component.
 - **`component`** *(INSTANCE)* — `{id}` for local, `{key}` for library/published.
 

@@ -183,7 +183,16 @@ exposes:
 - **text** — `{content, font, color, align, valign, decoration, case, paragraphSpacing, runs}`. `font`/`color` are atoms; `runs` carries per-range overrides (see below). Line height and letter spacing are canonical on the `font(...)` atom (`font(...){lh=24, ls=0.5}`) — there are no separate top-level `lh`/`ls` text keys.
 - **exportSettings** — array of persistent export presets, each `{format: PNG|JPG|SVG|PDF, suffix?, constraint?: [SCALE|WIDTH|HEIGHT, value]}`. Round-trips via `get_node`/`update_node` (the persistent-presets path; the `export` tool itself is one-off render/asset output).
 - **layoutPositioning** — `AUTO` | `ABSOLUTE` (a child's flow vs absolute participation). Paired with the parent's `layout.mode` it is what distinguishes a true absolute child from a flow child (the §7 absolute-positioning audit reads this — `position` alone can't, since flow children still carry x/y).
-- **componentProperties / variantProperties** *(on INSTANCE / variant nodes)* — the instance's current property values and variant selection. The `componentPropertyDefinitions` (the schema) live on the component/set and are read via `get_components`.
+- **componentProperties / variantProperties** *(on INSTANCE / variant nodes)* — the instance's current property values and variant selection. The `componentPropertyDefinitions` (the schema) live on the component/set and are read via `get_components`. **Read-only** — see *Read-only node fields* below.
+- **Read-only node fields (T2 asymmetries).** Three fields of the node struct are emitted on reads and **ignored on writes**, deliberately:
+  - **`componentProperties`** — a *projection* of the instance's current property values. Setting them is `set_instance`'s job, which validates each value against the component's `componentPropertyDefinitions`; a blind spec write-back would have no schema to check against.
+  - **`variantProperties`** — likewise a projection of which variant is selected. The variant is chosen by `set_instance`, or by `swap_component` for a different main.
+  - **`id`** — assigned by Figma when the node is created. A create cannot choose it, and an update addresses the node by it.
+
+  A read-modify-write therefore preserves these values in the document without the
+  write asserting them, which is why they can be echoed back safely. Anything else
+  the node struct documents **does** round-trip; a field that stops doing so is a
+  bug, not a new entry here.
 - **overrides** — the structured override delta on an instance: which fields / nested instances differ from the main component, so the agent can **read, replay, or report** surviving overrides (the read side of `set_instance`; read via `get_node`).
 - **component** *(on INSTANCE)* — the main-component reference for `create_node(INSTANCE)`: `{ key }` for a published/library component (`importComponentByKeyAsync`) **or** `{ id }` for a local component node, plus optional `properties` (component-property values, by exact key). **Write side: both paths.** **Read side:** `get_node` reads back `{ id }` for a **local** instance so it round-trips (T2); round-tripping a **published/library** instance (reading its `key` back) is a **documented deferred gap** (`docs/deferred-capabilities.md`) — it needs `getMainComponentAsync` on the read path (perf-sensitive). Instance property *values* read back via `componentProperties`, not here. Resolves the `tool-surface.md` "create_node(INSTANCE) by key/id" capability to a concrete field.
 - **context** — a round-tripping markdown **metadata field** (frontmatter scalars + fixed `##` body sections), stored in shared `pluginData` under `CONTEXT_NS = "figmabridge"` / `CONTEXT_KEY = "context"`. It is a **plain string, not an atom** (renders as a YAML block scalar), size-capped at 2 KB (`CONTEXT_MAX_BYTES` = 2048). View/edit split: the fidelity readers (`get_node`/`get_nodes`) return the full `context` and it round-trips via `create_node`/`update_node`; the view/list readers (`inspect`/`search`/`get_components`) emit a read-only `contextSummary` (the capped frontmatter slice). An over-cap value written via the raw `set_plugin_data` escape hatch is a declared read-only, non-round-trippable state (T2). Full field spec: `docs/specs/self-describing-nodes.md`.
@@ -257,13 +266,14 @@ tool-surface design).
   The name is what the agent reasons with and what it would write back; an id
   identifies the binding to Figma but tells the agent nothing about which token it
   is looking at, and costs a second call to find out.
-- **Both wrappers are read-only, and this is the pair of deliberate, documented
-  asymmetries** (principle T2). Each is emitted on a read to surface an existing
-  binding; on **write** each resolves to its literal, and the binding is applied by
-  the tool that owns it — `bind_variable` for `var()`, `apply_style` for `style()`.
-  Writing a wrapper therefore sets the appearance, never the binding. *(Principle
-  T2 requires a field that cannot round-trip to be documented rather than silent;
-  this is that documentation, and there are exactly two.)*
+- **Both wrappers are read-only — the two *wrapper* asymmetries** (principle T2).
+  Each is emitted on a read to surface an existing binding; on **write** each
+  resolves to its literal, and the binding is applied by the tool that owns it —
+  `bind_variable` for `var()`, `apply_style` for `style()`. Writing a wrapper
+  therefore sets the appearance, never the binding. *(Principle T2 requires a field
+  that cannot round-trip to be documented rather than silent; this is that
+  documentation for the wrappers. The read-only **node fields** are listed
+  separately under the node struct.)*
 - **Root-only enrichment (T10).** Resolving a binding to its name costs a lookup
   per bound field, so a read emits wrappers on the **directly-requested node**
   only; descendants inside a deep `get_node`/`inspect` subtree carry the resolved
