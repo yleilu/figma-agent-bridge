@@ -252,11 +252,25 @@ tool-surface design).
 ## var() / style() rules
 
 - Both wrap **any** atom; the resolved literal always follows.
-- **`var()` is read-only this phase** — it is emitted on reads to surface an
-  existing binding, but on **write** it resolves to a literal (binding is applied
-  via the `bind_variable` tool, scalar fields only). This is the one
-  **deliberate, documented asymmetry** (principle T2); see the tool-surface design
-  → *Expression integration*.
+- **Both wrappers name their source.** A read emits `style(Brand/Primary)` and
+  `var(radius/medium)` — the design-system **name**, never the opaque runtime id.
+  The name is what the agent reasons with and what it would write back; an id
+  identifies the binding to Figma but tells the agent nothing about which token it
+  is looking at, and costs a second call to find out.
+- **Both wrappers are read-only, and this is the pair of deliberate, documented
+  asymmetries** (principle T2). Each is emitted on a read to surface an existing
+  binding; on **write** each resolves to its literal, and the binding is applied by
+  the tool that owns it — `bind_variable` for `var()`, `apply_style` for `style()`.
+  Writing a wrapper therefore sets the appearance, never the binding. *(Principle
+  T2 requires a field that cannot round-trip to be documented rather than silent;
+  this is that documentation, and there are exactly two.)*
+- **Root-only enrichment (T10).** Resolving a binding to its name costs a lookup
+  per bound field, so a read emits wrappers on the **directly-requested node**
+  only; descendants inside a deep `get_node`/`inspect` subtree carry the resolved
+  literal without the wrapper. This is the same bounded-scan rule
+  `component.key` already follows (tool-surface design → *Expression integration*)
+  and for the same reason: an O(nodes × bound fields) resolution on a deep tree is
+  exactly the unbounded work T10 forbids.
 
 ## Notes
 

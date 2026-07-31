@@ -139,9 +139,15 @@ Bare literals: `opacity` `0.5` · `rotation` `45` · `blendMode` `MULTIPLY` ·
 ## `var()` and `style()` rules
 
 - Both wrap **any** atom; the resolved literal **always follows** the wrapper.
-- **`var()` is read-only** — emitted on reads to surface an existing binding. On
-  **write**, pass the literal value; apply bindings separately via `bind_variable`.
-- `style()` is similarly informational on reads; apply styles via `apply_style`.
+- **Both name their source** — `style(Brand/Primary)`, `var(radius/medium)`, never
+  an opaque id. The name is what you reason with and what you would write back.
+- **Both are read-only** — emitted on reads to surface an existing binding. On
+  **write**, either resolves to its literal, so writing one sets the appearance
+  and not the binding. Apply bindings with the tool that owns them:
+  `bind_variable` for `var()`, `apply_style` for `style()`.
+- **Only the node you asked for carries a wrapper.** Descendants inside a deep
+  `get_node`/`inspect` show the resolved literal without it, so a binding you care
+  about is best read by requesting that node directly.
 
 ---
 
