@@ -351,6 +351,39 @@ describe('handleConnect auto-discovery', () => {
 })
 
 describe('handleStatus', () => {
+  // Regression guard (e09fedc): the skew message was computed from
+  // `mine?.version`, but `mine` is undefined whenever the registry lookup
+  // MISSED — no relayHttpUrl, relay unreachable, entry unpublished. That is
+  // not "the plugin reported no version" (which protocolMismatch correctly
+  // treats as a skew on connect); it means we observed nothing. Reporting it
+  // as incompatible told the user to reinstall a plugin that is answering the
+  // live read in the same call.
+  it('does not invent a version skew when the registry lookup misses', async () => {
+    const mockClient = {
+      joinChannel: () => Promise.resolve(''),
+      sendCommand: () =>
+        Promise.resolve({
+          currentPage: { id: '0:1', name: 'Page 1' },
+          selection: [],
+        }),
+      disconnect: () => undefined,
+      isConnected: () => true,
+      joinedFiles: () => ['FK-1'],
+      channelFor: () => 'file-FK-1',
+    } as unknown as FigmaClient
+
+    // No relayHttpUrl → discoverChannels never runs → infos stays empty.
+    const result = await handleStatus(mockClient)
+    const text = result.content[0].text
+    const data = JSON.parse(text)
+    const entry = (data.joined ?? data)[0] ?? data
+
+    expect(text).not.toContain('incompatible')
+    expect(text).not.toContain('reinstall')
+    // The live read still landed — this is a healthy plugin, not a silent one.
+    expect(JSON.stringify(entry)).toContain('Page 1')
+  })
+
   it('returns disconnected when no file is joined', async () => {
     const mockClient = {
       joinChannel: () => Promise.resolve(''),
@@ -480,5 +513,68 @@ describe('handleStatus', () => {
     expect(out.connected).toBe(true)
     expect(out.joined[0].channel).toBe('degraded-ch')
     expect(out.joined[0].currentPage).toBeUndefined()
+  })
+})
+
+// version-handshake.md:118 — "minor/major difference → the actionable error,
+// surfaced on `connect` and `status`". status reported the two versions and
+// left the compare to the reader, which is not the same thing: the agent is
+// reading this entry precisely because something is already behaving oddly.
+describe('handleStatus surfaces a version skew', () => {
+  const stubRelay = (version: string): Server =>
+    Bun.serve({
+      port: 0,
+      fetch: () =>
+        new Response(
+          JSON.stringify([
+            {
+              channel: 'file-fk-1',
+              fileName: 'F',
+              fileKey: 'fk-1',
+              connectedAt: Date.now(),
+              version,
+              epoch: 'epoch-x',
+            },
+          ]),
+          {
+            headers: {
+              'content-type': 'application/json',
+            },
+          },
+        ),
+    })
+
+  const statusWith = async (
+    version: string,
+  ): Promise<Record<string, unknown>> => {
+    const srv = stubRelay(version)
+    const client = {
+      joinChannel: () => Promise.resolve(''),
+      sendCommand: () => Promise.resolve(null),
+      disconnect: () => undefined,
+      isConnected: () => true,
+      joinedFiles: () => ['fk-1'],
+      channelFor: () => 'file-fk-1',
+    } as unknown as FigmaClient
+    const result = await handleStatus(
+      client,
+      `http://localhost:${srv.port}`,
+    )
+    srv.stop(true)
+    return JSON.parse(
+      result.content[0].text ?? '',
+    ) as Record<string, unknown>
+  }
+
+  it('flags an incompatible plugin on its joined entry', async () => {
+    const out = await statusWith('0.1.0')
+    const joined = out.joined as { incompatible?: string }[]
+    expect(joined[0].incompatible).toContain('0.1.0')
+  })
+
+  it('omits the field when the versions agree', async () => {
+    const out = await statusWith(APP_VERSION)
+    const joined = out.joined as { incompatible?: string }[]
+    expect(joined[0].incompatible).toBeUndefined()
   })
 })

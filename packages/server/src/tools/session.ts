@@ -314,11 +314,30 @@ export const handleStatus = async (
       } catch {
         // Best-effort per file.
       }
+      // version-handshake.md: the skew's actionable message is surfaced on
+      // connect AND status. Reporting the two versions and leaving the compare
+      // to the reader is not surfacing it — the agent would have to know the
+      // major.minor rule to spot a skew, and would be reading this entry
+      // precisely because something is already behaving oddly.
+      //
+      // Only a version we actually OBSERVED can be compared. When the registry
+      // lookup missed — no relayHttpUrl, relay unreachable, entry not published
+      // — `mine` is undefined, and that says nothing about the plugin's
+      // version. protocolMismatch treats undefined as "reported no version"
+      // (correct on connect, where a live plugin answered), so passing it a
+      // lookup miss fabricates a skew for a plugin that is answering the live
+      // read three lines above. A registered plugin that genuinely reported no
+      // version still has `mine`, so that real skew is unaffected.
+      const skew =
+        mine !== undefined
+          ? protocolMismatch(mine.version)
+          : null
       return {
         fileKey,
         fileName: mine?.fileName ?? null,
         channel,
         protocolVersion: mine?.version,
+        ...(skew !== null ? { incompatible: skew } : {}),
         currentPage: live.currentPage,
         selection: live.selection,
         viewport: live.viewport,
