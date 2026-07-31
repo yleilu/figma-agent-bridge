@@ -15,10 +15,19 @@
 //
 //   CONSUMED by the current plugin:
 //     applyCommonProperties  — name, size, position, fills, strokes,
-//       strokeWeight, strokeAlign, strokeDash (→ dashPattern), radius, opacity,
-//       blendMode, rotation, visible, clipsContent, effects, layout,
+//       strokeWeight, strokeAlign, strokeDash (→ dashPattern),
+//       strokeCap/strokeJoin/strokeMiterLimit (applyStrokeGeometry),
+//       exportSettings (applyExportSettings), grids → layoutGrids
+//       (applyGrids), radius, opacity, blendMode, rotation, visible,
+//       clipsContent, effects, layout,
 //       minWidth/maxWidth/minHeight/maxHeight, constraints,
 //       fillStyleId/strokeStyleId/effectStyleId/textStyleId
+//       — see apply-node-fields.ts for the three most recently landed
+//       (strokeCap/strokeJoin/strokeMiterLimit, exportSettings, grids). Each
+//       is confirmed APPLIED to the live node (verified against the raw
+//       plugin GET_NODE reply, pre-serialization); none round-trip through
+//       get_node yet — that is a separate READ-face gap (node-spec-reader.ts
+//       does not project them back into NodeSpec), not a write gap.
 //     applyTextProperties    — text.content, text.font, text.align, text.valign,
 //       text.color, text.decoration, text.case, text.paragraphSpacing,
 //       text.lineHeight / text.letterSpacing ({value,unit}), textAutoResize
@@ -28,11 +37,13 @@
 //
 //   EMITTED but NOT YET consumed (reserved for later phases — do not claim
 //   round-trip for these until the plugin reads them):
-//     strokeCap, strokeJoin, strokeMiterLimit   (plugin reads only weight/
-//                                                 align/dashPattern today)
-//     grids,
-//     overrides, componentProperties, variantProperties, exportSettings,
-//     id (writer emits it; plugin ignores it on create)
+//     overrides (also broken on the read face — a separate, tracked issue)
+//
+//   Read-only by design (writer emits them; the plugin correctly ignores
+//   them on write — NOT gaps):
+//     componentProperties, variantProperties (instance overrides — the
+//       documented read-only override surface)
+//     id (writer emits it; plugin ignores it on create — Figma assigns the id)
 //
 // ── lh/ls (review finding #3, RESOLVED) ──────────────────────────────────────
 // lh/ls are CANONICAL on the font(...) atom (`font(Inter,SemiBold,18){lh=24}`).

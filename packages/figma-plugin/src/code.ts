@@ -1,6 +1,11 @@
 import { COMMANDS, CONTEXT_NS, CONTEXT_KEY } from '@figma-agent-bridge/shared'
 
 import { applyLayout, type AppliedLayout } from './apply-layout'
+import {
+  applyStrokeGeometry,
+  applyExportSettings,
+  applyGrids,
+} from './apply-node-fields'
 import { projectComponentDefs } from './project-component-defs'
 import { resolveInstanceProps } from './resolve-instance-props'
 import {
@@ -765,6 +770,18 @@ const applyCommonProperties = async (
       spec.strokeDash as number[]
   }
 
+  // Stroke geometry (cap/join/miter) — pure helper, see
+  // apply-node-fields.ts. The writer emits these flat keys from the
+  // `stroke(...)` atom's {cap=,join=,miter=} channel (atomToStroke).
+  applyStrokeGeometry(
+    node as GeometryMixin & SceneNode,
+    spec as {
+      strokeCap?: unknown
+      strokeJoin?: unknown
+      strokeMiterLimit?: unknown
+    },
+  )
+
   // Corner radius — guard on capability so an incompatible node (e.g. a SLICE)
   // warns-and-continues in update_node rather than throwing → {error}.
   if (spec.radius !== undefined && 'cornerRadius' in node) {
@@ -807,6 +824,14 @@ const applyCommonProperties = async (
     ;(node as FrameNode).clipsContent =
       spec.clipsContent as boolean
   }
+
+  // Export settings (presets) — pure helper, see apply-node-fields.ts. The
+  // writer passes spec.exportSettings through untouched (already Figma's
+  // ExportSettings[] shape).
+  applyExportSettings(
+    node as ExportMixin & SceneNode,
+    spec.exportSettings,
+  )
 
   // Effects (already parsed to effect objects by server)
   if (spec.effects !== undefined && 'effects' in node) {
@@ -851,15 +876,18 @@ const applyCommonProperties = async (
 
 
   // Layout grids. The server writer converts grid atoms → COMPLETE Figma
-  // LayoutGrid objects (via atomToGrid) and emits them as spec.grids; the plugin
-  // assigns them to node.layoutGrids. Capability-guard so an incompatible node
-  // warns-and-continues (T7) rather than throwing → {error}. Each grid's auto
-  // count rides the wire as 'auto' (JSON has no Infinity) → revive to Infinity.
+  // LayoutGrid objects (via atomToGrid) and emits them as spec.grids; Figma's
+  // own property is layoutGrids — applyGrids (apply-node-fields.ts) does the
+  // assign. Capability-guard here (not inside the pure helper) so an
+  // incompatible node warns-and-continues (T7) rather than throwing →
+  // {error}. Each grid's auto count rides the wire as 'auto' (JSON has no
+  // Infinity) → revive to Infinity.
   if (spec.grids !== undefined) {
     if ('layoutGrids' in node) {
-      ;(node as FrameNode).layoutGrids = (
-        spec.grids as unknown[]
-      ).map(reviveLayoutGrid)
+      applyGrids(
+        node as FrameNode,
+        (spec.grids as unknown[]).map(reviveLayoutGrid),
+      )
     } else {
       warnings?.push(
         'grids ignored — not supported on a ' +
