@@ -217,12 +217,17 @@ describe('toNodeSpec — GRID layout read-back', () => {
 // ─── var() binding read-back (no boundVariables field on NodeSpec) ─────────────
 
 describe('toNodeSpec — var() binding read-back', () => {
-  it('renders a variable-bound paint with its var(...) wrapper atom', () => {
+  it('renders a variable-bound paint with its var(Name) wrapper atom', () => {
     const spec = toNodeSpec(raw, { depth: -1 })
-    // The card's first fill carries boundVariables.color → the leaf atom
-    // is wrapped: var(var:123)#FFFFFF. There is NO boundVariables field on
-    // NodeSpec — the binding rides on the appearance atom.
-    expect(spec.fills?.[0]).toMatch(/^var\(/)
+    // The card's first fill carries boundVariables.color (id var:123); the
+    // fixture's root bindingNames.variables resolves it to the design-
+    // system NAME "surface/card-bg" — the leaf atom wraps with the NAME,
+    // never the id. There is NO boundVariables field on NodeSpec — the
+    // binding rides on the appearance atom.
+    expect(spec.fills?.[0]).toBe(
+      'var(surface/card-bg)#FFFFFF',
+    )
+    expect(spec.fills?.[0]).not.toContain('var:123')
     expect(spec).not.toHaveProperty('boundVariables')
   })
 })

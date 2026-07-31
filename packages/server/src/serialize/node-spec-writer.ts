@@ -53,6 +53,7 @@ import {
   atomToStroke,
   atomToGrid,
   atomToPath,
+  tokenize,
 } from '../grammar'
 
 export type FigmaWritePayload = Record<string, unknown>
@@ -96,7 +97,17 @@ const parseRadius = (
   if (typeof s === 'number') {
     return s
   }
-  const trimmed = s.trim()
+  // A read emits the binding wrapper — `var(radius/medium)8`, or the
+  // per-corner `var(radius/medium)[8,8,0,0]` — and the spec says a write
+  // resolves each wrapper to its literal. Every other atom strips it inside
+  // parseAtom; radius is the one atom parsed by hand, so it must strip it too,
+  // via the SHARED tokenizer rather than a second matcher that could drift
+  // from it (T8). Without this, Number('var(…)8') is NaN, which crosses the
+  // wire as null. Figma then REJECTS the write ("Property cornerRadius failed
+  // validation: Expected number, received null" — verified live), so a
+  // read-modify-write on any token-bound node fails outright where it used to
+  // round-trip. Loud rather than silent, but still broken.
+  const trimmed = tokenize(s).body.trim()
   if (trimmed.startsWith('[')) {
     // "[8,8,0,0]" → [8, 8, 0, 0]
     const inner = trimmed.slice(1, -1)

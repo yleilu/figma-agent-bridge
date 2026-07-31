@@ -9,9 +9,19 @@
 // collapse to IdStub for drill-by-id); deep subtrees are returned complete.
 // A source-level test enforces the absence of that import.
 //
-// var() read-back: a variable-bound paint renders with its var(<id>) wrapper on
-// the leaf atom. There is no boundVariables field on NodeSpec — the binding
-// rides on the appearance atom.
+// var()/style() read-back: a bound leaf renders with its var(<name>)/
+// style(<name>) wrapper on the leaf atom — the design-system NAME, never
+// the opaque runtime id (expression-formats.md "var() / style() rules").
+// There is no boundVariables field on NodeSpec — the binding rides on the
+// appearance atom, rendered through the ONE grammar renderer
+// (render-atom.ts's renderWrapper — T8, no hand-concatenation).
+//
+// Both wrappers are ROOT-ONLY (T10): `bindingNames` is a field the plugin
+// populates only on the directly-requested export root (mirrors
+// component.key). This module receives it as a plain parameter threaded
+// from `toNodeSpec` and NEVER forwards it into a recursive `buildNode` call
+// for children — so a descendant can never pick up a wrapper, even if it
+// happens to reuse the same variable id the root resolved a name for.
 
 import type {
   NodeSpec,
@@ -28,6 +38,7 @@ import {
   fontToAtom,
   strokeToAtom,
   pathToAtom,
+  renderWrapper,
   type FigmaPaint,
   type FigmaEffect,
   type FigmaFontName,
@@ -48,6 +59,98 @@ type RawColor = {
 }
 
 type RawBoundVariable = { id: string; type: string }
+
+/**
+ * Task 1's plugin enrichment, present on `raw.bindingNames` for the export
+ * ROOT only: `styles` maps a grammar field name (fill/stroke/effect/text) to
+ * the bound style's NAME; `variables` maps a variable id to its NAME. Both
+ * are resolved lookups (may omit an id/field the plugin's runtime couldn't
+ * resolve) — see the "never fall back to the id" rule below.
+ */
+type BindingNames = {
+  styles?: Record<string, string>
+  variables?: Record<string, string>
+}
+
+/**
+ * The one place a bound leaf decides its wrapper: a style binding always
+ * wins over a variable binding on the same leaf (apply_style is the coarser
+ * route — Figma resolves the style's own paint through it). Renders through
+ * the shared grammar renderer, never string concatenation. Returns `''`
+ * (no wrapper) when neither name is known — this is what keeps an
+ * unresolvable binding a BARE atom instead of falling back to the id.
+ */
+const wrapperFor = (
+  styleName: string | undefined,
+  varName: string | undefined,
+): string =>
+  styleName !== undefined
+    ? renderWrapper({ kind: 'style', name: styleName })
+    : varName !== undefined
+      ? renderWrapper({ kind: 'var', name: varName })
+      : ''
+
+/** Look up a variable id's resolved name; undefined if unbound/unresolved. */
+const variableNameFor = (
+  id: string | undefined,
+  bindingNames: BindingNames | undefined,
+): string | undefined =>
+  id === undefined ? undefined : bindingNames?.variables?.[id]
+
+/**
+ * Node-level `boundVariables` (scalar fields — radius, stroke weight, …).
+ *
+ * JSON_REST_V1's OWN vocabulary here does NOT mirror the Plugin API's flat
+ * field names (`topLeftRadius`, `strokeWeight`, …) — live-verified
+ * (2026-07-31, bind_variable → raw GET_NODE): a per-corner/per-side scalar
+ * binding surfaces one level deeper, under a REST-specific container keyed
+ * by an ALL-CAPS positional constant. A `topLeftRadius` Plugin-API binding
+ * reads back as `boundVariables.rectangleCornerRadii.
+ * RECTANGLE_TOP_LEFT_CORNER_RADIUS`; a `strokeWeight` binding reads back as
+ * FOUR entries under `boundVariables.individualStrokeWeights` (one per
+ * `BORDER_*_WEIGHT` side, all aliasing the same variable). This is why
+ * `radiusAtom`/`strokeGeom` look up the NESTED shape, not a flat key.
+ */
+const nodeBoundVariables = (
+  raw: RawNode,
+): Record<string, unknown> | undefined => {
+  const bound = raw.boundVariables
+  return bound !== null && typeof bound === 'object'
+    ? (bound as Record<string, unknown>)
+    : undefined
+}
+
+/** A flat (un-nested) node-level bound-variable id, e.g. `opacity`. */
+const flatAliasId = (
+  bound: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined =>
+  (bound?.[key] as RawBoundVariable | undefined)?.id
+
+/**
+ * A REST-nested bound-variable id: `bound[container][positionalKey].id`,
+ * trying each positional key in turn (per-corner/per-side bindings that all
+ * alias the same variable resolve to the first match either way).
+ */
+const nestedAliasId = (
+  bound: Record<string, unknown> | undefined,
+  container: string,
+  positionalKeys: readonly string[],
+): string | undefined => {
+  const nested = bound?.[container] as
+    | Record<string, RawBoundVariable>
+    | undefined
+  if (nested === undefined) {
+    return undefined
+  }
+  for (const key of positionalKeys) {
+    const id = nested[key]?.id
+    if (id !== undefined) {
+      return id
+    }
+  }
+  return undefined
+}
 
 type RawPaint = {
   type: string
@@ -322,29 +425,41 @@ const rawToFigmaPaint = (
 }
 
 /**
- * Render a paint leaf to an atom string, wrapping it in var(<id>) when the
- * paint is bound to a variable (binding read-back).
+ * Render a paint leaf to an atom string, wrapping it in style(<name>) or
+ * var(<name>) (binding read-back) — a style binding wins over a variable
+ * binding on the same leaf. `styleName` is the caller's resolved
+ * `bindingNames.styles[<field>]` for the array this paint lives in
+ * (fills → 'fill', strokes → 'stroke'); `bindingNames` supplies the
+ * variable-id → name lookup for this paint's own `boundVariables.color`.
  */
-const paintLeaf = (p: RawPaint): string | null => {
+const paintLeaf = (
+  p: RawPaint,
+  styleName: string | undefined,
+  bindingNames: BindingNames | undefined,
+): string | null => {
   const figma = rawToFigmaPaint(p)
   if (figma === null) {
     return null
   }
   const atom = paintToAtom(figma)
-  const binding = p.boundVariables?.color
-  if (binding !== undefined) {
-    return `var(${binding.id})${atom}`
-  }
-  return atom
+  const varName = variableNameFor(
+    p.boundVariables?.color?.id,
+    bindingNames,
+  )
+  return wrapperFor(styleName, varName) + atom
 }
 
-const paintArray = (raw: unknown): string[] | undefined => {
+const paintArray = (
+  raw: unknown,
+  styleName: string | undefined,
+  bindingNames: BindingNames | undefined,
+): string[] | undefined => {
   if (!Array.isArray(raw)) {
     return undefined
   }
   const atoms = (raw as RawPaint[])
     .filter(p => p.visible !== false)
-    .map(paintLeaf)
+    .map(p => paintLeaf(p, styleName, bindingNames))
     .filter((a): a is string => a !== null)
   return atoms.length > 0 ? atoms : undefined
 }
@@ -353,10 +468,12 @@ const paintArray = (raw: unknown): string[] | undefined => {
 
 const effectArray = (
   raw: unknown,
+  styleName: string | undefined,
 ): string[] | undefined => {
   if (!Array.isArray(raw)) {
     return undefined
   }
+  const wrapper = wrapperFor(styleName, undefined)
   const atoms = (raw as RawEffect[])
     .filter(e => e.visible !== false)
     .map(e => {
@@ -382,14 +499,17 @@ const effectArray = (
       if (e.showShadowBehindNode === true) {
         figma.showShadowBehindNode = true
       }
-      return effectToAtom(figma)
+      return wrapper + effectToAtom(figma)
     })
   return atoms.length > 0 ? atoms : undefined
 }
 
 // ─── stroke geometry ──────────────────────────────────────────────────────────
 
-const strokeGeom = (raw: RawNode): string | undefined => {
+const strokeGeom = (
+  raw: RawNode,
+  bindingNames: BindingNames | undefined,
+): string | undefined => {
   const weight = num(raw.strokeWeight)
   if (weight === undefined || weight <= 0) {
     return undefined
@@ -403,32 +523,89 @@ const strokeGeom = (raw: RawNode): string | undefined => {
   if (Array.isArray(dash) && dash.length > 0) {
     geom.dash = dash as number[]
   }
-  return strokeToAtom(geom)
+  // strokeWeight is a scalar VariableBindableNodeField (node-level
+  // boundVariables, not paint-level) — distinct from the strokes[] paint
+  // bindings paintArray already handles. REST nests a bound strokeWeight
+  // under individualStrokeWeights.BORDER_*_WEIGHT (see nodeBoundVariables'
+  // doc comment) — all four sides alias the same variable when bound via
+  // the Plugin API's single `strokeWeight` field, so the first match names
+  // the whole atom.
+  const bound = nodeBoundVariables(raw)
+  const varName = variableNameFor(
+    flatAliasId(bound, 'strokeWeight') ??
+      nestedAliasId(
+        bound,
+        'individualStrokeWeights',
+        STROKE_WEIGHT_BOUND_KEYS,
+      ),
+    bindingNames,
+  )
+  return wrapperFor(undefined, varName) + strokeToAtom(geom)
 }
+
+/** REST's per-side positional keys under `individualStrokeWeights`. */
+const STROKE_WEIGHT_BOUND_KEYS = [
+  'BORDER_TOP_WEIGHT',
+  'BORDER_RIGHT_WEIGHT',
+  'BORDER_BOTTOM_WEIGHT',
+  'BORDER_LEFT_WEIGHT',
+] as const
 
 // ─── radius ───────────────────────────────────────────────────────────────────
 
-const radiusAtom = (raw: RawNode): string | undefined => {
+/** REST's per-corner positional keys under `rectangleCornerRadii`. */
+const RADIUS_BOUND_KEYS = [
+  'RECTANGLE_TOP_LEFT_CORNER_RADIUS',
+  'RECTANGLE_TOP_RIGHT_CORNER_RADIUS',
+  'RECTANGLE_BOTTOM_RIGHT_CORNER_RADIUS',
+  'RECTANGLE_BOTTOM_LEFT_CORNER_RADIUS',
+] as const
+
+const radiusAtom = (
+  raw: RawNode,
+  bindingNames: BindingNames | undefined,
+): string | undefined => {
   const per = raw.rectangleCornerRadii as
     | [number, number, number, number]
     | undefined
-  if (
-    per !== undefined &&
-    Array.isArray(per) &&
-    per.length === 4 &&
-    !(
-      per[0] === per[1] &&
-      per[1] === per[2] &&
-      per[2] === per[3]
-    )
-  ) {
-    return `[${per.join(',')}]`
+  const base = (() => {
+    if (
+      per !== undefined &&
+      Array.isArray(per) &&
+      per.length === 4 &&
+      !(
+        per[0] === per[1] &&
+        per[1] === per[2] &&
+        per[2] === per[3]
+      )
+    ) {
+      return `[${per.join(',')}]`
+    }
+    const uniform = num(raw.cornerRadius)
+    if (uniform !== undefined && uniform > 0) {
+      return String(uniform)
+    }
+    return undefined
+  })()
+  if (base === undefined) {
+    return undefined
   }
-  const uniform = num(raw.cornerRadius)
-  if (uniform !== undefined && uniform > 0) {
-    return String(uniform)
-  }
-  return undefined
+  // There is no radius STYLE (no style resource governs corner radius) —
+  // only a variable can bind here. Figma has no single "radius" bound-
+  // variable field: it's four independent corner keys (REST-nested — see
+  // nodeBoundVariables' doc comment); the grammar has one atom regardless
+  // of uniform/per-corner, so the first resolvable corner names the whole
+  // atom.
+  const bound = nodeBoundVariables(raw)
+  const varName = variableNameFor(
+    nestedAliasId(
+      bound,
+      'rectangleCornerRadii',
+      RADIUS_BOUND_KEYS,
+    ),
+    bindingNames,
+  )
+  return wrapperFor(undefined, varName) + base
 }
 
 // ─── layout ───────────────────────────────────────────────────────────────────
@@ -531,7 +708,10 @@ const fontNameFromStyle = (
   return out
 }
 
-const runSpecs = (raw: RawNode): TextRun[] | undefined => {
+const runSpecs = (
+  raw: RawNode,
+  bindingNames: BindingNames | undefined,
+): TextRun[] | undefined => {
   const { runs: raws } = raw
   if (!Array.isArray(raws) || raws.length === 0) {
     return undefined
@@ -549,8 +729,10 @@ const runSpecs = (raw: RawNode): TextRun[] | undefined => {
     }
     const { color } = r
     if (Array.isArray(color)) {
+      // Per-range override — no run-level style field (textStyleId governs
+      // the base text, not a run), so only the variable half applies here.
       const colorAtom = (color as RawPaint[])
-        .map(paintLeaf)
+        .map(p => paintLeaf(p, undefined, bindingNames))
         .find((a): a is string => a !== null)
       if (colorAtom !== undefined) {
         run.color = colorAtom
@@ -561,24 +743,36 @@ const runSpecs = (raw: RawNode): TextRun[] | undefined => {
   return out.length > 0 ? out : undefined
 }
 
-const textSpec = (raw: RawNode): TextSpec | undefined => {
+const textSpec = (
+  raw: RawNode,
+  bindingNames: BindingNames | undefined,
+): TextSpec | undefined => {
   const content = str(raw.characters)
   const style = raw.style as RawTextStyle | undefined
   if (content === undefined || style === undefined) {
     return undefined
   }
+  // textStyleId governs the whole text style (font family/size/lh/ls as one
+  // atom) — no separate variable-field wrap here (those bind sub-properties
+  // on a scale this reader doesn't currently resolve names for; the style
+  // half is the one required, tested surface).
+  const textStyleName = bindingNames?.styles?.text
   const out: TextSpec = {
     content,
-    font: fontToAtom(fontNameFromStyle(style)),
+    font:
+      wrapperFor(textStyleName, undefined) +
+      fontToAtom(fontNameFromStyle(style)),
   }
-  // Text color rides as a leaf atom rendered from the first SOLID fill.
+  // Text color rides as a leaf atom rendered from the first SOLID fill —
+  // the SAME fillStyleId/boundVariables.color as the node's `fills`.
+  const fillStyleName = bindingNames?.styles?.fill
   const { fills } = raw
   if (Array.isArray(fills)) {
     const colorAtom = (fills as RawPaint[])
       .filter(
         f => f.visible !== false && f.type === 'SOLID',
       )
-      .map(paintLeaf)
+      .map(p => paintLeaf(p, fillStyleName, bindingNames))
       .find((a): a is string => a !== null)
     if (colorAtom !== undefined) {
       out.color = colorAtom
@@ -608,7 +802,7 @@ const textSpec = (raw: RawNode): TextSpec | undefined => {
   ) {
     out.paragraphSpacing = style.paragraphSpacing
   }
-  const runs = runSpecs(raw)
+  const runs = runSpecs(raw, bindingNames)
   if (runs !== undefined) {
     out.runs = runs
   }
@@ -766,11 +960,15 @@ const toStub = (raw: RawNode): IdStub => {
  *   depth = 0  → children become IdStubs (default)
  *   depth = N  → N full levels below the root; deeper children become stubs
  *   depth = -1 → the complete subtree (fidelity-first; nothing collapsed)
+ *
+ * `bindingNames` is `undefined` for every call EXCEPT the one `toNodeSpec`
+ * makes for the export root — see the T10 note at the top of this file.
  */
 const buildNode = (
   raw: RawNode,
   remaining: number,
   parentBBox: RawBBox | undefined,
+  bindingNames: BindingNames | undefined,
 ): NodeSpec => {
   const out: NodeSpec = {
     type: str(raw.type) ?? '',
@@ -826,23 +1024,34 @@ const buildNode = (
     ]
   }
 
-  const fills = paintArray(raw.fills)
+  const fills = paintArray(
+    raw.fills,
+    bindingNames?.styles?.fill,
+    bindingNames,
+  )
   if (fills !== undefined) {
     out.fills = fills
   }
-  const strokes = paintArray(raw.strokes)
+  const strokes = paintArray(
+    raw.strokes,
+    bindingNames?.styles?.stroke,
+    bindingNames,
+  )
   if (strokes !== undefined) {
     out.strokes = strokes
   }
-  const stroke = strokeGeom(raw)
+  const stroke = strokeGeom(raw, bindingNames)
   if (stroke !== undefined) {
     out.stroke = stroke
   }
-  const effects = effectArray(raw.effects)
+  const effects = effectArray(
+    raw.effects,
+    bindingNames?.styles?.effect,
+  )
   if (effects !== undefined) {
     out.effects = effects
   }
-  const radius = radiusAtom(raw)
+  const radius = radiusAtom(raw, bindingNames)
   if (radius !== undefined) {
     out.radius = radius
   }
@@ -953,7 +1162,7 @@ const buildNode = (
     out.clipsContent = true
   }
 
-  const text = textSpec(raw)
+  const text = textSpec(raw, bindingNames)
   if (text !== undefined) {
     out.text = text
   }
@@ -983,8 +1192,12 @@ const buildNode = (
       // Thread THIS node's bbox down so each child's position is computed
       // parent-relative (child.bbox − parent.bbox) when no relativeTransform.
       const childParentBBox = bboxOf(raw)
+      // T10 — bindingNames is ALWAYS undefined below the root: it is never
+      // threaded to a child, regardless of `depth`. A deep, fidelity-first
+      // read still resolves NO binding names on descendants (the same
+      // bounded-scan rule component.key follows) — see the file-header note.
       const built: NodeSpecOrStub[] = kids.map(c =>
-        buildNode(c, next, childParentBBox),
+        buildNode(c, next, childParentBBox, undefined),
       )
       out.children = built
     }
@@ -1000,5 +1213,12 @@ export const toNodeSpec = (
   const depth = opts.depth ?? 0
   // The export ROOT has no parent frame: positionOf falls back to its own
   // absolute bbox origin (current behavior preserved).
-  return buildNode(raw, depth, undefined)
+  //
+  // bindingNames (Task 1) rides on `raw.bindingNames` for the ROOT call
+  // only — the one place this function reads it. Every recursive
+  // `buildNode` call for a child passes `undefined` explicitly (T10).
+  const bindingNames = raw.bindingNames as
+    | BindingNames
+    | undefined
+  return buildNode(raw, depth, undefined, bindingNames)
 }
