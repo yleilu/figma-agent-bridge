@@ -128,4 +128,47 @@ describe('projectNode', () => {
     const result = projectNode(sampleNode, { fields: [] })
     expect(result).toBe(sampleNode)
   })
+  // `full` means every field. It used to be an enumerated list, which fell
+  // eight fields behind NodeSpec — `component`, the INSTANCE round-trip
+  // anchor, among them. Identity is the only definition that cannot drift.
+  it('profile:full keeps every field, including ones no list names', () => {
+    const rich = {
+      ...sampleNode,
+      component: { id: '2:3' },
+      isMask: true,
+      vectorPaths: ['M0 0'],
+      childCount: 3,
+    } as unknown as Parameters<typeof projectNode>[0]
+    expect(projectNode(rich, { profile: 'full' })).toBe(
+      rich,
+    )
+  })
+
+  it('profile:full ignores an empty fields array', () => {
+    expect(
+      projectNode(sampleNode, {
+        profile: 'full',
+        fields: [],
+      }),
+    ).toBe(sampleNode)
+  })
+
+  it('explicit fields still win over profile:full', () => {
+    const result = projectNode(sampleNode, {
+      profile: 'full',
+      fields: ['name'],
+    })
+    expect(Object.keys(result)).toEqual(['name'])
+  })
+
+  it('a narrowing profile still narrows', () => {
+    const result = projectNode(sampleNode, {
+      profile: 'minimal',
+    })
+    expect(Object.keys(result).sort()).toEqual([
+      'id',
+      'name',
+      'type',
+    ])
+  })
 })

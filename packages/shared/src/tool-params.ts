@@ -33,6 +33,7 @@ import {
   fidelityReadParamsSchema,
   listReadParamsSchema,
   cursorSchema,
+  profileSchema,
 } from './read-model'
 
 // ---------------------------------------------------------------------------
@@ -209,6 +210,15 @@ export const searchParamsSchema = z.object({
       'Scan-scope depth: how deep the plugin traverses each root. -1 (default) = whole subtree; 0 = root(s) only; N = N levels deep. Results stay a flat list.',
     ),
   ...listReadParamsSchema.shape,
+  // `profile` rides here rather than on listReadParamsSchema: the presets are
+  // NodeSpec field sets, so they mean something for `search`'s node results and
+  // nothing for a style or font list. Putting it on the shared list mixin would
+  // hand it to every future list read by accident.
+  profile: profileSchema
+    .optional()
+    .describe(
+      'Named field preset for each result: minimal | layout | style | text | full. `fields` wins when both are given.',
+    ),
 })
 
 // ---------------------------------------------------------------------------
