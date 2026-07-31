@@ -22,6 +22,8 @@ import {
   cursorRejected,
   errorEnvelope,
   synthKey,
+  protocolMismatch,
+  compareMajorMinor,
   requireFile,
   toolError,
   pluginError,
@@ -191,6 +193,51 @@ describe('synthKey', () => {
     expect(synthKey(info('sess-123', null, 'N'))).toBe(
       'sess-123',
     )
+  })
+})
+
+describe('compareMajorMinor', () => {
+  it('orders numerically, not lexically', () => {
+    // '0.10' sorts BELOW '0.9' as a string but is the newer version.
+    expect(
+      compareMajorMinor('0.10.0', '0.9.0'),
+    ).toBeGreaterThan(0)
+    expect(
+      compareMajorMinor('0.9.0', '0.10.0'),
+    ).toBeLessThan(0)
+    expect(compareMajorMinor('1.2.9', '1.2.0')).toBe(0)
+    expect(
+      compareMajorMinor('2.0.0', '1.9.0'),
+    ).toBeGreaterThan(0)
+  })
+})
+
+describe('protocolMismatch', () => {
+  const [maj, min] = APP_VERSION.split('.').map(Number)
+  const older =
+    min > 0 ? `${maj}.${min - 1}.0` : `${maj - 1}.9.0`
+  const newer = `${maj}.${min + 1}.0`
+
+  it('returns null on a matching major.minor', () => {
+    expect(protocolMismatch(`${maj}.${min}.99`)).toBeNull()
+  })
+
+  it('names the PLUGIN as stale when the plugin is older', () => {
+    const msg = protocolMismatch(older) ?? ''
+    expect(msg).toContain('update the Figma plugin')
+    expect(msg).not.toContain('update the MCP server')
+  })
+
+  it('names the SERVER as stale when the plugin is newer', () => {
+    const msg = protocolMismatch(newer) ?? ''
+    expect(msg).toContain('update the MCP server')
+    expect(msg).not.toContain('update the Figma plugin')
+  })
+
+  it('names the PLUGIN as stale when it reports no version', () => {
+    const msg = protocolMismatch(undefined) ?? ''
+    expect(msg).toContain("'(none)'")
+    expect(msg).toContain('update the Figma plugin')
   })
 })
 

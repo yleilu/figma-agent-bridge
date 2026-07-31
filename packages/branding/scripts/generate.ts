@@ -47,9 +47,10 @@ if (!pathMatch) {
 const logoPath = pathMatch[1]
 
 const viewBoxMatch = onWhite.match(/viewBox="([^"]+)"/i)
-const logoViewBox = viewBoxMatch
-  ? viewBoxMatch[1]
-  : '0 0 1024 1024'
+if (!viewBoxMatch) {
+  throw new Error('logo-on-white.svg: no viewBox="…" found')
+}
+const logoViewBox = viewBoxMatch[1]
 
 const color = '#D97757'
 

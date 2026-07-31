@@ -61,7 +61,7 @@ These apply once a design system is in play:
 > design-system-first and component-first — adopt a system if one exists, reuse before
 > create, bind an existing token. A user's `figma-bridge-prefs` may raise these to a
 > strict/proactive level and supply concrete values (tokens, spacing scale, type ramp,
-> naming). See [[figma-bridge/docs/specs/customization|customization.md]] (P1).
+> naming). See `docs/specs/customization.md` in the repo (not shipped) (P1).
 
 ---
 
@@ -85,7 +85,8 @@ Rules for running the surface smoothly and cheaply:
 ## Read the turn-start presence block
 
 Every turn opens with an injected `figma_bridge:` YAML block (see
-`docs/specs/plugin-presence.md`) — passive awareness, not something you fetch. Its per-file
+`docs/specs/plugin-presence.md` in the repo, not shipped) — passive awareness, not something you
+fetch. Its per-file
 `pending_edits` / `pending_edits_state` fields say what the **user** changed since your last
 drain. What to do about them:
 
@@ -157,7 +158,7 @@ every create, and nothing enforces it server-side. Never leave the Figma default
   (`Button/Primary`) — is a **user preference**, relocated to `figma-bridge-prefs`
   `references/house-style.md`; this skill ships only the floor (a meaningful,
   self-describing name on every node). See
-  [[figma-bridge/docs/specs/customization|customization.md]] §11 (P1).
+  `docs/specs/customization.md` §11 in the repo (not shipped) (P1).
 
 ---
 

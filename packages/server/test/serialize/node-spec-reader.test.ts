@@ -162,6 +162,24 @@ describe('toNodeSpec — GRID layout read-back', () => {
     expect(spec.layout?.colGap).toBe(0)
   })
 
+  it('reads pad on a GRID frame (padding is not H/V-only)', () => {
+    const gridRaw: Record<string, unknown> = {
+      id: '10:5',
+      name: 'Padded Grid',
+      type: 'FRAME',
+      layoutMode: 'GRID',
+      gridRowCount: 2,
+      gridColumnCount: 2,
+      paddingTop: 10,
+      paddingRight: 20,
+      paddingBottom: 30,
+      paddingLeft: 40,
+    }
+    const spec = toNodeSpec(gridRaw, { depth: -1 })
+    expect(spec.layout?.mode).toBe('GRID')
+    expect(spec.layout?.pad).toEqual([10, 20, 30, 40])
+  })
+
   it('GRID frame missing grid count/gap fields produces GRID mode with no counts/gaps', () => {
     const gridRaw: Record<string, unknown> = {
       id: '10:3',

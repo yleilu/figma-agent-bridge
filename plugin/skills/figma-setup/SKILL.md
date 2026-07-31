@@ -38,7 +38,7 @@ itself — that's `figma-design` / `figma-reviewer`.
 The Claude Code plugin package ships the built Figma plugin inside it. Figma
 can't load it from there, so this part copies it somewhere stable and tells
 the user what to import. Full design:
-[[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]] §5.1.
+`docs/specs/claude-plugin.md` §5.1 in the repo (not shipped).
 
 ### Where the files go
 
@@ -166,7 +166,7 @@ instantiates — or updates — a **user-authored** skill named exactly
 `figma-bridge-prefs`: the sanctioned home for one user's or team's house style
 (strict design-system-first / component-first levels, concrete tokens and
 scales, naming, review standards). Full design:
-[[figma-bridge/docs/specs/customization|customization.md]] §5.
+`docs/specs/customization.md` §5 in the repo (not shipped).
 
 ### What this produces
 
@@ -176,7 +176,7 @@ produced by copying the shipped template directory
 `references/figma-bridge-prefs-template/` wholesale into the user's skills
 tree, then tailoring the copy by interview. `figma-bridge-prefs` is not
 shipped by the plugin, and `figma-setup` is the _only_ path that writes it —
-see [[figma-bridge/docs/specs/customization|customization.md]] §5 for the
+see `docs/specs/customization.md` §5 in the repo (not shipped) for the
 full model of how the overlay reaches the build loop and overrides upward.
 
 ### Scope selection — user vs project

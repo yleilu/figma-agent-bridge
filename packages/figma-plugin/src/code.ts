@@ -2272,6 +2272,7 @@ const handleCommand = async (
           key: string
           name: string
           instancesCount: number
+          context?: string
           description?: string
         }
       > = {}
@@ -2307,6 +2308,7 @@ const handleCommand = async (
                 key: mkey,
                 name: main.name,
                 instancesCount: 0,
+                ...(readContext(main) !== undefined ? { context: readContext(main) } : {}),
                 ...(main.description ? { description: main.description } : {}),
               }
             }

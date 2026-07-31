@@ -110,7 +110,7 @@ _mechanics_ shortcuts fold back into the `figma-design` skill's recipes. A
 _taste / preference_ correction (a house-style default, a threshold, a naming choice)
 instead routes to the user's `figma-bridge-prefs` via `figma-setup` — it never folds into
 a shipped skill, and `figma-bridge-prefs` content never rides the feedback rail off-box.**
-See [[figma-bridge/docs/specs/customization|customization.md]] §11. Use this body format:
+See `docs/specs/customization.md` §11 in the repo (not shipped). Use this body format:
 
 ```
 **Long path:** A → B → C → outcome
@@ -197,7 +197,7 @@ subagents only `record_feedback` — the top-level agent runs this after they re
    - **header:** `Send feedback?`
    - **question:** `I captured N tool-friction note(s): "‹title 1›"[, "‹title 2›"][, …and K more]. Send them to the developer?` — fill `N` and up to 3 real titles from `list_feedback`; append `…and K more` only when more than 3 remain.
    - **options, in THIS order — option 1 is the default:**
-     1. **`Yes, send`** — `File all N to the developer` + attribution: remembered github → `, as <name> <login>`; remembered anonymous → `, anonymously via the bot`; first run (`identity` null) → `— I'll ask how to attribute first`.
+     1. **`Yes, send`** — `File all N to the developer` + attribution: remembered github → `, as <name> <email>` (`name` falls back to `login`, and a private `email` to the GitHub noreply address `{id}+{login}@users.noreply.github.com`); remembered anonymous → `, anonymously via the bot`; first run (`identity` null) → `— I'll ask how to attribute first`.
      2. **`Not now`** — `Keep them in the backlog.`
      3. **`Delete`** — `Discard them unsent.`
    Dismissing the question (Esc) counts as **Not now**. **Never** put `Delete` first or make it the

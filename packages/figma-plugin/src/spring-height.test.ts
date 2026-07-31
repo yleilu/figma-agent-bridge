@@ -11,7 +11,7 @@ import {
 
 describe('window-height bounds', () => {
   test('min is one message (title + description)', () => {
-    expect(MIN_WINDOW_HEIGHT).toBe(64)
+    expect(MIN_WINDOW_HEIGHT).toBe(60)
     expect(MIN_WINDOW_HEIGHT).toBe(ONE_MESSAGE_HEIGHT)
   })
   test('max is a 9:16 portrait of the fixed width', () => {

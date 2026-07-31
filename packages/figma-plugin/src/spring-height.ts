@@ -13,10 +13,10 @@ export const WINDOW_WIDTH = 340
 export const PORTRAIT_RATIO = 16 / 9
 
 // One-message floor, composed from the fallback block's own box
-// model (Tailwind p-3.5 = 14px padding, gap-1 = 4px, text-11
+// model (Tailwind p-3 = 12px padding, gap-1 = 4px, text-11
 // line-height = 16px). The window never shrinks below a single
 // title + description.
-const BLOCK_PADDING = 14
+const BLOCK_PADDING = 12
 const BLOCK_GAP = 4
 const LINE_HEIGHT = 16
 export const ONE_MESSAGE_HEIGHT =

@@ -68,7 +68,7 @@ skill is installed, use its `references/review-standards.md` scale. Absent it �
 `figma-bridge-prefs` is present but its `review-standards` is missing or unparseable — do
 **not** assert a shipped scale and never error: fall back to **internal consistency** —
 flag spacing that is inconsistent with the file's _own_ prevailing step (the value used
-most across siblings). See [[figma-bridge/docs/specs/customization|customization.md]] §11 (P1).
+most across siblings). See `docs/specs/customization.md` §11 in the repo (not shipped) (P1).
 
 Severity:
 
@@ -103,7 +103,7 @@ The concrete house type ramp is a **user preference**: when a `figma-bridge-pref
 is installed, use its `references/review-standards.md` ramp as the target. Absent it (or
 if `review-standards` is missing / unparseable), do **not** assert a shipped list — check
 the frame's **own prevailing ramp** for consistency (flag sizes that don't sit on the ramp
-the file itself uses most). See [[figma-bridge/docs/specs/customization|customization.md]] §11.
+the file itself uses most). See `docs/specs/customization.md` §11 in the repo (not shipped).
 
 ### Alignment
 
@@ -118,8 +118,8 @@ intentional overlays:
 
 ## Dimension 3 — Accessibility
 
-Accessibility is a **user preference** ([[figma-bridge/docs/specs/customization|customization.md]]
-§7): the concrete standards — contrast ratios, minimum text size, touch-target size — live in the
+Accessibility is a **user preference** (`docs/specs/customization.md` §7 in the repo, not
+shipped): the concrete standards — contrast ratios, minimum text size, touch-target size — live in the
 user's `figma-bridge-prefs` `references/review-standards.md`, **not** here. This section holds only
 the _how-to_ (what to look at, and how to compute contrast). **Load the thresholds from the
 `figma-bridge-prefs` `review-standards` before flagging.** With no `figma-bridge-prefs`

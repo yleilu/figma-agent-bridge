@@ -256,12 +256,12 @@ const STATUS_LIVE_TIMEOUT_MS = 2500
 
 /**
  * status() → { connected, joined[], available[] } where each joined entry is
- * { fileKey, fileName, channel, protocolVersion, currentPage, selection[],
+ * { fileKey, fileName, channel, version, currentPage, selection[],
  *   viewport }.
  *
  * Reports EVERY joined file (multi-file, B3) — not a single currentFileKey. The
  * connection identity (fileKey/channel) is known SERVER-side; fileName +
- * protocolVersion + available[] come from the relay registry (/channels); the
+ * version + available[] come from the relay registry (/channels); the
  * LIVE context (currentPage / selection / viewport) is read PER FILE from its
  * plugin via COMMANDS.STATUS and merged in. Each live read is best-effort and
  * bounded: a failed/slow round-trip still reports connection state for that file
@@ -336,7 +336,7 @@ export const handleStatus = async (
         fileKey,
         fileName: mine?.fileName ?? null,
         channel,
-        protocolVersion: mine?.version,
+        version: mine?.version,
         ...(skew !== null ? { incompatible: skew } : {}),
         currentPage: live.currentPage,
         selection: live.selection,

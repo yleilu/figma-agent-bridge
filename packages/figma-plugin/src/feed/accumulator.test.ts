@@ -372,4 +372,68 @@ describe('ChangeAccumulator', () => {
       { op: 'style_update', id: 'S:1', props: ['p'] },
     ])
   })
+
+  // A style's identity is its KEY. The runtime's trailing segment varies per
+  // EVENT, so keying collapse on the raw id gives every event a bucket of its
+  // own and nothing ever folds.
+  it('collapses one style across the id forms its events carry', () => {
+    const a = createAccumulator(100)
+    a.add({
+      op: 'style_update',
+      id: 'S:abc,1:2',
+      props: ['p'],
+    })
+    a.add({
+      op: 'style_update',
+      id: 'S:abc,1:3',
+      props: ['q'],
+    })
+    a.add({
+      op: 'style_update',
+      id: 'S:abc,',
+      props: ['r'],
+    })
+    expect(a.size()).toBe(1)
+    expect(a.runCount()).toBe(1)
+    const out = a.drain()
+    expect(out.changes).toHaveLength(1)
+    expect(out.changes[0]?.props).toEqual(['p', 'q', 'r'])
+  })
+
+  it('cancels a style created and deleted across two id forms', () => {
+    const a = createAccumulator(100)
+    a.add({ op: 'style_create', id: 'S:abc,' })
+    a.add({ op: 'style_delete', id: 'S:abc,1:2' })
+    expect(a.size()).toBe(0)
+    expect(a.runCount()).toBe(0)
+    expect(a.drain().changes).toEqual([])
+  })
+
+  it('drains the FIRST-SEEN id form, never the collapse key', () => {
+    const a = createAccumulator(100)
+    a.add({
+      op: 'style_update',
+      id: 'S:abc,1:2',
+      props: ['p'],
+    })
+    a.add({
+      op: 'style_update',
+      id: 'S:abc,1:9',
+      props: ['q'],
+    })
+    expect(a.drain().changes[0]?.id).toBe('S:abc,1:2')
+  })
+
+  it('never keys a NODE id by prefix — 1:8 is not 1:80', () => {
+    const a = createAccumulator(100)
+    a.add({ op: 'update', id: '1:8', props: ['x'] })
+    a.add({ op: 'update', id: '1:80', props: ['x'] })
+    a.add({ op: 'update', id: '1:8,2', props: ['x'] })
+    expect(a.size()).toBe(3)
+    expect(a.drain().changes.map(c => c.id)).toEqual([
+      '1:8',
+      '1:80',
+      '1:8,2',
+    ])
+  })
 })

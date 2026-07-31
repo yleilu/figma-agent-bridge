@@ -94,13 +94,13 @@ export const fileTargetParamsSchema = z.object({
     .string()
     .optional()
     .describe(
-      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); ignored by this surface today.',
+      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); the server forwards it as the key of the agent status row for this call (status-monitor.md).',
     ),
   agentType: z
     .string()
     .optional()
     .describe(
-      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); ignored by this surface today.',
+      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); the server forwards it as the display label on that agent status row (status-monitor.md).',
     ),
 })
 

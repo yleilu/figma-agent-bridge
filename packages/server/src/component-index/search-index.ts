@@ -41,6 +41,35 @@ export type SearchResult = {
 }
 
 /**
+ * Project a MiniSearch hit back to the stored record.
+ * A raw hit also carries the engine's own scoring fields
+ * (score / terms / queryTerms / match) — internals the
+ * agent must never see, so every hit is rebuilt from the
+ * stored fields alone.
+ */
+const toRecord = (
+  hit: ComponentIndexRecord,
+): ComponentIndexRecord => {
+  const rec: ComponentIndexRecord = {
+    id: hit.id,
+    key: hit.key,
+    name: hit.name,
+    type: hit.type,
+    page: hit.page,
+    source: hit.source,
+    fileKey: hit.fileKey,
+    signature: hit.signature,
+  }
+  if (hit.description !== undefined) {
+    rec.description = hit.description
+  }
+  if (hit.variantAxes !== undefined) {
+    rec.variantAxes = hit.variantAxes
+  }
+  return rec
+}
+
+/**
  * Run a query, bounded to top-N.
  * `truncated` = more matched than `limit`.
  * Optional `type` filters results before slicing so
@@ -61,7 +90,7 @@ export const searchIndex = (
       | undefined,
   }) as unknown as ComponentIndexRecord[]
   return {
-    results: hits.slice(0, limit),
+    results: hits.slice(0, limit).map(toRecord),
     truncated: hits.length > limit,
   }
 }

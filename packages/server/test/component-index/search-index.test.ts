@@ -54,6 +54,30 @@ describe('buildIndex + searchIndex', () => {
     expect(results).toHaveLength(1)
     expect(truncated).toBe(true)
   })
+  it('returns records only — no MiniSearch internals', () => {
+    const idx = buildIndex(records)
+    const { results } = searchIndex(idx, 'primary', 10)
+    expect(results).toHaveLength(1)
+    expect(Object.keys(results[0]).sort()).toEqual([
+      'description',
+      'fileKey',
+      'id',
+      'key',
+      'name',
+      'page',
+      'signature',
+      'source',
+      'type',
+    ])
+  })
+  it('omits an absent optional field rather than emitting undefined', () => {
+    const idx = buildIndex(records)
+    const { results } = searchIndex(idx, 'secondary', 10)
+    expect(results).toHaveLength(1)
+    expect(Object.keys(results[0])).not.toContain(
+      'description',
+    )
+  })
 })
 
 describe('serialize + load round-trip', () => {

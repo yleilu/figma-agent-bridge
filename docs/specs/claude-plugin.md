@@ -188,7 +188,7 @@ figma-agent-bridge/                       == the installed plugin root
 
 Conventions confirmed from real plugins: MCP config lives in `.mcp.json` at plugin root
 (never inline in `plugin.json`); `plugin.json` sets only
-`name, description, version, author, homepage, repository, license, keywords` (**`version` is
+`name, displayName, description, version, author, homepage, repository, license, keywords` (**`version` is
 required**, not optional — §5); the plugin ships **no `commands/`** — its surfaces are skills,
 agents, and hooks; skills are
 `skills/<name>/SKILL.md`; agents are flat `agents/<name>.md` with a `model:` frontmatter (and

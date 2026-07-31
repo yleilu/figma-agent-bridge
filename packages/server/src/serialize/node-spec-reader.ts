@@ -740,6 +740,14 @@ const layoutSpec = (
     return undefined
   }
 
+  // Padding applies to every auto-layout mode, GRID included.
+  const pt = num(raw.paddingTop) ?? 0
+  const pr = num(raw.paddingRight) ?? 0
+  const pb = num(raw.paddingBottom) ?? 0
+  const pl = num(raw.paddingLeft) ?? 0
+  const pad: LayoutSpec['pad'] | undefined =
+    pt || pr || pb || pl ? [pt, pr, pb, pl] : undefined
+
   // GRID branch (M12): two independent gaps, separate row/col counts.
   if (mode === 'GRID') {
     const out: LayoutSpec = { mode: 'GRID' }
@@ -759,6 +767,9 @@ const layoutSpec = (
     if (colGap !== undefined) {
       out.colGap = colGap
     }
+    if (pad !== undefined) {
+      out.pad = pad
+    }
     return out
   }
 
@@ -769,12 +780,8 @@ const layoutSpec = (
   if (gap !== undefined) {
     out.gap = gap
   }
-  const pt = num(raw.paddingTop) ?? 0
-  const pr = num(raw.paddingRight) ?? 0
-  const pb = num(raw.paddingBottom) ?? 0
-  const pl = num(raw.paddingLeft) ?? 0
-  if (pt || pr || pb || pl) {
-    out.pad = [pt, pr, pb, pl]
+  if (pad !== undefined) {
+    out.pad = pad
   }
   const primary = str(raw.primaryAxisAlignItems)
   const counter = str(raw.counterAxisAlignItems)
