@@ -2113,6 +2113,23 @@ const handleCommand = async (
     // variant axes, and the per-property defaults. The server applies the
     // name query filter.
     case COMMANDS.GET_COMPONENTS: {
+      // The containing PAGE's name. A component is routinely organised
+      // inside a frame or section (the normal UI-kit layout), not parented
+      // directly to the page, so walk ancestors up to the first PAGE
+      // instead of checking only the immediate parent.
+      const pageNameOf = (
+        node: BaseNode,
+      ): string | null => {
+        let p: BaseNode | null = node.parent
+        while (p) {
+          if (p.type === 'PAGE') {
+            return p.name
+          }
+          p = p.parent
+        }
+        return null
+      }
+
       const componentSets = figma.root.findAllWithCriteria({
         types: ['COMPONENT_SET'],
       })
@@ -2150,10 +2167,7 @@ const handleCommand = async (
           name: cs.name,
           key: cs.key,
           type: cs.type,
-          page:
-            cs.parent && cs.parent.type === 'PAGE'
-              ? cs.parent.name
-              : null,
+          page: pageNameOf(cs),
         }
         try {
           const variantAxes: Record<string, string[]> = {}
@@ -2222,10 +2236,7 @@ const handleCommand = async (
             name: comp.name,
             key: comp.key,
             type: comp.type,
-            page:
-              comp.parent && comp.parent.type === 'PAGE'
-                ? comp.parent.name
-                : null,
+            page: pageNameOf(comp),
             properties: projectComponentDefs(compDefs),
             defaults: defaultsOf(compDefs),
             ...(readContext(comp) !== undefined ? { context: readContext(comp) } : {}),
@@ -2238,10 +2249,7 @@ const handleCommand = async (
             name: comp.name,
             key: comp.key,
             type: comp.type,
-            page:
-              comp.parent && comp.parent.type === 'PAGE'
-                ? comp.parent.name
-                : null,
+            page: pageNameOf(comp),
             ...(readContext(comp) !== undefined ? { context: readContext(comp) } : {}),
             ...(comp.description ? { description: comp.description } : {}),
           })
@@ -2268,7 +2276,6 @@ const handleCommand = async (
         {
           key: string
           name: string
-          library: string
           instancesCount: number
           description?: string
         }
@@ -2304,10 +2311,6 @@ const handleCommand = async (
               remoteMap[mkey] = {
                 key: mkey,
                 name: main.name,
-                library:
-                  main.parent && main.parent.name
-                    ? main.parent.name
-                    : 'Unknown',
                 instancesCount: 0,
                 ...(main.description ? { description: main.description } : {}),
               }

@@ -353,13 +353,17 @@ const handleAgentStatus = (
   // A skeleton frame (text:null) marks "busy" but must NOT wipe an existing
   // narrative — keep the last line so a busy row shows what it last said (the
   // amber dot carries "busy"). The skeleton therefore only ever shows BEFORE the
-  // first narrative (prev has no text yet).
+  // first narrative (prev has no text yet). Same for `level`: a skeleton frame
+  // (any non-report_status tool call) always carries level:'normal' — without
+  // this, the next tool call after an error silently resets an errored row's
+  // dot back to green while the error narrative is still on screen.
   if (
     record.text === null &&
     prev?.text !== undefined &&
     prev.text !== null
   ) {
     merged.text = prev.text
+    merged.level = prev.level
   }
   byKey.set(record.key, merged)
   const payload = JSON.stringify({

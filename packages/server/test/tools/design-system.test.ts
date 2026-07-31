@@ -371,9 +371,7 @@ describe('handleGetComponents', () => {
         properties: [],
       },
     ],
-    remote: [
-      { key: 'remote-key', name: 'Icon', library: 'Lib' },
-    ],
+    remote: [{ key: 'remote-key', name: 'Icon' }],
   }
 
   it('forwards COMMANDS.GET_COMPONENTS', async () => {
@@ -777,7 +775,6 @@ describe('handleGetComponents', () => {
         {
           key: 'r1',
           name: 'Icon',
-          library: 'Lib',
           instancesCount: 50,
         },
       ],
@@ -819,7 +816,6 @@ describe('handleGetComponents', () => {
         {
           key: 'r1',
           name: 'Icon',
-          library: 'Lib',
           instancesCount: 3,
         },
       ],

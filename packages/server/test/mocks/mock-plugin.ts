@@ -479,8 +479,9 @@ export const createMockPlugin = (
         break
 
       // get_components: the NEW richer shape — key + variantAxes + `properties`
-      // + defaults per local entry, key + library + instancesCount per remote
-      // entry. `properties` is the SAME {id,name,type,defaultValue,
+      // + defaults per local entry, key + instancesCount per remote entry (no
+      // fabricated `library` — a remote instance carries no library identity,
+      // only `key` is honest). `properties` is the SAME {id,name,type,defaultValue,
       // variantOptions?} array shape + key update_component emits (read == write,
       // T2): each entry's `id` is the CANONICAL property id and `name` is the
       // part before "#".
@@ -531,7 +532,6 @@ export const createMockPlugin = (
               {
                 key: 'remote-key',
                 name: 'Icon',
-                library: 'Lib',
                 instancesCount: 3,
               },
             ]

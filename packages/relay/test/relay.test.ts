@@ -1576,6 +1576,67 @@ describe('relay', () => {
       await closeWs(plugin)
     })
 
+    it('a skeleton after an error preserves level (does not reset the dot to normal)', async () => {
+      const server2 = await connect()
+      const plugin = await connect()
+      const sQ = createMessageQueue(server2)
+      const pQ = createMessageQueue(plugin)
+      server2.send(
+        JSON.stringify({ type: 'join', channel: 'c3d' }),
+      )
+      await sQ()
+      plugin.send(
+        JSON.stringify({ type: 'join', channel: 'c3d' }),
+      )
+      await pQ()
+
+      server2.send(
+        JSON.stringify({
+          type: 'agent-status',
+          channel: 'c3d',
+          record: {
+            key: 'a3d',
+            sessionId: 's3d',
+            level: 'error',
+            text: 'Font "Inter Tight" missing',
+            activity: 'busy',
+            updatedAt: 1,
+          },
+        }),
+      )
+      await pQ() // broadcast of the error narrative
+
+      // A subsequent (non-report_status) tool call emits a plain skeleton —
+      // level:'normal' is the server's default for a busy+skeleton frame; the
+      // relay must not let it stomp the row's still-visible error.
+      server2.send(
+        JSON.stringify({
+          type: 'agent-status',
+          channel: 'c3d',
+          record: {
+            key: 'a3d',
+            sessionId: 's3d',
+            level: 'normal',
+            text: null,
+            activity: 'busy',
+            updatedAt: 2,
+          },
+        }),
+      )
+      const got = await pQ()
+      expect(got).toMatchObject({
+        type: 'agent-status',
+        record: {
+          key: 'a3d',
+          level: 'error',
+          text: 'Font "Inter Tight" missing',
+        },
+      })
+
+      await closeWs(server2)
+      await closeWs(plugin)
+    })
+
     it("POST /agent-status/settle flips a session's rows to idle and broadcasts", async () => {
       const server2 = await connect()
       const sQ = createMessageQueue(server2)

@@ -6,6 +6,15 @@ import { LOOP_SPRING } from './springs'
 import type { RosterRow } from './roster'
 import type { StatusRecord } from '@figma-agent-bridge/shared'
 
+// status-monitor.md § Lifecycle — Presence: "Muted — after IDLE_MS
+// (~45–60s) of no activity the whole row dims". This is the PANEL's
+// presence-level fade (the row dims), a different timescale/concern
+// than the relay's DEFAULT_IDLE_MS (packages/relay/src/relay.ts) which
+// flips a row's ACTIVITY from busy to idle when no Stop hook arrives.
+// The two happen to share a similar magnitude by spec design, not by
+// sharing a constant — this one is independently tunable.
+const IDLE_MS = 50_000
+
 // busy wins while an action is in flight (spec: busy = "a Figma
 // action is in flight"; error = "the LAST report flagged a
 // failure" — only shown once settled).
@@ -71,11 +80,17 @@ const label = (r: StatusRecord): string =>
 export const Row = ({ row }: { row: RosterRow }) => {
   const r = row.record
   const busy = r.activity === 'busy'
+  // Settled (idle, muted) only after IDLE_MS of quiet — a Stop-settled row
+  // stays full-opacity for the quiet period before it dims, instead of
+  // going dim the instant activity flips to idle.
+  const settled =
+    !busy && Date.now() - r.updatedAt >= IDLE_MS
   return (
     <div
       className={cx(
         'flex items-center gap-2 px-3 py-1 text-11',
-        busy ? 'bg-figma-bg-secondary' : 'opacity-60',
+        busy && 'bg-figma-bg-secondary',
+        settled && 'opacity-60',
         row.kind === 'child' && 'pl-7',
       )}
     >

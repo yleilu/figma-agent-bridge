@@ -158,11 +158,6 @@ every create, and nothing enforces it server-side. Never leave the Figma default
   `references/house-style.md`; this skill ships only the floor (a meaningful,
   self-describing name on every node). See
   [[figma-bridge/docs/specs/customization|customization.md]] §11 (P1).
-- **Semantic names for structural text** — a text node that plays a structural role (a
-  heading, a label, a field caption) earns a role name (`SectionTitle`, `PriceLabel`),
-  not its literal content. A text node whose name simply mirrors its own characters is
-  fine for plain copy — the reviewer exempts it — but structural text deserves a real
-  name.
 
 ---
 
