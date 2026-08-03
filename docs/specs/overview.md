@@ -59,8 +59,14 @@ All scripts run from the repo root (`bun run <script>`) unless noted.
 
 **Starting the MCP stack:** `scripts/start-mcp.sh`. It starts the relay if nothing is
 listening on `$PORT` (default **18080**), waits up to ~5s for it, then `exec`s the server
-(passing through args). The server auto-discovers the relay port via a ping/pong probe, so
-the port is a default, not a hard coupling.
+(passing through args).
+
+**Relay address — this spec is the single source of truth.** The port is **not** a hard
+coupling: the server reads `PORT` and falls back to the compiled `DEFAULT_PORT` (**18080**), and
+`RELAY_URL` overrides the whole websocket URL when the relay is not local. There is **no runtime
+discovery** — no probe, no broadcast — because a variable plus a default already satisfies the
+requirement and nothing has needed more. Other specs link here rather than restating this; a
+mechanism described in four places is a mechanism that will be wrong in three of them.
 
 ## Connection lifecycle
 

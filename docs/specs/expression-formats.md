@@ -107,7 +107,11 @@ tail lives, so the core stays short.
   `gradientTransform`). **Angle is linear-only** — `radial`, `angular`, and `diamond`
   carry no angle (the build side never converts angle back to a transform for them);
   non-trivial geometry for any gradient goes in `{tf=[a,b,c,d,e,f]}`. Stops are `#color@percent`.
-- **`{…}` keys (any paint):** `op=` (paint opacity, distinct from color alpha),
+- **`{…}` keys (any paint):** `op=` (paint opacity — on a **SOLID** this is the
+  *same* channel as the colour's alpha, since Figma's `SolidPaint` carries an RGB
+  colour and one opacity and has no separate colour alpha; `#RRGGBBAA` and `{op=}`
+  are two spellings of it, and a read emits the compact hex form. On a gradient or
+  image the paint's opacity is genuinely distinct from the stop/pixel alpha),
   `blend=` (blend mode), `vis=false` (hidden paint). Image/video also: `scale=`
   (FILL/FIT/CROP/TILE), `rot=` (0/90/180/270), `tile=` (scaling factor),
   `filter=` (exposure/contrast/…). Non-trivial gradient geometry: `tf=[a,b,c,d,e,f]`.

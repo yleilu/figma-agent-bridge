@@ -625,8 +625,11 @@ and is never a cloud-CI job.
     holds, and — because the marketplace entry only moves when a release commit stamps it — no user
     has the fix (§6.4). A hotfix committed and left there is not a shipped fix; one released but left
     out of `dev` is a fix the next release will not carry.
-- **Merges.** Feature branches merge with a non-fast-forward, `merge:`-prefixed commit, preserving a
-  legible topology.
+- **Merges.** Feature branches merge **non-fast-forward**, preserving a legible topology, with
+  git's **default** merge message (`Merge branch 'x'` / `Merge branch 'x' into y`) — do not author
+  a custom subject. The topology is what carries the meaning here; the branch name and the commits
+  it brings say what happened, and an invented merge subject only adds a second place for that to
+  be described wrongly.
 - **Commits.** Commits use Conventional Commits with scopes discovered from history — the hotfix
   commit written straight onto `main` included. The release pipeline authors exactly one commit of
   its own — `Release X.Y.Z`

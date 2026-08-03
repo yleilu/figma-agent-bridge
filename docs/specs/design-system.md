@@ -50,12 +50,34 @@ can be used directly as `var(--figma-color-…)` — the Tailwind mapping is a c
 
 **Semantic status colors** (used by the status monitor's progress dot and elsewhere):
 
+**The intent is that a status dot reads as a saturated, distinguishable signal in
+both the light and the dark theme.** The token below is how that is currently
+achieved, not the point in itself — see the override note.
+
 | Meaning | Token |
 |---|---|
 | busy / in-progress | amber — `--figma-color-icon-warning` |
 | ok / done | green — `--figma-color-icon-success` |
 | error / danger | red — `--figma-color-icon-danger` |
 | muted row / skeleton / pending | tertiary ramp — `--figma-color-text-tertiary` / `-icon-tertiary` |
+
+> **Three of these are overridden, deliberately — do not "fix" it back.**
+> Figma injects `--figma-color-icon-{danger,success,warning}` with the **muted
+> `text-*` value** (ramp-400) rather than the documented **saturated** icon value
+> (ramp-500, which equals the `bg-*` value). Figma's own light theme defines
+> `icon-danger == bg-danger` (`#f24822`) and `!= text-danger`, but the dark
+> injection collapses `icon` onto `text` (`#fca397`). Using the tokens as written
+> above therefore produces **grey status dots in dark theme** — defeating the
+> intent this section exists to state.
+>
+> So `packages/figma-plugin/src/index.css` aliases those three to `--figma-color-bg-*`,
+> which is correct in **both** themes (danger: light `#f24822` / dark `#e03e1a`).
+> Neutral, brand, component and selected icons are **intentionally** muted
+> (`icon == text` in both themes) — do not add them to the alias list.
+>
+> Fixed in `3a92db6`. **Delete the aliases once Figma ships the documented icon
+> values**; the token column above then becomes literally true again.
+> Reference: https://developers.figma.com/docs/plugins/css-variables/
 
 ## Typography
 
