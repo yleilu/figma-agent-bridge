@@ -2,10 +2,9 @@
 title: figma-agent-bridge Principles
 created: 2026-06-22T16:30:00+08:00
 tags:
-  - spec
   - figma-bridge
   - principles
-type: spec
+type: principle
 related:
   - "[[figma-bridge/docs/architecture]]"
   - "[[figma-bridge/docs/specs/overview]]"
