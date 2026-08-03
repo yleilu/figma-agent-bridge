@@ -488,18 +488,43 @@ const paintLeaf = (
   return wrapperFor(styleName, varName) + atom
 }
 
+/**
+ * Render a paint array to atom strings.
+ *
+ * A hidden paint is NOT filtered out. `visible: false` is paint STATE, and
+ * the grammar carries it as `{vis=false}` (expression-formats.md) — which
+ * `paintToAtom` emits and `atomToPaint` parses. Dropping it here made a
+ * read-modify-write DESTROY the paint: the agent echoed back the fills it
+ * was shown, and the hidden one was never shown.
+ *
+ * A paint the grammar cannot render yet (VIDEO / PATTERN / SHADER, or a
+ * malformed export) still has to be dropped — but it is announced on
+ * `warnings`, never dropped silently (T7). `field` names the array so the
+ * warning says which one came back incomplete.
+ */
 const paintArray = (
   raw: unknown,
   styleName: string | undefined,
   bindingNames: BindingNames | undefined,
+  field: 'fills' | 'strokes',
+  warnings: string[],
 ): string[] | undefined => {
   if (!Array.isArray(raw)) {
     return undefined
   }
-  const atoms = (raw as RawPaint[])
-    .filter(p => p.visible !== false)
-    .map(p => paintLeaf(p, styleName, bindingNames))
-    .filter((a): a is string => a !== null)
+  const atoms: string[] = []
+  for (const p of raw as RawPaint[]) {
+    const atom = paintLeaf(p, styleName, bindingNames)
+    if (atom === null) {
+      warnings.push(
+        `${field}: dropped a paint this read cannot render (type ${
+          p.type ?? 'unknown'
+        }) — the returned ${field} array is incomplete`,
+      )
+      continue
+    }
+    atoms.push(atom)
+  }
   return atoms.length > 0 ? atoms : undefined
 }
 
@@ -514,7 +539,11 @@ const effectArray = (
   }
   const wrapper = wrapperFor(styleName, undefined)
   const atoms = (raw as RawEffect[])
-    .filter(e => e.visible !== false)
+    // No visibility filter: a hidden effect is still ON the node, and the
+    // grammar spells it (`{vis=false}`). Dropping it here made a
+    // read-modify-write delete the designer's hidden shadow — the same defect
+    // the fills path carried. `visible` must be carried onto the FigmaEffect
+    // below, or the effect reads back as visible and the write-back UN-hides it.
     .map(e => {
       const figma: FigmaEffect = {
         type: e.type as FigmaEffect['type'],
@@ -537,6 +566,9 @@ const effectArray = (
       }
       if (e.showShadowBehindNode === true) {
         figma.showShadowBehindNode = true
+      }
+      if (e.visible === false) {
+        figma.visible = false
       }
       return wrapper + effectToAtom(figma)
     })
@@ -1049,7 +1081,11 @@ const componentMeta = (
       const fields = o.overriddenFields
       if (id !== undefined && Array.isArray(fields)) {
         for (const field of fields as string[]) {
-          entries.push({ path: id, field, value: '' })
+          // Field NAME only. Figma's override record is
+          // `{id, overriddenFields}` — it never says what a field was
+          // overridden TO, so any `value` here would be invented. The
+          // old `value: ''` read as "overridden to blank".
+          entries.push({ path: id, field })
         }
       }
     }
@@ -1098,6 +1134,11 @@ const buildNode = (
   const out: NodeSpec = {
     type: str(raw.type) ?? '',
   }
+  // Per-node sink for read-face honesty: anything this node's export
+  // carried that the read could not represent is named here rather than
+  // vanishing. Attached to `out` only when non-empty; a child's warning
+  // lands on the child's own spec (buildNode recurses with a fresh sink).
+  const warnings: string[] = []
   const name = str(raw.name)
   if (name !== undefined) {
     out.name = name
@@ -1153,6 +1194,8 @@ const buildNode = (
     raw.fills,
     bindingNames?.styles?.fill,
     bindingNames,
+    'fills',
+    warnings,
   )
   if (fills !== undefined) {
     out.fills = fills
@@ -1161,6 +1204,8 @@ const buildNode = (
     raw.strokes,
     bindingNames?.styles?.stroke,
     bindingNames,
+    'strokes',
+    warnings,
   )
   if (strokes !== undefined) {
     out.strokes = strokes
@@ -1342,6 +1387,10 @@ const buildNode = (
       )
       out.children = built
     }
+  }
+
+  if (warnings.length > 0) {
+    out.warnings = warnings
   }
 
   return out

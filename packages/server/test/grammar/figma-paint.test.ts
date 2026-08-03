@@ -496,8 +496,22 @@ describe('paint: atomToPaint(paintToAtom(p)) deep-equals p', () => {
       },
     },
     {
+      // A VIDEO paint is only valid to Figma WITH a scaleMode, so a
+      // complete one always carries it; FILL stays implicit in the atom.
       name: 'video',
-      p: { type: 'VIDEO', videoHash: 'vid1' },
+      p: {
+        type: 'VIDEO',
+        videoHash: 'vid1',
+        scaleMode: 'FILL',
+      },
+    },
+    {
+      name: 'video with scale',
+      p: {
+        type: 'VIDEO',
+        videoHash: 'vid1',
+        scaleMode: 'TILE',
+      },
     },
     {
       name: 'pattern',
@@ -586,6 +600,35 @@ describe('paint: atomToPaint(paintToAtom(p)) deep-equals p', () => {
       ],
     })
     expect(atom).toContain('tf=')
+  })
+})
+
+// Figma rejects a VIDEO paint that carries no scaleMode ("Required value
+// missing at [0].scaleMode"), unlike IMAGE which it defaults. So the atom
+// must always supply one, and must honour the documented scale= attr.
+describe('video paint carries a scaleMode', () => {
+  it('defaults to FILL when no scale= is given', () => {
+    expect(atomToPaint('video(vid1)')).toEqual({
+      type: 'VIDEO',
+      videoHash: 'vid1',
+      scaleMode: 'FILL',
+    })
+  })
+  it('honours scale=TILE', () => {
+    expect(atomToPaint('video(vid1){scale=TILE}')).toEqual({
+      type: 'VIDEO',
+      videoHash: 'vid1',
+      scaleMode: 'TILE',
+    })
+  })
+  it('renders a non-FILL scaleMode back out as scale=', () => {
+    expect(
+      paintToAtom({
+        type: 'VIDEO',
+        videoHash: 'vid1',
+        scaleMode: 'TILE',
+      }),
+    ).toContain('scale=TILE')
   })
 })
 

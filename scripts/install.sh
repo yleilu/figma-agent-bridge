@@ -21,6 +21,10 @@ command -v claude >/dev/null || {
 }
 
 echo "=== checking for Bun ==="
+# Tracks whether THIS run put Bun on the machine. An agent host keeps the PATH
+# it started with, so a session that started before Bun existed cannot launch
+# the MCP server — /reload-plugins is not enough, it needs a full restart.
+BUN_INSTALLED_NOW=0
 if command -v bun >/dev/null; then
   echo "Bun is already installed, skipping."
 else
@@ -41,6 +45,7 @@ else
         exit 1
       fi
 
+      BUN_INSTALLED_NOW=1
       echo "Bun installed."
       ;;
     *)
@@ -61,10 +66,23 @@ claude plugin marketplace add "$GITHUB_REPO"
 echo "=== installing plugin ==="
 claude plugin install "${PLUGIN}@${MARKET}"
 
-cat <<EOF
+if [ "$BUN_INSTALLED_NOW" -eq 1 ]; then
+  cat <<EOF
+
+=== installed ===
+Bun was installed during this run, so QUIT AND REOPEN Claude Code before using
+the plugin. A running session keeps the PATH it started with — it cannot see
+the new Bun, and the MCP server will fail to launch. /reload-plugins is NOT
+enough here.
+
+Figma-side setup is a separate step, not covered by this script.
+EOF
+else
+  cat <<EOF
 
 === installed ===
 In your Claude Code session, run:  /reload-plugins   (activates without a restart)
 
 Figma-side setup is a separate step, not covered by this script.
 EOF
+fi

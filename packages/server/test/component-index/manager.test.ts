@@ -90,8 +90,8 @@ describe('IndexManager', () => {
   })
 
   it(
-    'rehydrates a warm index from disk in a second manager ' +
-      '(no rebuild)',
+    'revalidates a rehydrated index once, then serves it ' +
+      'warm',
     async () => {
       const mgrA = new IndexManager()
       await mgrA.reindex('file-a', async () =>
@@ -99,20 +99,63 @@ describe('IndexManager', () => {
       )
       const mgrB = new IndexManager()
       let calls = 0
-      const out = await mgrB.search(
+      const get = async () => {
+        calls += 1
+        return reply(['Button'])
+      }
+      const first = await mgrB.search(
         'file-a',
         'button',
         10,
-        async () => {
-          calls += 1
-          return reply([])
-        },
+        get,
       )
-      // served from the on-disk cache, no getComponents call
-      expect(calls).toBe(0)
-      expect(out.results.map(r => r.name)).toEqual([
+      const second = await mgrB.search(
+        'file-a',
+        'button',
+        10,
+        get,
+      )
+      // one revalidation for the unvalidated cache — and
+      // exactly one: the second search is already warm
+      expect(calls).toBe(1)
+      expect(first.indexState).toBe('warm')
+      expect(second.indexState).toBe('warm')
+      expect(second.results.map(r => r.name)).toEqual([
         'Button',
       ])
+    },
+  )
+
+  it(
+    'does not serve an unvalidated disk cache as ' +
+      'authoritative',
+    async () => {
+      const mgrA = new IndexManager()
+      await mgrA.reindex('file-a', async () =>
+        reply(['Button']),
+      )
+      // The document has moved on since that projection;
+      // the on-disk index is of unknown age and has had
+      // no freshness check.
+      const mgrB = new IndexManager()
+      let calls = 0
+      const out = await mgrB.search(
+        'file-a',
+        'new',
+        10,
+        async () => {
+          calls += 1
+          return reply(['Button', 'New Thing'])
+        },
+      )
+      // A rehydrated cache must be revalidated against
+      // the document before its results are labelled
+      // authoritative.
+      expect(calls).toBe(1)
+      expect(out.results.map(r => r.name)).toEqual([
+        'New Thing',
+      ])
+      expect(out.indexState).toBe('warm')
     },
   )
 })

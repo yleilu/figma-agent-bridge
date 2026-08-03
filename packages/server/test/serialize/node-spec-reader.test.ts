@@ -1680,3 +1680,245 @@ describe('toNodeSpec — IMAGE paint read-back (rot/tile/op/blend/vis)', () => {
     expect(spec.fills?.[0]).not.toContain('rot=')
   })
 })
+
+// ─── hidden paints survive the read ───────────────────────────────────────────
+//
+// A paint with `visible: false` is STATE, not absence. Dropping it from the
+// read makes a read-modify-write destroy it: the agent echoes back the fills
+// it was shown, and the hidden one — never shown — is gone. The grammar
+// already carries the state (`{vis=false}`, expression-formats.md) and the
+// write face already parses it, so the read has no excuse to filter.
+describe('toNodeSpec — hidden paints survive the read', () => {
+  it('emits a hidden fill as {vis=false}, in order, alongside the visible one', () => {
+    const spec = toNodeSpec(
+      {
+        id: '6:1',
+        type: 'RECTANGLE',
+        fills: [
+          {
+            type: 'SOLID',
+            visible: false,
+            color: { r: 1, g: 0, b: 0, a: 1 },
+          },
+          {
+            type: 'SOLID',
+            color: { r: 0, g: 1, b: 0, a: 1 },
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.fills).toEqual([
+      '#FF0000{vis=false}',
+      '#00FF00',
+    ])
+  })
+
+  it('does not read back as fill-less when the only fill is hidden', () => {
+    const spec = toNodeSpec(
+      {
+        id: '6:2',
+        type: 'RECTANGLE',
+        fills: [
+          {
+            type: 'SOLID',
+            visible: false,
+            color: { r: 1, g: 0, b: 0, a: 1 },
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.fills).toEqual(['#FF0000{vis=false}'])
+  })
+
+  it('keeps a hidden stroke too', () => {
+    const spec = toNodeSpec(
+      {
+        id: '6:3',
+        type: 'RECTANGLE',
+        strokes: [
+          {
+            type: 'SOLID',
+            visible: false,
+            color: { r: 0, g: 0, b: 1, a: 1 },
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.strokes).toEqual(['#0000FF{vis=false}'])
+  })
+
+  it('round-trips a hidden fill back through the write face', () => {
+    const spec = toNodeSpec(
+      {
+        id: '6:4',
+        type: 'RECTANGLE',
+        fills: [
+          {
+            type: 'SOLID',
+            visible: false,
+            color: { r: 1, g: 0, b: 0, a: 1 },
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    const paint = atomToPaint(
+      (spec.fills as string[])[0],
+    ) as { visible?: boolean }
+    expect(paint.visible).toBe(false)
+  })
+})
+
+// ─── an unmappable paint is announced, never silently dropped ─────────────────
+//
+// The reader cannot render VIDEO / PATTERN / SHADER paints yet. Dropping them
+// is survivable; dropping them SILENTLY is not — the agent is handed a fills
+// array that looks complete (T7: never hide what the surface could not do).
+describe('toNodeSpec — unmappable paints warn', () => {
+  it('warns, naming the paint type, when a fill cannot be rendered', () => {
+    const spec = toNodeSpec(
+      {
+        id: '7:1',
+        type: 'RECTANGLE',
+        fills: [
+          { type: 'VIDEO', videoHash: 'abc' },
+          {
+            type: 'SOLID',
+            color: { r: 0, g: 1, b: 0, a: 1 },
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.fills).toEqual(['#00FF00'])
+    expect(spec.warnings?.length).toBe(1)
+    expect(spec.warnings?.[0]).toContain('VIDEO')
+    expect(spec.warnings?.[0]).toContain('fills')
+  })
+
+  it('warns on an unmappable stroke, naming strokes', () => {
+    const spec = toNodeSpec(
+      {
+        id: '7:2',
+        type: 'RECTANGLE',
+        strokes: [{ type: 'PATTERN', sourceNodeId: '1:1' }],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.strokes).toBeUndefined()
+    expect(spec.warnings?.[0]).toContain('PATTERN')
+    expect(spec.warnings?.[0]).toContain('strokes')
+  })
+
+  it('emits no warnings field when every paint mapped', () => {
+    const spec = toNodeSpec(
+      {
+        id: '7:3',
+        type: 'RECTANGLE',
+        fills: [
+          {
+            type: 'SOLID',
+            color: { r: 0, g: 1, b: 0, a: 1 },
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect('warnings' in spec).toBe(false)
+  })
+})
+
+// ─── overrides report field NAMES, never a value ──────────────────────────────
+//
+// Figma's override record is `{id, overriddenFields}` — names only. The reader
+// used to pad every entry with `value: ''`, which reads as "this override sets
+// the field to blank". A live instance with its text overridden to a real
+// string returned seven entries, every one `value: ""`. The field is
+// report-only (expression-formats.md): it says WHICH fields differ, and the
+// value is read from the node struct itself.
+describe('toNodeSpec — overrides carry field names only', () => {
+  it('emits path + field and no value key at all', () => {
+    const spec = toNodeSpec(
+      {
+        id: '8:1',
+        type: 'INSTANCE',
+        overrides: [
+          {
+            id: 'I8:1;9:2',
+            overriddenFields: ['characters', 'fills'],
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.overrides).toEqual([
+      { path: 'I8:1;9:2', field: 'characters' },
+      { path: 'I8:1;9:2', field: 'fills' },
+    ])
+    for (const entry of spec.overrides ?? []) {
+      // `in`, not toBeUndefined() — a present-but-undefined key still
+      // serializes into the reply shape and must fail here.
+      expect('value' in entry).toBe(false)
+    }
+  })
+
+  it('omits overrides entirely when the raw export has none', () => {
+    const spec = toNodeSpec(
+      {
+        id: '8:2',
+        type: 'INSTANCE',
+        overrides: [],
+      } as never,
+      { depth: 0 },
+    )
+    expect('overrides' in spec).toBe(false)
+  })
+})
+
+// The mirror of the hidden-fill defect: effectArray filtered `visible !== false`,
+// so a designer's hidden shadow vanished from the read and a read-modify-write
+// deleted it. The grammar spells a hidden effect (`{vis=false}`, per
+// expression-formats.md), so there was never anything to compress away.
+describe('toNodeSpec — hidden effects survive the read', () => {
+  const shadow = (visible?: boolean) => ({
+    type: 'DROP_SHADOW',
+    radius: 8,
+    color: { r: 0, g: 0, b: 0, a: 0.25 },
+    offset: { x: 0, y: 4 },
+    ...(visible === false ? { visible: false } : {}),
+  })
+
+  it('keeps a hidden effect, marked vis=false, in order', () => {
+    const spec = toNodeSpec(
+      {
+        id: '1:1',
+        name: 'N',
+        type: 'RECTANGLE',
+        effects: [shadow(false), shadow()],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.effects).toEqual([
+      'shadow(0,4,8,#00000040){vis=false}',
+      'shadow(0,4,8,#00000040)',
+    ])
+  })
+
+  it('does not drop a node whose only effect is hidden', () => {
+    const spec = toNodeSpec(
+      {
+        id: '1:1',
+        name: 'N',
+        type: 'RECTANGLE',
+        effects: [shadow(false)],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.effects).toEqual([
+      'shadow(0,4,8,#00000040){vis=false}',
+    ])
+  })
+})

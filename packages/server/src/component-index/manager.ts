@@ -94,10 +94,15 @@ export class IndexManager {
         INDEX_OPTIONS_VERSION,
       )
       if (cached) {
+        // A cache off disk is of unknown age and has had
+        // no freshness check, so it is never
+        // authoritative: adopt it as `stale` and let the
+        // rebuild below revalidate it against the
+        // document before the first search answers.
         entry = {
           index: loadIndex(cached),
           membership: '',
-          state: 'warm',
+          state: 'stale',
         }
         this.files.set(fileKey, entry)
       }

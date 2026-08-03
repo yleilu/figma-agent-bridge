@@ -65,7 +65,10 @@ export const exportSettingSchema = z.object({
 export const overrideEntrySchema = z.object({
   path: z.string(),
   field: z.string(),
-  value: z.string(),
+  // Optional because Figma's override record carries field NAMES only — the
+  // reader has no value to report. Required here would reject the read-back of
+  // any instance carrying overrides at the MCP boundary.
+  value: z.string().optional(),
 })
 
 export const idStubSchema = z.object({

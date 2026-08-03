@@ -560,9 +560,14 @@ const astToPaint = (ast: AtomAST): FigmaPaint => {
         a !== undefined && a.kind === 'scalar'
           ? String(a.value)
           : null
+      // Figma defaults scaleMode for IMAGE but NOT for VIDEO — a video
+      // paint without one is rejected outright ("Required value missing
+      // at [0].scaleMode"), so always emit one. scale= is the same attr
+      // the image branch reads.
       return {
         type: 'VIDEO',
         videoHash: hash,
+        scaleMode: str(attrs?.scale) ?? 'FILL',
         ...commonPaintAttrs(attrs),
       }
     }
@@ -673,11 +678,19 @@ const paintToAst = (p: FigmaPaint): AtomAST => {
     }
   }
   if (p.type === 'VIDEO') {
+    const attrs = paintAttrsFromObj(p)
+    // FILL is what a bare video(...) atom means, so it stays implicit.
+    if (
+      p.scaleMode !== undefined &&
+      p.scaleMode !== 'FILL'
+    ) {
+      attrs.scale = p.scaleMode
+    }
     return {
       kind: 'head',
       head: 'video',
       args: [{ kind: 'scalar', value: p.videoHash ?? '' }],
-      ...attrsWrap(paintAttrsFromObj(p)),
+      ...attrsWrap(attrs),
     }
   }
   if (p.type === 'PATTERN') {
