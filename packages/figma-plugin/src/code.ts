@@ -1,6 +1,7 @@
 import { COMMANDS, CONTEXT_NS, CONTEXT_KEY } from '@figma-agent-bridge/shared'
 
 import { applyLayout, type AppliedLayout } from './apply-layout'
+import { importComponentByKeyWithDeadline } from './import-by-key'
 import {
   applyStrokeGeometry,
   applyExportSettings,
@@ -1295,22 +1296,20 @@ const createSingleNode = async (
         | undefined
       // A published key may belong to a COMPONENT or a COMPONENT_SET — Figma
       // has a separate importer per kind and the key itself does not say
-      // which. Try component, fall back to set, and resolve a set to its
-      // defaultVariant: the same rule the local-id path below applies,
-      // because you instance a variant and never the set itself
-      // (expression-formats.md). Without the fallback, get_components hands
-      // the agent set keys the write then refuses (T1/T2).
-      const importByKey = async (
+      // which. Both run concurrently, first fulfilment wins, and a set
+      // resolves to its defaultVariant: the same rule the local-id path
+      // below applies, because you instance a variant and never the set
+      // itself (expression-formats.md). Sequential would not work — the
+      // wrong importer HANGS rather than rejecting (see import-by-key.ts),
+      // so a catch-and-fall-back never reaches the second one.
+      const importByKey = (
         key: string,
-      ): Promise<ComponentNode> => {
-        try {
-          return await figma.importComponentByKeyAsync(key)
-        } catch {
-          const set =
-            await figma.importComponentSetByKeyAsync(key)
-          return set.defaultVariant
-        }
-      }
+      ): Promise<ComponentNode> =>
+        importComponentByKeyWithDeadline(key, {
+          component: k =>
+            figma.importComponentByKeyAsync(k),
+          set: k => figma.importComponentSetByKeyAsync(k),
+        })
       // Resolve the main component. Two paths:
       //   1. REMOTE (compRef.remote===true AND key present): prefer
       //      importComponentByKeyAsync(key) first — the local id is a
@@ -3188,7 +3187,16 @@ const handleCommand = async (
           }
         }
         try {
-          scMain = await importer(scKey)
+          // Deadlined + concurrent: `importer` alone never settles for a key
+          // it cannot import, so this catch was previously unreachable.
+          scMain = await importComponentByKeyWithDeadline(
+            scKey,
+            {
+              component: k => importer(k),
+              set: k =>
+                figma.importComponentSetByKeyAsync(k),
+            },
+          )
         } catch (e) {
           return {
             id: inst.id,
