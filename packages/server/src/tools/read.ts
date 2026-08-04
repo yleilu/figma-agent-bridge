@@ -142,19 +142,29 @@ export const handleInspect = async (
           ),
         }
       : toNodeSpec(raw, { depth: -1 })
-    // The synthetic SELECTION root is transparent to `depth`: a forest depth of
-    // N must keep N levels below each SELECTED node, not below the wrapper. So
-    // a non-negative depth (including the depth=0 default applied when neither
-    // depth nor budget is given) is bumped by one level to account for the extra
-    // root. depth=-1 (return-all) and the budget path are unaffected (budget
-    // ignores depth in truncateTree).
-    const forestDepth =
-      depth === undefined
-        ? 1
-        : depth >= 0
-          ? depth + 1
-          : depth
-    const effectiveDepth = isForest ? forestDepth : depth
+    // The synthetic SELECTION root eats one level, so `depth` needs adjusting
+    // before it reaches truncateTree. Four cases, one per thing the caller asked.
+    const forestDepth = (): number | undefined => {
+      if (depth === undefined && budget !== undefined) {
+        // Budget-only: the budget decides how deep to fill. Forcing a depth
+        // here truncates the tree before the budget fill ever runs — which is
+        // exactly the regression this shape used to have, back when a budget
+        // made truncateTree ignore depth and this bump looked harmless.
+        return undefined
+      }
+      if (depth === undefined) {
+        // Nothing asked for: show the selected nodes themselves — a bare
+        // depth=0 would show the wrapper and stub everything under it.
+        return 1
+      }
+      if (depth < 0) {
+        // -1 is every level; the wrapper changes nothing.
+        return depth
+      }
+      // A level cap counts from the selected nodes, so skip past the wrapper.
+      return depth + 1
+    }
+    const effectiveDepth = isForest ? forestDepth() : depth
     const { view, truncated } = truncateTree(full, {
       depth: effectiveDepth,
       budget,

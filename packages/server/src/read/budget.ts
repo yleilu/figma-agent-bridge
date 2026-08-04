@@ -106,12 +106,27 @@ export const fillToBudget = (
 
   const queue: QueueItem[] = []
 
+  // A stub that arrived already-stubbed (an earlier depth pass made it) is
+  // still bytes in the response, so it must be charged like anything else —
+  // otherwise a pre-stubbed tree escapes the cap entirely. It is NOT re-added
+  // to the receipt: whichever pass stubbed it already recorded it. When it
+  // does not fit it is dropped, exactly like a stub we create ourselves.
+  const admitExistingStub = (
+    stub: NodeSpecOrStub,
+    into: NodeSpecOrStub[],
+  ): void => {
+    const cost = estimateTokens(stub) + FRAMING_TOKENS
+    if (cost <= remaining) {
+      remaining -= cost
+      into.push(stub)
+    }
+  }
+
   // Enqueue root's children
   if (root.children && root.children.length > 0) {
     for (const child of root.children) {
       if (isStub(child)) {
-        // Already a stub — keep as is, don't re-add to receipt
-        rootClone.children!.push(child)
+        admitExistingStub(child, rootClone.children!)
       } else {
         // child is NodeSpec after isStub check narrows the union
         rootClone.children!.push(child)
@@ -170,7 +185,7 @@ export const fillToBudget = (
       if (node.children && node.children.length > 0) {
         for (const child of node.children) {
           if (isStub(child)) {
-            nodeClone.children!.push(child)
+            admitExistingStub(child, nodeClone.children!)
           } else {
             // child is NodeSpec after isStub check narrows the union
             nodeClone.children!.push(child)

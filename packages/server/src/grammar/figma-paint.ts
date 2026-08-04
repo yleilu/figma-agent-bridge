@@ -62,10 +62,13 @@ export type FigmaImagePaint = {
   blendMode?: string
 }
 
+// Figma marks scaleMode REQUIRED on VideoPaint (unlike ImagePaint, where it
+// defaults) — a video paint without one is rejected outright. The writer
+// always emits it, so the type says so too.
 export type FigmaVideoPaint = {
   type: 'VIDEO'
   videoHash: string | null
-  scaleMode?: string
+  scaleMode: string
   opacity?: number
   visible?: boolean
   blendMode?: string

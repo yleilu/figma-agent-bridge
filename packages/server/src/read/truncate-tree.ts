@@ -101,22 +101,38 @@ const truncateByDepth = (
 }
 
 /**
- * Truncate a NodeSpec tree according to depth and/or budget options.
+ * The always-on response cap (tool-surface.md:155, D4). Omitting `budget`
+ * SELECTS this — it is never a request for an unbounded read.
+ */
+export const DEFAULT_BUDGET = 20_000
+
+/**
+ * Truncate a NodeSpec tree by depth, then cap it at the budget.
+ *
+ * Depth chooses WHERE truncation lands; the budget decides WHETHER it
+ * happens. The two compose rather than replace each other, so no combination
+ * of arguments returns an unbounded tree (T10).
  *
  * Semantics:
- *   - budget given → level-fill BFS (delegates to fillToBudget)
- *   - no budget AND no depth → depth = 0 (root only, children stubbed)
- *   - depth = -1 → complete tree returned, empty receipt
- *   - depth = N >= 0 → N full levels below root; excess stubbed + receipted
+ *   - neither → depth 0 (root only, children stubbed), capped
+ *   - depth = N >= 0 → N full levels below root, then capped
+ *   - depth = -1 → every level, then capped
+ *   - budget only → as deep as fits that budget (depth -1 + explicit cap)
  */
 export const truncateTree = (
   root: NodeSpec,
   opts: { depth?: number; budget?: number },
 ): TreeResult => {
-  if (opts.budget !== undefined) {
-    return fillToBudget(root, opts.budget)
-  }
+  // A budget with no depth means "as deep as fits", so it cannot fall back
+  // to the bare depth-0 default the no-argument case uses.
+  const depth =
+    opts.depth ?? (opts.budget !== undefined ? -1 : 0)
+  const budget = opts.budget ?? DEFAULT_BUDGET
 
-  const depth = opts.depth ?? 0
-  return truncateByDepth(root, depth)
+  const byDepth = truncateByDepth(root, depth)
+  const capped = fillToBudget(byDepth.view, budget)
+  return {
+    view: capped.view,
+    truncated: [...byDepth.truncated, ...capped.truncated],
+  }
 }

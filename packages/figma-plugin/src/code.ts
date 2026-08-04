@@ -1293,6 +1293,24 @@ const createSingleNode = async (
             properties?: Record<string, string | boolean>
           }
         | undefined
+      // A published key may belong to a COMPONENT or a COMPONENT_SET — Figma
+      // has a separate importer per kind and the key itself does not say
+      // which. Try component, fall back to set, and resolve a set to its
+      // defaultVariant: the same rule the local-id path below applies,
+      // because you instance a variant and never the set itself
+      // (expression-formats.md). Without the fallback, get_components hands
+      // the agent set keys the write then refuses (T1/T2).
+      const importByKey = async (
+        key: string,
+      ): Promise<ComponentNode> => {
+        try {
+          return await figma.importComponentByKeyAsync(key)
+        } catch {
+          const set =
+            await figma.importComponentSetByKeyAsync(key)
+          return set.defaultVariant
+        }
+      }
       // Resolve the main component. Two paths:
       //   1. REMOTE (compRef.remote===true AND key present): prefer
       //      importComponentByKeyAsync(key) first — the local id is a
@@ -1308,9 +1326,7 @@ const createSingleNode = async (
       ) {
         // Remote/published: key-first with id fallback (T7).
         try {
-          component = await figma.importComponentByKeyAsync(
-            compRef.key,
-          )
+          component = await importByKey(compRef.key)
         } catch {
           warnings?.push(
             'remote component key ' +
@@ -1365,12 +1381,10 @@ const createSingleNode = async (
           )
         }
       } else if (compRef?.key !== undefined) {
-        component = await figma.importComponentByKeyAsync(
-          compRef.key,
-        )
+        component = await importByKey(compRef.key)
       } else {
         throw new Error(
-          'INSTANCE requires component.id (local component node) or component.key (published/library component)',
+          'INSTANCE requires component.id (local component node) or component.key (published/library component or component set)',
         )
       }
       const instance = component.createInstance()
