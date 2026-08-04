@@ -98,7 +98,7 @@ tail lives, so the core stays short.
 | diamond gradient | `diamond(#FF0000@0, #0000FF@100)` |
 | image | `image(HASH)` · write also `image(url)` |
 | video | `video(HASH)` |
-| pattern | `pattern(componentId)` |
+| pattern | `pattern(sourceNodeId){shape=RECT, tile=1, gap=[0,0], align=CENTER}` |
 
 - **Solid:** `solid()` is **optional** — a bare color *is* a solid paint. Color
   notations: `#RRGGBB`, `#RRGGBBAA`, `rgb(r,g,b)`, `rgba(r,g,b,a)` (a = 0–1). The
@@ -115,6 +115,23 @@ tail lives, so the core stays short.
   `blend=` (blend mode), `vis=false` (hidden paint). Image/video also: `scale=`
   (FILL/FIT/CROP/TILE), `rot=` (0/90/180/270), `tile=` (scaling factor),
   `filter=` (exposure/contrast/…). Non-trivial gradient geometry: `tf=[a,b,c,d,e,f]`.
+- **Pattern:** tiles a source node across the shape. Figma marks four fields
+  **required**, so the grammar always emits them and supplies a default when a write
+  omits one: `shape=` tile shape — `RECT` (default) / `HEX-H` / `HEX-V`; `tile=`
+  scaling factor (default `1`, the same key and meaning as an image's); `gap=[x,y]`
+  spacing between tiles (default `[0,0]`); `align=` horizontal alignment — `START` /
+  `CENTER` (default) / `END`. A pattern paint missing any of them is rejected at the
+  Figma boundary, so partial emission is never valid.
+
+  > **The shipped Figma runtime rejects `PATTERN` outright — a write will fail.**
+  > `@figma/plugin-typings` declares `PatternPaint` (unchanged across 1.123–1.132) and
+  > this grammar matches it field for field, but the app validates fills against a
+  > discriminator that omits `PATTERN` and includes `SHADER`: *"Invalid discriminator
+  > value. Expected 'SOLID' | 'SHADER' | 'GRADIENT_*' | 'IMAGE' | …"*. The rejection is
+  > at the type, before any field check, so a complete paint fails exactly like a
+  > partial one. The form above stays specified because it is Figma's published
+  > contract and is what the surface will emit the moment the runtime accepts it.
+  > **Delete this note once a pattern fill applies**; nothing else here changes.
 - **Image source (write asymmetry):** the view always emits `image(HASH)`; the
   **write parser also accepts `image(url)`** — the server creates the hash
   (`createImageAsync`, deduped by URL). The `create_image(url|bytes)` tool is the

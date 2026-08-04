@@ -71,13 +71,45 @@ export type FigmaVideoPaint = {
   blendMode?: string
 }
 
+// Figma marks tileType / scalingFactor / spacing / horizontalAlignment
+// REQUIRED on PatternPaint; a paint missing any of them is rejected at the
+// Figma boundary, so these are non-optional here and the write side always
+// supplies a default rather than omitting them.
 export type FigmaPatternPaint = {
   type: 'PATTERN'
   sourceNodeId: string
+  tileType: PatternTileType
+  scalingFactor: number
+  spacing: { x: number; y: number }
+  horizontalAlignment: PatternAlignment
   opacity?: number
   visible?: boolean
   blendMode?: string
 }
+
+export type PatternTileType =
+  | 'RECTANGULAR'
+  | 'HORIZONTAL_HEXAGONAL'
+  | 'VERTICAL_HEXAGONAL'
+
+export type PatternAlignment = 'START' | 'CENTER' | 'END'
+
+/** Compact grammar spelling <-> Figma's enum, both directions. */
+const TILE_SHAPE: Record<string, PatternTileType> = {
+  RECT: 'RECTANGULAR',
+  'HEX-H': 'HORIZONTAL_HEXAGONAL',
+  'HEX-V': 'VERTICAL_HEXAGONAL',
+}
+const TILE_SHAPE_OUT: Record<PatternTileType, string> = {
+  RECTANGULAR: 'RECT',
+  HORIZONTAL_HEXAGONAL: 'HEX-H',
+  VERTICAL_HEXAGONAL: 'HEX-V',
+}
+const PATTERN_ALIGNMENTS: readonly PatternAlignment[] = [
+  'START',
+  'CENTER',
+  'END',
+]
 
 export type FigmaPaint =
   | FigmaSolidPaint
@@ -573,12 +605,31 @@ const astToPaint = (ast: AtomAST): FigmaPaint => {
     }
     case 'pattern': {
       const a = args[0]
+      const gap = Array.isArray(attrs?.gap)
+        ? (attrs.gap as (string | number)[]).map(Number)
+        : []
+      const align = str(attrs?.align)?.toUpperCase()
       return {
         type: 'PATTERN',
         sourceNodeId:
           a !== undefined && a.kind === 'scalar'
             ? String(a.value)
             : '',
+        // All four are required by Figma — default rather than omit.
+        tileType:
+          TILE_SHAPE[
+            str(attrs?.shape)?.toUpperCase() ?? ''
+          ] ?? 'RECTANGULAR',
+        scalingFactor: num(attrs?.tile) ?? 1,
+        spacing: {
+          x: gap[0] ?? 0,
+          y: gap[1] ?? 0,
+        },
+        horizontalAlignment: PATTERN_ALIGNMENTS.includes(
+          align as PatternAlignment,
+        )
+          ? (align as PatternAlignment)
+          : 'CENTER',
         ...commonPaintAttrs(attrs),
       }
     }
@@ -694,11 +745,31 @@ const paintToAst = (p: FigmaPaint): AtomAST => {
     }
   }
   if (p.type === 'PATTERN') {
+    const attrs = paintAttrsFromObj(p)
+    // Emit only what differs from the documented default, so a plain tiling
+    // reads back as bare `pattern(id)` and still round-trips.
+    if (p.tileType !== 'RECTANGULAR') {
+      attrs.shape = TILE_SHAPE_OUT[p.tileType]
+    }
+    if (p.scalingFactor !== 1) {
+      attrs.tile = p.scalingFactor
+    }
+    // Tolerant on the read face: the wire shape has diverged from
+    // @figma/plugin-typings before, and a missing field must not throw
+    // mid-serialization. The write face stays strict.
+    const gx = p.spacing?.x ?? 0
+    const gy = p.spacing?.y ?? 0
+    if (gx !== 0 || gy !== 0) {
+      attrs.gap = [gx, gy]
+    }
+    if (p.horizontalAlignment !== 'CENTER') {
+      attrs.align = p.horizontalAlignment
+    }
     return {
       kind: 'head',
       head: 'pattern',
       args: [{ kind: 'scalar', value: p.sourceNodeId }],
-      ...attrsWrap(paintAttrsFromObj(p)),
+      ...attrsWrap(attrs),
     }
   }
   throw new Error('paintToAtom: unknown paint type')

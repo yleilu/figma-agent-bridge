@@ -515,7 +515,14 @@ describe('paint: atomToPaint(paintToAtom(p)) deep-equals p', () => {
     },
     {
       name: 'pattern',
-      p: { type: 'PATTERN', sourceNodeId: '12:34' },
+      p: {
+        type: 'PATTERN',
+        sourceNodeId: '12:34',
+        tileType: 'RECTANGULAR',
+        scalingFactor: 1,
+        spacing: { x: 0, y: 0 },
+        horizontalAlignment: 'CENTER',
+      },
     },
   ]
 
