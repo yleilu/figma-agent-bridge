@@ -32,13 +32,15 @@ Committed, blocked, blocker named.
 Surfaced 2026-06-27 during the comprehensive live tool sweep + per-issue spec review.
 
 > **Audit 2026-08-05.** Re-verified every *Still deferred* item against `dev` after the
-> tool-contract merge (`a6e90e0`), by execution rather than by reading the notes. **Nothing in
-> Still deferred has completed** — TEXT_PATH, grid track-sizing/child-placement,
-> `create_tree` BOOLEAN_OPERATION, `vectorNetwork`, the auto-layout HUG default, unknown-key
+> tool-contract merge (`a6e90e0`), by execution rather than by reading the notes. Nothing in
+> Still deferred had completed at audit time — TEXT_PATH, grid track-sizing/child-placement,
+> `create_tree` BOOLEAN_OPERATION, the auto-layout HUG default, unknown-key
 > rejection on the create face, Community distribution and reconnect-with-backoff all still hold,
 > each re-checked in code. **Two bugs listed below as open are now closed** (`B17`, `B20`), and the
 > plugin-apply extraction advanced by one of its four named field-applies. The `set_instance`
-> `overrides` entry was added 2026-08-04 and is deliberately untouched.
+> `overrides` entry was added 2026-08-04 and is deliberately untouched. **Closed since the audit:**
+> the `vectorNetwork` entry, whose per-point `cornerRadius` half shipped the same day (`a0c1909`)
+> and whose stated blocker — needing a struct grammar — turned out not to exist.
 
 > **Audit 2026-07-29.** This file had accumulated shipped capabilities and **already-fixed bug notes** among the live deferrals. Everything finished has moved to [§ Shipped](#shipped--history) at the bottom; what remains above is genuinely deferred and was re-verified against `dev` code. Two sections were **routed out** entirely (they duplicated tracked QA-backlog items) — see [§ Routed out](#routed-out-2026-07-29).
 
@@ -63,21 +65,23 @@ Surfaced 2026-06-27 during the comprehensive live tool sweep + per-issue spec re
 
 ### Read round-trip limitations (JSON_REST_V1 gaps)
 
-- **`vectorNetwork` / `setVectorNetworkAsync` — full bezier authoring (M3-V3, DEFERRED).** `vectorPaths` (M3-V1/V2, ✅ SHIPPED merged `4430194`) covers VECTOR node write + read-back for non-curved paths via `node.vectorPaths`. The deeper `vectorNetwork` API (`VectorNetwork` with bezier handles, vertices, segments, regions) enables exact bezier editing but requires a non-atom struct grammar (it is a complex nested object, not a string). **Consequence — corrected 2026-08-05, it is narrower than this entry claimed.** The old text said
-curves come back approximated. They do not: live-verified, `path(NONZERO,"M0 0 C 50 0 50 100 100
-100")` writes, applies and reads back byte-identical, as do open and closed paths. **Geometry
-round-trips.** What `VectorPath` cannot carry is everything a `VectorNetwork` holds *besides* the
-path string — it is only `{windingRule, data}`, while a network carries vertices, segments and
-regions with **per-vertex `strokeCap`, `strokeJoin`, `cornerRadius` and `handleMirroring`**. So the
-loss is **per-vertex styling and region structure**, not shape, and it bites **vectors authored
-elsewhere** (drawn by hand, imported from SVG) — a shape we create round-trips fine. Still a
-deliberate, documented T2 asymmetry (T7 honest), but silent: nothing warns that a read dropped
-per-vertex detail. **Re-verified 2026-08-05: zero hits** for `vectorNetwork` across `packages/*/src`. **To fulfil:** design the `vectorNetwork` struct grammar, add a `vectorNetwork` field to `NodeSpec`,
-implement writer + plugin apply (`setVectorNetworkAsync`) + reader read-back. **The blocker is the
-value shape, not the work** — the grammar is entirely strings and a network is a nested object of
-arrays, so this needs a new struct form decided before anything is written. **Cheaper interim (not
-yet built):** when a read finds per-vertex detail `vectorPaths` cannot express, say so in
-`warnings[]` — that turns a silent loss into an honest one (T7) without solving the grammar.
+- **Per-point `strokeCap`, `strokeJoin`, `handleMirroring`, and region structure.** Scope narrowed
+2026-08-05, twice. Geometry was never the problem: `path(NONZERO,"M0 0 C 50 0 50 100 100 100")`
+writes, applies and reads back byte-identical, open or closed. What `VectorPath` cannot carry is
+what a `VectorNetwork` holds *besides* the path string — it is only `{windingRule, data}`, while a
+network carries vertices with **per-point `strokeCap`, `strokeJoin`, `cornerRadius` and
+`handleMirroring`**, plus regions. The loss is per-point styling, not shape, and it bites vectors
+**authored elsewhere** — drawn by hand, imported from SVG.
+**`cornerRadius` is now shipped** (see below), and shipping it settled the question this entry was
+really blocked on: the `{…}` channel carries per-point detail as an **index-keyed sparse list**
+(`corners=[1:10, 2:20]`), so no struct grammar was needed and none is needed for the three
+remaining keys. `caps=`, `joins=` and `mirrors=` are already specced in `expression-formats.md`
+with the same shape and listed there as not yet implemented; each is now a mechanical repeat of the
+corners work — read from the network, fold into the atom, stamp back via `setVectorNetworkAsync`.
+**What genuinely remains open is region structure**, which has no index basis and no designed form.
+**Blocker:** the three per-point keys are unblocked and merely unbuilt, which by this file's own
+test makes them backlog, not deferred — they stay noted here only because they share a spec section
+with the shipped key and the absence promise there must move with them.
 
 ### Distribution & publishing (surfaced 2026-07-10 — dev-ops workflow design)
 
@@ -130,9 +134,15 @@ Built and merged as part of the M-items build; they arose from the same spec-com
 | Capability | Merged sha | Notes |
 | ---------- | ---------- | ----- |
 | **Slots — define (createSlot via `update_component`) + fill (append into an instance's slot)** (M2) | `2c5e83f` | Slot definition on components + slot-filling on instances. |
-| **VECTOR `vectorPaths` authoring + round-trip, the `path()` atom, re-homed `pointCount`/`innerRadius`/`sectionContentsHidden`, field-symmetry meta-test** (M3) | `4430194` | Closes the **field-strip class** for `vectorNodeId`/`booleanOperation`/`component`. `vectorPaths` (V1/V2) merged; full bezier `vectorNetwork` (V3) remains deferred above. |
+| **VECTOR `vectorPaths` authoring + round-trip, the `path()` atom, re-homed `pointCount`/`innerRadius`/`sectionContentsHidden`, field-symmetry meta-test** (M3) | `4430194` | Closes the **field-strip class** for `vectorNodeId`/`booleanOperation`/`component`. Geometry round-trips; the per-point detail beside it was closed separately (below). |
 | **Variable aliases round-trip (B2) + per-node explicit variable-mode selection** (M13) | `3453977` | Variable-alias expressions resolve through the alias chain on read; per-node `variableMode` override field added. |
 | **`transform_group` (`figma.transformGroup` repeat-pattern)** (M15) | `5e7f613` | Enables repeat-pattern layout via `figma.transformGroup`. |
+
+## Per-point corner radii (2026-08-05)
+
+| Capability | Merged sha | Notes |
+| ---------- | ---------- | ----- |
+| **Per-point `cornerRadius` on a VECTOR — read and write** | `a0c1909` | A hand-drawn shape's rounded corners used to flatten to sharp ones with nothing said. They now ride in the `path()` atom's `{…}` channel as an index-keyed sparse list (`corners=[1:10, 2:20]`), read from the network and written back through `setVectorNetworkAsync`. Live-verified both directions against a hand-drawn node. Settled the design question this file called a blocker: per-point detail needs **no struct grammar**. |
 
 ## Bug notes that this file carried until they were fixed
 
