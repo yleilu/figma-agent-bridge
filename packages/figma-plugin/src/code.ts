@@ -2,6 +2,7 @@ import { COMMANDS, CONTEXT_NS, CONTEXT_KEY } from '@figma-agent-bridge/shared'
 
 import { applyLayout, type AppliedLayout } from './apply-layout'
 import { importComponentByKeyWithDeadline } from './import-by-key'
+import { omitMixed } from './mixed'
 import {
   applyPointDetail,
   capsFromNetwork,
@@ -394,9 +395,17 @@ const exportNodeDocument = async (
     // bindingNames/componentKey, this needs no async lookup). Feature-detect
     // (T7): a node type without a strokes mixin silently no-ops.
     if ('strokeJoin' in node) {
-      doc.strokeJoin = (
-        node as unknown as { strokeJoin: string }
-      ).strokeJoin
+      // A vector whose points carry different joins reports figma.mixed here,
+      // which is a Symbol and cannot cross the plugin boundary — see mixed.ts.
+      // Omitting is the honest answer: mixed is not one value.
+      const join = omitMixed(
+        (node as unknown as { strokeJoin: unknown })
+          .strokeJoin,
+        figma.mixed,
+      )
+      if (join !== undefined) {
+        doc.strokeJoin = join
+      }
     }
     if ('strokeMiterLimit' in node) {
       doc.strokeMiterLimit = (
