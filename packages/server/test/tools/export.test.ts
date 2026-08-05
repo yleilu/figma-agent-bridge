@@ -137,8 +137,7 @@ describe('handleExport', () => {
       client,
     )
 
-    const text = (result.content[0] as { text: string })
-      .text
+    const { text } = result.content[0] as { text: string }
     expect(JSON.parse(text)).toEqual({
       error: 'plugin exploded',
       code: 'PLUGIN_ERROR',
@@ -181,8 +180,7 @@ describe('handleExport', () => {
       { nodeId: '1:42' },
       mockClient,
     )
-    const text = (result.content[0] as { text: string })
-      .text
+    const { text } = result.content[0] as { text: string }
     expect(JSON.parse(text)).toEqual({
       error: 'Unexpected response from plugin',
       code: 'PLUGIN_ERROR',

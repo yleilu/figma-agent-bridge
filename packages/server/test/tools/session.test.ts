@@ -374,7 +374,7 @@ describe('handleStatus', () => {
 
     // No relayHttpUrl → discoverChannels never runs → infos stays empty.
     const result = await handleStatus(mockClient)
-    const text = result.content[0].text
+    const { text } = result.content[0]
     const data = JSON.parse(text)
     const entry = (data.joined ?? data)[0] ?? data
 

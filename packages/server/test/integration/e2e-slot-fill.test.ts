@@ -184,9 +184,9 @@ describe('M2b slot-fill e2e (T7 instance-lock wrap)', () => {
     const data = JSON.parse(text) as Record<string, unknown>
     expect(data.error).toBeUndefined()
     expect(data.code).toBeUndefined()
-    expect(
-      (data.root as { name: string }).name,
-    ).toBe('Slot Content')
+    expect((data.root as { name: string }).name).toBe(
+      'Slot Content',
+    )
     expect(data.ids).toHaveLength(1)
   })
 })

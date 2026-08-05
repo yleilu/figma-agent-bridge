@@ -15,6 +15,7 @@ import { join } from 'node:path'
 const SRC = join(import.meta.dir, '../../src')
 
 const walk = (dir: string): string[] =>
+  // eslint-disable-next-line n/no-sync -- test-only tree scan
   readdirSync(dir, { withFileTypes: true }).flatMap(e => {
     const full = join(dir, e.name)
     return e.isDirectory()
@@ -43,7 +44,10 @@ describe('no bare-text failure paths', () => {
   it('finds none under packages/server/src', () => {
     expect(
       files
-        .filter(f => BARE.test(readFileSync(f, 'utf8')))
+        .filter(f =>
+          // eslint-disable-next-line n/no-sync -- test-only source read
+          BARE.test(readFileSync(f, 'utf8')),
+        )
         .map(f => f.slice(SRC.length + 1)),
     ).toEqual([])
   })

@@ -609,7 +609,7 @@ const astToPaint = (ast: AtomAST): FigmaPaint => {
     case 'pattern': {
       const a = args[0]
       const gap = Array.isArray(attrs?.gap)
-        ? (attrs.gap as (string | number)[]).map(Number)
+        ? attrs.gap.map(Number)
         : []
       const align = str(attrs?.align)?.toUpperCase()
       return {

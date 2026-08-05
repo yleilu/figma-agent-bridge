@@ -577,6 +577,14 @@ const effectArray = (
 
 // ─── stroke geometry ──────────────────────────────────────────────────────────
 
+/** REST's per-side positional keys under `individualStrokeWeights`. */
+const STROKE_WEIGHT_BOUND_KEYS = [
+  'BORDER_TOP_WEIGHT',
+  'BORDER_RIGHT_WEIGHT',
+  'BORDER_BOTTOM_WEIGHT',
+  'BORDER_LEFT_WEIGHT',
+] as const
+
 const strokeGeom = (
   raw: RawNode,
   bindingNames: BindingNames | undefined,
@@ -640,14 +648,6 @@ const strokeGeom = (
   )
   return wrapperFor(undefined, varName) + strokeToAtom(geom)
 }
-
-/** REST's per-side positional keys under `individualStrokeWeights`. */
-const STROKE_WEIGHT_BOUND_KEYS = [
-  'BORDER_TOP_WEIGHT',
-  'BORDER_RIGHT_WEIGHT',
-  'BORDER_BOTTOM_WEIGHT',
-  'BORDER_LEFT_WEIGHT',
-] as const
 
 // ─── radius ───────────────────────────────────────────────────────────────────
 

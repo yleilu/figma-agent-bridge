@@ -12,7 +12,9 @@ const RAW_ID = /(?:var|style)\((?:VariableID:|S:)/
 
 describe('wrapper-no-raw-id guard', () => {
   it('liveness: the matcher fires on the shape it exists to forbid', () => {
-    expect(RAW_ID.test('var(VariableID:1:2)#FFF')).toBe(true)
+    expect(RAW_ID.test('var(VariableID:1:2)#FFF')).toBe(
+      true,
+    )
     expect(RAW_ID.test('style(S:1:2:0)#FFF')).toBe(true)
     expect(RAW_ID.test('var(radius/medium)8')).toBe(false)
     expect(RAW_ID.test('style(Brand/Primary)#FF00AA')).toBe(
@@ -32,7 +34,9 @@ describe('wrapper-no-raw-id guard', () => {
         },
       ],
       fillStyleId: 'S:abc123',
-      strokes: [{ type: 'SOLID', color: { r: 0, g: 0, b: 0 } }],
+      strokes: [
+        { type: 'SOLID', color: { r: 0, g: 0, b: 0 } },
+      ],
       strokeStyleId: 'S:border1',
       effects: [
         {

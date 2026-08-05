@@ -457,7 +457,7 @@ describe('batch delete_styles — index-tagged like the standalone handler', () 
     const fanout = sent[0] as {
       ops: { params: { styles: { index?: number }[] } }[]
     }
-    const styles = fanout.ops[0].params.styles
+    const { styles } = fanout.ops[0].params
     // The plugin builds its reply from entry.index; undefined would be dropped
     // by JSON.stringify, leaving a failure the agent cannot map to its input.
     expect(styles.map(s => s.index)).toEqual([0, 1, 2])

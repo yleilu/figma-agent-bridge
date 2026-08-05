@@ -30,7 +30,9 @@ describe('toNodeSpec — wrapper names (style/var render by name)', () => {
       bindingNames: { styles: { fill: 'Brand/Primary' } },
     }
     const spec = toNodeSpec(raw, { depth: -1 })
-    expect(spec.fills?.[0]).toBe('style(Brand/Primary)#FF00AA')
+    expect(spec.fills?.[0]).toBe(
+      'style(Brand/Primary)#FF00AA',
+    )
   })
 
   it('a paint bound to a variable renders var(Name)<atom> — the name, not the id', () => {
@@ -43,7 +45,10 @@ describe('toNodeSpec — wrapper names (style/var render by name)', () => {
           type: 'SOLID',
           color: FF00AA,
           boundVariables: {
-            color: { id: 'VariableID:9:9', type: 'VARIABLE_ALIAS' },
+            color: {
+              id: 'VariableID:9:9',
+              type: 'VARIABLE_ALIAS',
+            },
           },
         },
       ],
@@ -66,7 +71,10 @@ describe('toNodeSpec — wrapper names (style/var render by name)', () => {
           type: 'SOLID',
           color: FF00AA,
           boundVariables: {
-            color: { id: 'VariableID:9:9', type: 'VARIABLE_ALIAS' },
+            color: {
+              id: 'VariableID:9:9',
+              type: 'VARIABLE_ALIAS',
+            },
           },
         },
       ],
@@ -77,7 +85,9 @@ describe('toNodeSpec — wrapper names (style/var render by name)', () => {
       },
     }
     const spec = toNodeSpec(raw, { depth: -1 })
-    expect(spec.fills?.[0]).toBe('style(Brand/Primary)#FF00AA')
+    expect(spec.fills?.[0]).toBe(
+      'style(Brand/Primary)#FF00AA',
+    )
   })
 
   it('a non-paint field (radius) bound to a variable renders var(Name)<atom>', () => {
@@ -124,7 +134,9 @@ describe('toNodeSpec — wrapper names (style/var render by name)', () => {
         },
       },
       bindingNames: {
-        variables: { 'VariableID:8:8': 'stroke/weight-medium' },
+        variables: {
+          'VariableID:8:8': 'stroke/weight-medium',
+        },
       },
     }
     const spec = toNodeSpec(raw, { depth: -1 })
@@ -138,12 +150,18 @@ describe('toNodeSpec — wrapper names (style/var render by name)', () => {
       id: '1:4',
       name: 'StrokeBound',
       type: 'FRAME',
-      strokes: [{ type: 'SOLID', color: { r: 0, g: 0, b: 0 } }],
+      strokes: [
+        { type: 'SOLID', color: { r: 0, g: 0, b: 0 } },
+      ],
       strokeStyleId: 'S:border1',
-      bindingNames: { styles: { stroke: 'Border/Default' } },
+      bindingNames: {
+        styles: { stroke: 'Border/Default' },
+      },
     }
     const spec = toNodeSpec(raw, { depth: -1 })
-    expect(spec.strokes?.[0]).toBe('style(Border/Default)#000000')
+    expect(spec.strokes?.[0]).toBe(
+      'style(Border/Default)#000000',
+    )
   })
 
   it('an effects array bound to a style wraps every effect leaf', () => {
@@ -163,7 +181,9 @@ describe('toNodeSpec — wrapper names (style/var render by name)', () => {
       bindingNames: { styles: { effect: 'Shadow/Card' } },
     }
     const spec = toNodeSpec(raw, { depth: -1 })
-    expect(spec.effects?.[0]).toMatch(/^style\(Shadow\/Card\)shadow\(/)
+    expect(spec.effects?.[0]).toMatch(
+      /^style\(Shadow\/Card\)shadow\(/,
+    )
   })
 
   it('a text node bound to a style wraps the font atom', () => {
@@ -172,7 +192,11 @@ describe('toNodeSpec — wrapper names (style/var render by name)', () => {
       name: 'TextBound',
       type: 'TEXT',
       characters: 'Hi',
-      style: { fontFamily: 'Inter', fontStyle: 'Regular', fontSize: 16 },
+      style: {
+        fontFamily: 'Inter',
+        fontStyle: 'Regular',
+        fontSize: 16,
+      },
       textStyleId: 'S:txt1',
       bindingNames: { styles: { text: 'Heading/H1' } },
     }
@@ -192,7 +216,10 @@ describe('toNodeSpec — wrapper names (style/var render by name)', () => {
           type: 'SOLID',
           color: FF00AA,
           boundVariables: {
-            color: { id: 'VariableID:5:5', type: 'VARIABLE_ALIAS' },
+            color: {
+              id: 'VariableID:5:5',
+              type: 'VARIABLE_ALIAS',
+            },
           },
         },
       ],
@@ -216,7 +243,10 @@ describe('toNodeSpec — wrapper names (style/var render by name)', () => {
           type: 'SOLID',
           color: FF00AA,
           boundVariables: {
-            color: { id: 'VariableID:5:5', type: 'VARIABLE_ALIAS' },
+            color: {
+              id: 'VariableID:5:5',
+              type: 'VARIABLE_ALIAS',
+            },
           },
         },
       ],

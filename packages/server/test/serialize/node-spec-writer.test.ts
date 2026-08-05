@@ -147,7 +147,6 @@ describe('specToFigma — radius', () => {
     ).toEqual({ radius: [8, 8, 0, 0] })
   })
 
-
   it('uniform radius string converts to number', () => {
     expect(specToFigma({ radius: '8' })).toEqual({
       radius: 8,
