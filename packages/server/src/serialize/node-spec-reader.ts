@@ -1263,7 +1263,8 @@ const buildNode = (
   const vp = raw.vectorPaths
   if (Array.isArray(vp)) {
     // Per-point detail rides in the atom's {…} channel. The plugin sends it
-    // separately — `vectorCorners`, `vectorCaps` — because it lives on the
+    // separately — `vectorCorners`, `vectorCaps`, `vectorJoins` — because it
+    // lives on the
     // network, which never crosses the wire; folding it in here is what keeps
     // the indices and the points they count inside one value.
     //
@@ -1286,9 +1287,11 @@ const buildNode = (
     }
     const corners = sparseDetail<number>(raw.vectorCorners)
     const caps = sparseDetail<string>(raw.vectorCaps)
+    const joins = sparseDetail<string>(raw.vectorJoins)
     const dropped = [
       ...Object.keys(corners ?? {}),
       ...Object.keys(caps ?? {}),
+      ...Object.keys(joins ?? {}),
     ].length
     if (dropped > 0 && vp.length > 1) {
       warnings.push(
@@ -1313,6 +1316,9 @@ const buildNode = (
           ? { corners }
           : {}),
         ...(foldable && caps !== undefined ? { caps } : {}),
+        ...(foldable && joins !== undefined
+          ? { joins }
+          : {}),
       })
     })
   }

@@ -180,6 +180,9 @@ stroke([2,0,2,0])          # per-side weights [top,right,bottom,left]
   `cap=` (NONE/ROUND/SQUARE/ARROW_LINES/ARROW_EQUILATERAL), `join=` (MITER/BEVEL/ROUND),
   `miter=`, `dash=[…]` (arbitrary-length dash pattern).
 
+`cap=` and `join=` describe the whole node. A node whose individual points disagree has no single
+value for them, so the key is omitted here and `path()`'s per-point list says what each point does.
+
 **One vocabulary, and it is the Plugin API's.** Figma names two cap values differently in its REST
 export — `LINE_ARROW` and `TRIANGLE_ARROW` for what the Plugin API calls `ARROW_LINES` and
 `ARROW_EQUILATERAL`. Reads normalize to the Plugin API spelling, because that is the only spelling
@@ -333,18 +336,14 @@ declined the same way on write, rather than attaching a radius to whichever corn
 happens to reach. The promise above therefore holds wherever the keys can be trusted, and where it
 cannot the read says so instead of looking clean.
 
-**Implemented:** `corners`, `caps`. **Not implemented:** `joins`, and not for want of trying —
-**Figma cannot currently hold one.** Setting a non-default `strokeJoin` on a vertex through
-`setVectorNetworkAsync` leaves a node that `exportAsync` never returns for: the read hangs until it
-times out, and the node becomes unreadable. Verified live, reproducibly, and specific to this one
-property — `MITER` (the default) is a harmless no-op, while `BEVEL` and `ROUND` both hang, and
-`corners`/`caps` written at the same point read back instantly.
+**All three keys are implemented**, so an absent key carries its full meaning: every point is
+default for that property. Nothing in this channel is a silent unknown.
 
-Nothing else produces such a node either: Figma's own UI offers no per-point join control, and its
-SVG importer maps `stroke-linejoin` onto the node, splitting differing joins into separate VECTORs
-rather than differing vertices. So the key stays specced and unbuilt — writing it would trade a
-readable node for a corner detail, and there is no node in the wild that needs reading. The
-node-level `join=` in `stroke()` carries every case that actually arises.
+**When the points disagree, the node-level twin goes quiet.** Figma reports a node's own
+`strokeCap` or `strokeJoin` as *mixed* once its points differ, which is not a value and must not be
+rendered as one. `stroke()` therefore omits that key and the per-point list carries the whole
+truth — the reverse of the ordinary case, where the node-level value carries it and the per-point
+list is absent. Between them exactly one is authoritative, never both and never neither.
 
 Example — the shape a designer drew with two of four corners rounded, to different radii:
 

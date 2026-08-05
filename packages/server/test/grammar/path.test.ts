@@ -241,3 +241,33 @@ describe('path() — per-point stroke caps', () => {
     ).toBeUndefined()
   })
 })
+
+describe('path() — per-point stroke joins', () => {
+  it('parses and renders a sparse join list', () => {
+    const atom =
+      'path(NONE,"M 0 0 L 10 0 L 10 10"){joins=[1:BEVEL]}'
+    const parsed = atomToPath(atom)
+    expect(parsed.joins).toEqual({ 1: 'BEVEL' })
+    expect(pathToAtom(parsed)).toBe(atom)
+  })
+
+  it('carries all three keys at once, in table order', () => {
+    const atom =
+      'path(NONE,"M 0 0 L 10 0 L 10 10"){corners=[0:2], caps=[1:ROUND], joins=[2:BEVEL]}'
+    expect(pathToAtom(atomToPath(atom))).toBe(atom)
+  })
+
+  it('drops a value that is not a StrokeJoin', () => {
+    expect(
+      atomToPath(
+        'path(NONE,"M 0 0 Z"){joins=[0:CURVED, 1:MITER]}',
+      ).joins,
+    ).toEqual({ 1: 'MITER' })
+  })
+
+  it('has no joins key when the attr is absent', () => {
+    expect(
+      atomToPath('path(NONE,"M 0 0 Z")').joins,
+    ).toBeUndefined()
+  })
+})

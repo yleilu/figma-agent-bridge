@@ -3,6 +3,7 @@ import {
   applyPointDetail,
   capsFromNetwork,
   cornersFromNetwork,
+  joinsFromNetwork,
 } from './vector-points'
 
 const v = (cornerRadius?: number) => ({ cornerRadius })
@@ -186,5 +187,90 @@ describe('applyPointDetail — corners and caps together', () => {
     const caps = { 1: 'ARROW_EQUILATERAL' }
     const { vertices } = applyPointDetail(pts, { caps })
     expect(capsFromNetwork({ vertices })).toEqual(caps)
+  })
+})
+
+describe('joinsFromNetwork', () => {
+  it('names only the point that disagrees with the node join', () => {
+    expect(
+      joinsFromNetwork(
+        {
+          vertices: [
+            { strokeJoin: 'ROUND' },
+            { strokeJoin: 'BEVEL' },
+          ],
+        },
+        'ROUND',
+      ),
+    ).toEqual({ 1: 'BEVEL' })
+  })
+
+  // Figma stamps the node join onto every vertex, same as it does for caps.
+  it('is undefined when every point echoes the node join', () => {
+    expect(
+      joinsFromNetwork(
+        {
+          vertices: [
+            { strokeJoin: 'ROUND' },
+            { strokeJoin: 'ROUND' },
+          ],
+        },
+        'ROUND',
+      ),
+    ).toBeUndefined()
+  })
+
+  // A mixed node join is exactly the case this key describes; MITER is the
+  // Figma default and the right baseline when there is no node value.
+  it('falls back to MITER when the node join is mixed', () => {
+    expect(
+      joinsFromNetwork({
+        vertices: [
+          { strokeJoin: 'MITER' },
+          { strokeJoin: 'BEVEL' },
+        ],
+      }),
+    ).toEqual({ 1: 'BEVEL' })
+  })
+
+  it('never throws on a missing or malformed network', () => {
+    expect(joinsFromNetwork(undefined)).toBeUndefined()
+    expect(
+      joinsFromNetwork({ vertices: 'nope' } as never),
+    ).toBeUndefined()
+  })
+})
+
+describe('applyPointDetail — all three keys', () => {
+  it('stamps corners, caps and joins onto one vertex list', () => {
+    expect(
+      applyPointDetail(
+        [
+          { x: 0, y: 0 },
+          { x: 10, y: 0 },
+        ],
+        {
+          corners: { 0: 4 },
+          caps: { 1: 'ARROW_LINES' },
+          joins: { 1: 'BEVEL' },
+        },
+      ).vertices,
+    ).toEqual([
+      { x: 0, y: 0, cornerRadius: 4 },
+      {
+        x: 10,
+        y: 0,
+        strokeCap: 'ARROW_LINES',
+        strokeJoin: 'BEVEL',
+      },
+    ])
+  })
+
+  it('reports an out-of-range join index too', () => {
+    expect(
+      applyPointDetail([{ x: 0, y: 0 }], {
+        joins: { 5: 'BEVEL' },
+      }).skipped,
+    ).toEqual([5])
   })
 })

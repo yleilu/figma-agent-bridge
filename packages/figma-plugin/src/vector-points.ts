@@ -20,10 +20,16 @@
 //
 // Values are the Plugin API's own (`ARROW_LINES`, never REST's `LINE_ARROW`),
 // because they are read straight off the network rather than from an export.
+//
+// Every key is measured against the NODE's value for the same property, not
+// against Figma's global default: Figma stamps the node-level value onto each
+// vertex rather than leaving it blank, so a literal read would emit a dense
+// list on every ordinary stroked vector.
 
 type VertexLike = {
   cornerRadius?: number
   strokeCap?: string
+  strokeJoin?: string
 }
 
 type NetworkLike = {
@@ -100,6 +106,31 @@ export const capsFromNetwork = (
 }
 
 /**
+ * Sparse `{vertexIndex: strokeJoin}` for the points that disagree with the
+ * node's own join — the same rule, and the same reason, as `capsFromNetwork`:
+ * Figma stamps its node-level value onto every vertex, so anything else would
+ * put a dense list on every ordinary stroked vector.
+ *
+ * `nodeJoin` is unknown exactly when the node's value is `figma.mixed`, which
+ * is the case this key exists to describe; MITER is Figma's default and the
+ * right thing to measure against then.
+ */
+export const joinsFromNetwork = (
+  network: NetworkLike | undefined | null,
+  nodeJoin?: string,
+): Record<number, string> | undefined => {
+  const inherited = nodeJoin ?? 'MITER'
+  return sparse(network, v => {
+    const join = v.strokeJoin
+    const differs =
+      typeof join === 'string' &&
+      join.length > 0 &&
+      join !== inherited
+    return differs ? join : undefined
+  })
+}
+
+/**
  * The write half: a copy of the vertices with per-point detail stamped on.
  *
  * Assigning `vectorPaths` makes Figma rebuild the network from the path data,
@@ -117,12 +148,14 @@ export const applyPointDetail = <T extends VertexLike>(
   detail: {
     corners?: Record<number, number>
     caps?: Record<number, string>
+    joins?: Record<number, string>
   },
 ): { vertices: T[]; skipped: number[] } => {
-  const { corners = {}, caps = {} } = detail
+  const { corners = {}, caps = {}, joins = {} } = detail
   const named = [
     ...Object.keys(corners),
     ...Object.keys(caps),
+    ...Object.keys(joins),
   ].map(Number)
   return {
     vertices: vertices.map((v, i) => ({
@@ -133,6 +166,9 @@ export const applyPointDetail = <T extends VertexLike>(
       ...(caps[i] === undefined
         ? {}
         : { strokeCap: caps[i] }),
+      ...(joins[i] === undefined
+        ? {}
+        : { strokeJoin: joins[i] }),
     })),
     skipped: [...new Set(named)]
       .filter(i => vertices[i] === undefined)
