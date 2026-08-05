@@ -76,18 +76,17 @@ network carries vertices with **per-point `strokeCap`, `strokeJoin`, `cornerRadi
 question this entry was really blocked on: the `{…}` channel carries per-point detail as an
 **index-keyed sparse list** (`corners=[1:10,2:20]`, `caps=[1:ARROW_LINES]`), so no struct grammar
 was needed. `handleMirroring` was **dropped from the spec** rather than deferred — it is editor
-state that changes nothing rendered.
-**`joins=` was attempted 2026-08-05 and is blocked by a Figma runtime defect.** Setting a
-non-default per-vertex `strokeJoin` through `setVectorNetworkAsync` leaves a node `exportAsync`
-never returns for — `get_node` hangs to timeout and the node is unreadable. Reproducible and
-specific: `MITER` is a harmless no-op, `BEVEL` and `ROUND` both hang, and `corners`/`caps` written
-at the same point read back instantly. Nothing else creates such a node either — Figma's UI has no
-per-point join control and its SVG importer maps `stroke-linejoin` onto the node, splitting
-differing joins into separate VECTORs. The implementation was written, verified broken, and
-dropped; the spec now records the blocker.
-**What genuinely remains open is region structure**, which has no index basis and no designed form.
-**Blocker:** for `joins=`, Figma's export hang — recheck on a future Figma build before rebuilding
-it, and note that even fixed it has no real-world source today.
+state that changes nothing rendered. **`joins=` shipped too**, after a false start worth recording:
+it was first attributed to a Figma defect, because writing a per-point join made `get_node` hang to
+timeout. The hang was ours. A node whose points disagree reports its node-level `strokeJoin` as
+`figma.mixed` — a **Symbol** — and the plugin copied that raw into the export document; the reply
+crosses the boundary through `ui.postMessage`, which structured-clones, and a symbol throws there
+("Cannot unwrap symbol"), so the reply was never sent and the caller waited out its timeout.
+Guarding the read turned 30,002ms into 7ms. Two fixes came out of it: `omitMixed` for any raw read
+of a possibly-mixed property, and a reply path that answers with an error instead of vanishing when
+a result cannot be serialized.
+**All that remains open is region structure**, which has no index basis and no designed form.
+**Blocker:** none — this entry is now down to one genuinely undesigned item.
 
 ### Distribution & publishing (surfaced 2026-07-10 — dev-ops workflow design)
 
@@ -149,6 +148,7 @@ Built and merged as part of the M-items build; they arose from the same spec-com
 | Capability | Merged sha | Notes |
 | ---------- | ---------- | ----- |
 | **Per-point `cornerRadius` on a VECTOR — read and write** | `a0c1909` | A hand-drawn shape's rounded corners used to flatten to sharp ones with nothing said. They now ride in the `path()` atom's `{…}` channel as an index-keyed sparse list (`corners=[1:10,2:20]`), read from the network and written back through `setVectorNetworkAsync`. Live-verified both directions against a hand-drawn node. Settled the design question this file called a blocker: per-point detail needs **no struct grammar**. |
+| **Per-point `strokeJoin` — read and write; the `figma.mixed` wire bug; a reply path that fails loudly** | _this cycle_ | `joins=[1:BEVEL]`, completing the per-point channel. Unblocked by finding that the "Figma hang" was our own unguarded `figma.mixed` read: the sentinel is a Symbol, `ui.postMessage` structured-clones, and the throw silently ate the reply — 30,002ms timeout became a 7ms read. Also hardened the command reply so an unserializable result answers `UNSERIALIZABLE_RESULT` rather than nothing. All live-verified. |
 | **Per-point `strokeCap` — read and write; and the arrow-cap name bug** | _this cycle_ | An arrowhead is a stroke cap, so a line pointing one way needs a different cap at each end and the node-level field can hold only one. `caps=[1:ARROW_LINES]`, same sparse basis. Sparse here means *differs from the node's cap* — Figma stamps its node value onto every vertex, so comparing against NONE would have put `caps=[0:ROUND,1:ROUND]` on every stroked vector. Also fixed a **silent T2 break**: REST exports the two arrow caps as `LINE_ARROW`/`TRIANGLE_ARROW`, the Plugin API accepts only `ARROW_LINES`/`ARROW_EQUILATERAL`, so `get_node` on any arrow returned a spec `create_node` rejected. Reads normalize now. All live-verified. |
 
 ## Bug notes that this file carried until they were fixed

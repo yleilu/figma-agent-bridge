@@ -7,6 +7,7 @@ import {
   applyPointDetail,
   capsFromNetwork,
   cornersFromNetwork,
+  joinsFromNetwork,
 } from './vector-points'
 import {
   applyStrokeGeometry,
@@ -377,6 +378,16 @@ const exportNodeDocument = async (
         if (caps !== undefined) {
           detail.vectorCaps = caps
         }
+        const nodeJoin = (
+          node as unknown as { strokeJoin?: unknown }
+        ).strokeJoin
+        const joins = joinsFromNetwork(
+          network,
+          typeof nodeJoin === 'string' ? nodeJoin : undefined,
+        )
+        if (joins !== undefined) {
+          detail.vectorJoins = joins
+        }
       }
     }
     // width / height — JSON_REST_V1 omits unrotated width/height, emitting only
@@ -397,7 +408,8 @@ const exportNodeDocument = async (
     if ('strokeJoin' in node) {
       // A vector whose points carry different joins reports figma.mixed here,
       // which is a Symbol and cannot cross the plugin boundary — see mixed.ts.
-      // Omitting is the honest answer: mixed is not one value.
+      // Omitting is the honest answer: mixed is not one value, and the
+      // per-point `joins=` list says what each point actually does.
       const join = omitMixed(
         (node as unknown as { strokeJoin: unknown })
           .strokeJoin,
@@ -1265,6 +1277,7 @@ const applyVectorPointDetail = async (
   paths: readonly (VectorPath & {
     corners?: Record<number, number>
     caps?: Record<number, string>
+    joins?: Record<number, string>
   })[],
   warnings?: string[],
 ): Promise<void> => {
@@ -1272,7 +1285,12 @@ const applyVectorPointDetail = async (
     m: Record<number, unknown> | undefined,
   ): boolean => m !== undefined && Object.keys(m).length > 0
   if (
-    !paths.some((p) => nonEmpty(p.corners) || nonEmpty(p.caps))
+    !paths.some(
+      (p) =>
+        nonEmpty(p.corners) ||
+        nonEmpty(p.caps) ||
+        nonEmpty(p.joins),
+    )
   ) {
     return
   }
@@ -1281,7 +1299,7 @@ const applyVectorPointDetail = async (
       'per-point detail ignored: this spec has ' +
         String(paths.length) +
         ' paths, and a point index cannot be attributed to one of them — ' +
-        'supply the shape as a single path to round or cap its points',
+        'supply the shape as a single path to style its points',
     )
     return
   }
@@ -1292,7 +1310,7 @@ const applyVectorPointDetail = async (
     warnings?.push(
       'per-point detail ignored: this Figma build exposes no writable vector ' +
         'network — the shape is correct but its corners stay sharp and its ' +
-        'caps stay as the node-level cap',
+        'caps and joins stay as the node-level ones',
     )
     return
   }
@@ -1302,6 +1320,9 @@ const applyVectorPointDetail = async (
       corners: paths[0].corners,
       caps: paths[0].caps as
         | Record<number, StrokeCap>
+        | undefined,
+      joins: paths[0].joins as
+        | Record<number, StrokeJoin>
         | undefined,
     })
     await vector.setVectorNetworkAsync({
@@ -1386,6 +1407,7 @@ const createSingleNode = async (
         const paths = spec.vectorPaths as (VectorPath & {
           corners?: Record<number, number>
           caps?: Record<number, string>
+          joins?: Record<number, string>
         })[]
         try {
           vector.vectorPaths = paths.map(

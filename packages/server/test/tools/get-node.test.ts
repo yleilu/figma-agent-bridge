@@ -225,6 +225,78 @@ describe('handleGetNode (rebuilt — NodeSpec)', () => {
     expect(spec.vectorCaps).toBeUndefined()
   })
 
+  it('folds vectorJoins in alongside the other two', async () => {
+    const result = await handleGetNode(
+      { nodeId: '5:5', depth: 0 },
+      stubClient({
+        reply: {
+          id: '5:5',
+          name: 'Styled corner',
+          type: 'VECTOR',
+          absoluteBoundingBox: {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+          },
+          vectorPaths: [
+            {
+              windingRule: 'NONE',
+              data: 'M0 0 L100 0 L100 100',
+            },
+          ],
+          vectorCorners: { 1: 8 },
+          vectorCaps: { 2: 'ROUND' },
+          vectorJoins: { 1: 'BEVEL' },
+        },
+      }),
+    )
+    const spec = YAML.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect((spec.vectorPaths as string[])[0]).toBe(
+      'path(NONE,"M0 0 L100 0 L100 100"){corners=[1:8], caps=[2:ROUND], joins=[1:BEVEL]}',
+    )
+    expect(spec.vectorJoins).toBeUndefined()
+  })
+
+  // A node whose points disagree reports no node-level join at all — the
+  // plugin omits figma.mixed rather than shipping a symbol. The per-point
+  // list is then the only thing that says what each point does.
+  it('carries joins with no node-level join beside them', async () => {
+    const result = await handleGetNode(
+      { nodeId: '5:6', depth: 0 },
+      stubClient({
+        reply: {
+          id: '5:6',
+          name: 'Mixed join',
+          type: 'VECTOR',
+          absoluteBoundingBox: {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+          },
+          strokeWeight: 12,
+          vectorPaths: [
+            {
+              windingRule: 'NONE',
+              data: 'M0 0 L100 0 L100 100',
+            },
+          ],
+          vectorJoins: { 1: 'BEVEL' },
+        },
+      }),
+    )
+    const spec = YAML.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(spec.stroke).toBe('stroke(12)')
+    expect((spec.vectorPaths as string[])[0]).toContain(
+      '{joins=[1:BEVEL]}',
+    )
+  })
+
   it('warns rather than guessing when a node has several paths', async () => {
     // The indices count points inside one path; the network numbers vertices
     // across the node. With several paths those bases part ways, so the read

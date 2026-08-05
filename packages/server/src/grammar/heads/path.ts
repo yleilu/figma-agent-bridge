@@ -45,6 +45,8 @@ export type FigmaVectorPath = {
    * hold.
    */
   caps?: Record<number, string>
+  /** Per-point stroke joins, same sparse index basis as `corners` and `caps`. */
+  joins?: Record<number, string>
 }
 
 /** Plugin API StrokeCap. REST's two arrow spellings are normalized before here. */
@@ -55,6 +57,9 @@ const STROKE_CAPS = new Set([
   'ARROW_LINES',
   'ARROW_EQUILATERAL',
 ])
+
+/** Plugin API StrokeJoin — the same three names REST uses, no divergence here. */
+const STROKE_JOINS = new Set(['MITER', 'BEVEL', 'ROUND'])
 
 type WindingRule = FigmaVectorPath['windingRule']
 
@@ -95,6 +100,9 @@ const asRadius = (v: string): number | undefined => {
 
 const asStrokeCap = (v: string): string | undefined =>
   STROKE_CAPS.has(v) ? v : undefined
+
+const asStrokeJoin = (v: string): string | undefined =>
+  STROKE_JOINS.has(v) ? v : undefined
 
 /**
  * Read an `index:value` sparse list out of the atom's `{…}` channel.
@@ -159,12 +167,14 @@ export const atomToPath = (s: string): FigmaVectorPath => {
 
   const corners = readSparse(ast.attrs?.corners, asRadius)
   const caps = readSparse(ast.attrs?.caps, asStrokeCap)
+  const joins = readSparse(ast.attrs?.joins, asStrokeJoin)
 
   return {
     windingRule,
     data,
     ...(corners === undefined ? {} : { corners }),
     ...(caps === undefined ? {} : { caps }),
+    ...(joins === undefined ? {} : { joins }),
   }
 }
 
@@ -214,9 +224,11 @@ export const pathToAtom = (p: FigmaVectorPath): string => {
   ]
   const corners = writeSparse(p.corners)
   const caps = writeSparse(p.caps)
+  const joins = writeSparse(p.joins)
   const attrs = {
     ...(corners === undefined ? {} : { corners }),
     ...(caps === undefined ? {} : { caps }),
+    ...(joins === undefined ? {} : { joins }),
   }
   const ast: AtomAST = {
     kind: 'head',
