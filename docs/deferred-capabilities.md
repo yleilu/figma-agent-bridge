@@ -11,13 +11,34 @@ type: reference
 
 # Deferred Capabilities — Spec-Completeness Backlog
 
-**What this is:** real Figma capabilities (and surface-symmetry holes) that we **know exist** but have **deliberately deferred** — they are _not bugs_ and _not in scope_ for the current live-sweep bug-fix pass. A "gap" here = **a feature to be fulfilled later**, once it gets a **full review + plan**.
+**What this is: the TBD list.** A capability belongs here only if it passes **both** tests:
+
+1. **We will ship it** — not "might", not "if someone asks".
+2. **A specific reason blocks it now** — named and checkable. *"Nobody has built it yet"* is not a
+   blocker, it is a schedule.
+
+The canonical shape is the team-library row below: we intend to source components from a team
+library, publishing one needs a paid Figma plan, we do not have one, so it cannot be verified.
+Committed, blocked, blocker named.
+
+**Not for** bugs, roadmap, wishes, settled decisions or internal quality work — see
+[`docs/README.md`](README.md) for where each of those goes. Seven entries left this file on
+2026-08-05 for failing one test or the other.
 
 **Why they're separate from bugs:** bugs are **code↔spec** mismatches (the spec declares it, the code is wrong → fix the code). These gaps are **spec↔principles** mismatches — the **spec itself never declared them**, so it's incomplete relative to its governing principles (T1 symmetry, T6 "expose every distinct capability", T2 round-trip). See `principles.md`.
 
 > **Process gate — do NOT fill these piecemeal.** Before implementing _any_ of these, run a **spec-completeness audit** (sweep the spec against T1/T6/T2 to surface the _full_ set, not just the ones a sweep happened to hit), then per feature: **brainstorm → update the spec first → plan → build** (cascade per the doc-management hierarchy). Several of these are one coherent family and should be decided together.
 
 Surfaced 2026-06-27 during the comprehensive live tool sweep + per-issue spec review.
+
+> **Audit 2026-08-05.** Re-verified every *Still deferred* item against `dev` after the
+> tool-contract merge (`a6e90e0`), by execution rather than by reading the notes. **Nothing in
+> Still deferred has completed** — TEXT_PATH, grid track-sizing/child-placement,
+> `create_tree` BOOLEAN_OPERATION, `vectorNetwork`, the auto-layout HUG default, unknown-key
+> rejection on the create face, Community distribution and reconnect-with-backoff all still hold,
+> each re-checked in code. **Two bugs listed below as open are now closed** (`B17`, `B20`), and the
+> plugin-apply extraction advanced by one of its four named field-applies. The `set_instance`
+> `overrides` entry was added 2026-08-04 and is deliberately untouched.
 
 > **Audit 2026-07-29.** This file had accumulated shipped capabilities and **already-fixed bug notes** among the live deferrals. Everything finished has moved to [§ Shipped](#shipped--history) at the bottom; what remains above is genuinely deferred and was re-verified against `dev` code. Two sections were **routed out** entirely (they duplicated tracked QA-backlog items) — see [§ Routed out](#routed-out-2026-07-29).
 
@@ -27,44 +48,26 @@ Surfaced 2026-06-27 during the comprehensive live tool sweep + per-issue spec re
 
 | Capability | Figma API (verified real) | Current status | What fulfilling it needs |
 | ---------- | ------------------------- | -------------- | ------------------------ |
-| **TEXT_PATH** (text on a path) | `figma.createTextPath(vector, startSegment, startPosition) → TextPathNode` (typings 1.123.0) | **Writer DEFERRED — M11 ship-gate failed live (2026-07-18):** `createTextPath` works + creates a TEXT_PATH, but `get_node` cannot recover the source-vector ref — `TextPathNode.vectorNodeId`/`startSegment`/`startPosition` are NOT exposed at runtime (and the node has no readable `vectorPaths`), so the write is write-only → deferred per T2 (never ship a write-only tool). Text content DOES read back; existing TEXT_PATH nodes still read type+text. Full impl preserved on unmerged branch `feat/m11-textpath`. **Re-verified 2026-07-29:** the branch still exists and is unmerged; nothing in `packages/` implements TEXT_PATH. | Re-enable when the runtime surfaces the source-path ref on `TextPathNode` (then finish the export enrichment + merge `feat/m11-textpath`). |
-| **GRID layout — track sizing + child placement (M12 follow-on)** | `gridRowSizes`/`gridColumnSizes` (track sizing) + per-child `gridRowSpan`/`gridColumnSpan`/`gridChild*Align` (child placement) | **Deliberately deferred** (drop-nothing rule) — M12 shipped `rows/cols/rowGap/colGap` on the frame; these per-track/per-child properties are a natural follow-on. No code removed. **Re-verified 2026-07-29: zero hits** for `gridRowSizes`/`gridColumnSizes`/`gridRowSpan` across `packages/`. | design per-track struct (fixed/auto/fr sizing per track), per-child grid-area fields on `NodeSpec`, writer + plugin-apply + reader read-back |
-| **`create_tree` declarative composites — `BOOLEAN_OPERATION`** | children-combining node type | **Honest-rejected, deliberately.** `create_tree` validates against `CREATABLE_TYPES`, so the type can never reach the create-type switch; booleans route to the **`boolean_op` tool**. **Re-verified 2026-07-29** at `code.ts:1400-1406` — the comment and the removed handlers confirm it, and a clone-by-id of an existing BOOLEAN_OPERATION still works. *(`GROUP` and `TRANSFORM_GROUP`, the other two composites of this row, have shipped — see § Shipped.)* | Decide whether to surface `BOOLEAN_OPERATION` in `create_tree` at all, or keep routing to `boolean_op` permanently. |
+| **TEXT_PATH** (text on a path) | `figma.createTextPath(vector, startSegment, startPosition) → TextPathNode` (typings `^1.132.0`) | **Writer DEFERRED — M11 ship-gate failed live (2026-07-18):** `createTextPath` works + creates a TEXT_PATH, but `get_node` cannot recover the source-vector ref — `TextPathNode.vectorNodeId`/`startSegment`/`startPosition` are NOT exposed at runtime (and the node has no readable `vectorPaths`), so the write is write-only → deferred per T2 (never ship a write-only tool). Text content DOES read back; existing TEXT_PATH nodes still read type+text. Full impl preserved on unmerged branch `feat/m11-textpath`. **Re-verified 2026-08-05:** the branch still exists and is unmerged; `packages/` carries only comments explaining the absence. ⚠️ **The blocker may have moved.** The 2026-07-18 finding was against typings 1.123.0; in **1.132.0 `TextPathNode` declares `vectorPaths` AND `vectorNetwork` as readable**, so the node's GEOMETRY can be read back after all. Still absent: `vectorNodeId`/`startSegment`/`startPosition` — they exist only as `createTextPath` parameters — so which vector it was built from, and where along it, remain unrecoverable. A shape round-trip may now be possible where a construction round-trip is not. **Probe live before deciding** — typings and runtime disagreed on `PatternPaint` this same week. | Re-enable when the runtime surfaces the source-path ref on `TextPathNode` (then finish the export enrichment + merge `feat/m11-textpath`). |
+
+### Blocked on an account we do not have
+
+- **Team-library component sourcing — cannot be verified.** `team-library-registry.md` specs
+  sourcing components from a published team library, and the surface is designed for it. But
+  **publishing a library requires a paid Figma plan** (`docs/specs/team-library-registry.md:135-136`)
+  and we do not have one, so neither the publish side nor the consume side can be exercised
+  end-to-end — a library key cannot be produced to test against. The read path
+  (`importComponentByKeyAsync` / `importComponentSetByKeyAsync`) is built and the error path is
+  live-verified; only the SUCCESS path is unproven. **To fulfil:** a paid plan, or a collaborator
+  with one who can publish a fixture library we can point at.
 
 ### Read round-trip limitations (JSON_REST_V1 gaps)
 
 - **`vectorNetwork` / `setVectorNetworkAsync` — full bezier authoring (M3-V3, DEFERRED).** `vectorPaths` (M3-V1/V2, ✅ SHIPPED merged `4430194`) covers VECTOR node write + read-back for non-curved paths via `node.vectorPaths`. The deeper `vectorNetwork` API (`VectorNetwork` with bezier handles, vertices, segments, regions) enables exact bezier editing but requires a non-atom struct grammar (it is a complex nested object, not a string). **Consequence:** `vectorPaths` read-back from `get_node` is a **documented lossy projection** for pre-existing vectors that have bezier curves or multi-region shapes — their _exact_ geometry lives in `vectorNetwork`, not `vectorPaths`. This is a deliberate, documented T2 asymmetry (T7 honest: the limitation is stated here and in `expression-formats.md`), not a silent gap. **Re-verified 2026-07-29: zero hits** for `vectorNetwork` across `packages/*/src`. **To fulfill:** design the `vectorNetwork` struct grammar, add a `vectorNetwork` field to `NodeSpec`, implement writer + plugin apply (`setVectorNetworkAsync`) + reader read-back.
 
-- **`set_instance.overrides` demands a `value` no read can supply (surfaced 2026-08-04).** The
-  reader emits `{path, field}` and never a value — Figma's override record is `{id,
-  overriddenFields}`, names only, and `expression-formats.md:219` makes that the design ("read the
-  value from the node struct itself"). But `set_instance`'s own parameter schema
-  (`tool-params.ts:1382-1394`) marks `value` **required**, so an agent cannot feed a `get_node`
-  read back into the write without inventing it. Harmless today — the parameter is documented "NOT
-  YET APPLIED" and the plugin only warns and skips (`code.ts:3277-3285`) — so this is shape
-  mismatch on a no-op, not a live defect, and tightening it now would just move noise around.
-  **To fulfill:** when per-node overrides are actually implemented, decide the write shape against
-  what a read can produce — either `value` becomes optional and the write resolves it from the
-  target, or `overrides` stops being a `{path, field, value}` triple. Deliberately left as-is
-  2026-08-04. Related dead weight: `overrideEntrySchema.value` (`node-spec-schema.ts:65-72`) is
-  optional and populated by nothing.
-
-### Authoring ergonomics (surfaced 2026-07-06 — analytics-dashboard capability demo)
-
-- **An auto-layout frame with an explicit `size` still HUGs (ignores the size) unless `sizing:['FIXED','FIXED']` is set.** `size:[1440,900]` + a `layout` produced a frame that collapsed to hug its content — the explicit size was silently ignored because the container's axis-sizing modes default to AUTO/HUG. Least-surprise fix: when a node has BOTH `layout` and an explicit `size`, default its sizing to FIXED (respect the size) unless `sizing` overrides; at minimum document it. (Cost one rebuild in the demo.) **Re-verified 2026-07-29:** `sizing` is passed through only when supplied (`node-spec-writer.ts:255-256`; `code.ts:781-795`) — no such default exists. **Also tracked as `I1`** in `docs/scratch/qa/issues/2-improvement.md`, where the compat call (behavior-changing) lives.
-
-### Test-infrastructure (deferred quality)
-
-- **Comprehensive plugin-apply unit-test layer.** The headless suite exercises a **mock stand-in**, never the real plugin — so plugin-side crashes/no-ops were invisible until live (the root reason the conversion-shape/field-strip/constraints class stayed live-only). **Partially realized** by the 2026-06-27 bug-fix pass: the layout-apply and instance-prop-resolver logic were extracted into pure, headlessly-tested modules (`apply-layout.ts`, `resolve-instance-props.ts`). The durable fix is to continue extracting `applyCommonProperties`' field-applies (constraints, grids, effects, sizing) into pure helpers tested against `@figma/plugin-typings`.
-- **B-ii — reject/warn on unknown `NodeSpec` fields, on the CREATE face.** ⚠️ **Half shipped** — the *update* face now warns (`06da82d`: `unknownPatchKeyWarnings` + a passthrough `partialNodeSpecSchema`), but `nodeSpecSchema`/`treeNodeSpecSchema` still **strip silently**, verified by execution 2026-07-29: `nodeSpecSchema.parse({type:'FRAME', bogusKey:1, x:10})` → `{"type":"FRAME"}`. The fix shape now exists and can be reused on the create path. **Also tracked as `I9`** (create-face residual).
-
 ### Distribution & publishing (surfaced 2026-07-10 — dev-ops workflow design)
 
 - **Public Figma Community distribution — self-issued `fileKey`.** The plugin sets `enablePrivatePluginApi: true` and reads `figma.fileKey`, which Figma restricts to **private/Organization plugins and Figma-owned resources** — public Community plugins are deliberately barred from the file key ([developers.figma.com/docs/plugins/api/figma](https://developers.figma.com/docs/plugins/api/figma/)). So the plugin **cannot be published to the public Community as-is**. **Current path:** the fig-plugin travels as a **manifest-import payload** distributed with the Claude Code plugin package and is imported by the user — a privately distributed plugin, so the private API stays available and no Figma review is involved. **Deferred:** public Community distribution (to be discussed before building). **Plan when we do it:** keep the same identity key name **`fileKey`** on the wire/register protocol, but populate it with an **id we generate ourselves** — a stable per-file id stored on the document via `figma.root.setPluginData`/`getPluginData` (survives sessions, shared across collaborators on the same file) — and drop `enablePrivatePluginApi`. This is **transparent to the server**, which already trusts whatever id the plugin reports on `register`; only the _source_ of the value changes. Trade-off: we lose the _real_ Figma file key (no Figma REST-API correlation), which the localhost bridge does not use today. See the dev-ops spec's distribution section.
-
-### Tooling / workflow
-
-- **Auto-reconnect-with-backoff (deferred).** **Shipped 2026-06-28:** the `close_plugin` internal command (`figma.closePlugin()`) + the channel-persistence fix _(mechanism superseded by per-file channels — reload determinism now comes from binding the channel to `fileKey`; see [[figma-bridge/docs/specs/overview|overview.md]] Connection lifecycle)_ + `scripts/reload-plugin.sh` — so the **rebuild → close → reopen → auto-reconnect → verify** loop reloads new `dist/code.js` headlessly. The remaining nice-to-have is auto-**re**connect-with-backoff so a _live_ plugin self-heals when its socket drops while it stays open (relay restart, network blip), not only on relaunch. **Re-verified 2026-07-29: still absent** — `hooks/useRelay.ts:564-582` `onclose` tears state down and sets `disconnected`; there is no retry and no backoff timer anywhere in the file. Add only if live relay-restart drops prove annoying.
 
 ### Dev-ops — deferred verification & follow-ups (surfaced 2026-07-11 — dev-ops workflow shipped)
 
@@ -125,8 +128,8 @@ These sat in the deferred tables long after the code was corrected. Each was **r
 | ------------- | ------ | ----------- |
 | "Read round-trip limitations → `get_node` `profile` crashes on an unrecognized value" | **B4** | `read/project.ts:100-107` — the `!keys` guard replaced `=== null`. |
 | "Read round-trip limitations → Rotated-node size/position read-back" | **B7** | `code.ts:299-307` — the plugin enriches `doc.width`/`doc.height` from the Plugin API (always unrotated) so the reader prefers them over the REST bbox. |
-| "Read round-trip limitations → gradient angle reads back `linear(0)`" | **B1** | `node-spec-reader.ts:244-275` — the transform is derived from `gradientHandlePositions`. ⚠️ **LINEAR only.** RADIAL/ANGULAR/DIAMOND still take the identity fallback (`:249-253`, `:260-264`) and are now tracked as **`B17`**, open. |
-| "Authoring ergonomics → `update_component` adds property definitions but does NOT bind them" | **B3** | `code.ts:383-397` emits `componentPropertyReferences`, read at `node-spec-reader.ts:906-916`. ⚠️ but `profile:'full'` does not project it — that is **`B20`**, open. |
+| "Read round-trip limitations → gradient angle reads back `linear(0)`" | **B1** | `node-spec-reader.ts` — the transform is derived from `gradientHandlePositions`. **`B17` (the RADIAL/ANGULAR/DIAMOND identity fallback) is now CLOSED too**, by `cb9a6bf`: all four types derive the full transform from three handles and emit it as `{tf=[…]}`. Re-verified 2026-08-05 by execution — linear, radial, angular and diamond each recover `tf=` rather than falling back. |
+| "Authoring ergonomics → `update_component` adds property definitions but does NOT bind them" | **B3** | `code.ts` emits `componentPropertyReferences`, read back by the reader. **`B20` is now CLOSED**, by `2c4220d`: `profile:'full'` short-circuits to identity rather than an enumerated key list (`read/project.ts:99-106`), so it cannot omit a field again. Re-verified 2026-08-05 by execution — `full` keeps both `componentPropertyReferences` and `component`; `minimal` still narrows. |
 | "Test-infrastructure → **B-i** writer↔plugin field-symmetry test" | *(`I12`)* | Shipped with M3 (`4430194`): `packages/server/test/serialize/field-symmetry.test.ts`. ⚠️ top-level-key granularity only — struct members are unguarded, which is how `text.runs` (**`B15`**) walked through. Residual tracked as `I12`. |
 
 ## See also
