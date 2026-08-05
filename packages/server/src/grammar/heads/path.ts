@@ -35,7 +35,26 @@ export type FigmaVectorPath = {
    * authors, so an ordinary read is unchanged.
    */
   corners?: Record<number, number>
+  /**
+   * Per-point stroke caps, same sparse index basis as `corners`. The values are
+   * the **Plugin API** spelling (`ARROW_LINES`, not REST's `LINE_ARROW`) —
+   * expression-formats.md fixes one vocabulary because only that one writes.
+   *
+   * This is the key an arrow needs: a line that points one way carries a
+   * different cap at each end, which the node-level `stroke(){cap=}` cannot
+   * hold.
+   */
+  caps?: Record<number, string>
 }
+
+/** Plugin API StrokeCap. REST's two arrow spellings are normalized before here. */
+const STROKE_CAPS = new Set([
+  'NONE',
+  'ROUND',
+  'SQUARE',
+  'ARROW_LINES',
+  'ARROW_EQUILATERAL',
+])
 
 type WindingRule = FigmaVectorPath['windingRule']
 
@@ -69,6 +88,48 @@ const unquote = (v: string): string => {
   return v
 }
 
+const asRadius = (v: string): number | undefined => {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : undefined
+}
+
+const asStrokeCap = (v: string): string | undefined =>
+  STROKE_CAPS.has(v) ? v : undefined
+
+/**
+ * Read an `index:value` sparse list out of the atom's `{…}` channel.
+ *
+ * The tokenizer already hands back each `1:10` as one array element, so this
+ * only splits and validates — no new grammar was needed for any of these keys.
+ * A malformed or unrecognized entry is **skipped, never thrown**: a read that
+ * died mid-serialization over one odd pair would cost the whole node.
+ *
+ * Returns `undefined` rather than `{}` when nothing survives, so callers can
+ * omit the key entirely and an ordinary read stays byte-for-byte unchanged.
+ */
+const readSparse = <T>(
+  raw: unknown,
+  value: (s: string) => T | undefined,
+): Record<number, T> | undefined => {
+  if (!Array.isArray(raw)) {
+    return undefined
+  }
+  const out: Record<number, T> = {}
+  for (const entry of raw) {
+    const [i, ...rest] = String(entry).split(':')
+    const idx = Number(i)
+    const parsed = value(rest.join(':'))
+    if (
+      Number.isInteger(idx) &&
+      idx >= 0 &&
+      parsed !== undefined
+    ) {
+      out[idx] = parsed
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
 /**
  * Parse a path atom string into a Figma VectorPath object.
  *
@@ -96,30 +157,15 @@ export const atomToPath = (s: string): FigmaVectorPath => {
   const data: string =
     typeof dataRaw === 'string' ? unquote(dataRaw) : ''
 
-  // {corners=[1:10, 2:20]} — index:radius pairs. The tokenizer already reads
-  // each `1:10` as one array element (no new grammar), so this head only has
-  // to split it. A malformed entry is skipped, never thrown: a read must not
-  // die mid-serialization because one pair was odd.
-  const corners: Record<number, number> = {}
-  const rawCorners = ast.attrs?.corners
-  if (Array.isArray(rawCorners)) {
-    for (const entry of rawCorners) {
-      const [i, v] = String(entry).split(':')
-      const idx = Number(i)
-      const radius = Number(v)
-      if (
-        Number.isInteger(idx) &&
-        idx >= 0 &&
-        Number.isFinite(radius)
-      ) {
-        corners[idx] = radius
-      }
-    }
-  }
+  const corners = readSparse(ast.attrs?.corners, asRadius)
+  const caps = readSparse(ast.attrs?.caps, asStrokeCap)
 
-  return Object.keys(corners).length > 0
-    ? { windingRule, data, corners }
-    : { windingRule, data }
+  return {
+    windingRule,
+    data,
+    ...(corners === undefined ? {} : { corners }),
+    ...(caps === undefined ? {} : { caps }),
+  }
 }
 
 /**
@@ -129,6 +175,25 @@ export const atomToPath = (s: string): FigmaVectorPath => {
  */
 const normalizePathData = (data: string): string =>
   data.replace(/,/g, ' ').replace(/\s{2,}/g, ' ')
+
+/**
+ * Render a sparse map back to `index:value` entries, sorted so the atom is
+ * deterministic, and `undefined` when there is nothing to say — which is how
+ * a vector authored through this grammar renders exactly as it did before
+ * these keys existed.
+ */
+const writeSparse = (
+  m: Record<number, number | string> | undefined,
+): string[] | undefined => {
+  const entries = Object.entries(m ?? {})
+    .map(([i, v]) => [Number(i), v] as const)
+    .filter(([i]) => Number.isInteger(i) && i >= 0)
+    .sort((a, b) => a[0] - b[0])
+  if (entries.length === 0) {
+    return undefined
+  }
+  return entries.map(([i, v]) => `${i}:${String(v)}`)
+}
 
 /**
  * Render a Figma VectorPath object to a path atom string.
@@ -147,25 +212,17 @@ export const pathToAtom = (p: FigmaVectorPath): string => {
       value: `"${normalizePathData(p.data)}"`,
     },
   ]
-  // Sorted so the rendered atom is deterministic; emitted only when a point
-  // is actually rounded, so the common case renders exactly as before.
-  const entries = Object.entries(p.corners ?? {})
-    .map(([i, v]) => [Number(i), v] as const)
-    .filter(
-      ([i, v]) => Number.isFinite(i) && Number.isFinite(v),
-    )
-    .sort((a, b) => a[0] - b[0])
+  const corners = writeSparse(p.corners)
+  const caps = writeSparse(p.caps)
+  const attrs = {
+    ...(corners === undefined ? {} : { corners }),
+    ...(caps === undefined ? {} : { caps }),
+  }
   const ast: AtomAST = {
     kind: 'head',
     head: 'path',
     args,
-    ...(entries.length > 0
-      ? {
-          attrs: {
-            corners: entries.map(([i, v]) => `${i}:${v}`),
-          },
-        }
-      : {}),
+    ...(Object.keys(attrs).length > 0 ? { attrs } : {}),
   }
   return renderAtom(ast)
 }

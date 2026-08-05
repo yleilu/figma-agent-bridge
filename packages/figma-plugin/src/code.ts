@@ -3,9 +3,10 @@ import { COMMANDS, CONTEXT_NS, CONTEXT_KEY } from '@figma-agent-bridge/shared'
 import { applyLayout, type AppliedLayout } from './apply-layout'
 import { importComponentByKeyWithDeadline } from './import-by-key'
 import {
-  applyCornersToVertices,
+  applyPointDetail,
+  capsFromNetwork,
   cornersFromNetwork,
-} from './vector-corners'
+} from './vector-points'
 import {
   applyStrokeGeometry,
   applyExportSettings,
@@ -350,18 +351,30 @@ const exportNodeDocument = async (
     applyContexts(doc, contexts)
     if (node.type === 'VECTOR' && 'vectorPaths' in node) {
       doc.vectorPaths = (node as VectorNode).vectorPaths
-      // Per-point corner radii live on the NETWORK, which vectorPaths cannot
+      // Per-point detail lives on the NETWORK, which vectorPaths cannot
       // express — without this a hand-drawn shape reads back with sharp
-      // corners the file does not have. Only the radii are sent, sparsely;
-      // the network itself is unbounded and stays put (T10). Feature-detected
-      // like the vectorPaths guard beside it.
+      // corners the file does not have, and an arrow reads back blunt. Only
+      // the few properties are sent, sparsely; the network itself is unbounded
+      // and stays put (T10). Feature-detected like the vectorPaths guard
+      // beside it.
       if ('vectorNetwork' in node) {
-        const corners = cornersFromNetwork(
-          (node as VectorNode).vectorNetwork,
-        )
+        const network = (node as VectorNode).vectorNetwork
+        const detail = doc as Record<string, unknown>
+        const corners = cornersFromNetwork(network)
         if (corners !== undefined) {
-          ;(doc as Record<string, unknown>).vectorCorners =
-            corners
+          detail.vectorCorners = corners
+        }
+        // The node's own cap can be figma.mixed (a Symbol) exactly when the
+        // vertices disagree; only a string is a value to compare against.
+        const nodeCap = (
+          node as unknown as { strokeCap?: unknown }
+        ).strokeCap
+        const caps = capsFromNetwork(
+          network,
+          typeof nodeCap === 'string' ? nodeCap : undefined,
+        )
+        if (caps !== undefined) {
+          detail.vectorCaps = caps
         }
       }
     }
@@ -1225,67 +1238,70 @@ const applyTextProperties = async (
 }
 
 /**
- * Write per-point corner radii onto the network Figma just rebuilt.
+ * Write per-point detail onto the network Figma just rebuilt.
  *
  * Two-step and async by necessity: `vector.vectorPaths = …` discards the old
- * network and derives a fresh one from the path data, so the radii can only be
- * stamped afterwards. Everything that can fail here warns and continues — a
- * corner is detail, and losing the node over one is the worse trade (T7).
+ * network and derives a fresh one from the path data, so corner radii and
+ * stroke caps can only be stamped afterwards. Everything that can fail here
+ * warns and continues — this is detail, and losing the node over one corner is
+ * the worse trade (T7).
  *
  * The indices count points within one path, while the network numbers vertices
  * across the node; those agree only for a single-entry vector, which is what
- * the read emits corners for. Several entries are declined out loud rather than
- * applied to whichever corner the flat index happens to land on.
+ * the read emits this detail for. Several entries are declined out loud rather
+ * than applied to whichever point the flat index happens to land on.
  */
-const applyVectorCorners = async (
+const applyVectorPointDetail = async (
   vector: VectorNode,
   paths: readonly (VectorPath & {
     corners?: Record<number, number>
+    caps?: Record<number, string>
   })[],
   warnings?: string[],
 ): Promise<void> => {
-  const carried = paths
-    .map((p) => p.corners)
-    .filter(
-      (c): c is Record<number, number> =>
-        c !== undefined && Object.keys(c).length > 0,
-    )
-  if (carried.length === 0) {
+  const nonEmpty = (
+    m: Record<number, unknown> | undefined,
+  ): boolean => m !== undefined && Object.keys(m).length > 0
+  if (
+    !paths.some((p) => nonEmpty(p.corners) || nonEmpty(p.caps))
+  ) {
     return
   }
   if (paths.length > 1) {
     warnings?.push(
-      'corners ignored: this spec has ' +
+      'per-point detail ignored: this spec has ' +
         String(paths.length) +
         ' paths, and a point index cannot be attributed to one of them — ' +
-        'supply the shape as a single path to round its corners',
+        'supply the shape as a single path to round or cap its points',
     )
     return
   }
-  const corners = carried[0]
   if (
     !('vectorNetwork' in vector) ||
     typeof vector.setVectorNetworkAsync !== 'function'
   ) {
     warnings?.push(
-      'corners ignored: this Figma build exposes no writable vector network — ' +
-        'the shape is correct but its corners stay sharp',
+      'per-point detail ignored: this Figma build exposes no writable vector ' +
+        'network — the shape is correct but its corners stay sharp and its ' +
+        'caps stay as the node-level cap',
     )
     return
   }
   try {
     const network = vector.vectorNetwork
-    const patched = applyCornersToVertices(
-      network.vertices,
-      corners,
-    )
+    const patched = applyPointDetail(network.vertices, {
+      corners: paths[0].corners,
+      caps: paths[0].caps as
+        | Record<number, StrokeCap>
+        | undefined,
+    })
     await vector.setVectorNetworkAsync({
       ...network,
       vertices: patched.vertices,
     })
     if (patched.skipped.length > 0) {
       warnings?.push(
-        'corners skipped at index ' +
+        'per-point detail skipped at index ' +
           patched.skipped.join(', ') +
           ': the path has only ' +
           String(network.vertices.length) +
@@ -1294,7 +1310,7 @@ const applyVectorCorners = async (
     }
   } catch (e) {
     warnings?.push(
-      'corners rejected by Figma: ' + String(e),
+      'per-point detail rejected by Figma: ' + String(e),
     )
   }
 }
@@ -1360,6 +1376,7 @@ const createSingleNode = async (
         // and are written after, because assigning vectorPaths rebuilds it.
         const paths = spec.vectorPaths as (VectorPath & {
           corners?: Record<number, number>
+          caps?: Record<number, string>
         })[]
         try {
           vector.vectorPaths = paths.map(
@@ -1373,7 +1390,7 @@ const createSingleNode = async (
             'vectorPaths rejected by Figma (invalid path data): ' + String(e),
           )
         }
-        await applyVectorCorners(vector, paths, warnings)
+        await applyVectorPointDetail(vector, paths, warnings)
       }
       node = vector
       break

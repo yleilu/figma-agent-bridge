@@ -193,6 +193,38 @@ describe('handleGetNode (rebuilt — NodeSpec)', () => {
     expect(spec.vectorCorners).toBeUndefined()
   })
 
+  it('folds vectorCaps in — the arrow case', async () => {
+    // A line with an arrowhead on one end only. The node-level cap can hold
+    // one value; this is the shape that needs two.
+    const result = await handleGetNode(
+      { nodeId: '5:4', depth: 0 },
+      stubClient({
+        reply: {
+          id: '5:4',
+          name: 'Arrow',
+          type: 'VECTOR',
+          absoluteBoundingBox: {
+            x: 0,
+            y: 0,
+            width: 200,
+            height: 0,
+          },
+          vectorPaths: [
+            { windingRule: 'NONE', data: 'M0 0 L200 0' },
+          ],
+          vectorCaps: { 1: 'ARROW_LINES' },
+        },
+      }),
+    )
+    const spec = YAML.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect((spec.vectorPaths as string[])[0]).toBe(
+      'path(NONE,"M0 0 L200 0"){caps=[1:ARROW_LINES]}',
+    )
+    expect(spec.vectorCaps).toBeUndefined()
+  })
+
   it('warns rather than guessing when a node has several paths', async () => {
     // The indices count points inside one path; the network numbers vertices
     // across the node. With several paths those bases part ways, so the read
