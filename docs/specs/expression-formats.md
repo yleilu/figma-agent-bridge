@@ -273,15 +273,46 @@ Example: `path(NONZERO,"M0 0 L100 0 L100 100 Z")`
 
 Read back on the `vectorPaths` field of a VECTOR node. Write: supply in `create_node`/`update_node` spec as `vectorPaths: [path(...), ...]`.
 
-**A `path()` carries geometry only, and says so when that is not everything.** Figma holds a
-vector two ways: `vectorPaths` — `{windingRule, data}`, which this atom mirrors — and
-`vectorNetwork`, which additionally carries **per-vertex** `strokeCap`, `strokeJoin`,
-`cornerRadius` and `handleMirroring`, plus region structure. Shape round-trips exactly; that extra
-detail cannot be expressed here. A vector authored in this grammar never has any, but one drawn by
-hand or imported from SVG may. When a read finds such detail, it **emits a `warnings[]` entry
-naming the field and what was dropped** — the same honesty channel a `VIDEO` fill uses, and the
-rule already stated for `warnings` above. Silence therefore means nothing was lost, which is what
-makes the field worth reading.
+**Per-point detail rides in the `{…}` channel, sparsely.** Figma holds a vector two ways:
+`vectorPaths` — `{windingRule, data}`, which this atom's head mirrors — and `vectorNetwork`, whose
+vertices additionally carry `cornerRadius`, `strokeCap`, `strokeJoin` and `handleMirroring`. The
+path data alone cannot express any of it, and a vector drawn by hand or imported from SVG commonly
+has it: two corners rounded to different radii is the ordinary case, not an exotic one. Read such a
+node without this channel and the agent gets a shape with sharp corners the file does not have.
+
+Four keys carry it, each an **index-keyed sparse list** — `index:value`, only for the points that
+differ from the default:
+
+| Key | Figma property | Values |
+|---|---|---|
+| `corners=` | `cornerRadius` | a number, e.g. `corners=[0:12, 2:4]` |
+| `caps=` | `strokeCap` | `NONE`/`ROUND`/`SQUARE`/`ARROW_LINES`/`ARROW_EQUILATERAL` |
+| `joins=` | `strokeJoin` | `MITER`/`BEVEL`/`ROUND` |
+| `mirrors=` | `handleMirroring` | `NONE`/`ANGLE`/`ANGLE_AND_LENGTH` |
+
+The index is **zero-based into the path's points**, in the order the `data` string visits them —
+the same basis as `text.runs`' `at:[start,end]`. Sparse because it scales: a 500-point illustration
+with three rounded corners emits three entries, not five hundred (T4, T10). Keeping them **inside
+the atom** rather than in a sibling field is what stops the indices drifting away from the points
+they describe when a path is rewritten.
+
+Emitted only when a point carries something non-default, so a vector authored through this grammar
+has no such keys and an ordinary read is unchanged.
+
+**The absence promise is per-key, not blanket.** A key that is implemented and absent means every
+point is default for that property — that is what makes reading it worth anything. A key that is
+**not yet implemented** says nothing either way, and must be listed here as such rather than left
+to look like a clean read. Shipping a key means the read can be trusted about it; until then the
+honest statement is that we do not know.
+
+**Implemented:** `corners`. **Not yet:** `caps`, `joins`, `mirrors` — a node carrying per-point
+stroke caps, joins or handle mirroring reads back without them and without warning today.
+
+Example — the shape a designer drew with two of four corners rounded, to different radii:
+
+```yaml
+vectorPaths: [path(NONE,"M 0 253 L 430.5 0 L 777 494.5 L 218.5 797 Z"){corners=[0:12, 2:4]}]
+```
 
 Unknown `{…}` keys are ignored on read and only emitted when non-default (T4).
 
