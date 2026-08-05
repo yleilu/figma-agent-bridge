@@ -1235,6 +1235,35 @@ const buildNode = (
   // vectorPaths — VECTOR nodes only; enriched by the plugin's exportNodeDocument.
   const vp = raw.vectorPaths
   if (Array.isArray(vp)) {
+    // Per-point corner radii ride in the atom's {…} channel. The plugin sends
+    // them separately as `vectorCorners` because they live on the network,
+    // which never crosses the wire; folding them in here is what keeps the
+    // indices and the points they count inside one value.
+    //
+    // The indices are into ONE path's points, but the network numbers its
+    // vertices across the whole node. Those agree only while the node has a
+    // single entry — which is the shape Figma emits for an ordinary vector,
+    // subpaths and all, and the shape this was verified against. With several
+    // entries the basis is genuinely unsettled, so say so rather than emit an
+    // index that may point at the wrong corner (T7).
+    const rawCorners = raw.vectorCorners
+    const corners =
+      rawCorners !== undefined &&
+      rawCorners !== null &&
+      typeof rawCorners === 'object'
+        ? (rawCorners as Record<number, number>)
+        : undefined
+    if (corners !== undefined && vp.length > 1) {
+      warnings.push(
+        `vectorPaths: ${
+          Object.keys(corners).length
+        } rounded point(s) omitted — this node has ${
+          vp.length
+        } paths and the point indices cannot be attributed to one of them; the returned vectorPaths show those corners as sharp`,
+      )
+    }
+    const foldable =
+      corners !== undefined && vp.length === 1
     out.vectorPaths = vp.map((p: unknown) => {
       const path = p as {
         windingRule: string
@@ -1246,6 +1275,7 @@ const buildNode = (
           | 'EVENODD'
           | 'NONE',
         data: path.data,
+        ...(foldable ? { corners } : {}),
       })
     })
   }

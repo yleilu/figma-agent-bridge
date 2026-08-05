@@ -291,7 +291,10 @@ differ from the default:
 | `mirrors=` | `handleMirroring` | `NONE`/`ANGLE`/`ANGLE_AND_LENGTH` |
 
 The index is **zero-based into the path's points**, in the order the `data` string visits them —
-the same basis as `text.runs`' `at:[start,end]`. Sparse because it scales: a 500-point illustration
+the same basis as `text.runs`' `at:[start,end]`. A path with several subpaths (more than one `M`)
+keeps one flat sequence: Figma emits all subpaths in a single `data` string, so point 4 of a
+two-subpath shape is simply its fifth point overall. Verified live against a hand-drawn node
+(4 points, 1:1 with the vertex order) and a two-subpath vector (6 points, one entry, 6 vertices). Sparse because it scales: a 500-point illustration
 with three rounded corners emits three entries, not five hundred (T4, T10). Keeping them **inside
 the atom** rather than in a sibling field is what stops the indices drifting away from the points
 they describe when a path is rewritten.
@@ -304,6 +307,14 @@ point is default for that property — that is what makes reading it worth anyth
 **not yet implemented** says nothing either way, and must be listed here as such rather than left
 to look like a clean read. Shipping a key means the read can be trusted about it; until then the
 honest statement is that we do not know.
+
+**One exception, and it is never silent.** The index counts points within one path, while Figma
+numbers a node's vertices across the whole node. Those coincide while `vectorPaths` holds a single
+entry — the shape an ordinary vector has, subpaths and all. A node with several entries reads
+**without the keys and with a warning naming what was dropped**, and a spec written that way is
+declined the same way on write, rather than attaching a radius to whichever corner a flat index
+happens to reach. The promise above therefore holds wherever the keys can be trusted, and where it
+cannot the read says so instead of looking clean.
 
 **Implemented:** `corners`. **Not yet:** `caps`, `joins`, `mirrors` — a node carrying per-point
 stroke caps, joins or handle mirroring reads back without them and without warning today.
