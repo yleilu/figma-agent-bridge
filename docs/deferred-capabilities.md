@@ -76,13 +76,18 @@ network carries vertices with **per-point `strokeCap`, `strokeJoin`, `cornerRadi
 question this entry was really blocked on: the `{…}` channel carries per-point detail as an
 **index-keyed sparse list** (`corners=[1:10,2:20]`, `caps=[1:ARROW_LINES]`), so no struct grammar
 was needed. `handleMirroring` was **dropped from the spec** rather than deferred — it is editor
-state that changes nothing rendered. `joins=` is specced and unbuilt, a mechanical repeat of the
-caps work, and left that way deliberately: a stroke join that varies point to point is rare
-hand-work and the node-level `join=` covers the rest.
+state that changes nothing rendered.
+**`joins=` was attempted 2026-08-05 and is blocked by a Figma runtime defect.** Setting a
+non-default per-vertex `strokeJoin` through `setVectorNetworkAsync` leaves a node `exportAsync`
+never returns for — `get_node` hangs to timeout and the node is unreadable. Reproducible and
+specific: `MITER` is a harmless no-op, `BEVEL` and `ROUND` both hang, and `corners`/`caps` written
+at the same point read back instantly. Nothing else creates such a node either — Figma's UI has no
+per-point join control and its SVG importer maps `stroke-linejoin` onto the node, splitting
+differing joins into separate VECTORs. The implementation was written, verified broken, and
+dropped; the spec now records the blocker.
 **What genuinely remains open is region structure**, which has no index basis and no designed form.
-**Blocker:** none for `joins=` — it is unbuilt, not blocked, which by this file's own test makes it
-backlog rather than deferred; it stays noted here only because it shares a spec section with the
-shipped keys and the absence promise there must move with it.
+**Blocker:** for `joins=`, Figma's export hang — recheck on a future Figma build before rebuilding
+it, and note that even fixed it has no real-world source today.
 
 ### Distribution & publishing (surfaced 2026-07-10 — dev-ops workflow design)
 

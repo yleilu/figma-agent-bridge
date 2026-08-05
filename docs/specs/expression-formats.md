@@ -333,9 +333,18 @@ declined the same way on write, rather than attaching a radius to whichever corn
 happens to reach. The promise above therefore holds wherever the keys can be trusted, and where it
 cannot the read says so instead of looking clean.
 
-**Implemented:** `corners`, `caps`. **Not yet:** `joins` — a node whose points carry differing
-stroke joins reads back without them and without warning. A join that varies point to point is
-rare hand-work, and the node-level `join=` covers the case that is not.
+**Implemented:** `corners`, `caps`. **Not implemented:** `joins`, and not for want of trying —
+**Figma cannot currently hold one.** Setting a non-default `strokeJoin` on a vertex through
+`setVectorNetworkAsync` leaves a node that `exportAsync` never returns for: the read hangs until it
+times out, and the node becomes unreadable. Verified live, reproducibly, and specific to this one
+property — `MITER` (the default) is a harmless no-op, while `BEVEL` and `ROUND` both hang, and
+`corners`/`caps` written at the same point read back instantly.
+
+Nothing else produces such a node either: Figma's own UI offers no per-point join control, and its
+SVG importer maps `stroke-linejoin` onto the node, splitting differing joins into separate VECTORs
+rather than differing vertices. So the key stays specced and unbuilt — writing it would trade a
+readable node for a corner detail, and there is no node in the wild that needs reading. The
+node-level `join=` in `stroke()` carries every case that actually arises.
 
 Example — the shape a designer drew with two of four corners rounded, to different radii:
 
