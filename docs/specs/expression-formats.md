@@ -176,8 +176,15 @@ stroke([2,0,2,0])          # per-side weights [top,right,bottom,left]
 ```
 
 - Positional = uniform weight (a number) **or** a `[t,r,b,l]` tuple for per-side.
-- **`{…}` keys:** `align=` (CENTER/INSIDE/OUTSIDE), `cap=`, `join=`, `miter=`,
-  `dash=[…]` (arbitrary-length dash pattern).
+- **`{…}` keys:** `align=` (CENTER/INSIDE/OUTSIDE),
+  `cap=` (NONE/ROUND/SQUARE/ARROW_LINES/ARROW_EQUILATERAL), `join=` (MITER/BEVEL/ROUND),
+  `miter=`, `dash=[…]` (arbitrary-length dash pattern).
+
+**One vocabulary, and it is the Plugin API's.** Figma names two cap values differently in its REST
+export — `LINE_ARROW` and `TRIANGLE_ARROW` for what the Plugin API calls `ARROW_LINES` and
+`ARROW_EQUILATERAL`. Reads normalize to the Plugin API spelling, because that is the only spelling
+writes accept: handing back REST's would return a value this same grammar rejects, and an arrow is
+the commonest cap there is (T2, T8).
 
 ### Geometry literals & tuples
 
@@ -275,29 +282,39 @@ Read back on the `vectorPaths` field of a VECTOR node. Write: supply in `create_
 
 **Per-point detail rides in the `{…}` channel, sparsely.** Figma holds a vector two ways:
 `vectorPaths` — `{windingRule, data}`, which this atom's head mirrors — and `vectorNetwork`, whose
-vertices additionally carry `cornerRadius`, `strokeCap`, `strokeJoin` and `handleMirroring`. The
-path data alone cannot express any of it, and a vector drawn by hand or imported from SVG commonly
-has it: two corners rounded to different radii is the ordinary case, not an exotic one. Read such a
-node without this channel and the agent gets a shape with sharp corners the file does not have.
+vertices additionally carry `cornerRadius`, `strokeCap` and `strokeJoin`. The path data alone
+cannot express any of it, and a vector drawn by hand or imported from SVG commonly has it: two
+corners rounded to different radii, or an arrowhead on one end of a line and nothing on the other.
+Read such a node without this channel and the agent gets a shape the file does not have — sharp
+where it is round, blunt where it points.
 
-Four keys carry it, each an **index-keyed sparse list** — `index:value`, only for the points that
-differ from the default:
+Three keys carry it, each an **index-keyed sparse list** — `index:value`, only for the points that
+differ from the node-level default:
 
 | Key | Figma property | Values |
 |---|---|---|
-| `corners=` | `cornerRadius` | a number, e.g. `corners=[0:12, 2:4]` |
+| `corners=` | `cornerRadius` | a number, e.g. `corners=[0:12,2:4]` |
 | `caps=` | `strokeCap` | `NONE`/`ROUND`/`SQUARE`/`ARROW_LINES`/`ARROW_EQUILATERAL` |
 | `joins=` | `strokeJoin` | `MITER`/`BEVEL`/`ROUND` |
-| `mirrors=` | `handleMirroring` | `NONE`/`ANGLE`/`ANGLE_AND_LENGTH` |
+
+Each has a node-level twin in `stroke()`, which is where a value shared by every point belongs;
+these keys are for the points that disagree with it. `caps=` is the one that earns its keep — an
+arrowhead is a stroke cap, so a line pointing one way needs two different caps and the node-level
+field cannot hold both.
+
+**`handleMirroring` is deliberately absent.** It decides how Figma's pen tool moves the opposite
+handle while a human drags one — it changes nothing rendered, since the curve is fully determined
+by handle positions the `data` string already carries losslessly. It is editor state, not design
+state, and a key that cannot change what anyone sees is not worth a place in the grammar.
 
 The index is **zero-based into the path's points**, in the order the `data` string visits them —
 the same basis as `text.runs`' `at:[start,end]`. A path with several subpaths (more than one `M`)
 keeps one flat sequence: Figma emits all subpaths in a single `data` string, so point 4 of a
 two-subpath shape is simply its fifth point overall. Verified live against a hand-drawn node
-(4 points, 1:1 with the vertex order) and a two-subpath vector (6 points, one entry, 6 vertices). Sparse because it scales: a 500-point illustration
-with three rounded corners emits three entries, not five hundred (T4, T10). Keeping them **inside
-the atom** rather than in a sibling field is what stops the indices drifting away from the points
-they describe when a path is rewritten.
+(4 points, 1:1 with the vertex order) and a two-subpath vector (6 points, one entry, 6 vertices).
+Sparse because it scales: a 500-point illustration with three rounded corners emits three entries,
+not five hundred (T4, T10). Keeping them **inside the atom** rather than in a sibling field is what
+stops the indices drifting away from the points they describe when a path is rewritten.
 
 Emitted only when a point carries something non-default, so a vector authored through this grammar
 has no such keys and an ordinary read is unchanged.
@@ -316,13 +333,14 @@ declined the same way on write, rather than attaching a radius to whichever corn
 happens to reach. The promise above therefore holds wherever the keys can be trusted, and where it
 cannot the read says so instead of looking clean.
 
-**Implemented:** `corners`. **Not yet:** `caps`, `joins`, `mirrors` — a node carrying per-point
-stroke caps, joins or handle mirroring reads back without them and without warning today.
+**Implemented:** `corners`, `caps`. **Not yet:** `joins` — a node whose points carry differing
+stroke joins reads back without them and without warning. A join that varies point to point is
+rare hand-work, and the node-level `join=` covers the case that is not.
 
 Example — the shape a designer drew with two of four corners rounded, to different radii:
 
 ```yaml
-vectorPaths: [path(NONE,"M 0 253 L 430.5 0 L 777 494.5 L 218.5 797 Z"){corners=[0:12, 2:4]}]
+vectorPaths: [path(NONE,"M 0 253 L 430.5 0 L 777 494.5 L 218.5 797 Z"){corners=[0:12,2:4]}]
 ```
 
 Unknown `{…}` keys are ignored on read and only emitted when non-default (T4).

@@ -192,3 +192,52 @@ describe('path atom — per-point corners', () => {
     ).toEqual({ 1: 5 })
   })
 })
+
+describe('path() — per-point stroke caps', () => {
+  it('parses a sparse cap list', () => {
+    expect(
+      atomToPath(
+        'path(NONE,"M 0 0 L 200 0"){caps=[1:ARROW_LINES]}',
+      ).caps,
+    ).toEqual({ 1: 'ARROW_LINES' })
+  })
+
+  it('renders one, sorted and quoted like the rest', () => {
+    expect(
+      pathToAtom({
+        windingRule: 'NONE',
+        data: 'M 0 0 L 200 0',
+        caps: { 1: 'ARROW_LINES', 0: 'ROUND' },
+      }),
+    ).toBe(
+      'path(NONE,"M 0 0 L 200 0"){caps=[0:ROUND,1:ARROW_LINES]}',
+    )
+  })
+
+  it('carries corners and caps together', () => {
+    // Attrs are separated by ", " and array items by "," — renderAtom's
+    // existing convention, same as dash=[4,4].
+    const atom =
+      'path(NONE,"M 0 0 L 10 0 L 10 10 Z"){corners=[1:4], caps=[2:SQUARE]}'
+    const parsed = atomToPath(atom)
+    expect(parsed.corners).toEqual({ 1: 4 })
+    expect(parsed.caps).toEqual({ 2: 'SQUARE' })
+    expect(pathToAtom(parsed)).toBe(atom)
+  })
+
+  // REST's LINE_ARROW is normalized upstream in the reader; anything that
+  // reaches the grammar and is still not a Plugin API cap is not a cap.
+  it('drops a value that is not a Plugin API StrokeCap', () => {
+    expect(
+      atomToPath(
+        'path(NONE,"M 0 0 Z"){caps=[0:LINE_ARROW, 1:ROUND]}',
+      ).caps,
+    ).toEqual({ 1: 'ROUND' })
+  })
+
+  it('has no caps key when the attr is absent', () => {
+    expect(
+      atomToPath('path(NONE,"M 0 0 Z")').caps,
+    ).toBeUndefined()
+  })
+})

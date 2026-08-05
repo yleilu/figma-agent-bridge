@@ -72,16 +72,17 @@ what a `VectorNetwork` holds *besides* the path string — it is only `{windingR
 network carries vertices with **per-point `strokeCap`, `strokeJoin`, `cornerRadius` and
 `handleMirroring`**, plus regions. The loss is per-point styling, not shape, and it bites vectors
 **authored elsewhere** — drawn by hand, imported from SVG.
-**`cornerRadius` is now shipped** (see below), and shipping it settled the question this entry was
-really blocked on: the `{…}` channel carries per-point detail as an **index-keyed sparse list**
-(`corners=[1:10, 2:20]`), so no struct grammar was needed and none is needed for the three
-remaining keys. `caps=`, `joins=` and `mirrors=` are already specced in `expression-formats.md`
-with the same shape and listed there as not yet implemented; each is now a mechanical repeat of the
-corners work — read from the network, fold into the atom, stamp back via `setVectorNetworkAsync`.
+**`cornerRadius` and `strokeCap` are now shipped** (see below), and shipping them settled the
+question this entry was really blocked on: the `{…}` channel carries per-point detail as an
+**index-keyed sparse list** (`corners=[1:10,2:20]`, `caps=[1:ARROW_LINES]`), so no struct grammar
+was needed. `handleMirroring` was **dropped from the spec** rather than deferred — it is editor
+state that changes nothing rendered. `joins=` is specced and unbuilt, a mechanical repeat of the
+caps work, and left that way deliberately: a stroke join that varies point to point is rare
+hand-work and the node-level `join=` covers the rest.
 **What genuinely remains open is region structure**, which has no index basis and no designed form.
-**Blocker:** the three per-point keys are unblocked and merely unbuilt, which by this file's own
-test makes them backlog, not deferred — they stay noted here only because they share a spec section
-with the shipped key and the absence promise there must move with them.
+**Blocker:** none for `joins=` — it is unbuilt, not blocked, which by this file's own test makes it
+backlog rather than deferred; it stays noted here only because it shares a spec section with the
+shipped keys and the absence promise there must move with it.
 
 ### Distribution & publishing (surfaced 2026-07-10 — dev-ops workflow design)
 
@@ -142,7 +143,8 @@ Built and merged as part of the M-items build; they arose from the same spec-com
 
 | Capability | Merged sha | Notes |
 | ---------- | ---------- | ----- |
-| **Per-point `cornerRadius` on a VECTOR — read and write** | `a0c1909` | A hand-drawn shape's rounded corners used to flatten to sharp ones with nothing said. They now ride in the `path()` atom's `{…}` channel as an index-keyed sparse list (`corners=[1:10, 2:20]`), read from the network and written back through `setVectorNetworkAsync`. Live-verified both directions against a hand-drawn node. Settled the design question this file called a blocker: per-point detail needs **no struct grammar**. |
+| **Per-point `cornerRadius` on a VECTOR — read and write** | `a0c1909` | A hand-drawn shape's rounded corners used to flatten to sharp ones with nothing said. They now ride in the `path()` atom's `{…}` channel as an index-keyed sparse list (`corners=[1:10,2:20]`), read from the network and written back through `setVectorNetworkAsync`. Live-verified both directions against a hand-drawn node. Settled the design question this file called a blocker: per-point detail needs **no struct grammar**. |
+| **Per-point `strokeCap` — read and write; and the arrow-cap name bug** | _this cycle_ | An arrowhead is a stroke cap, so a line pointing one way needs a different cap at each end and the node-level field can hold only one. `caps=[1:ARROW_LINES]`, same sparse basis. Sparse here means *differs from the node's cap* — Figma stamps its node value onto every vertex, so comparing against NONE would have put `caps=[0:ROUND,1:ROUND]` on every stroked vector. Also fixed a **silent T2 break**: REST exports the two arrow caps as `LINE_ARROW`/`TRIANGLE_ARROW`, the Plugin API accepts only `ARROW_LINES`/`ARROW_EQUILATERAL`, so `get_node` on any arrow returned a spec `create_node` rejected. Reads normalize now. All live-verified. |
 
 ## Bug notes that this file carried until they were fixed
 
