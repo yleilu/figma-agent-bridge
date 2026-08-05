@@ -1210,6 +1210,43 @@ describe('toNodeSpec — stroke cap/join/miter read-back', () => {
     expect(spec.stroke).toBe('stroke(2){cap=ROUND}')
   })
 
+  // Figma spells the two arrow caps one way in a REST export and another in the
+  // Plugin API. A read that passes REST's name through returns a spec the very
+  // next create_node rejects — verified live against Figma before this existed.
+  it.each([
+    ['LINE_ARROW', 'ARROW_LINES'],
+    ['TRIANGLE_ARROW', 'ARROW_EQUILATERAL'],
+  ])(
+    'rewrites REST cap %s to the writable %s',
+    (rest, plugin) => {
+      const spec = toNodeSpec(
+        {
+          id: '2:1a',
+          type: 'VECTOR',
+          strokeWeight: 2,
+          strokeCap: rest,
+        } as never,
+        { depth: 0 },
+      )
+      expect(spec.stroke).toBe(`stroke(2){cap=${plugin}}`)
+    },
+  )
+
+  it('leaves a cap that already has one spelling alone', () => {
+    for (const cap of ['ROUND', 'SQUARE']) {
+      const spec = toNodeSpec(
+        {
+          id: '2:1b',
+          type: 'VECTOR',
+          strokeWeight: 2,
+          strokeCap: cap,
+        } as never,
+        { depth: 0 },
+      )
+      expect(spec.stroke).toBe(`stroke(2){cap=${cap}}`)
+    }
+  })
+
   it('omits cap when strokeCap is the Figma default NONE', () => {
     const spec = toNodeSpec(
       {

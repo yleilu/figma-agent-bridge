@@ -577,6 +577,33 @@ const effectArray = (
 
 // ─── stroke geometry ──────────────────────────────────────────────────────────
 
+/**
+ * REST's spelling of the two arrow caps → the Plugin API's.
+ *
+ * Figma calls the same cap `LINE_ARROW` in a JSON_REST_V1 export and
+ * `ARROW_LINES` in the Plugin API, and likewise `TRIANGLE_ARROW` /
+ * `ARROW_EQUILATERAL`. The export is what a read sees and the Plugin API is
+ * what a write must supply, so emitting REST's name hands the agent a value
+ * that its own next call rejects — verified live: create_node answers
+ * "Invalid enum value. Expected 'NONE' | 'ROUND' | 'SQUARE' | 'ARROW_LINES' |
+ * 'ARROW_EQUILATERAL'". expression-formats.md fixes one vocabulary, the Plugin
+ * API's, because only that one writes (T2, T8).
+ *
+ * Per-point caps need no such mapping: they come off `vectorNetwork` through
+ * the plugin, which speaks the Plugin API already.
+ */
+const REST_STROKE_CAP: Record<string, string> = {
+  LINE_ARROW: 'ARROW_LINES',
+  TRIANGLE_ARROW: 'ARROW_EQUILATERAL',
+}
+
+const pluginStrokeCap = (
+  cap: string | undefined,
+): string | undefined =>
+  cap === undefined
+    ? undefined
+    : (REST_STROKE_CAP[cap] ?? cap)
+
 /** REST's per-side positional keys under `individualStrokeWeights`. */
 const STROKE_WEIGHT_BOUND_KEYS = [
   'BORDER_TOP_WEIGHT',
@@ -613,7 +640,7 @@ const strokeGeom = (
   // Eliding a default is lossless for the round-trip (T2): the writer then
   // sends nothing for that key and Figma keeps the same default, so the node
   // is unchanged. Only a NON-default value has to survive, and it still does.
-  const cap = str(raw.strokeCap)
+  const cap = pluginStrokeCap(str(raw.strokeCap))
   if (cap !== undefined && cap !== 'NONE') {
     geom.cap = cap
   }
@@ -1235,35 +1262,42 @@ const buildNode = (
   // vectorPaths — VECTOR nodes only; enriched by the plugin's exportNodeDocument.
   const vp = raw.vectorPaths
   if (Array.isArray(vp)) {
-    // Per-point corner radii ride in the atom's {…} channel. The plugin sends
-    // them separately as `vectorCorners` because they live on the network,
-    // which never crosses the wire; folding them in here is what keeps the
-    // indices and the points they count inside one value.
+    // Per-point detail rides in the atom's {…} channel. The plugin sends it
+    // separately — `vectorCorners`, `vectorCaps` — because it lives on the
+    // network, which never crosses the wire; folding it in here is what keeps
+    // the indices and the points they count inside one value.
     //
     // The indices are into ONE path's points, but the network numbers its
     // vertices across the whole node. Those agree only while the node has a
     // single entry — which is the shape Figma emits for an ordinary vector,
     // subpaths and all, and the shape this was verified against. With several
     // entries the basis is genuinely unsettled, so say so rather than emit an
-    // index that may point at the wrong corner (T7).
-    const rawCorners = raw.vectorCorners
-    const corners =
-      rawCorners !== undefined &&
-      rawCorners !== null &&
-      typeof rawCorners === 'object'
-        ? (rawCorners as Record<number, number>)
+    // index that may point at the wrong point (T7).
+    const sparseDetail = <T>(
+      value: unknown,
+    ): Record<number, T> | undefined => {
+      const usable =
+        value !== undefined &&
+        value !== null &&
+        typeof value === 'object'
+      return usable
+        ? (value as Record<number, T>)
         : undefined
-    if (corners !== undefined && vp.length > 1) {
+    }
+    const corners = sparseDetail<number>(raw.vectorCorners)
+    const caps = sparseDetail<string>(raw.vectorCaps)
+    const dropped = [
+      ...Object.keys(corners ?? {}),
+      ...Object.keys(caps ?? {}),
+    ].length
+    if (dropped > 0 && vp.length > 1) {
       warnings.push(
-        `vectorPaths: ${
-          Object.keys(corners).length
-        } rounded point(s) omitted — this node has ${
+        `vectorPaths: per-point detail on ${dropped} point(s) omitted — this node has ${
           vp.length
-        } paths and the point indices cannot be attributed to one of them; the returned vectorPaths show those corners as sharp`,
+        } paths and the point indices cannot be attributed to one of them; the returned vectorPaths show those points as unstyled`,
       )
     }
-    const foldable =
-      corners !== undefined && vp.length === 1
+    const foldable = vp.length === 1
     out.vectorPaths = vp.map((p: unknown) => {
       const path = p as {
         windingRule: string
@@ -1275,7 +1309,10 @@ const buildNode = (
           | 'EVENODD'
           | 'NONE',
         data: path.data,
-        ...(foldable ? { corners } : {}),
+        ...(foldable && corners !== undefined
+          ? { corners }
+          : {}),
+        ...(foldable && caps !== undefined ? { caps } : {}),
       })
     })
   }
