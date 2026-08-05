@@ -3,6 +3,10 @@ import { COMMANDS, CONTEXT_NS, CONTEXT_KEY } from '@figma-agent-bridge/shared'
 import { applyLayout, type AppliedLayout } from './apply-layout'
 import { importComponentByKeyWithDeadline } from './import-by-key'
 import {
+  applyCornersToVertices,
+  cornersFromNetwork,
+} from './vector-corners'
+import {
   applyStrokeGeometry,
   applyExportSettings,
   applyGrids,
@@ -346,6 +350,20 @@ const exportNodeDocument = async (
     applyContexts(doc, contexts)
     if (node.type === 'VECTOR' && 'vectorPaths' in node) {
       doc.vectorPaths = (node as VectorNode).vectorPaths
+      // Per-point corner radii live on the NETWORK, which vectorPaths cannot
+      // express — without this a hand-drawn shape reads back with sharp
+      // corners the file does not have. Only the radii are sent, sparsely;
+      // the network itself is unbounded and stays put (T10). Feature-detected
+      // like the vectorPaths guard beside it.
+      if ('vectorNetwork' in node) {
+        const corners = cornersFromNetwork(
+          (node as VectorNode).vectorNetwork,
+        )
+        if (corners !== undefined) {
+          ;(doc as Record<string, unknown>).vectorCorners =
+            corners
+        }
+      }
     }
     // width / height — JSON_REST_V1 omits unrotated width/height, emitting only
     // absoluteBoundingBox which is the AXIS-ALIGNED bbox (inflated when rotated).
@@ -1206,6 +1224,81 @@ const applyTextProperties = async (
   }
 }
 
+/**
+ * Write per-point corner radii onto the network Figma just rebuilt.
+ *
+ * Two-step and async by necessity: `vector.vectorPaths = …` discards the old
+ * network and derives a fresh one from the path data, so the radii can only be
+ * stamped afterwards. Everything that can fail here warns and continues — a
+ * corner is detail, and losing the node over one is the worse trade (T7).
+ *
+ * The indices count points within one path, while the network numbers vertices
+ * across the node; those agree only for a single-entry vector, which is what
+ * the read emits corners for. Several entries are declined out loud rather than
+ * applied to whichever corner the flat index happens to land on.
+ */
+const applyVectorCorners = async (
+  vector: VectorNode,
+  paths: readonly (VectorPath & {
+    corners?: Record<number, number>
+  })[],
+  warnings?: string[],
+): Promise<void> => {
+  const carried = paths
+    .map((p) => p.corners)
+    .filter(
+      (c): c is Record<number, number> =>
+        c !== undefined && Object.keys(c).length > 0,
+    )
+  if (carried.length === 0) {
+    return
+  }
+  if (paths.length > 1) {
+    warnings?.push(
+      'corners ignored: this spec has ' +
+        String(paths.length) +
+        ' paths, and a point index cannot be attributed to one of them — ' +
+        'supply the shape as a single path to round its corners',
+    )
+    return
+  }
+  const corners = carried[0]
+  if (
+    !('vectorNetwork' in vector) ||
+    typeof vector.setVectorNetworkAsync !== 'function'
+  ) {
+    warnings?.push(
+      'corners ignored: this Figma build exposes no writable vector network — ' +
+        'the shape is correct but its corners stay sharp',
+    )
+    return
+  }
+  try {
+    const network = vector.vectorNetwork
+    const patched = applyCornersToVertices(
+      network.vertices,
+      corners,
+    )
+    await vector.setVectorNetworkAsync({
+      ...network,
+      vertices: patched.vertices,
+    })
+    if (patched.skipped.length > 0) {
+      warnings?.push(
+        'corners skipped at index ' +
+          patched.skipped.join(', ') +
+          ': the path has only ' +
+          String(network.vertices.length) +
+          ' points',
+      )
+    }
+  } catch (e) {
+    warnings?.push(
+      'corners rejected by Figma: ' + String(e),
+    )
+  }
+}
+
 const createSingleNode = async (
   spec: Record<string, unknown>,
   parent: ParentNode,
@@ -1262,13 +1355,25 @@ const createSingleNode = async (
     case 'VECTOR': {
       const vector = figma.createVector()
       if ('vectorPaths' in vector && spec.vectorPaths !== undefined) {
+        // The server hands each path over as {windingRule, data, corners?}.
+        // Only the first two are Figma's shape; the radii live on the network
+        // and are written after, because assigning vectorPaths rebuilds it.
+        const paths = spec.vectorPaths as (VectorPath & {
+          corners?: Record<number, number>
+        })[]
         try {
-          vector.vectorPaths = spec.vectorPaths as VectorPath[]
+          vector.vectorPaths = paths.map(
+            ({ windingRule, data }) => ({
+              windingRule,
+              data,
+            }),
+          )
         } catch (e) {
           warnings?.push(
             'vectorPaths rejected by Figma (invalid path data): ' + String(e),
           )
         }
+        await applyVectorCorners(vector, paths, warnings)
       }
       node = vector
       break

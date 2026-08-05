@@ -23,6 +23,18 @@ import { renderAtom } from '../render-atom'
 export type FigmaVectorPath = {
   windingRule: 'NONZERO' | 'EVENODD' | 'NONE'
   data: string
+  /**
+   * Per-point corner radii, SPARSE and keyed by point index — the order the
+   * `data` string visits its points, subpaths included (verified live: a
+   * vertex's position in Figma's network is that same order, and several
+   * subpaths stay one flat sequence in one `data` string).
+   *
+   * Sparse because it has to scale: a 500-point illustration with three
+   * rounded corners carries three entries, not five hundred (T4, T10). Absent
+   * entirely when no point is rounded — which is every vector this grammar
+   * authors, so an ordinary read is unchanged.
+   */
+  corners?: Record<number, number>
 }
 
 type WindingRule = FigmaVectorPath['windingRule']
@@ -84,7 +96,30 @@ export const atomToPath = (s: string): FigmaVectorPath => {
   const data: string =
     typeof dataRaw === 'string' ? unquote(dataRaw) : ''
 
-  return { windingRule, data }
+  // {corners=[1:10, 2:20]} — index:radius pairs. The tokenizer already reads
+  // each `1:10` as one array element (no new grammar), so this head only has
+  // to split it. A malformed entry is skipped, never thrown: a read must not
+  // die mid-serialization because one pair was odd.
+  const corners: Record<number, number> = {}
+  const rawCorners = ast.attrs?.corners
+  if (Array.isArray(rawCorners)) {
+    for (const entry of rawCorners) {
+      const [i, v] = String(entry).split(':')
+      const idx = Number(i)
+      const radius = Number(v)
+      if (
+        Number.isInteger(idx) &&
+        idx >= 0 &&
+        Number.isFinite(radius)
+      ) {
+        corners[idx] = radius
+      }
+    }
+  }
+
+  return Object.keys(corners).length > 0
+    ? { windingRule, data, corners }
+    : { windingRule, data }
 }
 
 /**
@@ -112,10 +147,25 @@ export const pathToAtom = (p: FigmaVectorPath): string => {
       value: `"${normalizePathData(p.data)}"`,
     },
   ]
+  // Sorted so the rendered atom is deterministic; emitted only when a point
+  // is actually rounded, so the common case renders exactly as before.
+  const entries = Object.entries(p.corners ?? {})
+    .map(([i, v]) => [Number(i), v] as const)
+    .filter(
+      ([i, v]) => Number.isFinite(i) && Number.isFinite(v),
+    )
+    .sort((a, b) => a[0] - b[0])
   const ast: AtomAST = {
     kind: 'head',
     head: 'path',
     args,
+    ...(entries.length > 0
+      ? {
+          attrs: {
+            corners: entries.map(([i, v]) => `${i}:${v}`),
+          },
+        }
+      : {}),
   }
   return renderAtom(ast)
 }

@@ -154,4 +154,87 @@ describe('handleGetNode (rebuilt — NodeSpec)', () => {
     expect(Array.isArray(vp)).toBe(true)
     expect(vp[0]).toBe('path(NONZERO,"M0 0 L10 0 Z")')
   })
+
+  it("folds the plugin's vectorCorners into the path atom", async () => {
+    // A hand-drawn shape: four points, the middle two rounded to different
+    // radii. Those radii live on the network, which never crosses the wire —
+    // the plugin sends them separately and the reader folds them back in, so
+    // the index and the points it counts stay inside one value.
+    const result = await handleGetNode(
+      { nodeId: '5:2', depth: 0 },
+      stubClient({
+        reply: {
+          id: '5:2',
+          name: 'Rounded quad',
+          type: 'VECTOR',
+          absoluteBoundingBox: {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+          },
+          vectorPaths: [
+            {
+              windingRule: 'NONZERO',
+              data: 'M0 0 L10 0 L10 10 L0 10 Z',
+            },
+          ],
+          vectorCorners: { 1: 10, 2: 20 },
+        },
+      }),
+    )
+    const spec = YAML.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect((spec.vectorPaths as string[])[0]).toBe(
+      'path(NONZERO,"M0 0 L10 0 L10 10 L0 10 Z"){corners=[1:10,2:20]}',
+    )
+    // The transport field is an input to the atom, never a field of its own.
+    expect(spec.vectorCorners).toBeUndefined()
+  })
+
+  it('warns rather than guessing when a node has several paths', async () => {
+    // The indices count points inside one path; the network numbers vertices
+    // across the node. With several paths those bases part ways, so the read
+    // says what it dropped instead of pointing at a corner it cannot name.
+    const result = await handleGetNode(
+      { nodeId: '5:3', depth: 0 },
+      stubClient({
+        reply: {
+          id: '5:3',
+          name: 'Two paths',
+          type: 'VECTOR',
+          absoluteBoundingBox: {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+          },
+          vectorPaths: [
+            {
+              windingRule: 'NONZERO',
+              data: 'M0 0 L10 0 Z',
+            },
+            {
+              windingRule: 'EVENODD',
+              data: 'M20 0 L30 0 Z',
+            },
+          ],
+          vectorCorners: { 1: 10 },
+        },
+      }),
+    )
+    const spec = YAML.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    const paths = spec.vectorPaths as string[]
+    expect(paths.every(p => !p.includes('corners'))).toBe(
+      true,
+    )
+    expect(
+      (spec.warnings as string[]).some(
+        w => w.includes('vectorPaths') && w.includes('2'),
+      ),
+    ).toBe(true)
+  })
 })
