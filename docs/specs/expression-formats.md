@@ -273,6 +273,16 @@ Example: `path(NONZERO,"M0 0 L100 0 L100 100 Z")`
 
 Read back on the `vectorPaths` field of a VECTOR node. Write: supply in `create_node`/`update_node` spec as `vectorPaths: [path(...), ...]`.
 
+**A `path()` carries geometry only, and says so when that is not everything.** Figma holds a
+vector two ways: `vectorPaths` — `{windingRule, data}`, which this atom mirrors — and
+`vectorNetwork`, which additionally carries **per-vertex** `strokeCap`, `strokeJoin`,
+`cornerRadius` and `handleMirroring`, plus region structure. Shape round-trips exactly; that extra
+detail cannot be expressed here. A vector authored in this grammar never has any, but one drawn by
+hand or imported from SVG may. When a read finds such detail, it **emits a `warnings[]` entry
+naming the field and what was dropped** — the same honesty channel a `VIDEO` fill uses, and the
+rule already stated for `warnings` above. Silence therefore means nothing was lost, which is what
+makes the field worth reading.
+
 Unknown `{…}` keys are ignored on read and only emitted when non-default (T4).
 
 ## Worked example (inspect view of one node)
