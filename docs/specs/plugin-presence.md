@@ -356,8 +356,8 @@ Figma / Claude Code facts that shape this design:
   presence over HTTP (`GET /channels`) and the pending count via the on-disk mirror — never the server's
   in-memory buffers. This is why records stay in `pull_changes` and only the count is surfaced.
 - **`/channels` is HTTP on the relay's port.** A shell hook reads it with a plain request. The hook uses
-  the **default `18080`**, overridable by an explicit env var — it does **not** run the server's runtime
-  ping/pong port-discovery, so the port is a fixed default/override, not discovered.
+  the **default `18080`**, overridable by an explicit env var — the same default-plus-override the server
+  uses ([[figma-bridge/docs/specs/overview|overview.md]] owns the relay address).
 - **The hook cannot import TypeScript.** The count-file path is computed by a shared TS function on the
   writing side and by a shell expression here, so the two are held together by a checked-in fixture over
   an ASCII alphabet rather than by a shared module (Reading the count files). A drift would silently

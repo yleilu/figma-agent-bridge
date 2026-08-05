@@ -7,6 +7,13 @@ const MAX_LINES = 400
 const RELAX =
   /\b(?:skip|relax|disabl|ignor|bypass|suppress|omit|forego|forgo|avoid|leave out|no need to|don'?t (?:run|do|bother)|never (?:run|verify))\w*[^.\n]{0,40}\b(?:verif|read-?back|safety|destructiv|delete)/i
 
+// The a11y default is a PREFERENCE, so the relax scan ignores it (§6). This positive assertion
+// guards it instead: the shipped template must still carry its WCAG AA thresholds.
+const A11Y_DEFAULTS: [string, RegExp][] = [
+  ['normal-text contrast 4.5:1', /4\.5:1/],
+  ['touch-target minimum 44', /\b44\b/],
+]
+
 export type TFile = { path: string; content: string }
 
 // Meta-statements ABOUT the floor (the sentinel comment + frontmatter) must not trip the relax scan.
@@ -29,6 +36,24 @@ export function lintTemplateFiles(
     v.push(
       'missing SKILL.md.tmpl (the template skill file, renamed to SKILL.md on copy)',
     )
+  }
+  const standards = files.find(
+    f =>
+      f.path === 'references/review-standards.md' ||
+      f.path.endsWith('/references/review-standards.md'),
+  )
+  if (!standards) {
+    v.push(
+      'missing references/review-standards.md (it ships the WCAG AA accessibility default)',
+    )
+  } else {
+    for (const [what, re] of A11Y_DEFAULTS) {
+      if (!re.test(standards.content)) {
+        v.push(
+          `${standards.path}: no longer ships the WCAG AA accessibility default (${what})`,
+        )
+      }
+    }
   }
   for (const f of files) {
     const m = f.content.match(/^---\n([\s\S]*?)\n---/)

@@ -24,7 +24,11 @@ const SPACED_HEADS = new Set([
   'diamond',
 ])
 
-const renderWrapper = (w?: Wrapper): string =>
+// Exported so the read-face reader (node-spec-reader.ts) can wrap a
+// binding-carrying leaf through the ONE grammar renderer instead of
+// hand-concatenating `${kind}(${name})` itself (T8 — one grammar, both
+// faces). Do not change its behaviour when exporting.
+export const renderWrapper = (w?: Wrapper): string =>
   w === undefined ? '' : `${w.kind}(${w.name})`
 
 const renderScalar = (

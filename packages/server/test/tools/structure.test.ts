@@ -26,6 +26,7 @@ import {
 import {
   handleDeleteNode,
   handleSetFocus,
+  handleReparentNode,
 } from '@figma-agent-bridge/server/tools/structure'
 import { withFile } from '@figma-agent-bridge/server/tools/with-file'
 import { createMockPlugin } from '../mocks/mock-plugin'
@@ -89,10 +90,12 @@ describe('handleDeleteNode', () => {
         reply: { error: 'Node not found: nope' },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'Node not found',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Node not found')
+    expect(data.code).toBe('NODE_NOT_FOUND')
   })
 
   it('returns failure text on a null reply', async () => {
@@ -100,9 +103,10 @@ describe('handleDeleteNode', () => {
       { nodeId: '1:1' },
       stubScoped({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to delete node.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to delete node.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })
 
@@ -148,9 +152,28 @@ describe('handleSetFocus', () => {
       { nodeIds: ['1:1'] },
       stubScoped({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to set focus.',
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to set focus.',
+      code: 'PLUGIN_ERROR',
+    })
+  })
+})
+
+describe('handleReparentNode', () => {
+  it('a thrown transport failure envelopes DISCONNECTED', async () => {
+    const client: ScopedFigmaClient = {
+      fileKey: 'fk-test',
+      sendCommand: () =>
+        Promise.reject(new Error('Not connected')),
+    }
+    const result = await handleReparentNode(
+      { nodeId: '1:1', parentId: '1:2' },
+      client,
     )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Not connected',
+      code: 'DISCONNECTED',
+    })
   })
 })
 
@@ -251,11 +274,13 @@ describe('delete_node PAGE branch (M4 guard)', () => {
       { nodeId: 'page:only' },
       scoped,
     )
-    // formatMutationResult surfaces a plugin {error} as "Error: <msg>" text.
-    expect(res.content[0].text).toContain('Error')
-    expect(res.content[0].text).toContain(
-      'last remaining page',
-    )
+    // formatMutationResult surfaces a plugin {error} as the typed envelope.
+    const data = JSON.parse(res.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('last remaining page')
+    expect(data.code).toBe('PLUGIN_ERROR')
   })
 
   it('current-page: returns currentPageId in reply (switch occurred)', async () => {

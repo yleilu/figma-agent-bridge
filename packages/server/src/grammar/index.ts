@@ -21,7 +21,7 @@ export type {
 } from './types'
 
 export { parseAtom, tryParseAtom } from './parse-atom'
-export { renderAtom } from './render-atom'
+export { renderAtom, renderWrapper } from './render-atom'
 export { tokenize } from './tokenize'
 
 export {
@@ -35,6 +35,9 @@ export {
   strokeToAtom,
   angleToTransform,
   transformToAngle,
+  handlesToTransform,
+  isPureRotation,
+  isIdentityTransform,
   hexToRgba,
   rgbaToHex,
 } from './figma-paint'
@@ -43,6 +46,7 @@ export type {
   RGB,
   RGBA,
   Transform,
+  GradientHandle,
   FigmaPaint,
   FigmaSolidPaint,
   FigmaGradientPaint,

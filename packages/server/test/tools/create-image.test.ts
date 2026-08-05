@@ -63,8 +63,12 @@ describe('handleCreateImage', () => {
       stubClient({ sent, reply: { hash: 'never' } }),
     )
     expect(sent).toHaveLength(0)
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain('url or bytes')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INVALID_PARAM')
+    expect(data.error).toContain('url or bytes')
   })
 
   it('rejects when BOTH url and bytes are supplied (no send)', async () => {
@@ -74,7 +78,9 @@ describe('handleCreateImage', () => {
       stubClient({ sent, reply: { hash: 'never' } }),
     )
     expect(sent).toHaveLength(0)
-    expect(result.content[0].text).toContain('Error')
+    expect(JSON.parse(result.content[0].text).code).toBe(
+      'INVALID_PARAM',
+    )
   })
 
   it('T7 degrade: surfaces a {warnings} reply as success, NEVER an error', async () => {
@@ -122,8 +128,9 @@ describe('handleCreateImage', () => {
       { url: 'https://x/y.png' },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to create image.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to create image.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })

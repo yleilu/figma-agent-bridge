@@ -447,10 +447,14 @@ describe('handleTransformGroup', () => {
         },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain(
       'transformGroup is unavailable',
     )
+    expect(data.code).toBe('API_UNAVAILABLE')
   })
 
   it('returns failure text on a null reply', async () => {
@@ -461,9 +465,10 @@ describe('handleTransformGroup', () => {
       },
       stubScoped({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to transform group nodes.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to transform group nodes.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })
 

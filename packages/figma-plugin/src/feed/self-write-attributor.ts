@@ -15,6 +15,7 @@ import type {
 } from '@figma-agent-bridge/shared/change-feed'
 import type { WriteScope } from './write-scope'
 import { captureLocator, captureValues } from './capture'
+import { styleKey } from './style-key'
 
 // A Map, not an object literal: `OP_BY_TYPE['constructor']` on a literal
 // resolves through Object.prototype and would emit a record whose `op` is a
@@ -70,19 +71,6 @@ export type SelfWriteAttributor = {
    *  now, so it is computed once per id per window and re-computed in the
    *  next one. */
   resetWindow(): void
-}
-
-// A style's id is NOT one stable string. `create_styles` returns
-// `S:<key>,` — trailing segment empty — while the documentchange event for
-// the same style carries the page id: `S:<key>,1:8`. The KEY is the stable
-// part. Matching whole strings therefore never succeeded, and every
-// agent-created style leaked into the feed as a user edit.
-//
-// Node ids are NOT normalised: they are exact, and a prefix match would
-// wrongly equate `1:8` with `1:80`.
-const styleKey = (id: string): string => {
-  const comma = id.indexOf(',')
-  return comma === -1 ? id : id.slice(0, comma)
 }
 
 /**

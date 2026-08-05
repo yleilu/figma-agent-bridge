@@ -2,6 +2,7 @@
   "id": "1:42",
   "name": "Card",
   "type": "FRAME",
+  "bindingNames": { "variables": { "var:123": "surface/card-bg" } },
   "visible": true,
   "locked": false,
   "opacity": 1,

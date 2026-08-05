@@ -61,7 +61,7 @@ These apply once a design system is in play:
 > design-system-first and component-first — adopt a system if one exists, reuse before
 > create, bind an existing token. A user's `figma-bridge-prefs` may raise these to a
 > strict/proactive level and supply concrete values (tokens, spacing scale, type ramp,
-> naming). See [[figma-bridge/docs/specs/customization|customization.md]] (P1).
+> naming). See `docs/specs/customization.md` in the repo (not shipped) (P1).
 
 ---
 
@@ -85,7 +85,8 @@ Rules for running the surface smoothly and cheaply:
 ## Read the turn-start presence block
 
 Every turn opens with an injected `figma_bridge:` YAML block (see
-`docs/specs/plugin-presence.md`) — passive awareness, not something you fetch. Its per-file
+`docs/specs/plugin-presence.md` in the repo, not shipped) — passive awareness, not something you
+fetch. Its per-file
 `pending_edits` / `pending_edits_state` fields say what the **user** changed since your last
 drain. What to do about them:
 
@@ -157,12 +158,7 @@ every create, and nothing enforces it server-side. Never leave the Figma default
   (`Button/Primary`) — is a **user preference**, relocated to `figma-bridge-prefs`
   `references/house-style.md`; this skill ships only the floor (a meaningful,
   self-describing name on every node). See
-  [[figma-bridge/docs/specs/customization|customization.md]] §11 (P1).
-- **Semantic names for structural text** — a text node that plays a structural role (a
-  heading, a label, a field caption) earns a role name (`SectionTitle`, `PriceLabel`),
-  not its literal content. A text node whose name simply mirrors its own characters is
-  fine for plain copy — the reviewer exempts it — but structural text deserves a real
-  name.
+  `docs/specs/customization.md` §11 in the repo (not shipped) (P1).
 
 ---
 
@@ -207,13 +203,8 @@ Visually dominant by design; only one primary per screen.
   writing docs: link out via `## Links` instead. The hard cap is 2 KB; a write over it
   is rejected with a clean size error.
 
-Two boundaries to respect:
+One boundary to respect:
 
-- **Root-only read-back (v1).** `context` can be _written_ on any node — including
-  `create_tree` descendants — but it is only _read back_ when that node is the read /
-  export **root**. A deep `get_node` returns `context` on the root, not on descendants.
-  Do not rely on a deep read or a `create_tree` round-trip to preserve descendant
-  context; write it, then read each node _as its own root_ to confirm.
 - **Over-cap writes are read-only.** The raw `set_plugin_data(figmabridge/context, …)`
   escape hatch is unopinionated and can store a value above the 2 KB cap. Such a value
   reads back faithfully but is **read-only** — a full-spec write-back through

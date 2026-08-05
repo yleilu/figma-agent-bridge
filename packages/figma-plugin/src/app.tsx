@@ -37,7 +37,7 @@ const Fallback = ({
         'start the MCP / relay to connect',
       ]
   return (
-    <div className="flex flex-col gap-1 p-3.5 text-11">
+    <div className="flex flex-col gap-1 p-3 text-11">
       <div className="flex items-center gap-2">
         <PulseDot
           busy={connecting}
@@ -55,7 +55,7 @@ const Fallback = ({
 }
 
 const Idle = () => (
-  <div className="flex flex-col gap-1 p-3.5 text-11">
+  <div className="flex flex-col gap-1 p-3 text-11">
     <div className="flex items-center gap-2">
       <span className="inline-block w-2 h-2 rounded-full bg-figma-icon-tertiary" />
       <span className="font-semibold text-figma-text">
@@ -75,7 +75,7 @@ const VersionMismatch = ({
   plugin: string
   server: string
 }) => (
-  <div className="flex flex-col gap-1 p-3.5 text-11">
+  <div className="flex flex-col gap-1 p-3 text-11">
     <div className="flex items-center gap-2">
       <span className="inline-block w-2 h-2 rounded-full bg-figma-icon-danger" />
       <span className="font-semibold text-figma-text">

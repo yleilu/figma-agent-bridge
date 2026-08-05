@@ -70,7 +70,10 @@ describe('handleGetSelection', () => {
       {},
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toContain('Failed')
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to get selection from plugin.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })
 
@@ -103,10 +106,12 @@ describe('handleSetSelection', () => {
         reply: { error: 'Node not found: nope' },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'Node not found',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Node not found')
+    expect(data.code).toBe('NODE_NOT_FOUND')
   })
 
   // Empty array is the documented CLEAR-selection path: still sends the command

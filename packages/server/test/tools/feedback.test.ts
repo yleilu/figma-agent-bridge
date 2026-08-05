@@ -37,6 +37,11 @@ describe('handleRecordFeedback', () => {
       { category: 'bugs', title: 'x', description: 'y' },
       '0.0.1',
     )
-    expect(result.content[0].text).toContain('Error')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('EROFS')
+    expect(data.code).toBe('PLUGIN_ERROR')
   })
 })

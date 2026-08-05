@@ -37,22 +37,32 @@ See [docs/specs/tool-surface.md](docs/specs/tool-surface.md) for the full tool c
 
 ## Install
 
-> **Not live yet.** The Claude Code plugin resolves from the `figma-agent-bridge` npm
-> package, which today is only a name-reservation stub (`0.0.1`) — its own description
-> says the real package "ships from 0.3.0 onward." Routes 1–3 below are accurate to the
-> design, not to what you can run today; route 4 (manual/from source) works right now,
-> since it never touches the published package.
+> **Not live yet.** The Claude Code plugin and the standalone server both resolve from
+> the `figma-agent-bridge` npm package, which today is only a name-reservation stub
+> (`0.0.1`) — its own description says the real package "ships from 0.3.0 onward."
+> Routes **R1** and **R3** below are accurate to the design, not to what you can run
+> today; **R2** (manual / from source) works right now, since it never touches the
+> published package.
 
 **Every route needs:** [Bun](https://bun.sh) and the Figma **desktop** app (plugins
 arrive by manifest import, which the browser can't do).
 
-**Windows (routes 1–2):** the MCP tools work the same as anywhere else, but the
+**Windows (route R1):** the MCP tools work the same as anywhere else, but the
 plugin's five hooks — identity injection, the presence status block — are POSIX shell
 scripts calling `jq`/`curl`. Native Windows has neither, so without a POSIX shell
 providing them, those hooks quietly don't run; nothing errors, they just don't fire.
-Routes 3 and 4 aren't affected.
+R2 and R3 ship no hooks, so they aren't affected.
 
-### 1. Claude Desktop
+The three routes match the ones in
+[docs/specs/dev-ops.md](docs/specs/dev-ops.md) §3 — R1 is the only complete one.
+
+### R1. Claude Code plugin — the primary route
+
+Server, skills, agents, hooks, and the Figma plugin payload arrive together. Two host
+surfaces, one plugin — installing on either surfaces on the other.
+
+**Claude Desktop** (use its **Code** surface — on the chat surfaces the skills load but
+the MCP tools aren't guaranteed to be bridged):
 
 1. Install Bun, then open (or reopen) Claude Desktop — a session that's already
    running won't see a freshly-installed `bun`.
@@ -61,9 +71,7 @@ Routes 3 and 4 aren't affected.
 3. Install the listed plugin, **Figma Bridge**, from the resulting entry.
 4. Restart or reload so the MCP server is picked up.
 
-Then continue with **Figma-side setup** below.
-
-### 2. Claude Code CLI
+**Claude Code CLI:**
 
 1. Install Bun, then open (or reopen) Claude Code — a session that's already running
    won't see a freshly-installed `bun`.
@@ -76,22 +84,16 @@ yleilu/figma-agent-bridge`, then `/plugin install figma-agent-bridge@figma-agent
 
 Then continue with **Figma-side setup** below.
 
-### Figma-side setup (routes 1 and 2)
+### Figma-side setup (route R1)
 
-Once the plugin is installed, on either route:
+Once the plugin is installed, on either host surface:
 
 1. Ask the agent to run the `figma-setup` skill — it materializes the Figma plugin
    and tells you the exact path to import.
 2. In Figma: **Plugins → Development → Import plugin from manifest** → that path.
 3. Open the plugin from a Figma design file — it connects on its own.
 
-### 3. From Figma's plugin marketplace
-
-Not applicable yet — this project isn't published to Figma's plugin marketplace
-(org-private or public) at all today. See routes 1 and 2 for the current install
-path.
-
-### 4. Manual / from source — for contributors
+### R2. Manual / from source — for contributors
 
 Working on this repo directly, or running from a local clone:
 
@@ -106,6 +108,48 @@ Working on this repo directly, or running from a local clone:
 5. Open the plugin from a Figma design file — it connects on its own.
 
 Repo scripts: `bun run test`, `bun run typecheck`, `bun run lint`, `bun run format`.
+
+### R3. Standalone MCP server — any MCP client
+
+For an MCP client that isn't Claude Code, or a Claude Code user wiring the server up by
+hand. It delivers the **raw tool surface only** — no skills, agents, or hooks — so it is
+not equivalent to R1.
+
+1. Point your MCP client's server configuration at the published package's `bin` entry,
+   launched through Bun's package runner at a **pinned exact version**:
+
+   ```json
+   {
+     "mcpServers": {
+       "figma-bridge": {
+         "command": "bunx",
+         "args": ["figma-agent-bridge@<version>"]
+       }
+     }
+   }
+   ```
+
+   The bundle is built `--target=bun`, so the runner has to be Bun's — a Node-based
+   runner (`npx`) can't execute it.
+
+2. Restart the MCP client so it launches the newly configured server.
+3. Download `figma-plugin.zip` from this repository's GitHub release, **at the same
+   version you pinned** — the server and the Figma plugin move in lockstep.
+4. Unzip it into a directory you own and intend to keep: Figma stores the path it
+   imported from, so moving or deleting it later breaks the import.
+5. In Figma: **Plugins → Development → Import plugin from manifest** → the
+   `manifest.json` sitting at the root of what you unzipped.
+6. Open the plugin from a Figma design file — it connects on its own.
+
+To remove it: delete the step-1 entry from your MCP client's configuration, remove
+**Agent Bridge** from Figma's plugins-in-development list, and delete the directory you
+unzipped into. Nothing else was placed on disk — the package runner fetched the server.
+
+### Not a route: Figma's own plugin marketplace
+
+The Figma plugin always arrives by **manifest import** (the step above on every route).
+This project isn't published to Figma's marketplace — org-private or public — and
+neither is offered; see [docs/specs/dev-ops.md](docs/specs/dev-ops.md) §3.8 (F4/F5).
 
 ## Troubleshooting
 

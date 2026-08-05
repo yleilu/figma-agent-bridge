@@ -114,7 +114,8 @@ If tools time out or return a disconnected error without a version mismatch mess
 ## Presence status block
 
 Every turn starts with an injected `figma_bridge:` YAML block (see
-`docs/specs/plugin-presence.md`) — passive awareness, not something you fetch. Read it for what
+`docs/specs/plugin-presence.md` in the repo, not shipped) — passive awareness, not something you
+fetch. Read it for what
 it tells you about **reachability**; its `pending_edits` / `pending_edits_state` fields are
 design-loop tool usage and belong to `figma-design`.
 
@@ -130,7 +131,7 @@ design-loop tool usage and belong to `figma-design`.
 
 ## Confirm the fix
 
-- `status()` — returns per-file `protocolVersion` in `joined[]`; the entry for your file
+- `status()` — returns per-file `version` in `joined[]`; the entry for your file
   shows the plugin version. Versions should match the server.
 - Run any file tool with the target `fileKey` — if it returns a result (no `INCOMPATIBLE`
   or `DISCONNECTED`), the handshake passed.

@@ -162,6 +162,24 @@ describe('toNodeSpec — GRID layout read-back', () => {
     expect(spec.layout?.colGap).toBe(0)
   })
 
+  it('reads pad on a GRID frame (padding is not H/V-only)', () => {
+    const gridRaw: Record<string, unknown> = {
+      id: '10:5',
+      name: 'Padded Grid',
+      type: 'FRAME',
+      layoutMode: 'GRID',
+      gridRowCount: 2,
+      gridColumnCount: 2,
+      paddingTop: 10,
+      paddingRight: 20,
+      paddingBottom: 30,
+      paddingLeft: 40,
+    }
+    const spec = toNodeSpec(gridRaw, { depth: -1 })
+    expect(spec.layout?.mode).toBe('GRID')
+    expect(spec.layout?.pad).toEqual([10, 20, 30, 40])
+  })
+
   it('GRID frame missing grid count/gap fields produces GRID mode with no counts/gaps', () => {
     const gridRaw: Record<string, unknown> = {
       id: '10:3',
@@ -217,12 +235,17 @@ describe('toNodeSpec — GRID layout read-back', () => {
 // ─── var() binding read-back (no boundVariables field on NodeSpec) ─────────────
 
 describe('toNodeSpec — var() binding read-back', () => {
-  it('renders a variable-bound paint with its var(...) wrapper atom', () => {
+  it('renders a variable-bound paint with its var(Name) wrapper atom', () => {
     const spec = toNodeSpec(raw, { depth: -1 })
-    // The card's first fill carries boundVariables.color → the leaf atom
-    // is wrapped: var(var:123)#FFFFFF. There is NO boundVariables field on
-    // NodeSpec — the binding rides on the appearance atom.
-    expect(spec.fills?.[0]).toMatch(/^var\(/)
+    // The card's first fill carries boundVariables.color (id var:123); the
+    // fixture's root bindingNames.variables resolves it to the design-
+    // system NAME "surface/card-bg" — the leaf atom wraps with the NAME,
+    // never the id. There is NO boundVariables field on NodeSpec — the
+    // binding rides on the appearance atom.
+    expect(spec.fills?.[0]).toBe(
+      'var(surface/card-bg)#FFFFFF',
+    )
+    expect(spec.fills?.[0]).not.toContain('var:123')
     expect(spec).not.toHaveProperty('boundVariables')
   })
 })
@@ -915,6 +938,179 @@ describe('toNodeSpec — gradient angle from gradientHandlePositions (B1)', () =
   })
 })
 
+// ─── issue-5: full gradient geometry from 3 handles (tf attr) ─────────────────
+//
+// JSON_REST_V1 always sends 3 gradientHandlePositions (start/end/width for
+// LINEAR; center/major/minor for RADIAL, ANGULAR, DIAMOND). These fixtures
+// are NOT hand-derived — they were captured live against the real Figma
+// plugin (write a known {tf=[...]}, read back the raw handles Figma computed
+// for it). A pure rotation (or, for radial/angular/diamond, the identity
+// transform) must keep reading back WITHOUT a tf attr; anything with skew or
+// non-uniform scale must carry {tf=[a,b,c,d,e,f]} or the geometry is silently
+// flattened (the bug this fixes).
+//
+// FLOAT_TOLERANCE mirrors figma-paint.test.ts: round3's 3-decimal precision.
+const FLOAT_TOLERANCE = 1e-3
+
+describe('toNodeSpec — full gradient geometry from 3 handles (issue-5)', () => {
+  const makeNode = (
+    type:
+      | 'GRADIENT_LINEAR'
+      | 'GRADIENT_RADIAL'
+      | 'GRADIENT_ANGULAR'
+      | 'GRADIENT_DIAMOND',
+    handles: { x: number; y: number }[],
+  ): Record<string, unknown> => ({
+    id: 'issue5:1',
+    name: 'Rect',
+    type: 'RECTANGLE',
+    fills: [
+      {
+        type,
+        gradientHandlePositions: handles,
+        gradientStops: [
+          {
+            position: 0,
+            color: { r: 1, g: 0, b: 0, a: 1 },
+          },
+          {
+            position: 1,
+            color: { r: 0, g: 0, b: 1, a: 1 },
+          },
+        ],
+      },
+    ],
+  })
+
+  const atomOf = (
+    type: Parameters<typeof makeNode>[0],
+    handles: { x: number; y: number }[],
+  ): string => {
+    const spec = toNodeSpec(
+      makeNode(type, handles) as never,
+      {
+        depth: -1,
+      },
+    )
+    return (spec.fills as string[])[0]
+  }
+
+  const expectGradientTransformClose = (
+    atom: string,
+    expected: number[][],
+  ): void => {
+    const paint = atomToPaint(atom)
+    if (
+      paint.type !== 'GRADIENT_LINEAR' &&
+      paint.type !== 'GRADIENT_RADIAL' &&
+      paint.type !== 'GRADIENT_ANGULAR' &&
+      paint.type !== 'GRADIENT_DIAMOND'
+    ) {
+      throw new Error('expected a gradient paint')
+    }
+    const t = paint.gradientTransform
+    for (let i = 0; i < 2; i++) {
+      for (let j = 0; j < 3; j++) {
+        expect(
+          Math.abs(t[i][j] - expected[i][j]),
+        ).toBeLessThanOrEqual(FLOAT_TOLERANCE)
+      }
+    }
+  }
+
+  it('LINEAR identity handles -> linear(0, ...) with NO tf', () => {
+    const atom = atomOf('GRADIENT_LINEAR', [
+      { x: 0, y: 0.5 },
+      { x: 1, y: 0.5 },
+      { x: 0, y: 1 },
+    ])
+    expect(atom).toStartWith('linear(0')
+    expect(atom).not.toContain('tf=')
+  })
+
+  it('LINEAR rot90 handles -> linear(90, ...) with NO tf', () => {
+    const atom = atomOf('GRADIENT_LINEAR', [
+      { x: 0.5, y: 0 },
+      { x: 0.5, y: 1 },
+      { x: 0, y: 0 },
+    ])
+    expect(atom).toStartWith('linear(90')
+    expect(atom).not.toContain('tf=')
+  })
+
+  it('LINEAR skew+scale handles (proven-live bug case) -> carries tf and round-trips', () => {
+    const atom = atomOf('GRADIENT_LINEAR', [
+      { x: -0.32352941447166406, y: 0.20588234430469043 },
+      { x: 2.0294117784984795, y: -0.3823529539378455 },
+      { x: -0.7647058991103022, y: 0.9411764561511243 },
+    ])
+    expect(atom).toContain('tf=')
+    expectGradientTransformClose(atom, [
+      [0.5, 0.3, 0.1],
+      [0.2, 0.8, 0.4],
+    ])
+  })
+
+  it('RADIAL identity handles -> radial(...) with NO tf', () => {
+    const atom = atomOf('GRADIENT_RADIAL', [
+      { x: 0.5, y: 0.5 },
+      { x: 1, y: 0.5 },
+      { x: 0.5, y: 1 },
+    ])
+    expect(atom).toStartWith('radial(')
+    expect(atom).not.toContain('tf=')
+  })
+
+  it('RADIAL custom center/radius geometry -> carries tf and round-trips', () => {
+    const atom = atomOf('GRADIENT_RADIAL', [
+      { x: 0.5, y: 0.5 },
+      { x: 1.5, y: 0.5 },
+      { x: 0.5, y: 1.5 },
+    ])
+    expect(atom).toContain('tf=')
+    expectGradientTransformClose(atom, [
+      [0.5, 0, 0.25],
+      [0, 0.5, 0.25],
+    ])
+  })
+
+  it('ANGULAR custom geometry -> carries tf and round-trips', () => {
+    const atom = atomOf('GRADIENT_ANGULAR', [
+      { x: 0.8529411820134077, y: -0.08823530481657754 },
+      { x: 2.0294117784984795, y: -0.3823529539378455 },
+      { x: 0.4117646973747698, y: 0.6470588070298563 },
+    ])
+    expect(atom).toContain('tf=')
+    expectGradientTransformClose(atom, [
+      [0.5, 0.3, 0.1],
+      [0.2, 0.8, 0.4],
+    ])
+  })
+
+  it('DIAMOND custom geometry -> carries tf and round-trips', () => {
+    const atom = atomOf('GRADIENT_DIAMOND', [
+      { x: 0.8529411820134077, y: -0.08823530481657754 },
+      { x: 2.0294117784984795, y: -0.3823529539378455 },
+      { x: 0.4117646973747698, y: 0.6470588070298563 },
+    ])
+    expect(atom).toContain('tf=')
+    expectGradientTransformClose(atom, [
+      [0.5, 0.3, 0.1],
+      [0.2, 0.8, 0.4],
+    ])
+  })
+
+  it('DIAMOND identity handles -> diamond(...) with NO tf', () => {
+    const atom = atomOf('GRADIENT_DIAMOND', [
+      { x: 0.5, y: 0.5 },
+      { x: 1, y: 0.5 },
+      { x: 0.5, y: 1 },
+    ])
+    expect(atom).toStartWith('diamond(')
+    expect(atom).not.toContain('tf=')
+  })
+})
+
 // ─── B7: rotated node size — prefer raw.width/height over absoluteBoundingBox ──
 // JSON_REST_V1 omits unrotated width/height; the plugin enrichment adds them.
 // sizeOf must prefer the enriched raw.width/height (unrotated geometry) over
@@ -990,5 +1186,739 @@ describe('toNodeSpec — componentPropertyReferences read-back', () => {
     expect(spec).not.toHaveProperty(
       'componentPropertyReferences',
     )
+  })
+})
+
+// ─── stroke geometry read-back: cap/join/miter into the stroke atom ──────────
+//
+// strokeCap is present in JSON_REST_V1; strokeJoin / strokeMiterLimit are NOT
+// (plugin-enriched — see exportNodeDocument in code.ts). The reader must fold
+// all three into the ONE stroke(...) atom's {…} channel via strokeToAtom, same
+// as align/dash already do.
+
+describe('toNodeSpec — stroke cap/join/miter read-back', () => {
+  it('reads strokeCap into the stroke atom {cap=…}', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:1',
+        type: 'RECTANGLE',
+        strokeWeight: 2,
+        strokeCap: 'ROUND',
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe('stroke(2){cap=ROUND}')
+  })
+
+  it('omits cap when strokeCap is the Figma default NONE', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:2',
+        type: 'RECTANGLE',
+        strokeWeight: 2,
+        strokeCap: 'NONE',
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe('stroke(2)')
+  })
+
+  it('reads strokeJoin and strokeMiterLimit when NON-default', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:3',
+        type: 'RECTANGLE',
+        strokeWeight: 2,
+        strokeJoin: 'ROUND',
+        strokeMiterLimit: 8,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe(
+      'stroke(2){join=ROUND, miter=8}',
+    )
+  })
+
+  // This test used to assert `stroke(2){join=MITER, miter=4}` — the default
+  // noise itself — which locked the defect in place. expression-formats.md:276
+  // says a key is "only emitted when non-default (T4)", and the spec's worked
+  // example of a read (:286) is `stroke(1, {align=INSIDE})`, carrying neither.
+  // Eliding a default is lossless: the writer sends nothing and Figma keeps the
+  // same value, so the round-trip is unaffected.
+  it('omits join/miter at their Figma defaults (MITER/4)', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:3b',
+        type: 'RECTANGLE',
+        strokeWeight: 2,
+        strokeJoin: 'MITER',
+        strokeMiterLimit: 4,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe('stroke(2)')
+  })
+
+  it('combines align/cap/join/miter/dash into the one canonical atom', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:4',
+        type: 'RECTANGLE',
+        strokeWeight: 2,
+        strokeAlign: 'INSIDE',
+        strokeCap: 'ROUND',
+        strokeJoin: 'BEVEL',
+        strokeMiterLimit: 8,
+        dashPattern: [4, 4],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe(
+      'stroke(2){align=INSIDE, cap=ROUND, join=BEVEL, miter=8, dash=[4,4]}',
+    )
+  })
+
+  it('omits cap/join/miter when absent (no {…} channel at all)', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:5',
+        type: 'RECTANGLE',
+        strokeWeight: 3,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe('stroke(3)')
+  })
+
+  it('the stroke atom survives a read → write round-trip', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:6',
+        type: 'RECTANGLE',
+        strokeWeight: 2,
+        strokeAlign: 'INSIDE',
+        strokeCap: 'ROUND',
+        strokeJoin: 'BEVEL',
+        strokeMiterLimit: 8,
+      } as never,
+      { depth: 0 },
+    )
+    const written = specToFigma({
+      stroke: spec.stroke,
+    }) as {
+      strokeWeight: number
+      strokeAlign: string
+      strokeCap: string
+      strokeJoin: string
+      strokeMiterLimit: number
+    }
+    expect(written.strokeWeight).toBe(2)
+    expect(written.strokeAlign).toBe('INSIDE')
+    expect(written.strokeCap).toBe('ROUND')
+    expect(written.strokeJoin).toBe('BEVEL')
+    expect(written.strokeMiterLimit).toBe(8)
+  })
+
+  // A DEFAULT-valued key round-trips by absence, which is why eliding it is
+  // lossless: the read omits it, the write sends nothing for it, and Figma
+  // keeps the same value it already had. This is the half the old assertion
+  // could not distinguish, because it round-tripped MITER/4 explicitly.
+  it('a default-valued stroke round-trips as absence, not as loss', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:7',
+        type: 'RECTANGLE',
+        strokeWeight: 2,
+        strokeAlign: 'INSIDE',
+        strokeJoin: 'MITER',
+        strokeMiterLimit: 4,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe('stroke(2){align=INSIDE}')
+
+    const written = specToFigma({
+      stroke: spec.stroke,
+    }) as Record<string, unknown>
+    // Nothing is sent for join/miter — Figma keeps MITER/4 untouched.
+    expect(written.strokeJoin).toBeUndefined()
+    expect(written.strokeMiterLimit).toBeUndefined()
+    expect(written.strokeAlign).toBe('INSIDE')
+  })
+})
+
+// ─── exportSettings read-back (raw.exportSettings → NodeSpec.exportSettings) ──
+//
+// The raw/Figma constraint shape is an OBJECT {type, value}; the NodeSpec/
+// grammar shape is the tuple ['SCALE'|'WIDTH'|'HEIGHT', number] — the mirror
+// of the revive applyExportSettings does on the way in (apply-node-fields.ts).
+
+describe('toNodeSpec — exportSettings read-back', () => {
+  it('converts a raw export preset with a SCALE constraint to the tuple form', () => {
+    const spec = toNodeSpec(
+      {
+        id: '3:1',
+        type: 'FRAME',
+        exportSettings: [
+          {
+            format: 'PNG',
+            suffix: '@2x',
+            constraint: { type: 'SCALE', value: 2 },
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.exportSettings).toEqual([
+      {
+        format: 'PNG',
+        suffix: '@2x',
+        constraint: ['SCALE', 2],
+      },
+    ])
+  })
+
+  it('converts a WIDTH constraint and omits an empty suffix', () => {
+    const spec = toNodeSpec(
+      {
+        id: '3:2',
+        type: 'FRAME',
+        exportSettings: [
+          {
+            format: 'SVG',
+            suffix: '',
+            constraint: { type: 'WIDTH', value: 512 },
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.exportSettings).toEqual([
+      { format: 'SVG', constraint: ['WIDTH', 512] },
+    ])
+  })
+
+  it('handles multiple presets and a preset with no constraint', () => {
+    const spec = toNodeSpec(
+      {
+        id: '3:3',
+        type: 'FRAME',
+        exportSettings: [
+          { format: 'JPG' },
+          {
+            format: 'PDF',
+            constraint: { type: 'HEIGHT', value: 100 },
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.exportSettings).toEqual([
+      { format: 'JPG' },
+      { format: 'PDF', constraint: ['HEIGHT', 100] },
+    ])
+  })
+
+  it('omits exportSettings when absent or empty on the raw node', () => {
+    expect(
+      toNodeSpec({ id: '3:4', type: 'FRAME' } as never, {
+        depth: 0,
+      }).exportSettings,
+    ).toBeUndefined()
+    expect(
+      toNodeSpec(
+        {
+          id: '3:5',
+          type: 'FRAME',
+          exportSettings: [],
+        } as never,
+        { depth: 0 },
+      ).exportSettings,
+    ).toBeUndefined()
+  })
+
+  it('exportSettings survives a read → write round-trip (mirrors applyExportSettings revive)', () => {
+    const spec = toNodeSpec(
+      {
+        id: '3:6',
+        type: 'FRAME',
+        exportSettings: [
+          {
+            format: 'PNG',
+            suffix: '@2x',
+            constraint: { type: 'SCALE', value: 2 },
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    const written = specToFigma({
+      exportSettings: spec.exportSettings,
+    })
+    expect(written.exportSettings).toEqual([
+      {
+        format: 'PNG',
+        suffix: '@2x',
+        constraint: ['SCALE', 2],
+      },
+    ])
+  })
+})
+
+// ─── layoutGrids read-back (raw.layoutGrids → NodeSpec.grids) ────────────────
+//
+// Figma's own property is layoutGrids; the NodeSpec/grammar field is grids.
+// Each raw LayoutGrid converts to a grid atom via the existing gridToAtom
+// (the inverse of the writer's atomToGrid, already in grammar/heads/grid.ts).
+
+describe('toNodeSpec — layoutGrids read-back', () => {
+  it('converts a COLUMNS layoutGrid to a columns(...) atom', () => {
+    const spec = toNodeSpec(
+      {
+        id: '4:1',
+        type: 'FRAME',
+        layoutGrids: [
+          {
+            pattern: 'COLUMNS',
+            alignment: 'STRETCH',
+            count: 12,
+            gutterSize: 32,
+            offset: 16,
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.grids).toEqual([
+      'columns(12,0,32){offset=16}',
+    ])
+  })
+
+  it('converts a GRID pattern layoutGrid to a grid(...) atom', () => {
+    const spec = toNodeSpec(
+      {
+        id: '4:2',
+        type: 'FRAME',
+        layoutGrids: [{ pattern: 'GRID', sectionSize: 8 }],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.grids).toEqual(['grid(8)'])
+  })
+
+  it('converts a ROWS layoutGrid with non-STRETCH alignment + sectionSize', () => {
+    const spec = toNodeSpec(
+      {
+        id: '4:3',
+        type: 'FRAME',
+        layoutGrids: [
+          {
+            pattern: 'ROWS',
+            alignment: 'MIN',
+            count: 4,
+            gutterSize: 10,
+            sectionSize: 20,
+            offset: 0,
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.grids).toEqual(['rows(4,20,10){align=MIN}'])
+  })
+
+  it('handles multiple grids on one node', () => {
+    const spec = toNodeSpec(
+      {
+        id: '4:4',
+        type: 'FRAME',
+        layoutGrids: [
+          {
+            pattern: 'COLUMNS',
+            alignment: 'STRETCH',
+            count: 12,
+            gutterSize: 20,
+            offset: 0,
+          },
+          { pattern: 'GRID', sectionSize: 10 },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.grids).toEqual([
+      'columns(12,0,20)',
+      'grid(10)',
+    ])
+  })
+
+  it('maps a raw auto-count of -1 (what the live plugin actually sends) to columns(auto,...)', () => {
+    // Live-verified: creating columns(auto,60,20){align=MIN} and reading it
+    // back off the real plugin yields raw layoutGrids count -1, not Infinity
+    // (JSON can't carry Infinity anyway, so Figma never actually sends it).
+    const spec = toNodeSpec(
+      {
+        id: '4:8',
+        type: 'FRAME',
+        layoutGrids: [
+          {
+            pattern: 'COLUMNS',
+            alignment: 'MIN',
+            count: -1,
+            gutterSize: 20,
+            sectionSize: 60,
+            offset: 0,
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.grids).toEqual([
+      'columns(auto,60,20){align=MIN}',
+    ])
+  })
+
+  it('omits grids when layoutGrids is absent or empty', () => {
+    expect(
+      toNodeSpec({ id: '4:5', type: 'FRAME' } as never, {
+        depth: 0,
+      }).grids,
+    ).toBeUndefined()
+    expect(
+      toNodeSpec(
+        {
+          id: '4:6',
+          type: 'FRAME',
+          layoutGrids: [],
+        } as never,
+        { depth: 0 },
+      ).grids,
+    ).toBeUndefined()
+  })
+
+  it('round-trips through specToFigma (grids atom → complete Figma LayoutGrid)', () => {
+    const spec = toNodeSpec(
+      {
+        id: '4:7',
+        type: 'FRAME',
+        layoutGrids: [
+          {
+            pattern: 'COLUMNS',
+            alignment: 'STRETCH',
+            count: 12,
+            gutterSize: 32,
+            offset: 16,
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    const written = specToFigma({ grids: spec.grids })
+    expect(written.grids).toEqual([
+      {
+        pattern: 'COLUMNS',
+        alignment: 'STRETCH',
+        count: 12,
+        gutterSize: 32,
+        offset: 16,
+      },
+    ])
+  })
+})
+
+// ─── IMAGE paint read-back (rot/tile/op/blend/vis) ────────────────────────────
+//
+// Live-verified: writing image(HASH){scale=TILE, rot=90, tile=0.5, op=0.6,
+// blend=MULTIPLY} and reading it back used to drop rot/tile/op/blend,
+// surviving only scale=TILE. The raw JSON_REST_V1 export DOES carry
+// scalingFactor/rotation/opacity/blendMode/visible for an IMAGE paint (this
+// fixture mirrors the live-captured raw shape) — rawToFigmaPaint just
+// discarded them.
+describe('toNodeSpec — IMAGE paint read-back (rot/tile/op/blend/vis)', () => {
+  it('carries scalingFactor, rotation, opacity and blendMode into the image(...) atom', () => {
+    const spec = toNodeSpec(
+      {
+        id: '5:1',
+        type: 'RECTANGLE',
+        fills: [
+          {
+            type: 'IMAGE',
+            imageRef: 'deadbeef',
+            scaleMode: 'TILE',
+            scalingFactor: 0.5,
+            rotation: 90,
+            opacity: 0.6,
+            blendMode: 'MULTIPLY',
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    const fill = spec.fills?.[0] ?? ''
+    expect(fill).toContain('image(deadbeef)')
+    expect(fill).toContain('scale=TILE')
+    expect(fill).toContain('tile=0.5')
+    expect(fill).toContain('rot=90')
+    expect(fill).toContain('op=0.6')
+    expect(fill).toContain('blend=MULTIPLY')
+  })
+
+  it('omits rotation when it is the Figma default (0)', () => {
+    const spec = toNodeSpec(
+      {
+        id: '5:2',
+        type: 'RECTANGLE',
+        fills: [
+          {
+            type: 'IMAGE',
+            imageRef: 'deadbeef',
+            rotation: 0,
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.fills?.[0]).not.toContain('rot=')
+  })
+})
+
+// ─── hidden paints survive the read ───────────────────────────────────────────
+//
+// A paint with `visible: false` is STATE, not absence. Dropping it from the
+// read makes a read-modify-write destroy it: the agent echoes back the fills
+// it was shown, and the hidden one — never shown — is gone. The grammar
+// already carries the state (`{vis=false}`, expression-formats.md) and the
+// write face already parses it, so the read has no excuse to filter.
+describe('toNodeSpec — hidden paints survive the read', () => {
+  it('emits a hidden fill as {vis=false}, in order, alongside the visible one', () => {
+    const spec = toNodeSpec(
+      {
+        id: '6:1',
+        type: 'RECTANGLE',
+        fills: [
+          {
+            type: 'SOLID',
+            visible: false,
+            color: { r: 1, g: 0, b: 0, a: 1 },
+          },
+          {
+            type: 'SOLID',
+            color: { r: 0, g: 1, b: 0, a: 1 },
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.fills).toEqual([
+      '#FF0000{vis=false}',
+      '#00FF00',
+    ])
+  })
+
+  it('does not read back as fill-less when the only fill is hidden', () => {
+    const spec = toNodeSpec(
+      {
+        id: '6:2',
+        type: 'RECTANGLE',
+        fills: [
+          {
+            type: 'SOLID',
+            visible: false,
+            color: { r: 1, g: 0, b: 0, a: 1 },
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.fills).toEqual(['#FF0000{vis=false}'])
+  })
+
+  it('keeps a hidden stroke too', () => {
+    const spec = toNodeSpec(
+      {
+        id: '6:3',
+        type: 'RECTANGLE',
+        strokes: [
+          {
+            type: 'SOLID',
+            visible: false,
+            color: { r: 0, g: 0, b: 1, a: 1 },
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.strokes).toEqual(['#0000FF{vis=false}'])
+  })
+
+  it('round-trips a hidden fill back through the write face', () => {
+    const spec = toNodeSpec(
+      {
+        id: '6:4',
+        type: 'RECTANGLE',
+        fills: [
+          {
+            type: 'SOLID',
+            visible: false,
+            color: { r: 1, g: 0, b: 0, a: 1 },
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    const paint = atomToPaint(
+      (spec.fills as string[])[0],
+    ) as { visible?: boolean }
+    expect(paint.visible).toBe(false)
+  })
+})
+
+// ─── an unmappable paint is announced, never silently dropped ─────────────────
+//
+// The reader cannot render VIDEO / PATTERN / SHADER paints yet. Dropping them
+// is survivable; dropping them SILENTLY is not — the agent is handed a fills
+// array that looks complete (T7: never hide what the surface could not do).
+describe('toNodeSpec — unmappable paints warn', () => {
+  it('warns, naming the paint type, when a fill cannot be rendered', () => {
+    const spec = toNodeSpec(
+      {
+        id: '7:1',
+        type: 'RECTANGLE',
+        fills: [
+          { type: 'VIDEO', videoHash: 'abc' },
+          {
+            type: 'SOLID',
+            color: { r: 0, g: 1, b: 0, a: 1 },
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.fills).toEqual(['#00FF00'])
+    expect(spec.warnings?.length).toBe(1)
+    expect(spec.warnings?.[0]).toContain('VIDEO')
+    expect(spec.warnings?.[0]).toContain('fills')
+  })
+
+  it('warns on an unmappable stroke, naming strokes', () => {
+    const spec = toNodeSpec(
+      {
+        id: '7:2',
+        type: 'RECTANGLE',
+        strokes: [{ type: 'PATTERN', sourceNodeId: '1:1' }],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.strokes).toBeUndefined()
+    expect(spec.warnings?.[0]).toContain('PATTERN')
+    expect(spec.warnings?.[0]).toContain('strokes')
+  })
+
+  it('emits no warnings field when every paint mapped', () => {
+    const spec = toNodeSpec(
+      {
+        id: '7:3',
+        type: 'RECTANGLE',
+        fills: [
+          {
+            type: 'SOLID',
+            color: { r: 0, g: 1, b: 0, a: 1 },
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect('warnings' in spec).toBe(false)
+  })
+})
+
+// ─── overrides report field NAMES, never a value ──────────────────────────────
+//
+// Figma's override record is `{id, overriddenFields}` — names only. The reader
+// used to pad every entry with `value: ''`, which reads as "this override sets
+// the field to blank". A live instance with its text overridden to a real
+// string returned seven entries, every one `value: ""`. The field is
+// report-only (expression-formats.md): it says WHICH fields differ, and the
+// value is read from the node struct itself.
+describe('toNodeSpec — overrides carry field names only', () => {
+  it('emits path + field and no value key at all', () => {
+    const spec = toNodeSpec(
+      {
+        id: '8:1',
+        type: 'INSTANCE',
+        overrides: [
+          {
+            id: 'I8:1;9:2',
+            overriddenFields: ['characters', 'fills'],
+          },
+        ],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.overrides).toEqual([
+      { path: 'I8:1;9:2', field: 'characters' },
+      { path: 'I8:1;9:2', field: 'fills' },
+    ])
+    for (const entry of spec.overrides ?? []) {
+      // `in`, not toBeUndefined() — a present-but-undefined key still
+      // serializes into the reply shape and must fail here.
+      expect('value' in entry).toBe(false)
+    }
+  })
+
+  it('omits overrides entirely when the raw export has none', () => {
+    const spec = toNodeSpec(
+      {
+        id: '8:2',
+        type: 'INSTANCE',
+        overrides: [],
+      } as never,
+      { depth: 0 },
+    )
+    expect('overrides' in spec).toBe(false)
+  })
+})
+
+// The mirror of the hidden-fill defect: effectArray filtered `visible !== false`,
+// so a designer's hidden shadow vanished from the read and a read-modify-write
+// deleted it. The grammar spells a hidden effect (`{vis=false}`, per
+// expression-formats.md), so there was never anything to compress away.
+describe('toNodeSpec — hidden effects survive the read', () => {
+  const shadow = (visible?: boolean) => ({
+    type: 'DROP_SHADOW',
+    radius: 8,
+    color: { r: 0, g: 0, b: 0, a: 0.25 },
+    offset: { x: 0, y: 4 },
+    ...(visible === false ? { visible: false } : {}),
+  })
+
+  it('keeps a hidden effect, marked vis=false, in order', () => {
+    const spec = toNodeSpec(
+      {
+        id: '1:1',
+        name: 'N',
+        type: 'RECTANGLE',
+        effects: [shadow(false), shadow()],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.effects).toEqual([
+      'shadow(0,4,8,#00000040){vis=false}',
+      'shadow(0,4,8,#00000040)',
+    ])
+  })
+
+  it('does not drop a node whose only effect is hidden', () => {
+    const spec = toNodeSpec(
+      {
+        id: '1:1',
+        name: 'N',
+        type: 'RECTANGLE',
+        effects: [shadow(false)],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.effects).toEqual([
+      'shadow(0,4,8,#00000040){vis=false}',
+    ])
   })
 })

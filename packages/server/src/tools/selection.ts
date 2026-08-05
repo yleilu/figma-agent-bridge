@@ -1,18 +1,18 @@
 // tools/selection.ts — the get_selection / set_selection twin.
 //
-// get_selection (read): COMMANDS.GET_SELECTION → [{id,name,type}] as YAML.
+// get_selection (read): COMMANDS.GET_SELECTION → [{id,name,type}] as JSON.
 // set_selection (write): COMMANDS.SET_SELECTION with {nodeIds} → {selectedCount}
 // reported through formatMutationResult. set_selection is SELECTION ONLY — it
 // does not scroll the canvas (pair with set_focus for that).
 
-import YAML from 'yaml'
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { ScopedFigmaClient } from '../figma-client'
 import {
   type ToolResult,
   textResult,
   formatMutationResult,
-  errorMessage,
+  toolError,
+  errorEnvelope,
 } from './shared'
 
 export const handleGetSelection = async (
@@ -27,13 +27,14 @@ export const handleGetSelection = async (
       | { id: string; name: string; type: string }[]
       | null
     if (raw === null) {
-      return textResult(
+      return errorEnvelope(
+        'PLUGIN_ERROR',
         'Failed to get selection from plugin.',
       )
     }
-    return textResult(YAML.stringify(raw))
+    return textResult(JSON.stringify(raw, null, 2))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -51,6 +52,6 @@ export const handleSetSelection = async (
       'Failed to set selection.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

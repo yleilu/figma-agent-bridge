@@ -78,12 +78,16 @@ describe('M2b slot-fill e2e (T7 instance-lock wrap)', () => {
       scoped,
     )
     const { text } = result.content[0]
-    // formatMutationResult wraps plugin result.error as "Error: <msg>"
-    expect(text).toMatch(/^Error:/)
+    // formatMutationResult wraps plugin result.error as the typed envelope.
+    const data = JSON.parse(text) as {
+      error: string
+      code: string
+    }
     // The error message must mention the slot / SLOT / parent type (T7 honesty)
-    expect(text).toMatch(
+    expect(data.error).toMatch(
       /Cannot append into this parent|only a component SLOT|To fill a slot/,
     )
+    expect(data.code).toBe('PLUGIN_ERROR')
   })
 
   it('create_node: normal appendable parent still works (no regression)', async () => {
@@ -95,8 +99,8 @@ describe('M2b slot-fill e2e (T7 instance-lock wrap)', () => {
       scoped,
     )
     const { text } = result.content[0]
-    expect(text).not.toMatch(/^Error:/)
     const data = JSON.parse(text) as Record<string, unknown>
+    expect(data.error).toBeUndefined()
     expect(data.type).toBe('FRAME')
     expect(data.name).toBe('Card')
   })
@@ -113,8 +117,14 @@ describe('M2b slot-fill e2e (T7 instance-lock wrap)', () => {
       scoped,
     )
     const { text } = result.content[0]
-    // Should NOT be a blanket instance-descendant rejection
-    expect(text).not.toMatch(/^Error:/)
+    // Assert the SUCCESS, not the absence of a prose prefix: since the typed
+    // envelope landed, every error is JSON starting with `{`, so a
+    // `not.toMatch(/^Error:/)` here could never fail and guarded nothing.
+    const data = JSON.parse(text) as Record<string, unknown>
+    expect(data.error).toBeUndefined()
+    expect(data.code).toBeUndefined()
+    expect(data.name).toBe('Slot Content')
+    expect(data.parentId).toBe('I123;slot:456')
   })
 
   // --- create_tree ---
@@ -128,10 +138,14 @@ describe('M2b slot-fill e2e (T7 instance-lock wrap)', () => {
       scoped,
     )
     const { text } = result.content[0]
-    expect(text).toMatch(/^Error:/)
-    expect(text).toMatch(
+    const data = JSON.parse(text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toMatch(
       /Cannot append into this parent|only a component SLOT|To fill a slot/,
     )
+    expect(data.code).toBe('PLUGIN_ERROR')
   })
 
   it('create_tree: normal appendable parent still works (no regression)', async () => {
@@ -147,8 +161,8 @@ describe('M2b slot-fill e2e (T7 instance-lock wrap)', () => {
       scoped,
     )
     const { text } = result.content[0]
-    expect(text).not.toMatch(/^Error:/)
     const data = JSON.parse(text) as Record<string, unknown>
+    expect(data.error).toBeUndefined()
     expect((data.root as { type: string }).type).toBe(
       'FRAME',
     )
@@ -165,6 +179,14 @@ describe('M2b slot-fill e2e (T7 instance-lock wrap)', () => {
       scoped,
     )
     const { text } = result.content[0]
-    expect(text).not.toMatch(/^Error:/)
+    // Same as the create_node slot case: assert the success shape, because a
+    // `^Error:` pattern can no longer match a JSON envelope.
+    const data = JSON.parse(text) as Record<string, unknown>
+    expect(data.error).toBeUndefined()
+    expect(data.code).toBeUndefined()
+    expect(
+      (data.root as { name: string }).name,
+    ).toBe('Slot Content')
+    expect(data.ids).toHaveLength(1)
   })
 })

@@ -182,10 +182,12 @@ describe('handleCreateNode (rebuilt — single NodeSpec)', () => {
         },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'Parent not found',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Parent not found')
+    expect(data.code).toBe('NODE_NOT_FOUND')
   })
 
   it('surfaces plugin warnings on success', async () => {
@@ -215,9 +217,10 @@ describe('handleCreateNode (rebuilt — single NodeSpec)', () => {
       { spec: { type: 'FRAME' } },
       client,
     )
-    expect(result.content[0].text).toBe(
-      'Error: plugin exploded',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'plugin exploded',
+      code: 'PLUGIN_ERROR',
+    })
   })
 
   // An unsupported `type` is rejected cleanly at the SERVER boundary with an
@@ -230,10 +233,14 @@ describe('handleCreateNode (rebuilt — single NodeSpec)', () => {
       stubClient({ sent }),
     )
     expect(sent).toHaveLength(0)
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain('BUTTON')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('UNSUPPORTED_NODE_TYPE')
+    expect(data.error).toContain('BUTTON')
     // The message self-documents the valid surface.
-    expect(result.content[0].text).toContain('FRAME')
+    expect(data.error).toContain('FRAME')
   })
 
   // Issue #3: TEXT_PATH (figma.createTextPath) is real but was never specced/wired
@@ -247,10 +254,14 @@ describe('handleCreateNode (rebuilt — single NodeSpec)', () => {
       stubClient({ sent }),
     )
     expect(sent).toHaveLength(0)
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain('TEXT_PATH')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('UNSUPPORTED_NODE_TYPE')
+    expect(data.error).toContain('TEXT_PATH')
     // The message self-documents the valid surface.
-    expect(result.content[0].text).toContain('FRAME')
+    expect(data.error).toContain('FRAME')
   })
 
   it('still forwards a supported type', async () => {

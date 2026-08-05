@@ -6,8 +6,13 @@ import type { NodeSpec } from '@figma-agent-bridge/shared/node-spec'
 import type { Profile } from '@figma-agent-bridge/shared/read-model'
 
 /**
- * Named field sets per profile. 'full' is treated as an identity projection
- * (all NodeSpec keys). The others narrow to a specific concern.
+ * Named field sets per profile, each narrowing to one concern.
+ *
+ * `full` is NOT consulted — `projectNode` short-circuits it to identity, so
+ * every NodeSpec field survives including ones added later. Its entry exists
+ * only because `Record<Profile, …>` requires a key per profile; do not treat
+ * the list below as full's definition. It was one once, and quietly fell eight
+ * fields behind NodeSpec.
  */
 export const PROFILES: Record<
   Profile,
@@ -88,6 +93,17 @@ export const projectNode = (
   sel?: { fields?: string[]; profile?: Profile },
 ): Partial<NodeSpec> => {
   if (!sel) {
+    return n
+  }
+
+  // `full` means EVERY field, so it is identity — not a list. Enumerating it
+  // is what made it wrong: the list fell behind NodeSpec and silently dropped
+  // eight fields, `component` among them, which is the INSTANCE round-trip
+  // anchor. A list that must name every key is a list that will drift, so the
+  // profile that means "no narrowing" must not be one.
+  // `fields` still wins when both are given, so this only fires when `fields`
+  // selects nothing (absent, or the empty array the guard below also ignores).
+  if (sel.profile === 'full' && !sel.fields?.length) {
     return n
   }
 

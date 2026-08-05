@@ -219,8 +219,12 @@ describe('handleCreateVariables', () => {
         reply: { error: 'Variables API unavailable' },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain('unavailable')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('unavailable')
+    expect(data.code).toBe('API_UNAVAILABLE')
   })
 
   it('catches a malformed COLOR atom locally and reports an error (never throws)', async () => {
@@ -237,7 +241,12 @@ describe('handleCreateVariables', () => {
       },
       stubClient({ reply: { collectionId: 'c' } }),
     )
-    expect(result.content[0].text).toContain('Error')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INVALID_PARAM')
+    expect(data.error).toContain('hex')
   })
 
   it('returns failure text on a null reply', async () => {
@@ -254,9 +263,10 @@ describe('handleCreateVariables', () => {
       },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to create variables.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to create variables.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })
 
@@ -378,10 +388,12 @@ describe('handleUpdateVariables', () => {
         reply: { error: 'Collection not found: nope' },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'Collection not found',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Collection not found')
+    expect(data.code).toBe('NODE_NOT_FOUND')
   })
 
   it('returns failure text on a null reply', async () => {
@@ -389,9 +401,10 @@ describe('handleUpdateVariables', () => {
       { collectionId: 'col:1' },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to update variables.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to update variables.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 
   // B2 — aliases round-trip: update_variables must accept aliases so a
@@ -478,13 +491,18 @@ describe('handleDeleteVariables', () => {
     )
     const out = JSON.parse(result.content[0].text) as {
       results: { id: string; kind: string }[]
-      errors: { id: string; error: string }[]
+      errors: {
+        id: string
+        error: string
+        code: string
+      }[]
     }
     expect(out.results).toHaveLength(1)
     expect(out.results[0].id).toBe('var:1')
     expect(out.results[0].kind).toBe('variable')
     expect(out.errors).toHaveLength(1)
     expect(out.errors[0].id).toBe('err:missing')
+    expect(out.errors[0].code).toBe('NODE_NOT_FOUND')
   })
 
   it('returns partial success — collection id with cascade shape', async () => {
@@ -504,10 +522,15 @@ describe('handleDeleteVariables', () => {
     )
     const out = JSON.parse(result.content[0].text) as {
       results: { id: string; kind: string }[]
-      errors: { id: string; error: string }[]
+      errors: {
+        id: string
+        error: string
+        code: string
+      }[]
     }
     expect(out.results[0].kind).toBe('collection')
     expect(out.errors[0].id).toBe('err:bad')
+    expect(out.errors[0].code).toBe('NODE_NOT_FOUND')
   })
 
   it('surfaces a plugin-side {error} as an error (entire call failed)', async () => {
@@ -517,8 +540,12 @@ describe('handleDeleteVariables', () => {
         reply: { error: 'Variables API unavailable' },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain('unavailable')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('unavailable')
+    expect(data.code).toBe('API_UNAVAILABLE')
   })
 
   it('returns failure text on a null reply', async () => {
@@ -526,9 +553,10 @@ describe('handleDeleteVariables', () => {
       { collections: ['col:1'] },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to delete variables.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to delete variables.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 
   it('returns INVALID_PARAM error when both variables and collections are empty/absent', async () => {
@@ -536,8 +564,12 @@ describe('handleDeleteVariables', () => {
       {},
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain('At least one')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INVALID_PARAM')
+    expect(data.error).toContain('At least one')
   })
 })
 
@@ -590,12 +622,17 @@ describe('handleDeleteStyles', () => {
     )
     const out = JSON.parse(result.content[0].text) as {
       results: { id: string; index: number }[]
-      errors: { index: number; error: string }[]
+      errors: {
+        index: number
+        error: string
+        code: string
+      }[]
     }
     expect(out.results).toHaveLength(1)
     expect(out.results[0].id).toBe('S:1')
     expect(out.errors).toHaveLength(1)
     expect(out.errors[0].index).toBe(1)
+    expect(out.errors[0].code).toBe('NODE_NOT_FOUND')
   })
 
   it('returns partial success — name+type resolve + not-found', async () => {
@@ -635,8 +672,12 @@ describe('handleDeleteStyles', () => {
         reply: { error: 'Styles API unavailable' },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain('unavailable')
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('unavailable')
+    expect(data.code).toBe('API_UNAVAILABLE')
   })
 
   it('returns failure text on a null reply', async () => {
@@ -644,9 +685,10 @@ describe('handleDeleteStyles', () => {
       { styles: [{ id: 'S:1' }] },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to delete styles.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to delete styles.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })
 
@@ -837,12 +879,17 @@ describe('handleCreateStyles', () => {
     ])
     const out = JSON.parse(result.content[0].text) as {
       results: { index: number; name: string }[]
-      errors: { index: number; error: string }[]
+      errors: {
+        index: number
+        error: string
+        code: string
+      }[]
     }
     // Results keep their ORIGINAL indices (0 and 2); the error is index 1.
     expect(out.results.map(r => r.index)).toEqual([0, 2])
     expect(out.errors).toHaveLength(1)
     expect(out.errors[0].index).toBe(1)
+    expect(out.errors[0].code).toBe('PLUGIN_ERROR')
   })
 
   it('surfaces a plugin-side per-entry error in the errors[] array', async () => {
@@ -881,9 +928,10 @@ describe('handleCreateStyles', () => {
       },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to create styles.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to create styles.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })
 
@@ -1065,10 +1113,15 @@ describe('handleUpdateStyles', () => {
     expect(result.content[0].text).not.toContain('Error:')
     const out = JSON.parse(result.content[0].text) as {
       results: unknown[]
-      errors: { index: number; error: string }[]
+      errors: {
+        index: number
+        error: string
+        code: string
+      }[]
     }
     expect(out.results).toEqual([])
     expect(out.errors[0].error).toContain('Style not found')
+    expect(out.errors[0].code).toBe('NODE_NOT_FOUND')
   })
 
   it('isolates a malformed value atom to its entry (never throws; valid entries still sent)', async () => {
@@ -1103,9 +1156,10 @@ describe('handleUpdateStyles', () => {
       { styles: [{ id: 'S:1' }] },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to update styles.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to update styles.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })
 
@@ -1152,10 +1206,12 @@ describe('handleApplyStyle', () => {
         reply: { error: 'Node not found: nope' },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'Node not found',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Node not found')
+    expect(data.code).toBe('NODE_NOT_FOUND')
   })
 
   it('returns failure text on a null reply', async () => {
@@ -1163,8 +1219,9 @@ describe('handleApplyStyle', () => {
       { nodeId: '1:1', styleId: 'S:1', field: 'fill' },
       stubClient({ reply: null }),
     )
-    expect(result.content[0].text).toBe(
-      'Failed to apply style.',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'Failed to apply style.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })

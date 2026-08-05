@@ -121,10 +121,8 @@ large synchronous scan). Therefore:
 
 - `ping` is a **bridge-internal command** (not an agent-facing tool — the same class as the
   `close_plugin` lifecycle command). It is a `command: 'ping'` inside a normal message frame — **not** a
-  transport-level frame type, and distinct from both the removed legacy `Ping`/`Pong` *frames* and the
-  server↔relay **port-discovery** probe (both referenced in
-  [[figma-bridge/docs/specs/version-handshake|version-handshake.md]] /
-  [[figma-bridge/docs/specs/overview|overview.md]]). Adding it to the command set is a **wire-surface
+  transport-level frame type, and distinct from the removed legacy `Ping`/`Pong` *frames*
+  ([[figma-bridge/docs/specs/version-handshake|version-handshake.md]]). Adding it to the command set is a **wire-surface
   change carried under the B2 handshake** (a minor bump): a pre-`ping` plugin is flagged **`INCOMPATIBLE`
   at connect**, so the watchdog never reaches it and never false-kills it for not answering a command it
   doesn't know.

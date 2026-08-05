@@ -35,6 +35,20 @@ Surfaced 2026-06-27 during the comprehensive live tool sweep + per-issue spec re
 
 - **`vectorNetwork` / `setVectorNetworkAsync` — full bezier authoring (M3-V3, DEFERRED).** `vectorPaths` (M3-V1/V2, ✅ SHIPPED merged `4430194`) covers VECTOR node write + read-back for non-curved paths via `node.vectorPaths`. The deeper `vectorNetwork` API (`VectorNetwork` with bezier handles, vertices, segments, regions) enables exact bezier editing but requires a non-atom struct grammar (it is a complex nested object, not a string). **Consequence:** `vectorPaths` read-back from `get_node` is a **documented lossy projection** for pre-existing vectors that have bezier curves or multi-region shapes — their _exact_ geometry lives in `vectorNetwork`, not `vectorPaths`. This is a deliberate, documented T2 asymmetry (T7 honest: the limitation is stated here and in `expression-formats.md`), not a silent gap. **Re-verified 2026-07-29: zero hits** for `vectorNetwork` across `packages/*/src`. **To fulfill:** design the `vectorNetwork` struct grammar, add a `vectorNetwork` field to `NodeSpec`, implement writer + plugin apply (`setVectorNetworkAsync`) + reader read-back.
 
+- **`set_instance.overrides` demands a `value` no read can supply (surfaced 2026-08-04).** The
+  reader emits `{path, field}` and never a value — Figma's override record is `{id,
+  overriddenFields}`, names only, and `expression-formats.md:219` makes that the design ("read the
+  value from the node struct itself"). But `set_instance`'s own parameter schema
+  (`tool-params.ts:1382-1394`) marks `value` **required**, so an agent cannot feed a `get_node`
+  read back into the write without inventing it. Harmless today — the parameter is documented "NOT
+  YET APPLIED" and the plugin only warns and skips (`code.ts:3277-3285`) — so this is shape
+  mismatch on a no-op, not a live defect, and tightening it now would just move noise around.
+  **To fulfill:** when per-node overrides are actually implemented, decide the write shape against
+  what a read can produce — either `value` becomes optional and the write resolves it from the
+  target, or `overrides` stops being a `{path, field, value}` triple. Deliberately left as-is
+  2026-08-04. Related dead weight: `overrideEntrySchema.value` (`node-spec-schema.ts:65-72`) is
+  optional and populated by nothing.
+
 ### Authoring ergonomics (surfaced 2026-07-06 — analytics-dashboard capability demo)
 
 - **An auto-layout frame with an explicit `size` still HUGs (ignores the size) unless `sizing:['FIXED','FIXED']` is set.** `size:[1440,900]` + a `layout` produced a frame that collapsed to hug its content — the explicit size was silently ignored because the container's axis-sizing modes default to AUTO/HUG. Least-surprise fix: when a node has BOTH `layout` and an explicit `size`, default its sizing to FIXED (respect the size) unless `sizing` overrides; at minimum document it. (Cost one rebuild in the demo.) **Re-verified 2026-07-29:** `sizing` is passed through only when supplied (`node-spec-writer.ts:255-256`; `code.ts:781-795`) — no such default exists. **Also tracked as `I1`** in `docs/scratch/qa/issues/2-improvement.md`, where the compat call (behavior-changing) lives.

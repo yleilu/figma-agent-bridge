@@ -117,9 +117,8 @@ describe('handleConnect version handshake', () => {
     )
     const res = await handleStatus(client, HTTP)
     const parsed = JSON.parse(text(res))
-    expect(parsed.joined[0].protocolVersion).toBe(
-      APP_VERSION,
-    )
+    expect(parsed.joined[0].version).toBe(APP_VERSION)
+    expect(parsed.joined[0].protocolVersion).toBeUndefined()
     client.disconnect()
     plugin.stop()
   })

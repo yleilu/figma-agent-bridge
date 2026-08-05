@@ -1,6 +1,12 @@
 import { COMMANDS, CONTEXT_NS, CONTEXT_KEY } from '@figma-agent-bridge/shared'
 
 import { applyLayout, type AppliedLayout } from './apply-layout'
+import { importComponentByKeyWithDeadline } from './import-by-key'
+import {
+  applyStrokeGeometry,
+  applyExportSettings,
+  applyGrids,
+} from './apply-node-fields'
 import { projectComponentDefs } from './project-component-defs'
 import { resolveInstanceProps } from './resolve-instance-props'
 import {
@@ -267,6 +273,49 @@ const readContext = (n: BaseNode): string | undefined => {
   return v !== '' ? v : undefined
 }
 
+// context lives in shared pluginData, which reads SYNCHRONOUSLY — so unlike
+// the style/variable name resolution below (ROOT-ONLY, because it is async),
+// walking descendants here costs no round trips. exportAsync has already
+// paid O(subtree) to serialize these same nodes, so this walk adds nothing
+// asymptotically. Scoped to the exported subtree, so it is never O(document).
+const collectContexts = (
+  n: BaseNode,
+  into: Record<string, string>,
+): void => {
+  const ctx = readContext(n)
+  if (ctx !== undefined) {
+    into[n.id] = ctx
+  }
+  if ('children' in n) {
+    for (const child of (n as ChildrenMixin).children) {
+      collectContexts(child, into)
+    }
+  }
+}
+
+// Merges the collected id → context map into the exported JSON_REST_V1
+// document tree by id. Covers the root (its id is in the map too) and every
+// descendant, replacing what used to be a root-only assignment.
+const applyContexts = (
+  doc: Record<string, unknown>,
+  contexts: Record<string, string>,
+): void => {
+  const ctx = contexts[doc.id as string]
+  if (ctx !== undefined) {
+    doc.context = ctx
+  }
+  if (Array.isArray(doc.children)) {
+    for (const child of doc.children) {
+      if (typeof child === 'object' && child !== null) {
+        applyContexts(
+          child as Record<string, unknown>,
+          contexts,
+        )
+      }
+    }
+  }
+}
+
 const exportNodeDocument = async (
   node: BaseNode,
   isRoot: boolean,
@@ -289,10 +338,12 @@ const exportNodeDocument = async (
     (exported as Record<string, unknown>).document
   ) {
     const doc = (exported as Record<string, unknown>).document as Record<string, unknown>
-    const ctx = readContext(node)
-    if (ctx !== undefined) {
-      doc.context = ctx
-    }
+    // Collect context for the whole exported subtree (root + every
+    // descendant) via a synchronous walk of the real Figma nodes, then merge
+    // by id into the JSON_REST_V1 tree exportAsync just produced.
+    const contexts: Record<string, string> = {}
+    collectContexts(node, contexts)
+    applyContexts(doc, contexts)
     if (node.type === 'VECTOR' && 'vectorPaths' in node) {
       doc.vectorPaths = (node as VectorNode).vectorPaths
     }
@@ -305,6 +356,21 @@ const exportNodeDocument = async (
     if ('width' in node) {
       doc.width = (node as unknown as { width: number }).width
       doc.height = (node as unknown as { height: number }).height
+    }
+    // strokeJoin / strokeMiterLimit — JSON_REST_V1 carries strokeCap but NOT
+    // these two (live-confirmed absent, 2026-07-31). Plain synchronous
+    // property reads, like width/height above — NOT gated on isRoot (unlike
+    // bindingNames/componentKey, this needs no async lookup). Feature-detect
+    // (T7): a node type without a strokes mixin silently no-ops.
+    if ('strokeJoin' in node) {
+      doc.strokeJoin = (
+        node as unknown as { strokeJoin: string }
+      ).strokeJoin
+    }
+    if ('strokeMiterLimit' in node) {
+      doc.strokeMiterLimit = (
+        node as unknown as { strokeMiterLimit: number }
+      ).strokeMiterLimit
     }
     // pointCount (POLYGON + STAR) and innerRadius (STAR-only) are NOT carried by
     // JSON_REST_V1 — enrich like vectorPaths so they round-trip via get_node
@@ -415,6 +481,99 @@ const exportNodeDocument = async (
       if (main !== null && main !== undefined) {
         doc.componentKey = main.key
         doc.componentRemote = main.remote
+      }
+    }
+    // T1 (wrapper-names) — bindingNames: resolves the four styleId fields
+    // and every boundVariables id to their NAMES, so the server can wrap a
+    // bound fill/stroke/effect/text as style(name) and a bound property as
+    // var(name) instead of emitting the bare resolved value. Only the plugin
+    // can turn a Figma id into a name. ROOT-ONLY (isRoot===true), mirroring
+    // the componentKey enrichment above — O(targets) not O(document); a
+    // descendant inside a deep inspect keeps its cheap id-only projection.
+    // Feature-detect each resolver independently: if either API is missing
+    // on this Figma runtime, omit that half and continue — never throw.
+    if (isRoot) {
+      const bindingNames: {
+        styles?: Record<string, string>
+        variables?: Record<string, string>
+      } = {}
+      if (typeof figma.getStyleByIdAsync === 'function') {
+        const styleIdFields = {
+          fillStyleId: 'fill',
+          strokeStyleId: 'stroke',
+          effectStyleId: 'effect',
+          textStyleId: 'text',
+        } as const
+        const styles: Record<string, string> = {}
+        for (const [idField, gramField] of Object.entries(
+          styleIdFields,
+        )) {
+          if (!(idField in node)) continue
+          const styleId = (
+            node as unknown as Record<string, unknown>
+          )[idField]
+          if (
+            typeof styleId !== 'string' ||
+            styleId.length === 0
+          ) {
+            continue
+          }
+          const style = await figma
+            .getStyleByIdAsync(styleId)
+            .catch(() => null)
+          if (style !== null && style !== undefined) {
+            styles[gramField] = style.name
+          }
+        }
+        if (Object.keys(styles).length > 0) {
+          bindingNames.styles = styles
+        }
+      }
+      if (
+        typeof figma.variables.getVariableByIdAsync ===
+          'function' &&
+        'boundVariables' in node
+      ) {
+        const bound = (
+          node as unknown as {
+            boundVariables?: Record<string, unknown>
+          }
+        ).boundVariables
+        if (bound) {
+          // Dedupe ids first — a node bound to the same variable on
+          // five fields costs one lookup, not five.
+          const ids = new Set<string>()
+          const pushAlias = (a: unknown): void => {
+            const id = (a as { id?: string } | null)?.id
+            if (typeof id === 'string') {
+              ids.add(id)
+            }
+          }
+          for (const val of Object.values(bound)) {
+            if (Array.isArray(val)) {
+              for (const a of val) {
+                pushAlias(a)
+              }
+            } else {
+              pushAlias(val)
+            }
+          }
+          const variables: Record<string, string> = {}
+          for (const id of ids) {
+            const v = await figma.variables
+              .getVariableByIdAsync(id)
+              .catch(() => null)
+            if (v !== null && v !== undefined) {
+              variables[id] = v.name
+            }
+          }
+          if (Object.keys(variables).length > 0) {
+            bindingNames.variables = variables
+          }
+        }
+      }
+      if (Object.keys(bindingNames).length > 0) {
+        doc.bindingNames = bindingNames
       }
     }
     return doc
@@ -547,38 +706,33 @@ const applyCommonProperties = async (
     })[]
     const paintArray: Paint[] = []
     for (const fill of fills) {
-      if (
-        fill.type === 'IMAGE' &&
-        (fill as unknown as Record<string, unknown>)
-          .imageUrl
-      ) {
-        // Fetch image from URL and create ImagePaint
+      const raw = fill as unknown as Record<string, unknown>
+      if (fill.type === 'IMAGE' && raw.imageUrl) {
+        // Fetch image from URL and create ImagePaint.
+        // Spread the server's already-parsed paint (it
+        // carries rot/tile/op/blend/vis) and override only
+        // what needs plugin-side work: resolve the URL to a
+        // hash and drop the write-only imageUrl key.
+        const { imageUrl, ...rest } = raw
         const image = await figma.createImageAsync(
-          (fill as unknown as Record<string, unknown>)
-            .imageUrl as string,
+          imageUrl as string,
         )
         paintArray.push({
+          ...rest,
           type: 'IMAGE',
           imageHash: image.hash,
           scaleMode:
-            ((fill as unknown as Record<string, unknown>)
-              .scaleMode as ImagePaint['scaleMode']) ??
+            (rest.scaleMode as ImagePaint['scaleMode']) ??
             'FILL',
         } as ImagePaint)
-      } else if (
-        fill.type === 'IMAGE' &&
-        (fill as unknown as Record<string, unknown>)
-          .imageHash
-      ) {
-        // Use existing image hash directly
+      } else if (fill.type === 'IMAGE' && raw.imageHash) {
+        // Already carries a hash - spread through so
+        // rot/tile/op/blend/vis survive, just default
+        // scaleMode.
         paintArray.push({
-          type: 'IMAGE',
-          imageHash: (
-            fill as unknown as Record<string, unknown>
-          ).imageHash as string,
+          ...raw,
           scaleMode:
-            ((fill as unknown as Record<string, unknown>)
-              .scaleMode as ImagePaint['scaleMode']) ??
+            (raw.scaleMode as ImagePaint['scaleMode']) ??
             'FILL',
         } as ImagePaint)
       } else {
@@ -627,6 +781,18 @@ const applyCommonProperties = async (
       spec.strokeDash as number[]
   }
 
+  // Stroke geometry (cap/join/miter) — pure helper, see
+  // apply-node-fields.ts. The writer emits these flat keys from the
+  // `stroke(...)` atom's {cap=,join=,miter=} channel (atomToStroke).
+  applyStrokeGeometry(
+    node as GeometryMixin & SceneNode,
+    spec as {
+      strokeCap?: unknown
+      strokeJoin?: unknown
+      strokeMiterLimit?: unknown
+    },
+  )
+
   // Corner radius — guard on capability so an incompatible node (e.g. a SLICE)
   // warns-and-continues in update_node rather than throwing → {error}.
   if (spec.radius !== undefined && 'cornerRadius' in node) {
@@ -669,6 +835,14 @@ const applyCommonProperties = async (
     ;(node as FrameNode).clipsContent =
       spec.clipsContent as boolean
   }
+
+  // Export settings (presets) — pure helper, see apply-node-fields.ts. The
+  // writer passes spec.exportSettings through untouched (already Figma's
+  // ExportSettings[] shape).
+  applyExportSettings(
+    node as ExportMixin & SceneNode,
+    spec.exportSettings,
+  )
 
   // Effects (already parsed to effect objects by server)
   if (spec.effects !== undefined && 'effects' in node) {
@@ -713,15 +887,18 @@ const applyCommonProperties = async (
 
 
   // Layout grids. The server writer converts grid atoms → COMPLETE Figma
-  // LayoutGrid objects (via atomToGrid) and emits them as spec.grids; the plugin
-  // assigns them to node.layoutGrids. Capability-guard so an incompatible node
-  // warns-and-continues (T7) rather than throwing → {error}. Each grid's auto
-  // count rides the wire as 'auto' (JSON has no Infinity) → revive to Infinity.
+  // LayoutGrid objects (via atomToGrid) and emits them as spec.grids; Figma's
+  // own property is layoutGrids — applyGrids (apply-node-fields.ts) does the
+  // assign. Capability-guard here (not inside the pure helper) so an
+  // incompatible node warns-and-continues (T7) rather than throwing →
+  // {error}. Each grid's auto count rides the wire as 'auto' (JSON has no
+  // Infinity) → revive to Infinity.
   if (spec.grids !== undefined) {
     if ('layoutGrids' in node) {
-      ;(node as FrameNode).layoutGrids = (
-        spec.grids as unknown[]
-      ).map(reviveLayoutGrid)
+      applyGrids(
+        node as FrameNode,
+        (spec.grids as unknown[]).map(reviveLayoutGrid),
+      )
     } else {
       warnings?.push(
         'grids ignored — not supported on a ' +
@@ -1117,6 +1294,22 @@ const createSingleNode = async (
             properties?: Record<string, string | boolean>
           }
         | undefined
+      // A published key may belong to a COMPONENT or a COMPONENT_SET — Figma
+      // has a separate importer per kind and the key itself does not say
+      // which. Both run concurrently, first fulfilment wins, and a set
+      // resolves to its defaultVariant: the same rule the local-id path
+      // below applies, because you instance a variant and never the set
+      // itself (expression-formats.md). Sequential would not work — the
+      // wrong importer HANGS rather than rejecting (see import-by-key.ts),
+      // so a catch-and-fall-back never reaches the second one.
+      const importByKey = (
+        key: string,
+      ): Promise<ComponentNode> =>
+        importComponentByKeyWithDeadline(key, {
+          component: k =>
+            figma.importComponentByKeyAsync(k),
+          set: k => figma.importComponentSetByKeyAsync(k),
+        })
       // Resolve the main component. Two paths:
       //   1. REMOTE (compRef.remote===true AND key present): prefer
       //      importComponentByKeyAsync(key) first — the local id is a
@@ -1132,9 +1325,7 @@ const createSingleNode = async (
       ) {
         // Remote/published: key-first with id fallback (T7).
         try {
-          component = await figma.importComponentByKeyAsync(
-            compRef.key,
-          )
+          component = await importByKey(compRef.key)
         } catch {
           warnings?.push(
             'remote component key ' +
@@ -1189,12 +1380,10 @@ const createSingleNode = async (
           )
         }
       } else if (compRef?.key !== undefined) {
-        component = await figma.importComponentByKeyAsync(
-          compRef.key,
-        )
+        component = await importByKey(compRef.key)
       } else {
         throw new Error(
-          'INSTANCE requires component.id (local component node) or component.key (published/library component)',
+          'INSTANCE requires component.id (local component node) or component.key (published/library component or component set)',
         )
       }
       const instance = component.createInstance()
@@ -1932,6 +2121,23 @@ const handleCommand = async (
     // variant axes, and the per-property defaults. The server applies the
     // name query filter.
     case COMMANDS.GET_COMPONENTS: {
+      // The containing PAGE's name. A component is routinely organised
+      // inside a frame or section (the normal UI-kit layout), not parented
+      // directly to the page, so walk ancestors up to the first PAGE
+      // instead of checking only the immediate parent.
+      const pageNameOf = (
+        node: BaseNode,
+      ): string | null => {
+        let p: BaseNode | null = node.parent
+        while (p) {
+          if (p.type === 'PAGE') {
+            return p.name
+          }
+          p = p.parent
+        }
+        return null
+      }
+
       const componentSets = figma.root.findAllWithCriteria({
         types: ['COMPONENT_SET'],
       })
@@ -1969,10 +2175,7 @@ const handleCommand = async (
           name: cs.name,
           key: cs.key,
           type: cs.type,
-          page:
-            cs.parent && cs.parent.type === 'PAGE'
-              ? cs.parent.name
-              : null,
+          page: pageNameOf(cs),
         }
         try {
           const variantAxes: Record<string, string[]> = {}
@@ -2041,10 +2244,7 @@ const handleCommand = async (
             name: comp.name,
             key: comp.key,
             type: comp.type,
-            page:
-              comp.parent && comp.parent.type === 'PAGE'
-                ? comp.parent.name
-                : null,
+            page: pageNameOf(comp),
             properties: projectComponentDefs(compDefs),
             defaults: defaultsOf(compDefs),
             ...(readContext(comp) !== undefined ? { context: readContext(comp) } : {}),
@@ -2057,10 +2257,7 @@ const handleCommand = async (
             name: comp.name,
             key: comp.key,
             type: comp.type,
-            page:
-              comp.parent && comp.parent.type === 'PAGE'
-                ? comp.parent.name
-                : null,
+            page: pageNameOf(comp),
             ...(readContext(comp) !== undefined ? { context: readContext(comp) } : {}),
             ...(comp.description ? { description: comp.description } : {}),
           })
@@ -2087,8 +2284,8 @@ const handleCommand = async (
         {
           key: string
           name: string
-          library: string
           instancesCount: number
+          context?: string
           description?: string
         }
       > = {}
@@ -2123,11 +2320,8 @@ const handleCommand = async (
               remoteMap[mkey] = {
                 key: mkey,
                 name: main.name,
-                library:
-                  main.parent && main.parent.name
-                    ? main.parent.name
-                    : 'Unknown',
                 instancesCount: 0,
+                ...(readContext(main) !== undefined ? { context: readContext(main) } : {}),
                 ...(main.description ? { description: main.description } : {}),
               }
             }
@@ -2993,7 +3187,16 @@ const handleCommand = async (
           }
         }
         try {
-          scMain = await importer(scKey)
+          // Deadlined + concurrent: `importer` alone never settles for a key
+          // it cannot import, so this catch was previously unreachable.
+          scMain = await importComponentByKeyWithDeadline(
+            scKey,
+            {
+              component: k => importer(k),
+              set: k =>
+                figma.importComponentSetByKeyAsync(k),
+            },
+          )
         } catch (e) {
           return {
             id: inst.id,

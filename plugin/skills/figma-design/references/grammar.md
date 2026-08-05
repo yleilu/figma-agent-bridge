@@ -15,8 +15,8 @@ ships with the plugin since the spec file does not.
 
 | Category | What | Rendered as |
 |---|---|---|
-| **Struct** | composite with named fields | YAML |
-| **Atom** | single leaf value | compact string (this grammar) |
+| **Struct** | composite with named fields | YAML in `inspect`; JSON in every other read |
+| **Atom** | single leaf value | compact string (this grammar) — identical either way |
 
 Structs contain atoms as field values. All atoms share one shape.
 
@@ -37,7 +37,7 @@ Three parts, always in this order:
 3. **`{ … }`** *(optional)* — optional/rare fields, comma-separated `key=val`.
    Omitted when empty; always trailing.
 
-A field holding many atoms (e.g. `fills`) is a YAML array of atoms.
+A field holding many atoms (e.g. `fills`) is an array of atoms.
 
 **Canonical form (what reads emit):** `{…}` trailing, head args unspaced
 (`font(Inter,SemiBold,18)`), gradient stops spaced (`linear(135, #FF0000@0, #00FF00@100)`).
@@ -139,15 +139,23 @@ Bare literals: `opacity` `0.5` · `rotation` `45` · `blendMode` `MULTIPLY` ·
 ## `var()` and `style()` rules
 
 - Both wrap **any** atom; the resolved literal **always follows** the wrapper.
-- **`var()` is read-only** — emitted on reads to surface an existing binding. On
-  **write**, pass the literal value; apply bindings separately via `bind_variable`.
-- `style()` is similarly informational on reads; apply styles via `apply_style`.
+- **Both name their source** — `style(Brand/Primary)`, `var(radius/medium)`, never
+  an opaque id. The name is what you reason with and what you would write back.
+- **Both are read-only** — emitted on reads to surface an existing binding. On
+  **write**, either resolves to its literal, so writing one sets the appearance
+  and not the binding. Apply bindings with the tool that owns them:
+  `bind_variable` for `var()`, `apply_style` for `style()`.
+- **Only the node you asked for carries a wrapper.** Descendants inside a deep
+  `get_node`/`inspect` show the resolved literal without it, so a binding you care
+  about is best read by requesting that node directly.
 
 ---
 
-## Node struct fields (inspect / get_node view)
+## Node struct fields (inspect / get_node)
 
-The YAML struct wrapping atom values:
+The struct wrapping atom values. Shown as `inspect` renders it — YAML, the one
+YAML reader. `get_node` / `get_nodes` return the **same fields with the same
+atom strings**, serialized as JSON; only the container differs, never an atom.
 
 ```yaml
 type: FRAME
@@ -188,7 +196,10 @@ Key struct fields:
   separate top-level keys.
 - **`sizing`** — `[horizontal, vertical]` atom (FIXED/HUG/FILL).
 - **`layoutPositioning`** — `AUTO` | `ABSOLUTE` (child's flow participation).
-- **`componentProperties`** *(INSTANCE)* — current property values.
+- **`componentProperties`** *(INSTANCE)* — current property values. **Read-only** —
+  set them with `set_instance`, which validates each against the component's
+  definitions. Same for `variantProperties`, and for `id`, which Figma assigns.
+  Echoing them back in a spec is safe; they are ignored, not applied.
 - **`overrides`** *(INSTANCE)* — structured delta from main component.
 - **`component`** *(INSTANCE)* — `{id}` for local, `{key}` for library/published.
 

@@ -108,6 +108,14 @@ type MockPluginOptions = {
    * and the identity guard can't verify — see handleBroadcast).
    */
   fileKey?: string | null
+  /**
+   * The connection nonce sent on `register` (connection-liveness.md /
+   * change-feed.md) — the field the L6 dead-marker keys on. Defaults to a
+   * per-instance random value so distinct mock plugins are distinguishable;
+   * override to model TWO registers sharing an epoch, or omit-then-differ to
+   * model a reconnect.
+   */
+  epoch?: string
 }
 
 type MockPlugin = {
@@ -129,6 +137,16 @@ type MockPlugin = {
   // receipt, before the silent gate). Lets the L6 watchdog tests assert the
   // fast path never armed the watchdog (zero pings).
   pings: () => number
+  // holdCommand(command): withhold that command's reply INDEFINITELY, keeping
+  // it pending rather than dropping it (setSilent discards forever; delayCommand
+  // fires on a timer the test cannot align to an event). Combined with
+  // releaseHeld() this makes "the reply lands at this exact moment" testable —
+  // the L6 watchdog's mark path awaits a discoverChannels round-trip, a window
+  // of a few ms that no timer can reliably hit.
+  holdCommand: (command: string) => void
+  // releaseHeld(): send every reply held by holdCommand, now. Returns how many
+  // were released so a test can assert it actually armed the case it meant to.
+  releaseHeld: () => number
 }
 
 export const createMockPlugin = (
@@ -143,6 +161,7 @@ export const createMockPlugin = (
     componentSetError = false,
     version = APP_VERSION,
     fileKey = null,
+    epoch = `epoch:${Math.random().toString(36).slice(2, 8)}`,
   } = options
 
   let ws: WebSocket | null = null
@@ -163,6 +182,9 @@ export const createMockPlugin = (
   // default to off, so every pre-existing mock-based test keeps the
   // synchronous auto-answer it was written against.
   let silent = false
+  // L6 hold knob: commands whose reply is withheld until releaseHeld().
+  const heldCommands = new Set<string>()
+  const heldReplies: (() => void)[] = []
   const delayedCommands = new Map<string, number>()
   // Count of liveness pings received (see MockPlugin.pings). Incremented on
   // receipt regardless of the silent gate, so a silent-dead plugin still
@@ -457,8 +479,9 @@ export const createMockPlugin = (
         break
 
       // get_components: the NEW richer shape — key + variantAxes + `properties`
-      // + defaults per local entry, key + library + instancesCount per remote
-      // entry. `properties` is the SAME {id,name,type,defaultValue,
+      // + defaults per local entry, key + instancesCount per remote entry (no
+      // fabricated `library` — a remote instance carries no library identity,
+      // only `key` is honest). `properties` is the SAME {id,name,type,defaultValue,
       // variantOptions?} array shape + key update_component emits (read == write,
       // T2): each entry's `id` is the CANONICAL property id and `name` is the
       // part before "#".
@@ -509,7 +532,6 @@ export const createMockPlugin = (
               {
                 key: 'remote-key',
                 name: 'Icon',
-                library: 'Lib',
                 instancesCount: 3,
               },
             ]
@@ -2366,7 +2388,13 @@ export const createMockPlugin = (
 
     // L5 silent mode: withhold EVERY reply, incl. ping — models a fully dead
     // plugin/socket for the L6 watchdog tests. Nothing is sent, ever.
-    if (silent) {
+    //
+    // A HELD command is the exception, and the two compose deliberately:
+    // silence models a socket that answers nothing, holding models a reply
+    // that exists but has not been delivered yet. The L6 race needs both at
+    // once — pings going unanswered while the command's reply is still
+    // outstanding — so a held command falls through to be parked below.
+    if (silent && !heldCommands.has(cmd.command ?? '')) {
       return
     }
 
@@ -2444,6 +2472,12 @@ export const createMockPlugin = (
     // L5 delay knob: a command present in `delayedCommands` has its reply
     // deferred by the mapped ms (models a slow-but-alive plugin). Absent (the
     // default) → immediate synchronous reply, unchanged from before L5.
+    // L6 hold knob takes precedence over the delay knob: park the reply and
+    // let the test decide the instant it lands.
+    if (heldCommands.has(cmd.command!)) {
+      heldReplies.push(sendReply)
+      return
+    }
     const delayMs = delayedCommands.get(cmd.command!)
     if (delayMs !== undefined) {
       setTimeout(sendReply, delayMs)
@@ -2484,6 +2518,7 @@ export const createMockPlugin = (
               fileKey,
               fileName: documentName ?? null,
               version,
+              epoch,
             }
             socket.send(JSON.stringify(registerMsg))
 
@@ -2526,5 +2561,28 @@ export const createMockPlugin = (
 
   const pings = (): number => pingCount
 
-  return { start, stop, setSilent, delayCommand, pings }
+  const holdCommand = (command: string): void => {
+    heldCommands.add(command)
+  }
+
+  // Fire every parked reply and clear the queue. Returns the count so a test
+  // can assert it actually held something — a release of zero means the case
+  // it meant to arm never armed, which would make the assertion vacuous.
+  const releaseHeld = (): number => {
+    const n = heldReplies.length
+    for (const send of heldReplies.splice(0)) {
+      send()
+    }
+    return n
+  }
+
+  return {
+    start,
+    stop,
+    setSilent,
+    delayCommand,
+    pings,
+    holdCommand,
+    releaseHeld,
+  }
 }

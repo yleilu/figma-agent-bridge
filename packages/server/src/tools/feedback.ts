@@ -6,7 +6,7 @@ import {
 import {
   type ToolResult,
   textResult,
-  errorMessage,
+  toolError,
 } from './shared'
 
 export const handleRecordFeedback = async (
@@ -19,6 +19,6 @@ export const handleRecordFeedback = async (
       `Recorded feedback (${item.category}): ${item.title}`,
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

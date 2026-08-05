@@ -50,6 +50,7 @@ type BatchOut = {
     index: number
     op: string | null
     error?: string
+    code: string
   }[]
 }
 
@@ -155,6 +156,7 @@ describe('M3 batch tool e2e (mock plugin over real relay)', () => {
         index: 1,
         op: 'apply_style',
         error: out.results[1].error,
+        code: 'NODE_NOT_FOUND',
       },
     ])
   })

@@ -223,7 +223,10 @@ export const useRelay = () => {
         })
         const presenceWs = wsRef.current
         const presenceChannel = channelRef.current
-        if (presenceWs && presenceChannel) {
+        if (
+          presenceWs?.readyState === WebSocket.OPEN &&
+          presenceChannel
+        ) {
           presenceWs.send(
             JSON.stringify({
               type: 'presence',

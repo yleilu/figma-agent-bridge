@@ -21,19 +21,19 @@ export const createFromSvgParamsSchema = z.object({
     .string()
     .optional()
     .describe(
-      'Reserved — server-managed. Do NOT set. Injected by the session PreToolUse hook (request-envelope.md); ignored by this surface today.',
+      'Reserved — server-managed. Do NOT set. Injected by the session PreToolUse hook (request-envelope.md); the server remembers it once and keys the change-feed count file on it (change-feed.md).',
     ),
   agentId: z
     .string()
     .optional()
     .describe(
-      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); ignored by this surface today.',
+      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); the server forwards it as the key of the agent status row for this call (status-monitor.md).',
     ),
   agentType: z
     .string()
     .optional()
     .describe(
-      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); ignored by this surface today.',
+      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); the server forwards it as the display label on that agent status row (status-monitor.md).',
     ),
   parentId: z
     .string()

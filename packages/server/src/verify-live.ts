@@ -37,6 +37,7 @@ import type {
 import { handleExport } from './tools/export'
 import { handleSetFocus } from './tools/structure'
 import { handleDeleteNode } from './tools/structure'
+import { isErrorResult } from './tools/shared'
 import {
   CHECK_LIST,
   ALL_TOOLS,
@@ -419,7 +420,8 @@ const main = async (): Promise<number> => {
           { nodeId: id },
           scoped,
         )
-        if (!r.content[0]?.text.startsWith('Error:')) {
+        const failed = isErrorResult(r)
+        if (!failed) {
           deleted++
         }
       } catch {

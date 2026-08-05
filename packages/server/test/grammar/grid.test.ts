@@ -150,9 +150,25 @@ describe('grid: atomToGrid(gridToAtom(g)) deep-equals g', () => {
   })
 })
 
-// --- read-side: Infinity (Figma's auto count) maps back to the STRING auto ---
-describe('grid: gridToAtom maps Figma Infinity count → auto', () => {
-  it('Infinity count renders as the string auto', () => {
+// --- read-side: Figma's raw auto-count maps back to the STRING auto ---
+describe('grid: gridToAtom maps Figma auto count → auto', () => {
+  // Live-verified: creating columns(auto,60,20){align=MIN} and reading it
+  // back off the real plugin yields raw layoutGrids count -1, NOT Infinity
+  // — JSON can't carry Infinity over the wire, so Figma never actually sends
+  // it. -1 is the value this must handle; Infinity is exercised separately
+  // below as a harmless superset, not the live contract.
+  it('-1 count (the value Figma actually sends) renders as the string auto', () => {
+    const g = {
+      pattern: 'COLUMNS',
+      alignment: 'STRETCH',
+      count: -1,
+      gutterSize: 8,
+      sectionSize: 40,
+    } as unknown as FigmaLayoutGrid
+    expect(gridToAtom(g)).toBe('columns(auto,40,8)')
+  })
+
+  it('Infinity count also renders as the string auto (harmless superset)', () => {
     const g = {
       pattern: 'COLUMNS',
       alignment: 'STRETCH',

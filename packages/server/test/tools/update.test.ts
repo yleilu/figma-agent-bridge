@@ -86,10 +86,12 @@ describe('handleUpdateNode', () => {
         reply: { error: 'Node not found: 1:42' },
       }),
     )
-    expect(result.content[0].text).toContain('Error')
-    expect(result.content[0].text).toContain(
-      'Node not found',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Node not found')
+    expect(data.code).toBe('NODE_NOT_FOUND')
   })
 
   it('surfaces plugin warnings on success', async () => {

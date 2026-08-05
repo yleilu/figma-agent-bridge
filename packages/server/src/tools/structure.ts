@@ -38,9 +38,8 @@ import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { ScopedFigmaClient } from '../figma-client'
 import {
   type ToolResult,
-  textResult,
   formatMutationResult,
-  errorMessage,
+  toolError,
 } from './shared'
 
 export const handleDeleteNode = async (
@@ -57,7 +56,7 @@ export const handleDeleteNode = async (
       'Failed to delete node.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -75,7 +74,7 @@ export const handleSetFocus = async (
       'Failed to set focus.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -103,7 +102,7 @@ export const handleCloneNode = async (
       'Failed to clone node.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -129,7 +128,7 @@ export const handleReparentNode = async (
       'Failed to reparent node.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -150,7 +149,7 @@ export const handleReorderChildren = async (
       'Failed to reorder children.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -176,7 +175,7 @@ export const handleBooleanOp = async (
       'Failed to perform boolean operation.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -197,7 +196,7 @@ export const handleFlatten = async (
       'Failed to flatten nodes.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -218,7 +217,7 @@ export const handleGroupNodes = async (
       'Failed to group nodes.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -260,6 +259,6 @@ export const handleTransformGroup = async (
       'Failed to transform group nodes.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

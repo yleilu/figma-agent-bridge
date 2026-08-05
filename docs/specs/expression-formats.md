@@ -98,7 +98,7 @@ tail lives, so the core stays short.
 | diamond gradient | `diamond(#FF0000@0, #0000FF@100)` |
 | image | `image(HASH)` · write also `image(url)` |
 | video | `video(HASH)` |
-| pattern | `pattern(componentId)` |
+| pattern | `pattern(sourceNodeId){shape=RECT, tile=1, gap=[0,0], align=CENTER}` |
 
 - **Solid:** `solid()` is **optional** — a bare color *is* a solid paint. Color
   notations: `#RRGGBB`, `#RRGGBBAA`, `rgb(r,g,b)`, `rgba(r,g,b,a)` (a = 0–1). The
@@ -107,10 +107,31 @@ tail lives, so the core stays short.
   `gradientTransform`). **Angle is linear-only** — `radial`, `angular`, and `diamond`
   carry no angle (the build side never converts angle back to a transform for them);
   non-trivial geometry for any gradient goes in `{tf=[a,b,c,d,e,f]}`. Stops are `#color@percent`.
-- **`{…}` keys (any paint):** `op=` (paint opacity, distinct from color alpha),
+- **`{…}` keys (any paint):** `op=` (paint opacity — on a **SOLID** this is the
+  *same* channel as the colour's alpha, since Figma's `SolidPaint` carries an RGB
+  colour and one opacity and has no separate colour alpha; `#RRGGBBAA` and `{op=}`
+  are two spellings of it, and a read emits the compact hex form. On a gradient or
+  image the paint's opacity is genuinely distinct from the stop/pixel alpha),
   `blend=` (blend mode), `vis=false` (hidden paint). Image/video also: `scale=`
   (FILL/FIT/CROP/TILE), `rot=` (0/90/180/270), `tile=` (scaling factor),
   `filter=` (exposure/contrast/…). Non-trivial gradient geometry: `tf=[a,b,c,d,e,f]`.
+- **Pattern:** tiles a source node across the shape. Figma marks four fields
+  **required**, so the grammar always emits them and supplies a default when a write
+  omits one: `shape=` tile shape — `RECT` (default) / `HEX-H` / `HEX-V`; `tile=`
+  scaling factor (default `1`, the same key and meaning as an image's); `gap=[x,y]`
+  spacing between tiles (default `[0,0]`); `align=` horizontal alignment — `START` /
+  `CENTER` (default) / `END`. A pattern paint missing any of them is rejected at the
+  Figma boundary, so partial emission is never valid.
+
+  > **The shipped Figma runtime rejects `PATTERN` outright — a write will fail.**
+  > `@figma/plugin-typings` declares `PatternPaint` (unchanged across 1.123–1.132) and
+  > this grammar matches it field for field, but the app validates fills against a
+  > discriminator that omits `PATTERN` and includes `SHADER`: *"Invalid discriminator
+  > value. Expected 'SOLID' | 'SHADER' | 'GRADIENT_*' | 'IMAGE' | …"*. The rejection is
+  > at the type, before any field check, so a complete paint fails exactly like a
+  > partial one. The form above stays specified because it is Figma's published
+  > contract and is what the surface will emit the moment the runtime accepts it.
+  > **Delete this note once a pattern fill applies**; nothing else here changes.
 - **Image source (write asymmetry):** the view always emits `image(HASH)`; the
   **write parser also accepts `image(url)`** — the server creates the hash
   (`createImageAsync`, deduped by URL). The `create_image(url|bytes)` tool is the
@@ -178,14 +199,25 @@ Bare literals: `opacity` `0.5` · `rotation` `45` · `blendMode` `MULTIPLY` ·
 Composite types render as YAML maps; their leaves are atoms. The fields a struct
 exposes:
 
-- **node** — `type, name, id, size, position, layoutPositioning, fills[], strokes[], stroke, effects[], radius, opacity, rotation, blend, visible, clipsContent, exportSettings[], layout, sizing, constraints, text, component, componentProperties, variantProperties, overrides, context, children[]` (children are nested node structs).
+- **node** — `type, name, id, size, position, layoutPositioning, fills[], strokes[], stroke, effects[], radius, opacity, rotation, blend, visible, clipsContent, exportSettings[], layout, sizing, constraints, text, component, componentProperties, variantProperties, overrides, warnings, context, children[]` (children are nested node structs).
 - **layout** — `{mode: H|V|NONE|GRID, gap, pad: [t,r,b,l], align: [primary, counter], wrap, rows, cols, rowGap, colGap}`. `mode: NONE` turns auto-layout off. `mode: GRID` enables Figma's CSS-Grid-like layout; the four grid keys (`rows`, `cols`, `rowGap`, `colGap`) are GRID-only — `gap`/`align`/`wrap` are H/V-only. Deferred follow-on: `gridRowSizes`/`gridColumnSizes` (track sizing) and per-child `gridRowSpan`/`gridColumnSpan`/`gridChild*Align` (child placement) — see `docs/deferred-capabilities.md`.
 - **text** — `{content, font, color, align, valign, decoration, case, paragraphSpacing, runs}`. `font`/`color` are atoms; `runs` carries per-range overrides (see below). Line height and letter spacing are canonical on the `font(...)` atom (`font(...){lh=24, ls=0.5}`) — there are no separate top-level `lh`/`ls` text keys.
 - **exportSettings** — array of persistent export presets, each `{format: PNG|JPG|SVG|PDF, suffix?, constraint?: [SCALE|WIDTH|HEIGHT, value]}`. Round-trips via `get_node`/`update_node` (the persistent-presets path; the `export` tool itself is one-off render/asset output).
 - **layoutPositioning** — `AUTO` | `ABSOLUTE` (a child's flow vs absolute participation). Paired with the parent's `layout.mode` it is what distinguishes a true absolute child from a flow child (the §7 absolute-positioning audit reads this — `position` alone can't, since flow children still carry x/y).
-- **componentProperties / variantProperties** *(on INSTANCE / variant nodes)* — the instance's current property values and variant selection. The `componentPropertyDefinitions` (the schema) live on the component/set and are read via `get_components`.
-- **overrides** — the structured override delta on an instance: which fields / nested instances differ from the main component, so the agent can **read, replay, or report** surviving overrides (the read side of `set_instance`; read via `get_node`).
-- **component** *(on INSTANCE)* — the main-component reference for `create_node(INSTANCE)`: `{ key }` for a published/library component (`importComponentByKeyAsync`) **or** `{ id }` for a local component node, plus optional `properties` (component-property values, by exact key). **Write side: both paths.** **Read side:** `get_node` reads back `{ id }` for a **local** instance so it round-trips (T2); round-tripping a **published/library** instance (reading its `key` back) is a **documented deferred gap** (`docs/deferred-capabilities.md`) — it needs `getMainComponentAsync` on the read path (perf-sensitive). Instance property *values* read back via `componentProperties`, not here. Resolves the `tool-surface.md` "create_node(INSTANCE) by key/id" capability to a concrete field.
+- **componentProperties / variantProperties** *(on INSTANCE / variant nodes)* — the instance's current property values and variant selection. The `componentPropertyDefinitions` (the schema) live on the component/set and are read via `get_components`. **Read-only** — see *Read-only node fields* below.
+- **warnings** — the read's honesty channel: one entry per piece of the node's state this read **could not represent**, naming the field and the reason (e.g. a `VIDEO` fill the grammar does not render yet). Omitted entirely when nothing was lost, so its presence is the signal. **Read-only** — see below.
+- **Read-only node fields (T2 asymmetries).** Four fields of the node struct are emitted on reads and **ignored on writes**, deliberately:
+  - **`componentProperties`** — a *projection* of the instance's current property values. Setting them is `set_instance`'s job, which validates each value against the component's `componentPropertyDefinitions`; a blind spec write-back would have no schema to check against.
+  - **`variantProperties`** — likewise a projection of which variant is selected. The variant is chosen by `set_instance`, or by `swap_component` for a different main.
+  - **`id`** — assigned by Figma when the node is created. A create cannot choose it, and an update addresses the node by it.
+  - **`warnings`** — an observation *about* the read, not a property of the node. It exists so a lossy read says so instead of handing back an array that looks complete; a read-modify-write that echoes it back changes nothing.
+
+  A read-modify-write therefore preserves these values in the document without the
+  write asserting them, which is why they can be echoed back safely. Anything else
+  the node struct documents **does** round-trip; a field that stops doing so is a
+  bug, not a new entry here.
+- **overrides** — the structured override delta on an instance: **which fields** (and which nested instances) differ from the main component, so the agent can **read and report** surviving overrides (read via `get_node`). It carries field *names*, not their values — Figma's override record is `{id, overriddenFields}` — so it says *that* a field is overridden, never *what to*; read the value from the node struct itself. **Report-only, not a write format:** `set_instance` accepts per-node `overrides` but degrades them with a warning (`tool-surface.md`), so no read of this field can be fed back to re-apply an override.
+- **component** *(on INSTANCE)* — the main-component reference for `create_node(INSTANCE)`: `{ key }` for a published/library component **or component set** (`importComponentByKeyAsync`, falling back to `importComponentSetByKeyAsync` — a set resolves to its `defaultVariant`, matching the local-`id` path, because you instance a variant and never the set itself) **or** `{ id }` for a local component node, plus optional `properties` (component-property values, by exact key). **Write side: both paths.** **Read side:** `get_node` reads back `{ id }` for a **local** instance so it round-trips (T2); round-tripping a **published/library** instance (reading its `key` back) is a **documented deferred gap** (`docs/deferred-capabilities.md`) — it needs `getMainComponentAsync` on the read path (perf-sensitive). Instance property *values* read back via `componentProperties`, not here. Resolves the `tool-surface.md` "create_node(INSTANCE) by key/id" capability to a concrete field.
 - **context** — a round-tripping markdown **metadata field** (frontmatter scalars + fixed `##` body sections), stored in shared `pluginData` under `CONTEXT_NS = "figmabridge"` / `CONTEXT_KEY = "context"`. It is a **plain string, not an atom** (renders as a YAML block scalar), size-capped at 2 KB (`CONTEXT_MAX_BYTES` = 2048). View/edit split: the fidelity readers (`get_node`/`get_nodes`) return the full `context` and it round-trips via `create_node`/`update_node`; the view/list readers (`inspect`/`search`/`get_components`) emit a read-only `contextSummary` (the capped frontmatter slice). An over-cap value written via the raw `set_plugin_data` escape hatch is a declared read-only, non-round-trippable state (T2). Full field spec: `docs/specs/self-describing-nodes.md`.
 
 ## The `{…}` attribute catalogue (completeness)
@@ -196,9 +228,42 @@ dropped: paint `op`/`blend`/`vis`, image `scale`/`rot`/`filter`, shadow `spread`
 `behind`, per-side stroke + `cap`/`join`/arbitrary `dash`, gradient `tf`,
 `video()`/`pattern()` paints. Two struct-level additions:
 
-- **node layout grids** — `grids: ["columns(12,32,auto){align=STRETCH, offset=16, color=#FF000010}", "rows(...)"]` (the grid head + the same `{…}` channel).
+- **node layout grids** — `grids: ["columns(12,0,24){offset=16, color=#FF000010}", "columns(12,80,20){align=MIN}"]` (the grid head + the same `{…}` channel; full contract below).
 - **vector paths** — `vectorPaths: ["path(NONZERO,\"M0 0 L100 0 L100 100 Z\")", "path(EVENODD,\"M...\")"]` (VECTOR nodes only; read back from `node.vectorPaths`).
 - **text per-range runs** — `runs: [{ at:[0,4], font: font(Inter,Bold,16), color: #FF0000 }]`; each run is the same atoms scoped by `at:[start,end]`; base `text.*` is the default, runs override.
+
+## columns(count, sectionSize, gutterSize) / rows(...) / grid(sectionSize)
+
+Layout-grid atoms for a FRAME's `grids[]` field — Figma's own property is `layoutGrids`.
+
+| Variant | Form |
+|---|---|
+| columns | `columns(count, sectionSize, gutterSize)` |
+| rows | `rows(count, sectionSize, gutterSize)` — identical shape, ROWS pattern |
+| square grid | `grid(sectionSize)` |
+
+- **`columns`/`rows` positional args:** `count` (a number, or the literal `auto`
+  — the **only** place `auto` is legal in this grammar); `sectionSize`
+  (column/row width in px); `gutterSize` (a number — there is no auto gutter).
+- **`{…}` keys (`columns`/`rows`):** `align=` (`MIN`/`MAX`/`CENTER`/`STRETCH`,
+  default `STRETCH`), `offset=` (leading margin, px), `color=` (hex, the
+  grid's display color), `vis=false` (hidden grid).
+- **`align=STRETCH` (the default) ignores `sectionSize`:** under STRETCH,
+  Figma derives the section size from the frame and **rejects** an explicit
+  `sectionSize` — give `sectionSize` a real value only alongside a
+  non-STRETCH `align`.
+- **`grid(sectionSize)`** is the square-cell pattern: one positional arg
+  (required — Figma rejects a missing `sectionSize`), plus the shared
+  `color=`/`vis=` keys. No `align=`/`offset=` — those are columns/rows-only.
+
+Examples:
+```
+columns(12,0,24){offset=16, color=#FF000010}
+columns(12,80,20){align=MIN}
+grid(8)
+```
+
+Read back on the `grids` field of a FRAME node. Write: supply in `create_node`/`update_node` spec as `grids: [columns(...), ...]`.
 
 ## path(windingRule, "data")
 
@@ -252,11 +317,26 @@ tool-surface design).
 ## var() / style() rules
 
 - Both wrap **any** atom; the resolved literal always follows.
-- **`var()` is read-only this phase** — it is emitted on reads to surface an
-  existing binding, but on **write** it resolves to a literal (binding is applied
-  via the `bind_variable` tool, scalar fields only). This is the one
-  **deliberate, documented asymmetry** (principle T2); see the tool-surface design
-  → *Expression integration*.
+- **Both wrappers name their source.** A read emits `style(Brand/Primary)` and
+  `var(radius/medium)` — the design-system **name**, never the opaque runtime id.
+  The name is what the agent reasons with and what it would write back; an id
+  identifies the binding to Figma but tells the agent nothing about which token it
+  is looking at, and costs a second call to find out.
+- **Both wrappers are read-only — the two *wrapper* asymmetries** (principle T2).
+  Each is emitted on a read to surface an existing binding; on **write** each
+  resolves to its literal, and the binding is applied by the tool that owns it —
+  `bind_variable` for `var()`, `apply_style` for `style()`. Writing a wrapper
+  therefore sets the appearance, never the binding. *(Principle T2 requires a field
+  that cannot round-trip to be documented rather than silent; this is that
+  documentation for the wrappers. The read-only **node fields** are listed
+  separately under the node struct.)*
+- **Root-only enrichment (T10).** Resolving a binding to its name costs a lookup
+  per bound field, so a read emits wrappers on the **directly-requested node**
+  only; descendants inside a deep `get_node`/`inspect` subtree carry the resolved
+  literal without the wrapper. This is the same bounded-scan rule
+  `component.key` already follows (tool-surface design → *Expression integration*)
+  and for the same reason: an O(nodes × bound fields) resolution on a deep tree is
+  exactly the unbounded work T10 forbids.
 
 ## Notes
 

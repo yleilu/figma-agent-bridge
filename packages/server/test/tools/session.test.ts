@@ -81,6 +81,28 @@ describe('handleConnect', () => {
     expect(result.content[0].type).toBe('text')
     expect(result.content[0].text).toContain('test-ch')
   })
+
+  it('returns a typed envelope when joinChannel throws (explicit channel)', async () => {
+    const mockClient: FigmaClient = {
+      joinChannel: () =>
+        Promise.reject(new Error('Not connected')),
+      sendCommand: () => Promise.resolve(null),
+      disconnect: () => undefined,
+      isConnected: () => true,
+    }
+
+    const result = await handleConnect(
+      { channel: 'test-ch' },
+      mockClient,
+    )
+
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toBe('Not connected')
+    expect(data.code).toBe('DISCONNECTED')
+  })
 })
 
 describe('handleConnect auto-discovery', () => {
@@ -174,6 +196,136 @@ describe('handleConnect auto-discovery', () => {
     )
   })
 
+  it('a version-skewed explicit channel is refused as INCOMPATIBLE', async () => {
+    const ws = await connectRaw()
+    ws.send(
+      JSON.stringify({ type: 'join', channel: 'skew-ch' }),
+    )
+    await waitForMessage(ws)
+    ws.send(
+      JSON.stringify({
+        type: 'register',
+        channel: 'skew-ch',
+        fileName: null,
+        version: '0.0.1',
+      }),
+    )
+    await Bun.sleep(30)
+
+    const mockClient: FigmaClient = {
+      joinChannel: () => Promise.resolve('joined skew-ch'),
+      sendCommand: () => Promise.resolve(null),
+      disconnect: () => undefined,
+      isConnected: () => true,
+      notifyMismatch: () => undefined,
+    } as unknown as FigmaClient
+
+    const result = await handleConnect(
+      { channel: 'skew-ch' },
+      mockClient,
+      HTTP_URL,
+      TEST_PORT,
+    )
+
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INCOMPATIBLE')
+    expect(data.error).toContain('0.0.1')
+
+    await closeWs(ws)
+  })
+
+  it('a version-skewed resolved target is refused as INCOMPATIBLE', async () => {
+    const ws = await connectRaw()
+    ws.send(
+      JSON.stringify({
+        type: 'join',
+        channel: 'skew-target-ch',
+      }),
+    )
+    await waitForMessage(ws)
+    ws.send(
+      JSON.stringify({
+        type: 'register',
+        channel: 'skew-target-ch',
+        fileName: 'Skewed Doc',
+        version: '0.0.1',
+      }),
+    )
+    await Bun.sleep(30)
+
+    const mockClient: FigmaClient = {
+      joinChannel: () =>
+        Promise.resolve('joined skew-target-ch'),
+      sendCommand: () => Promise.resolve(null),
+      disconnect: () => undefined,
+      isConnected: () => true,
+      notifyMismatch: () => undefined,
+    } as unknown as FigmaClient
+
+    const result = await handleConnect(
+      { fileName: 'Skewed Doc' },
+      mockClient,
+      HTTP_URL,
+      TEST_PORT,
+    )
+
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INCOMPATIBLE')
+    expect(data.error).toContain('0.0.1')
+
+    await closeWs(ws)
+  })
+
+  it('returns a typed envelope when joinChannel throws (resolved target)', async () => {
+    const ws = await connectRaw()
+    ws.send(
+      JSON.stringify({
+        type: 'join',
+        channel: 'resolve-throw-ch',
+      }),
+    )
+    await waitForMessage(ws)
+    ws.send(
+      JSON.stringify({
+        type: 'register',
+        channel: 'resolve-throw-ch',
+        fileName: 'test-file',
+        version: APP_VERSION,
+      }),
+    )
+    await Bun.sleep(30)
+
+    const mockClient: FigmaClient = {
+      joinChannel: () =>
+        Promise.reject(new Error('Not connected')),
+      sendCommand: () => Promise.resolve(null),
+      disconnect: () => undefined,
+      isConnected: () => true,
+    } as unknown as FigmaClient
+
+    const result = await handleConnect(
+      { fileName: 'test-file' },
+      mockClient,
+      HTTP_URL,
+      TEST_PORT,
+    )
+
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toBe('Not connected')
+    expect(data.code).toBe('DISCONNECTED')
+
+    await closeWs(ws)
+  })
+
   it('explicit channel bypasses discovery', async () => {
     const calls: string[] = []
     const mockClient: FigmaClient = {
@@ -199,6 +351,39 @@ describe('handleConnect auto-discovery', () => {
 })
 
 describe('handleStatus', () => {
+  // Regression guard (e09fedc): the skew message was computed from
+  // `mine?.version`, but `mine` is undefined whenever the registry lookup
+  // MISSED — no relayHttpUrl, relay unreachable, entry unpublished. That is
+  // not "the plugin reported no version" (which protocolMismatch correctly
+  // treats as a skew on connect); it means we observed nothing. Reporting it
+  // as incompatible told the user to reinstall a plugin that is answering the
+  // live read in the same call.
+  it('does not invent a version skew when the registry lookup misses', async () => {
+    const mockClient = {
+      joinChannel: () => Promise.resolve(''),
+      sendCommand: () =>
+        Promise.resolve({
+          currentPage: { id: '0:1', name: 'Page 1' },
+          selection: [],
+        }),
+      disconnect: () => undefined,
+      isConnected: () => true,
+      joinedFiles: () => ['FK-1'],
+      channelFor: () => 'file-FK-1',
+    } as unknown as FigmaClient
+
+    // No relayHttpUrl → discoverChannels never runs → infos stays empty.
+    const result = await handleStatus(mockClient)
+    const text = result.content[0].text
+    const data = JSON.parse(text)
+    const entry = (data.joined ?? data)[0] ?? data
+
+    expect(text).not.toContain('incompatible')
+    expect(text).not.toContain('reinstall')
+    // The live read still landed — this is a healthy plugin, not a silent one.
+    expect(JSON.stringify(entry)).toContain('Page 1')
+  })
+
   it('returns disconnected when no file is joined', async () => {
     const mockClient = {
       joinChannel: () => Promise.resolve(''),
@@ -328,5 +513,68 @@ describe('handleStatus', () => {
     expect(out.connected).toBe(true)
     expect(out.joined[0].channel).toBe('degraded-ch')
     expect(out.joined[0].currentPage).toBeUndefined()
+  })
+})
+
+// version-handshake.md:118 — "minor/major difference → the actionable error,
+// surfaced on `connect` and `status`". status reported the two versions and
+// left the compare to the reader, which is not the same thing: the agent is
+// reading this entry precisely because something is already behaving oddly.
+describe('handleStatus surfaces a version skew', () => {
+  const stubRelay = (version: string): Server =>
+    Bun.serve({
+      port: 0,
+      fetch: () =>
+        new Response(
+          JSON.stringify([
+            {
+              channel: 'file-fk-1',
+              fileName: 'F',
+              fileKey: 'fk-1',
+              connectedAt: Date.now(),
+              version,
+              epoch: 'epoch-x',
+            },
+          ]),
+          {
+            headers: {
+              'content-type': 'application/json',
+            },
+          },
+        ),
+    })
+
+  const statusWith = async (
+    version: string,
+  ): Promise<Record<string, unknown>> => {
+    const srv = stubRelay(version)
+    const client = {
+      joinChannel: () => Promise.resolve(''),
+      sendCommand: () => Promise.resolve(null),
+      disconnect: () => undefined,
+      isConnected: () => true,
+      joinedFiles: () => ['fk-1'],
+      channelFor: () => 'file-fk-1',
+    } as unknown as FigmaClient
+    const result = await handleStatus(
+      client,
+      `http://localhost:${srv.port}`,
+    )
+    srv.stop(true)
+    return JSON.parse(
+      result.content[0].text ?? '',
+    ) as Record<string, unknown>
+  }
+
+  it('flags an incompatible plugin on its joined entry', async () => {
+    const out = await statusWith('0.1.0')
+    const joined = out.joined as { incompatible?: string }[]
+    expect(joined[0].incompatible).toContain('0.1.0')
+  })
+
+  it('omits the field when the versions agree', async () => {
+    const out = await statusWith(APP_VERSION)
+    const joined = out.joined as { incompatible?: string }[]
+    expect(joined[0].incompatible).toBeUndefined()
   })
 })

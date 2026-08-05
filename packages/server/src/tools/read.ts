@@ -18,9 +18,12 @@ import { paginateList, CursorError } from '../read/paginate'
 import {
   type ToolResult,
   textResult,
-  errorMessage,
+  toolError,
+  pluginError,
+  errorEnvelope,
   cursorRejected,
 } from './shared'
+import { classifyMessage, type ErrorCode } from '../errors'
 
 type ReadSelectors = {
   fields?: string[]
@@ -114,9 +117,16 @@ export const handleInspect = async (
       | Record<string, unknown>[]
       | null
     if (raw === null) {
-      return textResult(
+      return errorEnvelope(
+        'NODE_NOT_FOUND',
         `Node not found: ${nodeId ?? pageId ?? 'selection'}`,
       )
+    }
+    if (
+      raw !== null &&
+      typeof (raw as { error?: unknown }).error === 'string'
+    ) {
+      return pluginError((raw as { error: string }).error)
     }
 
     // Multi-selection → assemble a forest under a synthetic SELECTION root so
@@ -132,19 +142,29 @@ export const handleInspect = async (
           ),
         }
       : toNodeSpec(raw, { depth: -1 })
-    // The synthetic SELECTION root is transparent to `depth`: a forest depth of
-    // N must keep N levels below each SELECTED node, not below the wrapper. So
-    // a non-negative depth (including the depth=0 default applied when neither
-    // depth nor budget is given) is bumped by one level to account for the extra
-    // root. depth=-1 (return-all) and the budget path are unaffected (budget
-    // ignores depth in truncateTree).
-    const forestDepth =
-      depth === undefined
-        ? 1
-        : depth >= 0
-          ? depth + 1
-          : depth
-    const effectiveDepth = isForest ? forestDepth : depth
+    // The synthetic SELECTION root eats one level, so `depth` needs adjusting
+    // before it reaches truncateTree. Four cases, one per thing the caller asked.
+    const forestDepth = (): number | undefined => {
+      if (depth === undefined && budget !== undefined) {
+        // Budget-only: the budget decides how deep to fill. Forcing a depth
+        // here truncates the tree before the budget fill ever runs — which is
+        // exactly the regression this shape used to have, back when a budget
+        // made truncateTree ignore depth and this bump looked harmless.
+        return undefined
+      }
+      if (depth === undefined) {
+        // Nothing asked for: show the selected nodes themselves — a bare
+        // depth=0 would show the wrapper and stub everything under it.
+        return 1
+      }
+      if (depth < 0) {
+        // -1 is every level; the wrapper changes nothing.
+        return depth
+      }
+      // A level cap counts from the selected nodes, so skip past the wrapper.
+      return depth + 1
+    }
+    const effectiveDepth = isForest ? forestDepth() : depth
     const { view, truncated } = truncateTree(full, {
       depth: effectiveDepth,
       budget,
@@ -174,7 +194,7 @@ export const handleInspect = async (
       YAML.stringify({ view: projected, truncated }),
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -185,7 +205,7 @@ export const handleInspect = async (
  *
  * Fidelity-first: sends COMMANDS.GET_NODE → toNodeSpec(depth) (children past
  * the boundary collapse to IdStubs; depth=0 default) → projectNode(fields/
- * profile) → YAML. It does NOT route through read/budget — get_node is never
+ * profile) → JSON. It does NOT route through read/budget — get_node is never
  * size-truncated.
  */
 export const handleGetNode = async (
@@ -211,15 +231,24 @@ export const handleGetNode = async (
       },
     )) as Record<string, unknown> | null
     if (raw === null) {
-      return textResult(`Node not found: ${nodeId}`)
+      return errorEnvelope(
+        'NODE_NOT_FOUND',
+        `Node not found: ${nodeId}`,
+      )
+    }
+    if (
+      raw !== null &&
+      typeof (raw as { error?: unknown }).error === 'string'
+    ) {
+      return pluginError((raw as { error: string }).error)
     }
 
     const spec = toNodeSpec(raw, { depth: depth ?? 0 })
     const projected = projectNode(spec, { fields, profile })
 
-    return textResult(YAML.stringify(projected))
+    return textResult(JSON.stringify(projected, null, 2))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -258,15 +287,25 @@ export const handleGetNodes = async (
       },
     )) as Record<string, unknown>[] | null
     if (raw === null) {
-      return textResult('Failed to get nodes from plugin.')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Failed to get nodes from plugin.',
+      )
     }
 
     if (!Array.isArray(raw)) {
-      return textResult('Unexpected response from plugin')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Unexpected response from plugin',
+      )
     }
 
     const results: Partial<NodeSpec>[] = []
-    const errors: { id: string; error: string }[] = []
+    const errors: {
+      id: string
+      error: string
+      code: ErrorCode
+    }[] = []
     for (const entry of raw) {
       if (
         entry !== null &&
@@ -275,6 +314,7 @@ export const handleGetNodes = async (
         errors.push({
           id: (entry.id as string) ?? '',
           error: entry.error,
+          code: classifyMessage(entry.error),
         })
         continue
       }
@@ -282,9 +322,11 @@ export const handleGetNodes = async (
       results.push(projectNode(spec, { fields, profile }))
     }
 
-    return textResult(YAML.stringify({ results, errors }))
+    return textResult(
+      JSON.stringify({ results, errors }, null, 2),
+    )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -316,7 +358,10 @@ export const handleListPages = async (
       }[]
     } | null
     if (raw === null) {
-      return textResult('Failed to get pages from plugin.')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Failed to get pages from plugin.',
+      )
     }
 
     // T10 — bound the AGENT-CONTEXT: slice the page list to one page.
@@ -346,8 +391,8 @@ export const handleListPages = async (
     if (bounded.cursor !== undefined) {
       out.cursor = bounded.cursor
     }
-    return textResult(YAML.stringify(out))
+    return textResult(JSON.stringify(out, null, 2))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

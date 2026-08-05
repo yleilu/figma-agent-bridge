@@ -9,9 +9,10 @@ import { ensureRelay } from '../ensure-relay'
 import {
   type ToolResult,
   textResult,
-  errorMessage,
+  errorEnvelope,
   protocolMismatch,
   synthKey,
+  toolError,
 } from './shared'
 
 // --- target resolution (B3): match a connect request to exactly ONE file ---
@@ -164,7 +165,7 @@ export const handleConnect = async (
             info.version ?? '(none)',
             APP_VERSION,
           )
-          return textResult(mismatch)
+          return errorEnvelope('INCOMPATIBLE', mismatch)
         }
       }
     }
@@ -185,7 +186,7 @@ export const handleConnect = async (
         available,
       })
     } catch (err) {
-      return textResult(`Error: ${errorMessage(err)}`)
+      return toolError(err)
     }
   }
 
@@ -231,7 +232,7 @@ export const handleConnect = async (
       info.version ?? '(none)',
       APP_VERSION,
     )
-    return textResult(mismatch)
+    return errorEnvelope('INCOMPATIBLE', mismatch)
   }
 
   try {
@@ -244,7 +245,7 @@ export const handleConnect = async (
       available,
     })
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -255,12 +256,12 @@ const STATUS_LIVE_TIMEOUT_MS = 2500
 
 /**
  * status() → { connected, joined[], available[] } where each joined entry is
- * { fileKey, fileName, channel, protocolVersion, currentPage, selection[],
+ * { fileKey, fileName, channel, version, currentPage, selection[],
  *   viewport }.
  *
  * Reports EVERY joined file (multi-file, B3) — not a single currentFileKey. The
  * connection identity (fileKey/channel) is known SERVER-side; fileName +
- * protocolVersion + available[] come from the relay registry (/channels); the
+ * version + available[] come from the relay registry (/channels); the
  * LIVE context (currentPage / selection / viewport) is read PER FILE from its
  * plugin via COMMANDS.STATUS and merged in. Each live read is best-effort and
  * bounded: a failed/slow round-trip still reports connection state for that file
@@ -313,11 +314,30 @@ export const handleStatus = async (
       } catch {
         // Best-effort per file.
       }
+      // version-handshake.md: the skew's actionable message is surfaced on
+      // connect AND status. Reporting the two versions and leaving the compare
+      // to the reader is not surfacing it — the agent would have to know the
+      // major.minor rule to spot a skew, and would be reading this entry
+      // precisely because something is already behaving oddly.
+      //
+      // Only a version we actually OBSERVED can be compared. When the registry
+      // lookup missed — no relayHttpUrl, relay unreachable, entry not published
+      // — `mine` is undefined, and that says nothing about the plugin's
+      // version. protocolMismatch treats undefined as "reported no version"
+      // (correct on connect, where a live plugin answered), so passing it a
+      // lookup miss fabricates a skew for a plugin that is answering the live
+      // read three lines above. A registered plugin that genuinely reported no
+      // version still has `mine`, so that real skew is unaffected.
+      const skew =
+        mine !== undefined
+          ? protocolMismatch(mine.version)
+          : null
       return {
         fileKey,
         fileName: mine?.fileName ?? null,
         channel,
-        protocolVersion: mine?.version,
+        version: mine?.version,
+        ...(skew !== null ? { incompatible: skew } : {}),
         currentPage: live.currentPage,
         selection: live.selection,
         viewport: live.viewport,

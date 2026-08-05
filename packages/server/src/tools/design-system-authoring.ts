@@ -25,8 +25,12 @@ import {
   type ToolResult,
   formatMutationResult,
   errorMessage,
+  errorEnvelope,
+  toolError,
+  pluginError,
   textResult,
 } from './shared'
+import { classifyMessage } from '../errors'
 
 // ─── create_variables ─────────────────────────────────────────────────────────
 
@@ -93,7 +97,7 @@ export const handleCreateVariables = async (
       'Failed to create variables.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -174,7 +178,7 @@ export const handleUpdateVariables = async (
       'Failed to update variables.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -184,7 +188,7 @@ export const handleUpdateVariables = async (
  * Delete variables and/or collections by id. Collections are processed first
  * (removing a collection cascades its variables). Partial success (T5): one bad
  * id never sinks the rest. No value-convert touch (T8 — deletes carry no grammar).
- * Returns { results:[{id, kind:'variable'|'collection'}], errors:[{id, error}] }.
+ * Returns { results:[{id, kind:'variable'|'collection'}], errors:[{id, error, code}] }.
  */
 export const handleDeleteVariables = async (
   {
@@ -202,21 +206,45 @@ export const handleDeleteVariables = async (
   const hasCollections =
     collections !== undefined && collections.length > 0
   if (!hasVariables && !hasCollections) {
-    return textResult(
-      'Error: At least one of `variables` or `collections` must be a non-empty array.',
+    return errorEnvelope(
+      'INVALID_PARAM',
+      'At least one of `variables` or `collections` must be a non-empty array.',
     )
   }
   try {
-    const result = (await client.sendCommand(
+    const reply = (await client.sendCommand(
       COMMANDS.DELETE_VARIABLES,
       { variables, collections },
-    )) as { error?: string } | null
-    return formatMutationResult(
-      result,
-      'Failed to delete variables.',
+    )) as {
+      error?: string
+      results?: {
+        id: string
+        kind: 'variable' | 'collection'
+      }[]
+      errors?: { id: string; error: string }[]
+    } | null
+
+    if (reply === null) {
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Failed to delete variables.',
+      )
+    }
+    if (reply.error !== undefined) {
+      return pluginError(reply.error)
+    }
+
+    const results = reply.results ?? []
+    const errors = (reply.errors ?? []).map(e => ({
+      ...e,
+      code: classifyMessage(e.error),
+    }))
+
+    return textResult(
+      JSON.stringify({ results, errors }, null, 2),
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -239,7 +267,7 @@ type CreateStyleSpec = {
  * atom) is isolated to that entry's error and NOT sent to the plugin; a
  * placeholder keeps the sent array index-aligned with the plugin's replies, and
  * every result/error carries its ORIGINAL index. Returns
- * { results:[{id,key,name,type,index}], errors:[{index,error}] }.
+ * { results:[{id,key,name,type,index}], errors:[{index,error,code}] }.
  */
 export const handleCreateStyles = async (
   { styles }: { styles: CreateStyleSpec[] },
@@ -292,25 +320,27 @@ export const handleCreateStyles = async (
     } | null
 
     if (reply === null) {
-      return textResult('Failed to create styles.')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Failed to create styles.',
+      )
     }
     if (reply.error !== undefined) {
-      return textResult(`Error: ${reply.error}`)
+      return pluginError(reply.error)
     }
 
     // Merge the plugin's per-entry results/errors with the server-side
     // conversion errors, keeping each entry's ORIGINAL index.
     const results = reply.results ?? []
-    const errors = [
-      ...preErrors,
-      ...(reply.errors ?? []),
-    ].sort((a, b) => a.index - b.index)
+    const errors = [...preErrors, ...(reply.errors ?? [])]
+      .map(e => ({ ...e, code: classifyMessage(e.error) }))
+      .sort((a, b) => a.index - b.index)
 
     return textResult(
       JSON.stringify({ results, errors }, null, 2),
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -339,7 +369,7 @@ type UpdateStyleSpec = {
  * preserved per entry: a TEXT entry whose name/description committed but whose
  * font value load failed becomes THAT entry's error (the plugin reports the
  * applied name/description in the message). Returns
- * { results:[{id,index}], errors:[{index,error}] }.
+ * { results:[{id,index}], errors:[{index,error,code}] }.
  */
 export const handleUpdateStyles = async (
   { styles }: { styles: UpdateStyleSpec[] },
@@ -391,23 +421,25 @@ export const handleUpdateStyles = async (
     } | null
 
     if (reply === null) {
-      return textResult('Failed to update styles.')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Failed to update styles.',
+      )
     }
     if (reply.error !== undefined) {
-      return textResult(`Error: ${reply.error}`)
+      return pluginError(reply.error)
     }
 
     const results = reply.results ?? []
-    const errors = [
-      ...preErrors,
-      ...(reply.errors ?? []),
-    ].sort((a, b) => a.index - b.index)
+    const errors = [...preErrors, ...(reply.errors ?? [])]
+      .map(e => ({ ...e, code: classifyMessage(e.error) }))
+      .sort((a, b) => a.index - b.index)
 
     return textResult(
       JSON.stringify({ results, errors }, null, 2),
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -424,7 +456,7 @@ type DeleteStyleSpec = {
  * Pure pass-through with index-tagging: each entry gets an `index` attached so
  * the plugin can reply in index-aligned partial-success shape. No value-convert
  * (T8 — deletes carry no grammar). Returns
- * { results:[{id,index}], errors:[{index,error}] }.
+ * { results:[{id,index}], errors:[{index,error,code}] }.
  */
 export const handleDeleteStyles = async (
   { styles }: { styles: DeleteStyleSpec[] },
@@ -450,22 +482,25 @@ export const handleDeleteStyles = async (
     } | null
 
     if (reply === null) {
-      return textResult('Failed to delete styles.')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Failed to delete styles.',
+      )
     }
     if (reply.error !== undefined) {
-      return textResult(`Error: ${reply.error}`)
+      return pluginError(reply.error)
     }
 
     const results = reply.results ?? []
-    const errors = (reply.errors ?? []).sort(
-      (a, b) => a.index - b.index,
-    )
+    const errors = (reply.errors ?? [])
+      .map(e => ({ ...e, code: classifyMessage(e.error) }))
+      .sort((a, b) => a.index - b.index)
 
     return textResult(
       JSON.stringify({ results, errors }, null, 2),
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -500,6 +535,6 @@ export const handleApplyStyle = async (
       'Failed to apply style.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

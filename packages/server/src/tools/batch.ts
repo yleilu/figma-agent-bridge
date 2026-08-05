@@ -17,7 +17,7 @@
 //
 // PARTIAL-SUCCESS SHAPE (documented):
 //   results: [{ index, op, ok, result?, error?, warnings? }] — one per op, in order
-//   errors:  [{ index, op, error }]                   — the failures, summarized
+//   errors:  [{ index, op, error, code }]              — the failures, summarized
 // `warnings?` carries the SAME server-side writer warnings a direct call would
 // emit (e.g. update_node per-side stroke collapse), so a batched op is not a
 // silent lossy conversion (D3/T7).
@@ -44,7 +44,11 @@ import {
   type ToolResult,
   errorMessage,
   textResult,
+  toolError,
+  pluginError,
+  errorEnvelope,
 } from './shared'
+import { classifyMessage } from '../errors'
 
 type BatchEntry = Record<string, unknown> & { op?: string }
 
@@ -167,6 +171,32 @@ const convertUpdateStyles = (
   }
 }
 
+const convertDeleteStyles = (
+  params: Record<string, unknown>,
+): Record<string, unknown> => {
+  // A delete carries no grammar (T8 — nothing to convert), which is why this
+  // op reached batch with no converter at all. But CONVERTERS also carries the
+  // INDEX-TAGGING the plugin's index-aligned reply depends on: it answers
+  // {results:[{id,index}], errors:[{index,error}]} built from `entry.index`,
+  // so an untagged entry comes back with index undefined and JSON.stringify
+  // drops it. The agent then cannot map one style's failure back to its input
+  // (tool-surface.md:371). The standalone handleDeleteStyles tags them; this
+  // makes the batch path agree.
+  const { styles } = params as {
+    styles: Record<string, unknown>[]
+  }
+  if (!Array.isArray(styles)) {
+    return params
+  }
+  return {
+    ...params,
+    styles: styles.map((entry, index) => ({
+      index,
+      ...entry,
+    })),
+  }
+}
+
 const convertCreateVariables = (
   params: Record<string, unknown>,
 ): Record<string, unknown> => {
@@ -260,6 +290,7 @@ const CONVERTERS: Record<
   [COMMANDS.UPDATE_NODE]: convertUpdateNode,
   [COMMANDS.CREATE_STYLES]: convertCreateStyles,
   [COMMANDS.UPDATE_STYLES]: convertUpdateStyles,
+  [COMMANDS.DELETE_STYLES]: convertDeleteStyles,
   [COMMANDS.CREATE_VARIABLES]: convertCreateVariables,
   [COMMANDS.UPDATE_VARIABLES]: convertUpdateVariables,
 }
@@ -362,13 +393,16 @@ export const handleBatch = async (
       | null
 
     if (pluginReply === null) {
-      return textResult('Failed to run batch.')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Failed to run batch.',
+      )
     }
     if (
       'error' in pluginReply &&
       pluginReply.error !== undefined
     ) {
-      return textResult(`Error: ${pluginReply.error}`)
+      return pluginError(pluginReply.error)
     }
 
     const pluginResults =
@@ -429,6 +463,7 @@ export const handleBatch = async (
         index: r.index,
         op: r.op,
         error: r.error,
+        code: classifyMessage(r.error ?? ''),
       }))
 
     // batch ALWAYS succeeds at the tool level (D3 partial success): a per-op
@@ -441,6 +476,6 @@ export const handleBatch = async (
       JSON.stringify({ results, errors }, null, 2),
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

@@ -18,7 +18,8 @@ import { assertContextWithinCap } from '../serialize/context-cap'
 import {
   type ToolResult,
   formatMutationResult,
-  errorMessage,
+  toolError,
+  isErrorResult,
   textResult,
 } from './shared'
 
@@ -46,10 +47,7 @@ export const handleUpdateNode = async (
       result,
       `Failed to update node: ${nodeId}`,
     )
-    if (
-      warnings.length === 0 ||
-      mutation.content[0].text.startsWith('Error')
-    ) {
+    if (warnings.length === 0 || isErrorResult(mutation)) {
       return mutation
     }
     // Merge the server-side writer warnings INTO the reply's structured
@@ -61,6 +59,6 @@ export const handleUpdateNode = async (
     }
     return textResult(JSON.stringify(merged, null, 2))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

@@ -6,7 +6,6 @@
 // gated. The server surfaces those warnings in the emitted object and NEVER
 // throws on the degrade path. A plugin-side {error} is surfaced as an error.
 
-import YAML from 'yaml'
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { ScopedFigmaClient } from '../figma-client'
 import { paginateList, CursorError } from '../read/paginate'
@@ -14,7 +13,9 @@ import {
   type ToolResult,
   textResult,
   formatMutationResult,
-  errorMessage,
+  errorEnvelope,
+  toolError,
+  pluginError,
   cursorRejected,
 } from './shared'
 
@@ -48,12 +49,13 @@ export const handleGetReactions = async (
     } | null
 
     if (raw === null) {
-      return textResult(
+      return errorEnvelope(
+        'PLUGIN_ERROR',
         'Failed to get reactions from plugin.',
       )
     }
     if (raw.error !== undefined) {
-      return textResult(`Error: ${raw.error}`)
+      return pluginError(raw.error)
     }
 
     const results = (
@@ -87,9 +89,9 @@ export const handleGetReactions = async (
     if (raw.warnings !== undefined) {
       out.warnings = raw.warnings
     }
-    return textResult(YAML.stringify(out))
+    return textResult(JSON.stringify(out, null, 2))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -122,12 +124,13 @@ export const handleGetPluginData = async (
     } | null
 
     if (raw === null) {
-      return textResult(
+      return errorEnvelope(
+        'PLUGIN_ERROR',
         'Failed to get plugin data from plugin.',
       )
     }
     if (raw.error !== undefined) {
-      return textResult(`Error: ${raw.error}`)
+      return pluginError(raw.error)
     }
 
     const out: {
@@ -145,9 +148,9 @@ export const handleGetPluginData = async (
     if (raw.warnings !== undefined) {
       out.warnings = raw.warnings
     }
-    return textResult(YAML.stringify(out))
+    return textResult(JSON.stringify(out, null, 2))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -182,12 +185,13 @@ export const handleGetAnnotations = async (
     } | null
 
     if (raw === null) {
-      return textResult(
+      return errorEnvelope(
+        'PLUGIN_ERROR',
         'Failed to get annotations from plugin.',
       )
     }
     if (raw.error !== undefined) {
-      return textResult(`Error: ${raw.error}`)
+      return pluginError(raw.error)
     }
 
     const results = (
@@ -221,9 +225,9 @@ export const handleGetAnnotations = async (
     if (raw.warnings !== undefined) {
       out.warnings = raw.warnings
     }
-    return textResult(YAML.stringify(out))
+    return textResult(JSON.stringify(out, null, 2))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -258,7 +262,7 @@ export const handleSetPluginData = async (
       'Failed to set plugin data.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -288,7 +292,7 @@ export const handleSetReactions = async (
       'Failed to set reactions.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -317,6 +321,6 @@ export const handleSetAnnotations = async (
       'Failed to set annotations.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

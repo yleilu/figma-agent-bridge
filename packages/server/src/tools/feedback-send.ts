@@ -26,6 +26,7 @@ import {
   type ToolResult,
   textResult,
   errorMessage,
+  toolError,
 } from './shared'
 
 export interface ListFeedbackInput {
@@ -65,7 +66,7 @@ export const handleListFeedback = async (
       }),
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -223,7 +224,7 @@ export const handleSendFeedback = async (
     }
     return textResult(JSON.stringify({ results }))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -256,6 +257,6 @@ export const handleDiscardFeedback = async (
     }
     return textResult(JSON.stringify({ results }))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

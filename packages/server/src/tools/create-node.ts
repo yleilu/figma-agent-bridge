@@ -21,7 +21,9 @@ import { assertContextWithinCap } from '../serialize/context-cap'
 import {
   type ToolResult,
   formatMutationResult,
-  errorMessage,
+  toolError,
+  errorEnvelope,
+  isErrorResult,
   textResult,
 } from './shared'
 
@@ -64,8 +66,9 @@ export const handleCreateNode = async (
       spec.type,
     )
   ) {
-    return textResult(
-      `Error: Unsupported node type "${spec.type}". Valid types: ${CREATABLE_TYPES.join(', ')}.`,
+    return errorEnvelope(
+      'UNSUPPORTED_NODE_TYPE',
+      `Unsupported node type "${spec.type}". Valid types: ${CREATABLE_TYPES.join(', ')}.`,
     )
   }
 
@@ -99,9 +102,9 @@ export const handleCreateNode = async (
       return mutation
     }
     // Append the warnings to a SUCCESSFUL mutation result. (If the mutation
-    // errored, formatMutationResult already returned an Error: text — do not
-    // muddy it with the warning notes.)
-    if (mutation.content[0].text.startsWith('Error')) {
+    // errored, formatMutationResult already returned the error envelope — do
+    // not muddy it with the warning notes.)
+    if (isErrorResult(mutation)) {
       return mutation
     }
     const warningText = warnings
@@ -111,6 +114,6 @@ export const handleCreateNode = async (
       `${mutation.content[0].text}\n\n${warningText}`,
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

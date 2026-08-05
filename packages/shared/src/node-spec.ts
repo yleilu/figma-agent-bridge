@@ -82,13 +82,23 @@ export type ExportSetting = {
 }
 
 /**
- * A structured instance override delta (read side of `set_instance`;
- * round-trips). `value` is an atom or a plain string (e.g. characters).
+ * A structured instance override delta: report-only, naming *which*
+ * fields differ from the main component. Figma's override record is
+ * `{id, overriddenFields}` — field names only — so a read cannot state
+ * what a field was overridden *to*; take that from the node struct.
+ * Not a write format: `set_instance` degrades per-node `overrides`.
  */
 export type OverrideEntry = {
   path: string
   field: string
-  value: Atom | string
+  /**
+   * OPTIONAL and never emitted by the read face. Figma's override record
+   * carries no values, so the reader cannot fill this in honestly — it
+   * used to pad every entry with `''`, which read as "overridden to
+   * blank". Kept optional only so a caller-supplied spec that still
+   * carries one type-checks; the writer does not consume it.
+   */
+  value?: Atom | string
 }
 
 /** Depth-boundary / wide-node collapse — keeps `id` for drill-by-id. */
@@ -190,6 +200,15 @@ export type NodeSpec = {
   variantProperties?: Record<string, string>
   /** Structured override delta. */
   overrides?: OverrideEntry[]
+
+  /**
+   * READ-ONLY honesty channel: what this node's export carried that the
+   * read could not represent, one entry per loss, naming the field and
+   * the reason (T7 — the surface never hides what it could not do). A
+   * read that returns everything omits the key entirely. Ignored on
+   * write, so echoing a read back is harmless.
+   */
+  warnings?: string[]
 
   /** Full round-trippable markdown note, stored in shared pluginData. Omitted on read when absent/empty. Verbatim; the server never parses it. Capped at CONTEXT_MAX_BYTES on write. */
   context?: string

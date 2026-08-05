@@ -15,6 +15,7 @@ import { describe, expect, it } from 'bun:test'
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
 import { handleBatch } from '@figma-agent-bridge/server/tools/batch'
+import { batchParamsSchema } from '@figma-agent-bridge/shared/tool-params'
 
 type SentOp = {
   op: string
@@ -71,6 +72,7 @@ type BatchOut = {
     index: number
     op: string | null
     error?: string
+    code: string
   }[]
 }
 
@@ -224,12 +226,13 @@ describe('handleBatch', () => {
       'Node not found: bad-1',
     )
     expect(out.results[2].ok).toBe(true)
-    // errors[] summarizes only the failures, with index + op.
+    // errors[] summarizes only the failures, with index + op + code.
     expect(out.errors).toEqual([
       {
         index: 1,
         op: 'delete_node',
         error: 'Node not found: bad-1',
+        code: 'NODE_NOT_FOUND',
       },
     ])
   })
@@ -385,6 +388,7 @@ describe('handleBatch', () => {
     expect(out.results[1].error).toContain('6/8-char hex')
     expect(out.results[2].ok).toBe(true)
     expect(out.errors.map(e => e.index)).toEqual([1])
+    expect(out.errors[0].code).toBe('INVALID_PARAM')
   })
 
   it('an entry with neither a top-level nor a per-entry op records an error', async () => {
@@ -396,6 +400,10 @@ describe('handleBatch', () => {
     expect(out.results[0].ok).toBe(false)
     expect(out.results[0].error).toContain('No op')
     expect(out.errors).toHaveLength(1)
+    // No RULES pattern matches this message — the honest PLUGIN_ERROR
+    // fallback, never INVALID_PARAM (classifyMessage never blames the
+    // agent's parameters for a message it does not recognize).
+    expect(out.errors[0].code).toBe('PLUGIN_ERROR')
   })
 
   it('surfaces a plugin-level {error} as an error', async () => {
@@ -403,9 +411,87 @@ describe('handleBatch', () => {
       { op: 'delete_node', ops: [{ nodeId: '1:1' }] },
       stubClient({ reply: { error: 'relay exploded' } }),
     )
-    expect(result.content[0].text).toContain('Error:')
-    expect(result.content[0].text).toContain(
-      'relay exploded',
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('relay exploded')
+    expect(data.code).toBe('PLUGIN_ERROR')
+  })
+})
+
+// The fan-out op set is enumerated in tool-surface.md's "The one generic batch".
+// delete_styles sat in that list and not in the enum, so batch({op:'delete_styles'})
+// was rejected at validation while its sibling delete_variables went through.
+// The op-set tests below assert only that batchParamsSchema ACCEPTS the op —
+// they never execute a batch, which is why they could not see that the
+// execution path forwarded delete_styles entries untagged. This one runs the
+// handler and inspects what actually reaches the plugin.
+describe('batch delete_styles — index-tagged like the standalone handler', () => {
+  it('tags every style entry with its index (tool-surface.md:371)', async () => {
+    const sent: Record<string, unknown>[] = []
+    const client = {
+      fileKey: 'FK',
+      sendCommand: (_cmd: string, params: unknown) => {
+        sent.push(params as Record<string, unknown>)
+        return Promise.resolve({ results: [], errors: [] })
+      },
+    } as unknown as Parameters<typeof handleBatch>[1]
+
+    await handleBatch(
+      {
+        op: 'delete_styles',
+        ops: [
+          {
+            styles: [
+              { id: 'S:1' },
+              { id: 'bogus' },
+              { name: 'X', type: 'paint' },
+            ],
+          },
+        ],
+      } as unknown as Parameters<typeof handleBatch>[0],
+      client,
     )
+
+    const fanout = sent[0] as {
+      ops: { params: { styles: { index?: number }[] } }[]
+    }
+    const styles = fanout.ops[0].params.styles
+    // The plugin builds its reply from entry.index; undefined would be dropped
+    // by JSON.stringify, leaving a failure the agent cannot map to its input.
+    expect(styles.map(s => s.index)).toEqual([0, 1, 2])
+  })
+})
+
+describe('batch op set matches the spec', () => {
+  it('accepts delete_styles', () => {
+    expect(() =>
+      batchParamsSchema.parse({
+        fileKey: 'fk',
+        op: 'delete_styles',
+        ops: [{ id: 'S:1' }],
+      }),
+    ).not.toThrow()
+  })
+
+  it('still accepts its sibling delete_variables', () => {
+    expect(() =>
+      batchParamsSchema.parse({
+        fileKey: 'fk',
+        op: 'delete_variables',
+        ops: [{ variables: ['VariableID:1:2'] }],
+      }),
+    ).not.toThrow()
+  })
+
+  it('still rejects a create op (D3 excludes creation)', () => {
+    expect(() =>
+      batchParamsSchema.parse({
+        fileKey: 'fk',
+        op: 'create_node',
+        ops: [{}],
+      }),
+    ).toThrow()
   })
 })

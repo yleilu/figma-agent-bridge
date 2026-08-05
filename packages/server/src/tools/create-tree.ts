@@ -42,7 +42,8 @@ import { assertContextWithinCap } from '../serialize/context-cap'
 import {
   type ToolResult,
   formatMutationResult,
-  errorMessage,
+  isErrorResult,
+  toolError,
   textResult,
 } from './shared'
 
@@ -211,11 +212,9 @@ export const handleCreateTree = async (
       'Failed to create tree.',
     )
     // Append any lossy-conversion warnings to a SUCCESSFUL result. (On error,
-    // formatMutationResult already returned an Error: text — leave it clean.)
-    if (
-      warnings.length === 0 ||
-      mutation.content[0].text.startsWith('Error')
-    ) {
+    // formatMutationResult already returned the error envelope — leave it
+    // clean.)
+    if (warnings.length === 0 || isErrorResult(mutation)) {
       return mutation
     }
     const warningText = warnings
@@ -225,6 +224,6 @@ export const handleCreateTree = async (
       `${mutation.content[0].text}\n\n${warningText}`,
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

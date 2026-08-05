@@ -3,7 +3,10 @@ import type {
   NodeSpec,
   IdStub,
 } from '@figma-agent-bridge/shared/node-spec'
-import { truncateTree } from '../truncate-tree'
+import {
+  truncateTree,
+  DEFAULT_BUDGET,
+} from '../truncate-tree'
 
 // Helper builder
 const mk = (
@@ -188,5 +191,61 @@ describe('truncateTree', () => {
     expect(ids).not.toContain('pre-stub')
     // 'real' should appear
     expect(ids).toContain('real')
+  })
+})
+
+// ─── the budget is always on (tool-surface.md:155, D4) ────────────────────────
+//
+// Omitting `budget` selects DEFAULT_BUDGET; it is not a request for an
+// unbounded read. Depth chooses WHERE truncation lands, the budget decides
+// WHETHER it happens — so no combination of arguments returns everything.
+describe('truncateTree — always-on budget', () => {
+  // A tree far larger than DEFAULT_BUDGET at depth 1.
+  const wide = (n: number): NodeSpec =>
+    mk(
+      'root',
+      'FRAME',
+      Array.from({ length: n }, (_, i) =>
+        mk('child-with-a-long-name-' + i, 'RECTANGLE'),
+      ),
+    )
+
+  it('caps an explicit depth at the default budget', () => {
+    const { view, truncated } = truncateTree(wide(4000), {
+      depth: 1,
+    })
+    expect(truncated.length).toBeGreaterThan(0)
+    expect(
+      JSON.stringify(view).length / 4,
+    ).toBeLessThanOrEqual(DEFAULT_BUDGET)
+  })
+
+  it('caps depth=-1 at the default budget', () => {
+    const { view, truncated } = truncateTree(wide(4000), {
+      depth: -1,
+    })
+    expect(truncated.length).toBeGreaterThan(0)
+    expect(
+      JSON.stringify(view).length / 4,
+    ).toBeLessThanOrEqual(DEFAULT_BUDGET)
+  })
+
+  it('an explicit budget still wins over the default', () => {
+    const { view } = truncateTree(wide(4000), {
+      budget: 500,
+    })
+    expect(
+      JSON.stringify(view).length / 4,
+    ).toBeLessThanOrEqual(500)
+  })
+
+  it('leaves a small tree whole at depth=-1', () => {
+    const root = mk('root', 'FRAME', [
+      mk('c1', 'RECTANGLE'),
+      mk('c2', 'TEXT'),
+    ])
+    expect(
+      truncateTree(root, { depth: -1 }).truncated,
+    ).toEqual([])
   })
 })

@@ -129,11 +129,15 @@ const gridToAst = (g: FigmaLayoutGrid): AtomAST => {
   const wrap =
     Object.keys(attrs).length > 0 ? { attrs } : {}
   const head = g.pattern === 'COLUMNS' ? 'columns' : 'rows'
-  // 'auto' on the wire; Figma's READ side may surface Infinity for an auto
-  // count, so translate Infinity → 'auto' here (symmetric with the plugin's
-  // 'auto' → Infinity on assign).
+  // 'auto' on the wire. The live plugin's raw layoutGrids export surfaces an
+  // auto count as -1 (confirmed live — JSON can't carry Infinity anyway, so
+  // Figma never actually sends it over the wire); keep the Infinity check too
+  // since it is a harmless superset and symmetric with the plugin's
+  // 'auto' → Infinity on assign.
   const count =
-    g.count === Infinity ? 'auto' : (g.count ?? 'auto')
+    g.count === Infinity || g.count === -1
+      ? 'auto'
+      : (g.count ?? 'auto')
   const args: AtomArg[] = [
     { kind: 'scalar', value: count },
     { kind: 'scalar', value: g.sectionSize ?? 0 },

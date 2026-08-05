@@ -36,7 +36,9 @@ import { splitComponentProperties } from '../serialize/node-spec-reader'
 import {
   type ToolResult,
   formatMutationResult,
-  errorMessage,
+  toolError,
+  pluginError,
+  errorEnvelope,
   textResult,
 } from './shared'
 
@@ -62,7 +64,7 @@ export const handleCreateComponent = async (
       'Failed to create component.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -114,7 +116,7 @@ export const handleUpdateComponent = async (
       'Failed to update component.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -131,8 +133,9 @@ export const handleCombineVariants = async (
   client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
   if (componentIds.length < 2) {
-    return textResult(
-      'Error: combine_variants requires at least 2 components.',
+    return errorEnvelope(
+      'INVALID_PARAM',
+      'combine_variants requires at least 2 components.',
     )
   }
 
@@ -146,7 +149,7 @@ export const handleCombineVariants = async (
       'Failed to combine variants.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -166,8 +169,9 @@ export const handleSwapComponent = async (
   // the LOCAL mainComponentId WINS (no async import needed); the plugin resolves
   // `key` via importComponentByKeyAsync only when mainComponentId is absent.
   if (mainComponentId === undefined && key === undefined) {
-    return textResult(
-      'Error: swap_component requires mainComponentId (local) or key (remote).',
+    return errorEnvelope(
+      'INVALID_PARAM',
+      'swap_component requires mainComponentId (local) or key (remote).',
     )
   }
 
@@ -181,7 +185,7 @@ export const handleSwapComponent = async (
       'Failed to swap component.',
     )
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }
 
@@ -216,10 +220,13 @@ export const handleSetInstance = async (
     } | null
 
     if (result === null) {
-      return textResult('Failed to set instance.')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Failed to set instance.',
+      )
     }
     if (result.error !== undefined) {
-      return textResult(`Error: ${result.error}`)
+      return pluginError(result.error)
     }
 
     // T2: split the plugin's RAW Figma componentProperties echo
@@ -236,6 +243,6 @@ export const handleSetInstance = async (
     }
     return textResult(JSON.stringify(echo))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

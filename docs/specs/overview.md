@@ -59,8 +59,14 @@ All scripts run from the repo root (`bun run <script>`) unless noted.
 
 **Starting the MCP stack:** `scripts/start-mcp.sh`. It starts the relay if nothing is
 listening on `$PORT` (default **18080**), waits up to ~5s for it, then `exec`s the server
-(passing through args). The server auto-discovers the relay port via a ping/pong probe, so
-the port is a default, not a hard coupling.
+(passing through args).
+
+**Relay address — this spec is the single source of truth.** The port is **not** a hard
+coupling: the server reads `PORT` and falls back to the compiled `DEFAULT_PORT` (**18080**), and
+`RELAY_URL` overrides the whole websocket URL when the relay is not local. There is **no runtime
+discovery** — no probe, no broadcast — because a variable plus a default already satisfies the
+requirement and nothing has needed more. Other specs link here rather than restating this; a
+mechanism described in four places is a mechanism that will be wrong in three of them.
 
 ## Connection lifecycle
 
@@ -168,15 +174,27 @@ Every call returns the MCP `ToolResult`:
   or array — **never** a Figma node reference. Node-writes return at minimum `{ id, name, type }`
   plus operation-salient fields, with an optional `warning?: string` as the canonical channel
   for non-fatal notes (e.g. `createSlot` unavailable, auto-layout no-op).
-- **Reads** split by audience: machine readers (`get_*`) emit JSON `ParsedNode`/arrays; human
-  readers (`inspect`, `list_pages`) emit YAML.
+- **Reads** have exactly one YAML reader: **`inspect`**, whose whole job is a compact human- and
+  agent-scannable view of a tree (T3/T4) and whose atom/struct rendering is defined by
+  [[figma-bridge/docs/specs/expression-formats|expression-formats.md]]. **Every other read emits
+  JSON** — `get_node`, `get_nodes`, `get_selection`, `list_pages`, `search`, `get_styles`,
+  `get_variables`, `get_components`, `list_fonts`, `get_plugin_data`, `get_reactions`,
+  `get_annotations`, and every non-facade meta-read. One reader deviates and the deviation is
+  named here; a per-tool serialization choice is exactly the drift B1 forbids.
 - **`export`** returns an `image` block (PNG/JPG/PDF) or a `text` block (SVG).
 
 ### Error envelope — server-owned, typed
 
 Errors are uniform: `{ error: string, code: ErrorCode }`, emitted as one JSON `text` block.
 
-`ErrorCode = 'NODE_NOT_FOUND' | 'INVALID_PARAM' | 'FONT_LOAD_FAILED' | 'DISCONNECTED' | 'TIMEOUT' | 'UNSUPPORTED_NODE_TYPE' | 'API_UNAVAILABLE' | 'WRONG_EDITOR' | 'LIBRARY_UNPUBLISHED' | 'WRONG_FILE' | 'INCOMPATIBLE'`.
+`ErrorCode = 'NODE_NOT_FOUND' | 'INVALID_PARAM' | 'FONT_LOAD_FAILED' | 'DISCONNECTED' | 'TIMEOUT' | 'UNSUPPORTED_NODE_TYPE' | 'API_UNAVAILABLE' | 'WRONG_EDITOR' | 'LIBRARY_UNPUBLISHED' | 'WRONG_FILE' | 'INCOMPATIBLE' | 'PLUGIN_ERROR'`.
+
+**Every failure carries a code.** `PLUGIN_ERROR` is the honest fallback for a failure the
+server cannot place in any other code — "Figma failed and the server cannot say more". Because
+it exists, the classifier never has to choose between a wrong code and no code, and an agent can
+branch on `code` without first testing whether the field is there. A failure the server does not
+recognise is **never** reported as `INVALID_PARAM`: naming the agent's parameters as the cause
+when they were not sends it into a retry it can never win.
 
 `INCOMPATIBLE` is the plugin↔server **version skew** code (B2): distinct from `DISCONNECTED` (you *are* connected, just to an incompatible build — retrying `connect` won't help). Surfaced when the major.minor compare fails; see [[figma-bridge/docs/specs/version-handshake|version-handshake.md]].
 

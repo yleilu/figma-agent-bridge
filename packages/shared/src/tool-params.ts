@@ -33,6 +33,7 @@ import {
   fidelityReadParamsSchema,
   listReadParamsSchema,
   cursorSchema,
+  profileSchema,
 } from './read-model'
 
 // ---------------------------------------------------------------------------
@@ -93,13 +94,13 @@ export const fileTargetParamsSchema = z.object({
     .string()
     .optional()
     .describe(
-      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); ignored by this surface today.',
+      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); the server forwards it as the key of the agent status row for this call (status-monitor.md).',
     ),
   agentType: z
     .string()
     .optional()
     .describe(
-      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); ignored by this surface today.',
+      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); the server forwards it as the display label on that agent status row (status-monitor.md).',
     ),
 })
 
@@ -209,6 +210,15 @@ export const searchParamsSchema = z.object({
       'Scan-scope depth: how deep the plugin traverses each root. -1 (default) = whole subtree; 0 = root(s) only; N = N levels deep. Results stay a flat list.',
     ),
   ...listReadParamsSchema.shape,
+  // `profile` rides here rather than on listReadParamsSchema: the presets are
+  // NodeSpec field sets, so they mean something for `search`'s node results and
+  // nothing for a style or font list. Putting it on the shared list mixin would
+  // hand it to every future list read by accident.
+  profile: profileSchema
+    .optional()
+    .describe(
+      'Named field preset for each result: minimal | layout | style | text | full. `fields` wins when both are given.',
+    ),
 })
 
 // ---------------------------------------------------------------------------
@@ -1420,6 +1430,7 @@ export const batchOpSchema = z.enum([
   'bind_variable',
   'create_styles',
   'update_styles',
+  'delete_styles',
   'create_variables',
   'update_variables',
   'delete_variables',

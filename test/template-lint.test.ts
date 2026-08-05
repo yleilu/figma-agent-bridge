@@ -12,6 +12,10 @@ const good = [
     path: 'references/house-style.md',
     content: `---\nname: figma-bridge-prefs/house-style\ndescription: x\n---\nspacing 4 8 12; you may skip the grid on hero sections.\n`,
   },
+  {
+    path: 'references/review-standards.md',
+    content: `---\nname: figma-bridge-prefs/review-standards\ndescription: x\n---\ncontrast: normal text >= 4.5:1; touch targets >= 44 px.\n`,
+  },
 ]
 
 describe('template lint', () => {
@@ -87,6 +91,31 @@ describe('template lint', () => {
     expect(
       lintTemplateFiles(bad).some(m =>
         /size|lines/i.test(m),
+      ),
+    ).toBe(true)
+  })
+
+  it('flags a template whose review-standards no longer ships the WCAG AA default', () => {
+    const bad = good.map(f =>
+      f.path === 'references/review-standards.md'
+        ? {
+            ...f,
+            content: f.content.replace('4.5:1', '3:1'),
+          }
+        : f,
+    )
+    expect(
+      lintTemplateFiles(bad).some(m => /WCAG AA/.test(m)),
+    ).toBe(true)
+  })
+
+  it('flags a template that dropped review-standards entirely', () => {
+    const bad = good.filter(
+      f => f.path !== 'references/review-standards.md',
+    )
+    expect(
+      lintTemplateFiles(bad).some(m =>
+        /review-standards/.test(m),
       ),
     ).toBe(true)
   })

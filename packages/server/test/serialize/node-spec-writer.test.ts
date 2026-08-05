@@ -126,6 +126,28 @@ describe('specToFigma — effects', () => {
 })
 
 describe('specToFigma — radius', () => {
+  // Regression (d76be0d): that commit taught the reader to emit binding
+  // wrappers — `var(radius/medium)8` — on radius among other fields. Every
+  // other wrapped atom is stripped inside parseAtom, but radius is parsed by
+  // hand, so Number('var(radius/medium)8') was NaN → JSON null on the wire,
+  // which Figma rejects ("Expected number, received null", verified live). A
+  // read-modify-write on any token-bound node failed outright — precisely the
+  // design-system workflow T9 exists to encourage.
+  it('strips a var() wrapper from a uniform radius', () => {
+    expect(
+      specToFigma({ radius: 'var(radius/medium)8' }),
+    ).toEqual({ radius: 8 })
+  })
+
+  it('strips a var() wrapper from a per-corner radius', () => {
+    expect(
+      specToFigma({
+        radius: 'var(radius/medium)[8,8,0,0]',
+      }),
+    ).toEqual({ radius: [8, 8, 0, 0] })
+  })
+
+
   it('uniform radius string converts to number', () => {
     expect(specToFigma({ radius: '8' })).toEqual({
       radius: 8,

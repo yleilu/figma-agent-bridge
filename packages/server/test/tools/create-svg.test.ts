@@ -82,8 +82,9 @@ describe('handleCreateFromSvg', () => {
       client,
     )
 
-    expect(result.content[0].text).toBe(
-      'Error: plugin exploded',
-    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'plugin exploded',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })

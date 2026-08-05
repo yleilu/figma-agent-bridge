@@ -22,8 +22,17 @@ import {
   cursorRejected,
   errorEnvelope,
   synthKey,
+  protocolMismatch,
+  compareMajorMinor,
   requireFile,
+  toolError,
+  pluginError,
 } from '@figma-agent-bridge/server/tools/shared'
+
+const parseEnvelope = (r: {
+  content: { text?: string }[]
+}): { error: string; code: string } =>
+  JSON.parse(r.content[0].text ?? '')
 
 describe('textResult', () => {
   it('wraps a string in the ToolResult shape', () => {
@@ -62,18 +71,32 @@ describe('cursorRejected', () => {
 })
 
 describe('formatMutationResult', () => {
-  it('returns the fail message when result is null', () => {
+  it('envelopes a null reply as PLUGIN_ERROR carrying the fallback message', () => {
     expect(
-      formatMutationResult(null, 'Failed to create node.')
-        .content[0].text,
-    ).toBe('Failed to create node.')
+      parseEnvelope(
+        formatMutationResult(
+          null,
+          'Failed to create node.',
+        ),
+      ),
+    ).toEqual({
+      error: 'Failed to create node.',
+      code: 'PLUGIN_ERROR',
+    })
   })
 
-  it('prefixes Error: when result.error is set', () => {
+  it('envelopes a plugin error with a classified code', () => {
     expect(
-      formatMutationResult({ error: 'boom' }, 'fail')
-        .content[0].text,
-    ).toBe('Error: boom')
+      parseEnvelope(
+        formatMutationResult(
+          { error: 'Node not found: 1:2' },
+          'fallback',
+        ),
+      ),
+    ).toEqual({
+      error: 'Node not found: 1:2',
+      code: 'NODE_NOT_FOUND',
+    })
   })
 
   it('pretty-prints JSON otherwise', () => {
@@ -84,6 +107,30 @@ describe('formatMutationResult', () => {
     expect(r.content[0].text).toBe(
       JSON.stringify({ id: '1:2' }, null, 2),
     )
+  })
+})
+
+describe('renderers', () => {
+  it('toolError classifies a thrown Error', () => {
+    expect(
+      parseEnvelope(toolError(new Error('Not connected'))),
+    ).toEqual({
+      error: 'Not connected',
+      code: 'DISCONNECTED',
+    })
+  })
+
+  it('pluginError classifies a plugin string', () => {
+    expect(
+      parseEnvelope(
+        pluginError('Node is not an instance: 0:1'),
+      ).code,
+    ).toBe('UNSUPPORTED_NODE_TYPE')
+  })
+
+  it('the envelope is NOT pretty-printed', () => {
+    const t = toolError(new Error('x')).content[0].text
+    expect(t).not.toContain('\n')
   })
 })
 
@@ -146,6 +193,51 @@ describe('synthKey', () => {
     expect(synthKey(info('sess-123', null, 'N'))).toBe(
       'sess-123',
     )
+  })
+})
+
+describe('compareMajorMinor', () => {
+  it('orders numerically, not lexically', () => {
+    // '0.10' sorts BELOW '0.9' as a string but is the newer version.
+    expect(
+      compareMajorMinor('0.10.0', '0.9.0'),
+    ).toBeGreaterThan(0)
+    expect(
+      compareMajorMinor('0.9.0', '0.10.0'),
+    ).toBeLessThan(0)
+    expect(compareMajorMinor('1.2.9', '1.2.0')).toBe(0)
+    expect(
+      compareMajorMinor('2.0.0', '1.9.0'),
+    ).toBeGreaterThan(0)
+  })
+})
+
+describe('protocolMismatch', () => {
+  const [maj, min] = APP_VERSION.split('.').map(Number)
+  const older =
+    min > 0 ? `${maj}.${min - 1}.0` : `${maj - 1}.9.0`
+  const newer = `${maj}.${min + 1}.0`
+
+  it('returns null on a matching major.minor', () => {
+    expect(protocolMismatch(`${maj}.${min}.99`)).toBeNull()
+  })
+
+  it('names the PLUGIN as stale when the plugin is older', () => {
+    const msg = protocolMismatch(older) ?? ''
+    expect(msg).toContain('update the Figma plugin')
+    expect(msg).not.toContain('update the MCP server')
+  })
+
+  it('names the SERVER as stale when the plugin is newer', () => {
+    const msg = protocolMismatch(newer) ?? ''
+    expect(msg).toContain('update the MCP server')
+    expect(msg).not.toContain('update the Figma plugin')
+  })
+
+  it('names the PLUGIN as stale when it reports no version', () => {
+    const msg = protocolMismatch(undefined) ?? ''
+    expect(msg).toContain("'(none)'")
+    expect(msg).toContain('update the Figma plugin')
   })
 })
 
@@ -346,11 +438,11 @@ describe('requireFile', () => {
   })
 
   // connection-liveness.md: the watchdog (L6) declares an unresponsive instance
-  // dead by fileKey → connectedAt. requireFile must fast-fail DISCONNECTED while
-  // the /channels entry's connectedAt still matches the declared-dead value,
+  // dead by fileKey → epoch. requireFile must fast-fail DISCONNECTED while
+  // the /channels entry's epoch still matches the declared-dead value,
   // BEFORE auto-joining — the server is not joined here (channelFor → null), so
   // the discover() branch is reached and the marker check applies.
-  it('DISCONNECTED when the watchdog has declared this instance dead (connectedAt still matches)', async () => {
+  it('DISCONNECTED when the watchdog has declared this instance dead (epoch still matches)', async () => {
     let joinCalled = false
     const client = makeClient({
       channelFor: () => null,
@@ -358,10 +450,10 @@ describe('requireFile', () => {
         Promise.resolve([
           info('ch-dead', 'fk-dead', 'Dead Design'),
         ]).then(list =>
-          list.map(c => ({ ...c, connectedAt: 100 })),
+          list.map(c => ({ ...c, epoch: 'e-dead' })),
         ),
-      isInstanceDead: (fileKey, connectedAt) =>
-        fileKey === 'fk-dead' && connectedAt === 100,
+      isInstanceDead: (fileKey, epoch) =>
+        fileKey === 'fk-dead' && epoch === 'e-dead',
       joinChannel: () => {
         joinCalled = true
         return Promise.resolve('ok')

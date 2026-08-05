@@ -137,9 +137,12 @@ describe('handleExport', () => {
       client,
     )
 
-    expect(
-      (result.content[0] as { text: string }).text,
-    ).toBe('Error: plugin exploded')
+    const text = (result.content[0] as { text: string })
+      .text
+    expect(JSON.parse(text)).toEqual({
+      error: 'plugin exploded',
+      code: 'PLUGIN_ERROR',
+    })
   })
 
   it('surfaces a plugin-side {error} (not-found) instead of the generic mask', async () => {
@@ -153,8 +156,12 @@ describe('handleExport', () => {
       mockClient,
     )
     const { text } = result.content[0] as { text: string }
-    expect(text).toContain('Error')
-    expect(text).toContain('Node not found: 1:99')
+    const data = JSON.parse(text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Node not found: 1:99')
+    expect(data.code).toBe('NODE_NOT_FOUND')
     expect(text).not.toContain(
       'Unexpected response from plugin',
     )
@@ -174,8 +181,11 @@ describe('handleExport', () => {
       { nodeId: '1:42' },
       mockClient,
     )
-    expect(
-      (result.content[0] as { text: string }).text,
-    ).toBe('Unexpected response from plugin')
+    const text = (result.content[0] as { text: string })
+      .text
+    expect(JSON.parse(text)).toEqual({
+      error: 'Unexpected response from plugin',
+      code: 'PLUGIN_ERROR',
+    })
   })
 })

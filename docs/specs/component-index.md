@@ -133,6 +133,10 @@ shared path sanitizer defined by the Change Feed
 extension — the `.json` is appended by the caller — so the one function serves both this file stem and
 the feed's sibling `changes/<sanitizeKey(fileKey)>/` directory name.
 
+The store **directory** is overridable by the `COMPONENT_INDEX_DIR` environment variable — when set it
+replaces `~/.figma-agent-bridge/component-index/` wholesale, so tests (and any caller wanting an
+isolated cache) can point the index at a throwaway location without touching the home directory.
+
 ### Freshness
 
 The index is built once (a full projection) and then kept current, cheapest-mechanism-first:

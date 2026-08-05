@@ -309,9 +309,12 @@ describe('M3 create tools e2e', () => {
       scoped,
     )
     const { text } = result.content[0]
-    expect(text).toStartWith('Error')
-    expect(text).toContain('component.id')
-    expect(text).toContain('component.key')
+    const data = JSON.parse(text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('component.id')
+    expect(data.error).toContain('component.key')
   })
 
   // issue #4: an invalid by-id ref (node is not a COMPONENT/COMPONENT_SET) is a
@@ -328,8 +331,11 @@ describe('M3 create tools e2e', () => {
       scoped,
     )
     const { text } = result.content[0]
-    expect(text).toStartWith('Error')
-    expect(text).toContain('COMPONENT')
+    const data = JSON.parse(text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('COMPONENT')
   })
 })
 

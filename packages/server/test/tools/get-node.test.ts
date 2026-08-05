@@ -115,9 +115,12 @@ describe('handleGetNode (rebuilt — NodeSpec)', () => {
       { nodeId: '1:42' },
       client,
     )
-    expect(result.content[0].text).toBe(
-      'Error: plugin exploded',
-    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toBe('plugin exploded')
+    expect(data.code).toBe('PLUGIN_ERROR')
   })
 
   it('emits vectorPaths as path atoms for a VECTOR node (enriched by plugin)', async () => {

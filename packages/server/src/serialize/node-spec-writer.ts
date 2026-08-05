@@ -15,10 +15,21 @@
 //
 //   CONSUMED by the current plugin:
 //     applyCommonProperties  — name, size, position, fills, strokes,
-//       strokeWeight, strokeAlign, strokeDash (→ dashPattern), radius, opacity,
-//       blendMode, rotation, visible, clipsContent, effects, layout,
+//       strokeWeight, strokeAlign, strokeDash (→ dashPattern),
+//       strokeCap/strokeJoin/strokeMiterLimit (applyStrokeGeometry),
+//       exportSettings (applyExportSettings), grids → layoutGrids
+//       (applyGrids), radius, opacity, blendMode, rotation, visible,
+//       clipsContent, effects, layout,
 //       minWidth/maxWidth/minHeight/maxHeight, constraints,
 //       fillStyleId/strokeStyleId/effectStyleId/textStyleId
+//       — see apply-node-fields.ts for the three most recently landed
+//       (strokeCap/strokeJoin/strokeMiterLimit, exportSettings, grids). Each
+//       is confirmed APPLIED to the live node (verified against the raw
+//       plugin GET_NODE reply, pre-serialization), and all three now ROUND-TRIP
+//       — node-spec-reader.ts projects them back (strokeCap/Join/MiterLimit as
+//       the stroke atom's {…} keys, layoutGrids as `grids`, exportSettings with
+//       its constraint tuple). Each is elided at its Figma default, so a read
+//       emits only what differs (T4).
 //     applyTextProperties    — text.content, text.font, text.align, text.valign,
 //       text.color, text.decoration, text.case, text.paragraphSpacing,
 //       text.lineHeight / text.letterSpacing ({value,unit}), textAutoResize
@@ -28,11 +39,13 @@
 //
 //   EMITTED but NOT YET consumed (reserved for later phases — do not claim
 //   round-trip for these until the plugin reads them):
-//     strokeCap, strokeJoin, strokeMiterLimit   (plugin reads only weight/
-//                                                 align/dashPattern today)
-//     grids,
-//     overrides, componentProperties, variantProperties, exportSettings,
-//     id (writer emits it; plugin ignores it on create)
+//     overrides (also broken on the read face — a separate, tracked issue)
+//
+//   Read-only by design (writer emits them; the plugin correctly ignores
+//   them on write — NOT gaps):
+//     componentProperties, variantProperties (instance overrides — the
+//       documented read-only override surface)
+//     id (writer emits it; plugin ignores it on create — Figma assigns the id)
 //
 // ── lh/ls (review finding #3, RESOLVED) ──────────────────────────────────────
 // lh/ls are CANONICAL on the font(...) atom (`font(Inter,SemiBold,18){lh=24}`).
@@ -53,6 +66,7 @@ import {
   atomToStroke,
   atomToGrid,
   atomToPath,
+  tokenize,
 } from '../grammar'
 
 export type FigmaWritePayload = Record<string, unknown>
@@ -96,7 +110,17 @@ const parseRadius = (
   if (typeof s === 'number') {
     return s
   }
-  const trimmed = s.trim()
+  // A read emits the binding wrapper — `var(radius/medium)8`, or the
+  // per-corner `var(radius/medium)[8,8,0,0]` — and the spec says a write
+  // resolves each wrapper to its literal. Every other atom strips it inside
+  // parseAtom; radius is the one atom parsed by hand, so it must strip it too,
+  // via the SHARED tokenizer rather than a second matcher that could drift
+  // from it (T8). Without this, Number('var(…)8') is NaN, which crosses the
+  // wire as null. Figma then REJECTS the write ("Property cornerRadius failed
+  // validation: Expected number, received null" — verified live), so a
+  // read-modify-write on any token-bound node fails outright where it used to
+  // round-trip. Loud rather than silent, but still broken.
+  const trimmed = tokenize(s).body.trim()
   if (trimmed.startsWith('[')) {
     // "[8,8,0,0]" → [8, 8, 0, 0]
     const inner = trimmed.slice(1, -1)

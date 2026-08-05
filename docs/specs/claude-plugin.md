@@ -188,7 +188,7 @@ figma-agent-bridge/                       == the installed plugin root
 
 Conventions confirmed from real plugins: MCP config lives in `.mcp.json` at plugin root
 (never inline in `plugin.json`); `plugin.json` sets only
-`name, description, version, author, homepage, repository, license, keywords` (**`version` is
+`name, displayName, description, version, author, homepage, repository, license, keywords` (**`version` is
 required**, not optional — §5); the plugin ships **no `commands/`** — its surfaces are skills,
 agents, and hooks; skills are
 `skills/<name>/SKILL.md`; agents are flat `agents/<name>.md` with a `model:` frontmatter (and
@@ -795,7 +795,7 @@ Connection plumbing is why "open plugin + talk" is all a user does after install
 - The Figma plugin **auto-connects** on launch and rejoins its own channel, so a reload is
   deterministic. *(The channel is bound to the file's `fileKey` — **per-file channels**, see
   overview *Connection lifecycle* / version-handshake.md.)*
-- The MCP server **auto-discovers the relay port** and **auto-starts a shared relay** if none
+- The MCP server **auto-starts a shared relay** if none
   is running — a **detached singleton** on `:18080` that **outlives any single session**, so
   many Figma files (each plugin on its own channel) and many Claude Code sessions all pair
   through the one relay (`packages/relay` is already multi-channel: `channels: Map<channel,

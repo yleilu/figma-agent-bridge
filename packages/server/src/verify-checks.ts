@@ -26,7 +26,10 @@ import type {
   FigmaClient,
   ScopedFigmaClient,
 } from './figma-client'
-import type { ToolResult } from './tools/shared'
+import {
+  type ToolResult,
+  isErrorResult,
+} from './tools/shared'
 
 import { handleStatus } from './tools/session'
 import {
@@ -132,10 +135,11 @@ export type Check = {
 const text = (r: ToolResult): string =>
   r.content[0]?.text ?? ''
 
-/** A handler that returned "Error: …" is a hard failure (T7 surfaces errors). */
-const isError = (r: ToolResult): boolean =>
-  text(r).startsWith('Error:') ||
-  text(r).startsWith('Not connected')
+// A handler that returned the typed error envelope is a hard failure (T7
+// surfaces errors). Every handler in tools/ now emits the {error, code}
+// envelope (error-envelope-guard.test.ts holds the line), so the bare-text
+// fallback this OR once carried is gone.
+const isError = (r: ToolResult): boolean => isErrorResult(r)
 
 const asJson = (r: ToolResult): Record<string, unknown> =>
   JSON.parse(text(r)) as Record<string, unknown>

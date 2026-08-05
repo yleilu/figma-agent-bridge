@@ -18,6 +18,7 @@ import {
   type MutationOp,
   type WriterKey,
 } from '@figma-agent-bridge/shared/change-feed'
+import { styleKey } from './style-key'
 
 export type ChangeAccumulator = {
   add(rec: AttributedRecord): void
@@ -58,6 +59,12 @@ type Entry = {
   /** Monotonic, assigned when the id first enters. The maps are separate, so
    *  "the oldest distinct id" is only answerable against a shared clock. */
   seq: number
+  /** The RAW id first seen for this entry — what the drained records carry.
+   *  A style's map key is its KEY (its identity), which is a SHORTER string
+   *  than any id form the runtime hands over; making that key the drained id
+   *  would change what the record reports, so the two are kept apart and this
+   *  one is what leaves. */
+  id: string
   runs: Run[]
 }
 
@@ -204,14 +211,20 @@ export const createAccumulator = (
   const fold = (
     map: Map<string, Entry>,
     rec: AttributedRecord,
+    isStyle: boolean,
   ): void => {
     const id = rec.id
     if (id === undefined) return
-    let entry = map.get(id)
+    // A STYLE collapses on its KEY: the trailing segment of a style id varies
+    // per event, so keying on the raw string files every event for one style
+    // under a bucket of its own — collapse and cancellation would both be
+    // dead. Node ids are EXACT and never prefix-matched (`1:8` is not `1:80`).
+    const mapKey = isStyle ? styleKey(id) : id
+    let entry = map.get(mapKey)
     if (entry === undefined) {
       clock += 1
-      entry = { seq: clock, runs: [] }
-      map.set(id, entry)
+      entry = { seq: clock, id, runs: [] }
+      map.set(mapKey, entry)
     }
     const arriving = toCollapseRun(rec)
     const key = writerKeyOf(rec.by)
@@ -223,7 +236,7 @@ export const createAccumulator = (
         // create → delete under ONE writer inside one unbroken stretch: a node
         // that appeared and vanished is a node no reader can have seen.
         entry.runs.pop()
-        if (entry.runs.length === 0) map.delete(id)
+        if (entry.runs.length === 0) map.delete(mapKey)
         return
       }
       last.core = next
@@ -258,10 +271,8 @@ export const createAccumulator = (
         select = rec
         return
       }
-      fold(
-        rec.op.startsWith('style_') ? styles : nodes,
-        rec,
-      )
+      const isStyle = rec.op.startsWith('style_')
+      fold(isStyle ? styles : nodes, rec, isStyle)
     },
     markIndexStale() {
       stale = true
@@ -278,9 +289,9 @@ export const createAccumulator = (
       // Runs are flattened OLDEST FIRST per id: `params.changes[]` is ordered,
       // and for a given id that order IS the run order.
       for (const map of [nodes, styles])
-        for (const [id, entry] of map)
+        for (const entry of map.values())
           for (const run of entry.runs)
-            changes.push(toRecord(id, run))
+            changes.push(toRecord(entry.id, run))
       if (page !== null) changes.push(page)
       if (select !== null) changes.push(select)
       const out = {

@@ -13,10 +13,9 @@
 // limit+cursor are applied by the shared `paginateList` helper (read/paginate),
 // the one implementation behind every bounded list read (T10).
 //
-// Emits { results, truncated, cursor? } as YAML. `cursor` is present only when
+// Emits { results, truncated, cursor? } as JSON. `cursor` is present only when
 // more results remain after this page.
 
-import YAML from 'yaml'
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import type {
   Match,
@@ -31,7 +30,9 @@ import { paginateList, CursorError } from '../read/paginate'
 import {
   type ToolResult,
   textResult,
-  errorMessage,
+  toolError,
+  pluginError,
+  errorEnvelope,
   cursorRejected,
 } from './shared'
 
@@ -122,17 +123,21 @@ export const handleSearch = async (
     } | null
 
     if (raw === null) {
-      return textResult(
+      return errorEnvelope(
+        'PLUGIN_ERROR',
         'Search failed: no response from plugin.',
       )
     }
     // An unresolvable node/page scope qualifier resolves as {error} (not a WS
     // reject); surface it (T7) so a typo'd id is distinguishable from no-match.
     if (raw.error !== undefined) {
-      return textResult(`Error: ${raw.error}`)
+      return pluginError(raw.error)
     }
     if (!Array.isArray(raw.results)) {
-      return textResult('Unexpected response from plugin')
+      return errorEnvelope(
+        'PLUGIN_ERROR',
+        'Unexpected response from plugin',
+      )
     }
 
     // 1 — match (server-side filter, incl. type array via buildMatcher).
@@ -193,8 +198,8 @@ export const handleSearch = async (
       out.cursor = bounded.cursor
     }
 
-    return textResult(YAML.stringify(out))
+    return textResult(JSON.stringify(out, null, 2))
   } catch (err) {
-    return textResult(`Error: ${errorMessage(err)}`)
+    return toolError(err)
   }
 }

@@ -265,6 +265,46 @@ describe('handleInspect — multi-selection forest (M2 chunk F)', () => {
     ).toBeLessThanOrEqual(budget)
   })
 
+  // Regression guard (180250a): a forest bumped an omitted `depth` to 1 before
+  // calling truncateTree. That was harmless while a budget made truncateTree
+  // ignore depth — once depth became binding, a generous budget came back one
+  // level deep with almost all of it unspent. The existing budget test above
+  // uses a tiny budget, so it truncates either way and cannot see this.
+  it('a generous budget fills the whole forest — depth is not forced to 1', async () => {
+    const generous = parse(
+      (
+        await handleInspect(
+          { budget: 100000 },
+          stubClient({ reply: [deepTree, cardNode] }),
+        )
+      ).content[0].text,
+    )
+    const forcedToOne = parse(
+      (
+        await handleInspect(
+          { depth: 1 },
+          stubClient({ reply: [deepTree, cardNode] }),
+        )
+      ).content[0].text,
+    )
+    const nodes = (n: unknown): number => {
+      const o = n as { children?: unknown[] }
+      return (
+        1 +
+        (o.children ?? []).reduce<number>(
+          (t, c) => t + nodes(c),
+          0,
+        )
+      )
+    }
+    // Nothing was cut: the forest fits well inside 100k tokens.
+    expect(generous.truncated).toEqual([])
+    // And it is strictly deeper than the one-level view the bug returned.
+    expect(nodes(generous.view)).toBeGreaterThan(
+      nodes(forcedToOne.view),
+    )
+  })
+
   it('a budget below the SELECTION root cost emits no empty-id receipt entry', async () => {
     // The synthetic SELECTION root carries no real id. Under a budget smaller
     // than its shallow cost, fillToBudget must NOT push a {id:''} receipt entry
