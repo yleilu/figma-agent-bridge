@@ -1,6 +1,13 @@
-import { COMMANDS, CONTEXT_NS, CONTEXT_KEY } from '@figma-agent-bridge/shared'
+import {
+  COMMANDS,
+  CONTEXT_NS,
+  CONTEXT_KEY,
+} from '@figma-agent-bridge/shared'
 
-import { applyLayout, type AppliedLayout } from './apply-layout'
+import {
+  applyLayout,
+  type AppliedLayout,
+} from './apply-layout'
 import { importComponentByKeyWithDeadline } from './import-by-key'
 import { omitMixed } from './mixed'
 import {
@@ -276,7 +283,9 @@ const summarizeChildren = (
 
 const readContext = (n: BaseNode): string | undefined => {
   if (!('getSharedPluginData' in n)) return undefined
-  const v = (n as BaseNode & PluginDataMixin).getSharedPluginData(CONTEXT_NS, CONTEXT_KEY)
+  const v = (
+    n as BaseNode & PluginDataMixin
+  ).getSharedPluginData(CONTEXT_NS, CONTEXT_KEY)
   return v !== '' ? v : undefined
 }
 
@@ -333,7 +342,9 @@ const exportNodeDocument = async (
       name: node.name,
       type: node.type,
       children: summarizeChildren(node),
-      ...(readContext(node) !== undefined ? { context: readContext(node) } : {}),
+      ...(readContext(node) !== undefined
+        ? { context: readContext(node) }
+        : {}),
     }
   }
   const exported = await (node as SceneNode).exportAsync({
@@ -344,7 +355,8 @@ const exportNodeDocument = async (
     exported !== null &&
     (exported as Record<string, unknown>).document
   ) {
-    const doc = (exported as Record<string, unknown>).document as Record<string, unknown>
+    const doc = (exported as Record<string, unknown>)
+      .document as Record<string, unknown>
     // Collect context for the whole exported subtree (root + every
     // descendant) via a synchronous walk of the real Figma nodes, then merge
     // by id into the JSON_REST_V1 tree exportAsync just produced.
@@ -383,7 +395,9 @@ const exportNodeDocument = async (
         ).strokeJoin
         const joins = joinsFromNetwork(
           network,
-          typeof nodeJoin === 'string' ? nodeJoin : undefined,
+          typeof nodeJoin === 'string'
+            ? nodeJoin
+            : undefined,
         )
         if (joins !== undefined) {
           detail.vectorJoins = joins
@@ -397,8 +411,12 @@ const exportNodeDocument = async (
     // 'width' in node — consistent with pointCount/grid enrichment above. O(1)
     // per node; applies to ALL SceneNode types (no POLYGON/STAR-style gating).
     if ('width' in node) {
-      doc.width = (node as unknown as { width: number }).width
-      doc.height = (node as unknown as { height: number }).height
+      doc.width = (
+        node as unknown as { width: number }
+      ).width
+      doc.height = (
+        node as unknown as { height: number }
+      ).height
     }
     // strokeJoin / strokeMiterLimit — JSON_REST_V1 carries strokeCap but NOT
     // these two (live-confirmed absent, 2026-07-31). Plain synchronous
@@ -445,7 +463,8 @@ const exportNodeDocument = async (
     // true to keep unmasked nodes clean.
     if (
       'isMask' in node &&
-      (node as unknown as { isMask: boolean }).isMask === true
+      (node as unknown as { isMask: boolean }).isMask ===
+        true
     ) {
       doc.isMask = true
       if ('maskType' in node) {
@@ -467,7 +486,10 @@ const exportNodeDocument = async (
       ).explicitVariableModes === 'object' &&
       (
         node as unknown as {
-          explicitVariableModes: Record<string, string> | null
+          explicitVariableModes: Record<
+            string,
+            string
+          > | null
         }
       ).explicitVariableModes !== null
     ) {
@@ -506,9 +528,10 @@ const exportNodeDocument = async (
     if ('componentPropertyReferences' in node) {
       const refs = (
         node as unknown as {
-          componentPropertyReferences:
-            | Record<string, string>
-            | null
+          componentPropertyReferences: Record<
+            string,
+            string
+          > | null
         }
       ).componentPropertyReferences
       if (refs !== null && Object.keys(refs).length > 0) {
@@ -524,8 +547,11 @@ const exportNodeDocument = async (
     if (
       isRoot &&
       node.type === 'INSTANCE' &&
-      typeof (node as unknown as { getMainComponentAsync?: unknown })
-        .getMainComponentAsync === 'function'
+      typeof (
+        node as unknown as {
+          getMainComponentAsync?: unknown
+        }
+      ).getMainComponentAsync === 'function'
     ) {
       const main = await (node as InstanceNode)
         .getMainComponentAsync()
@@ -732,13 +758,21 @@ const applyCommonProperties = async (
   // set them on create too; without this branch update_node silently no-ops them
   // (the sectionContentsHidden:false bug found live 2026-07-17). `!== undefined`
   // so a `false` is honored, not dropped.
-  if (spec.pointCount !== undefined && 'pointCount' in node) {
-    ;(node as unknown as { pointCount: number }).pointCount =
-      spec.pointCount as number
+  if (
+    spec.pointCount !== undefined &&
+    'pointCount' in node
+  ) {
+    ;(
+      node as unknown as { pointCount: number }
+    ).pointCount = spec.pointCount as number
   }
-  if (spec.innerRadius !== undefined && 'innerRadius' in node) {
-    ;(node as unknown as { innerRadius: number }).innerRadius =
-      spec.innerRadius as number
+  if (
+    spec.innerRadius !== undefined &&
+    'innerRadius' in node
+  ) {
+    ;(
+      node as unknown as { innerRadius: number }
+    ).innerRadius = spec.innerRadius as number
   }
   if (
     spec.sectionContentsHidden !== undefined &&
@@ -746,7 +780,8 @@ const applyCommonProperties = async (
   ) {
     ;(
       node as unknown as { sectionContentsHidden: boolean }
-    ).sectionContentsHidden = spec.sectionContentsHidden as boolean
+    ).sectionContentsHidden =
+      spec.sectionContentsHidden as boolean
   }
 
   // Fills (already parsed to paint objects by server)
@@ -916,7 +951,10 @@ const applyCommonProperties = async (
   // only when present, mirroring the server writer's PURE contract (see
   // apply-layout.ts).
   if (spec.layout !== undefined && 'layoutMode' in node) {
-    applyLayout(node as FrameNode, spec.layout as AppliedLayout)
+    applyLayout(
+      node as FrameNode,
+      spec.layout as AppliedLayout,
+    )
   }
 
   // Min/max sizing
@@ -936,7 +974,6 @@ const applyCommonProperties = async (
     (node as FrameNode).maxHeight = spec.maxHeight as
       | number
       | null
-
 
   // Layout grids. The server writer converts grid atoms → COMPLETE Figma
   // LayoutGrid objects (via atomToGrid) and emits them as spec.grids; Figma's
@@ -989,9 +1026,18 @@ const applyCommonProperties = async (
     ;(node as TextNode).textStyleId =
       spec.textStyleId as string
   }
-  if (spec.context !== undefined && 'setSharedPluginData' in node) {
+  if (
+    spec.context !== undefined &&
+    'setSharedPluginData' in node
+  ) {
     const raw = String(spec.context)
-    ;(node as BaseNode & PluginDataMixin).setSharedPluginData(CONTEXT_NS, CONTEXT_KEY, raw.trim() === '' ? '' : raw)
+    ;(
+      node as BaseNode & PluginDataMixin
+    ).setSharedPluginData(
+      CONTEXT_NS,
+      CONTEXT_KEY,
+      raw.trim() === '' ? '' : raw,
+    )
   }
 }
 
@@ -1068,17 +1114,22 @@ const applyPostAppendProperties = (
         ;(node as SceneNode & { isMask: boolean }).isMask =
           spec.isMask as boolean
       } catch (e) {
-        warnings?.push('isMask could not be set: ' + String(e))
+        warnings?.push(
+          'isMask could not be set: ' + String(e),
+        )
       }
     }
   }
   if (spec.maskType !== undefined) {
     if ('maskType' in node) {
       try {
-        ;(node as SceneNode & { maskType: string }).maskType =
-          spec.maskType as string
+        ;(
+          node as SceneNode & { maskType: string }
+        ).maskType = spec.maskType as string
       } catch (e) {
-        warnings?.push('maskType could not be set: ' + String(e))
+        warnings?.push(
+          'maskType could not be set: ' + String(e),
+        )
       }
     } else {
       warnings?.push(
@@ -1137,7 +1188,10 @@ const applyTextProperties = async (
       style: font.style,
     })
     // Set font
-    node.fontName = { family: font.family, style: font.style }
+    node.fontName = {
+      family: font.family,
+      style: font.style,
+    }
     node.fontSize = font.size
   } else if (node.characters.length > 0) {
     for (const existing of node.getRangeAllFontNames(
@@ -1286,7 +1340,7 @@ const applyVectorPointDetail = async (
   ): boolean => m !== undefined && Object.keys(m).length > 0
   if (
     !paths.some(
-      (p) =>
+      p =>
         nonEmpty(p.corners) ||
         nonEmpty(p.caps) ||
         nonEmpty(p.joins),
@@ -1400,7 +1454,10 @@ const createSingleNode = async (
     }
     case 'VECTOR': {
       const vector = figma.createVector()
-      if ('vectorPaths' in vector && spec.vectorPaths !== undefined) {
+      if (
+        'vectorPaths' in vector &&
+        spec.vectorPaths !== undefined
+      ) {
         // The server hands each path over as {windingRule, data, corners?}.
         // Only the first two are Figma's shape; the radii live on the network
         // and are written after, because assigning vectorPaths rebuilds it.
@@ -1418,10 +1475,15 @@ const createSingleNode = async (
           )
         } catch (e) {
           warnings?.push(
-            'vectorPaths rejected by Figma (invalid path data): ' + String(e),
+            'vectorPaths rejected by Figma (invalid path data): ' +
+              String(e),
           )
         }
-        await applyVectorPointDetail(vector, paths, warnings)
+        await applyVectorPointDetail(
+          vector,
+          paths,
+          warnings,
+        )
       }
       node = vector
       break
@@ -1489,7 +1551,10 @@ const createSingleNode = async (
             const found = await figma.getNodeByIdAsync(
               compRef.id,
             )
-            if (found !== null && found.type === 'COMPONENT') {
+            if (
+              found !== null &&
+              found.type === 'COMPONENT'
+            ) {
               component = found
             } else if (
               found !== null &&
@@ -1511,7 +1576,8 @@ const createSingleNode = async (
         )
         if (found === null) {
           throw new Error(
-            'INSTANCE component.id not found: ' + compRef.id,
+            'INSTANCE component.id not found: ' +
+              compRef.id,
           )
         }
         if (found.type === 'COMPONENT') {
@@ -1927,11 +1993,12 @@ const resolveParentNode = async (
   if (parentId.startsWith('I') && sep > 1) {
     // "I<instanceId>;<...>" — instance id is between 'I' and the first ';'.
     const instanceId = parentId.slice(1, sep)
-    const instance = await figma.getNodeByIdAsync(instanceId)
+    const instance =
+      await figma.getNodeByIdAsync(instanceId)
     if (instance && 'findOne' in instance) {
       return (
         (instance as InstanceNode).findOne(
-          (n) => n.id === parentId,
+          n => n.id === parentId,
         ) ?? null
       )
     }
@@ -1951,7 +2018,10 @@ const resolveStyle = async (entry: {
   if (entry.id !== undefined) {
     return figma.getStyleByIdAsync(entry.id)
   }
-  if (entry.name === undefined || entry.type === undefined) {
+  if (
+    entry.name === undefined ||
+    entry.type === undefined
+  ) {
     return null
   }
   const listers = {
@@ -1961,7 +2031,11 @@ const resolveStyle = async (entry: {
     grid: figma.getLocalGridStylesAsync,
   }
   const list = await listers[entry.type]()
-  return (list as BaseStyle[]).find(s => s.name === entry.name) ?? null
+  return (
+    (list as BaseStyle[]).find(
+      s => s.name === entry.name,
+    ) ?? null
+  )
 }
 
 const handleCommand = async (
@@ -2201,7 +2275,9 @@ const handleCommand = async (
         id: s.id,
         name: s.name,
         value: s.paints[0],
-        ...(s.description ? { description: s.description } : {}),
+        ...(s.description
+          ? { description: s.description }
+          : {}),
       }))
       const textStylesRaw =
         await figma.getLocalTextStylesAsync()
@@ -2215,7 +2291,9 @@ const handleCommand = async (
           lineHeight: s.lineHeight,
           letterSpacing: s.letterSpacing,
         },
-        ...(s.description ? { description: s.description } : {}),
+        ...(s.description
+          ? { description: s.description }
+          : {}),
       }))
       const effectStylesRaw =
         await figma.getLocalEffectStylesAsync()
@@ -2223,7 +2301,9 @@ const handleCommand = async (
         id: s.id,
         name: s.name,
         value: s.effects[0],
-        ...(s.description ? { description: s.description } : {}),
+        ...(s.description
+          ? { description: s.description }
+          : {}),
       }))
       const gridStylesRaw =
         await figma.getLocalGridStylesAsync()
@@ -2263,7 +2343,9 @@ const handleCommand = async (
                 visible: g.visible,
               }
             : undefined,
-          ...(s.description ? { description: s.description } : {}),
+          ...(s.description
+            ? { description: s.description }
+            : {}),
         }
       })
       return { paint, text, effect, grid }
@@ -2360,15 +2442,23 @@ const handleCommand = async (
                 ? variantAxes
                 : undefined,
             defaults: defaultsOf(csDefs),
-            ...(readContext(cs) !== undefined ? { context: readContext(cs) } : {}),
-            ...(cs.description ? { description: cs.description } : {}),
+            ...(readContext(cs) !== undefined
+              ? { context: readContext(cs) }
+              : {}),
+            ...(cs.description
+              ? { description: cs.description }
+              : {}),
           }
         } catch (e) {
           // Degrade: include the set WITHOUT its variant info and warn.
           setMap[cs.id] = {
             ...base,
-            ...(readContext(cs) !== undefined ? { context: readContext(cs) } : {}),
-            ...(cs.description ? { description: cs.description } : {}),
+            ...(readContext(cs) !== undefined
+              ? { context: readContext(cs) }
+              : {}),
+            ...(cs.description
+              ? { description: cs.description }
+              : {}),
           }
           componentWarnings.push(
             'component set "' +
@@ -2400,8 +2490,12 @@ const handleCommand = async (
             page: pageNameOf(comp),
             properties: projectComponentDefs(compDefs),
             defaults: defaultsOf(compDefs),
-            ...(readContext(comp) !== undefined ? { context: readContext(comp) } : {}),
-            ...(comp.description ? { description: comp.description } : {}),
+            ...(readContext(comp) !== undefined
+              ? { context: readContext(comp) }
+              : {}),
+            ...(comp.description
+              ? { description: comp.description }
+              : {}),
           })
         } catch (e) {
           // Degrade: include the component WITHOUT its property info and warn.
@@ -2411,8 +2505,12 @@ const handleCommand = async (
             key: comp.key,
             type: comp.type,
             page: pageNameOf(comp),
-            ...(readContext(comp) !== undefined ? { context: readContext(comp) } : {}),
-            ...(comp.description ? { description: comp.description } : {}),
+            ...(readContext(comp) !== undefined
+              ? { context: readContext(comp) }
+              : {}),
+            ...(comp.description
+              ? { description: comp.description }
+              : {}),
           })
           componentWarnings.push(
             'component "' +
@@ -2461,7 +2559,11 @@ const handleCommand = async (
           types: ['INSTANCE'],
         })
         for (const inst of instances) {
-          if (scanned >= MAX_INSTANCES || Object.keys(remoteMap).length >= MAX_REMOTE_MAINS) {
+          if (
+            scanned >= MAX_INSTANCES ||
+            Object.keys(remoteMap).length >=
+              MAX_REMOTE_MAINS
+          ) {
             scanTruncated = true
             break
           }
@@ -2474,8 +2576,12 @@ const handleCommand = async (
                 key: mkey,
                 name: main.name,
                 instancesCount: 0,
-                ...(readContext(main) !== undefined ? { context: readContext(main) } : {}),
-                ...(main.description ? { description: main.description } : {}),
+                ...(readContext(main) !== undefined
+                  ? { context: readContext(main) }
+                  : {}),
+                ...(main.description
+                  ? { description: main.description }
+                  : {}),
               }
             }
             remoteMap[mkey].instancesCount++
@@ -2577,7 +2683,9 @@ const handleCommand = async (
                   .height,
               ]
             : undefined,
-        ...(fn && readContext(fn) !== undefined ? { context: readContext(fn) } : {}),
+        ...(fn && readContext(fn) !== undefined
+          ? { context: readContext(fn) }
+          : {}),
       })
 
       // B2 — depth bounds the SCAN SCOPE (descent depth), NOT the output shape:
@@ -2806,7 +2914,9 @@ const handleCommand = async (
         // appendChild wrap above); surface it directly as { error }.
         return {
           error:
-            err instanceof Error ? err.message : String(err),
+            err instanceof Error
+              ? err.message
+              : String(err),
         }
       }
     }
@@ -2865,7 +2975,9 @@ const handleCommand = async (
         // returns a clear structured error, not a raw uncaught exception.
         return {
           error:
-            err instanceof Error ? err.message : String(err),
+            err instanceof Error
+              ? err.message
+              : String(err),
         }
       }
     }
@@ -2945,7 +3057,10 @@ const handleCommand = async (
             type: string
             defaultValue: string | boolean
             targetNodeId?: string
-            field?: 'characters' | 'visible' | 'mainComponent'
+            field?:
+              | 'characters'
+              | 'visible'
+              | 'mainComponent'
           }[]
         | undefined
       if (addProps) {
@@ -2980,12 +3095,14 @@ const handleCommand = async (
                       : 'mainComponent')
                 try {
                   const bindable = child as unknown as {
-                    componentPropertyReferences?:
-                      | Record<string, string>
-                      | null
+                    componentPropertyReferences?: Record<
+                      string,
+                      string
+                    > | null
                   }
                   const existing =
-                    bindable.componentPropertyReferences ?? {}
+                    bindable.componentPropertyReferences ??
+                    {}
                   ;(
                     child as unknown as {
                       componentPropertyReferences: Record<
@@ -3555,7 +3672,10 @@ const handleCommand = async (
       // the plugin API — the setter silently no-ops. Renaming the file is
       // impossible via the plugin API, so push an honest warning and drop
       // spec.name so applyCommonProperties skips the no-op assignment.
-      if (spec.name !== undefined && node.type === 'DOCUMENT') {
+      if (
+        spec.name !== undefined &&
+        node.type === 'DOCUMENT'
+      ) {
         warnings.push(
           'name ignored — the file/document node cannot be renamed via the Figma plugin API',
         )
@@ -3657,7 +3777,8 @@ const handleCommand = async (
             }
 
             // Resolve modeId from modeId or modeName
-            let resolvedModeId: string | undefined = entry.modeId
+            let resolvedModeId: string | undefined =
+              entry.modeId
             if (
               resolvedModeId === undefined &&
               entry.modeName !== undefined
@@ -4099,11 +4220,15 @@ const handleCommand = async (
         const pages = figma.root.children
         if (pages.length <= 1) {
           return {
-            error: 'Cannot delete the last remaining page: ' + node.id,
+            error:
+              'Cannot delete the last remaining page: ' +
+              node.id,
           }
         }
         if (node.id === figma.currentPage.id) {
-          if (typeof figma.setCurrentPageAsync !== 'function') {
+          if (
+            typeof figma.setCurrentPageAsync !== 'function'
+          ) {
             return {
               ...info,
               warnings: [
@@ -4116,7 +4241,10 @@ const handleCommand = async (
           await figma.setCurrentPageAsync(next as PageNode)
         }
         node.remove()
-        return { ...info, currentPageId: figma.currentPage.id }
+        return {
+          ...info,
+          currentPageId: figma.currentPage.id,
+        }
       }
       node.remove()
       return info
@@ -4267,9 +4395,11 @@ const handleCommand = async (
       // origin of the (unrotated) node.
       const childAbs =
         'absoluteTransform' in child
-          ? (child as SceneNode & {
-              absoluteTransform: Transform
-            }).absoluteTransform
+          ? (
+              child as SceneNode & {
+                absoluteTransform: Transform
+              }
+            ).absoluteTransform
           : undefined
       const index = params.index as number | undefined
       if (index !== undefined) {
@@ -4286,9 +4416,11 @@ const handleCommand = async (
           : 'NONE'
       const newParentAbs =
         'absoluteTransform' in parent
-          ? (parent as BaseNode & {
-              absoluteTransform: Transform
-            }).absoluteTransform
+          ? (
+              parent as BaseNode & {
+                absoluteTransform: Transform
+              }
+            ).absoluteTransform
           : undefined
       if (
         parentLayoutMode === 'NONE' &&
@@ -4602,14 +4734,16 @@ const handleCommand = async (
       }
       if (!tgParent) {
         return {
-          error: 'No parent for the transform group result.',
+          error:
+            'No parent for the transform group result.',
         }
       }
       try {
         const tgIndex = tgParent.children
           ? tgParent.children.length
           : 0
-        const modifiers = (params.modifiers ?? []) as unknown[]
+        const modifiers = (params.modifiers ??
+          []) as unknown[]
         // Cast: figma.transformGroup not in typings 1.123.0 — safe cast.
         const transformGroupFn = (
           figma as unknown as Record<string, Function>
@@ -4632,7 +4766,9 @@ const handleCommand = async (
         return {
           error:
             'transform_group failed: ' +
-            (err instanceof Error ? err.message : String(err)),
+            (err instanceof Error
+              ? err.message
+              : String(err)),
         }
       }
     }
@@ -5344,7 +5480,11 @@ const handleCommand = async (
         } catch (e) {
           dvErrors.push({
             id: colId,
-            error: 'remove() failed on collection ' + colId + ': ' + String(e),
+            error:
+              'remove() failed on collection ' +
+              colId +
+              ': ' +
+              String(e),
           })
         }
       }
@@ -5365,7 +5505,8 @@ const handleCommand = async (
         if (typeof variable.remove !== 'function') {
           dvErrors.push({
             id: varId,
-            error: 'remove() unavailable on variable ' + varId,
+            error:
+              'remove() unavailable on variable ' + varId,
           })
           continue
         }
@@ -5375,7 +5516,11 @@ const handleCommand = async (
         } catch (e) {
           dvErrors.push({
             id: varId,
-            error: 'remove() failed on variable ' + varId + ': ' + String(e),
+            error:
+              'remove() failed on variable ' +
+              varId +
+              ': ' +
+              String(e),
           })
         }
       }
@@ -5666,7 +5811,8 @@ const handleCommand = async (
             }[]
           | undefined) ?? []
       const dsResults: { id: string; index: number }[] = []
-      const dsErrors: { index: number; error: string }[] = []
+      const dsErrors: { index: number; error: string }[] =
+        []
 
       for (const entry of dsEntries) {
         try {
@@ -5685,13 +5831,15 @@ const handleCommand = async (
             dsErrors.push({
               index: entry.index,
               error:
-                'remove() unavailable on style ' +
-                style.id,
+                'remove() unavailable on style ' + style.id,
             })
             continue
           }
           style.remove()
-          dsResults.push({ id: style.id, index: entry.index })
+          dsResults.push({
+            id: style.id,
+            index: entry.index,
+          })
         } catch (e) {
           dsErrors.push({
             index: entry.index,
