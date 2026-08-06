@@ -277,6 +277,9 @@ describe('handleGetNode (rebuilt — NodeSpec)', () => {
             width: 100,
             height: 100,
           },
+          strokes: [
+            { type: 'SOLID', color: { r: 0, g: 0, b: 0 } },
+          ],
           strokeWeight: 12,
           vectorPaths: [
             {

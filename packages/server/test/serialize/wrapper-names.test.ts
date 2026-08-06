@@ -117,6 +117,46 @@ describe('toNodeSpec — wrapper names (style/var render by name)', () => {
     expect(spec.radius).toBe('var(radius/medium)8')
   })
 
+  it('a UNIFORM per-corner radius with no flat cornerRadius still renders var(Name)<scalar>', () => {
+    // B21. `bind_variable(field:'cornerRadius')` on a FRAME binds all four
+    // corners; Figma then reports the value ONLY as a uniform
+    // rectangleCornerRadii group and OMITS the flat `cornerRadius` key.
+    // The reader used to derive its scalar from the per-corner array only
+    // when the corners DIFFERED, so this shape produced no base at all and
+    // the atom was dropped — losing the value AND the binding.
+    const raw: Record<string, unknown> = {
+      id: '1:3c',
+      name: 'UniformRadiusBound',
+      type: 'FRAME',
+      rectangleCornerRadii: [8, 8, 8, 8],
+      boundVariables: {
+        rectangleCornerRadii: {
+          RECTANGLE_TOP_LEFT_CORNER_RADIUS: {
+            id: 'VariableID:7:7',
+            type: 'VARIABLE_ALIAS',
+          },
+          RECTANGLE_TOP_RIGHT_CORNER_RADIUS: {
+            id: 'VariableID:7:7',
+            type: 'VARIABLE_ALIAS',
+          },
+          RECTANGLE_BOTTOM_RIGHT_CORNER_RADIUS: {
+            id: 'VariableID:7:7',
+            type: 'VARIABLE_ALIAS',
+          },
+          RECTANGLE_BOTTOM_LEFT_CORNER_RADIUS: {
+            id: 'VariableID:7:7',
+            type: 'VARIABLE_ALIAS',
+          },
+        },
+      },
+      bindingNames: {
+        variables: { 'VariableID:7:7': 'radius/medium' },
+      },
+    }
+    const spec = toNodeSpec(raw, { depth: -1 })
+    expect(spec.radius).toBe('var(radius/medium)8')
+  })
+
   it('a stroke weight bound to a variable renders var(Name)stroke(...)', () => {
     // Same REST nesting quirk: individualStrokeWeights.BORDER_TOP_WEIGHT
     // (etc.), not a flat `strokeWeight` key. Live-verified (2026-07-31).
@@ -124,6 +164,9 @@ describe('toNodeSpec — wrapper names (style/var render by name)', () => {
       id: '1:3b',
       name: 'StrokeWeightBound',
       type: 'FRAME',
+      strokes: [
+        { type: 'SOLID', color: { r: 0, g: 0, b: 0 } },
+      ],
       strokeWeight: 4,
       boundVariables: {
         individualStrokeWeights: {
