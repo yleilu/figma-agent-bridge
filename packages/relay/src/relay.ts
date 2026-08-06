@@ -73,7 +73,83 @@ const send = (
   ws: ServerWebSocket<WsData>,
   msg: RelayOutgoing,
 ) => {
-  ws.send(JSON.stringify(msg))
+  try {
+    ws.send(JSON.stringify(msg))
+  } catch (err) {
+    // A peer that went away mid-send is ordinary; what is not ordinary is
+    // pretending the frame landed. Nothing here can reach the waiter — this
+    // IS the delivery path — so the console is the only honest record.
+    console.error(
+      `[relay] send failed (${msg.type}):`,
+      String(err),
+    )
+  }
+}
+
+/**
+ * Tell whoever is waiting that a frame died here.
+ *
+ * A dropped frame is the worst failure this process can produce: the caller
+ * learns nothing and waits out a timeout whose message points at Figma rather
+ * than at the hop that lost it. That misdirection cost a whole investigation
+ * once, so every drop path in this file ends here instead of at a bare
+ * `return`.
+ *
+ * The notice rides the ORDINARY reply shape — `{ meta: { requestId }, error }`
+ * — which the server already turns into a rejected command (see
+ * figma-client's handleMessage). No new frame type, so no version skew: an
+ * older peer sees a normal error reply, which is exactly what this is.
+ */
+const reportDrop = (
+  ctx: RelayContext,
+  ws: ServerWebSocket<WsData>,
+  reason: string,
+  requestId?: string,
+  channel?: string,
+) => {
+  console.error(`[relay] dropped a frame: ${reason}`)
+  if (requestId === undefined) {
+    // Nothing to correlate against — the frame was too broken to name its
+    // own request. The caller's timeout is all that is left.
+    return
+  }
+  const notice: BroadcastMessage = {
+    type: 'broadcast',
+    message: {
+      meta: { requestId },
+      error: `relay dropped a ${reason} — the command did not reach its peer and can be retried`,
+    },
+  }
+  // Prefer the channel (the waiter may be any member), fall back to the
+  // sender so a channel-less drop still reaches someone.
+  const members =
+    channel !== undefined
+      ? ctx.channels.get(channel)
+      : undefined
+  if (members === undefined || members.size === 0) {
+    send(ws, notice)
+    return
+  }
+  members.forEach(client => {
+    send(client, notice)
+  })
+}
+
+/** Best-effort requestId from a frame too malformed to trust. */
+const requestIdOf = (json: unknown): string | undefined => {
+  const rid = (
+    json as
+      | { message?: { meta?: { requestId?: unknown } } }
+      | undefined
+  )?.message?.meta?.requestId
+  return typeof rid === 'string' ? rid : undefined
+}
+
+/** Best-effort channel from the same. */
+const channelOf = (json: unknown): string | undefined => {
+  const ch = (json as { channel?: unknown } | undefined)
+    ?.channel
+  return typeof ch === 'string' ? ch : undefined
 }
 
 const consumeToken = (
@@ -313,6 +389,15 @@ const handleMessage = (
 ) => {
   const members = ctx.channels.get(channel)
   if (members === undefined) {
+    // The channel was reaped, or both peers left while this frame was in
+    // flight. The work may already have happened, so saying nothing would
+    // leave the waiter to time out against a document that did change.
+    reportDrop(
+      ctx,
+      ws,
+      `frame for an unknown channel (${channel})`,
+      message.message.meta?.requestId,
+    )
     return
   }
 
@@ -321,12 +406,26 @@ const handleMessage = (
     message: message.message,
   }
 
-  const payload = JSON.stringify(broadcast)
+  let delivered = 0
   members.forEach(client => {
     if (client !== ws) {
-      client.send(payload)
+      send(client, broadcast)
+      delivered += 1
     }
   })
+  if (
+    delivered === 0 &&
+    message.message.meta?.requestId !== undefined
+  ) {
+    // Joined, but alone: the peer has gone. Recorded, NOT turned into an
+    // error reply — "the other side is gone" already belongs to the
+    // connection-liveness watchdog, which answers DISCONNECTED, a truer code
+    // than a dropped-frame notice. Synthesizing one here would race it and
+    // sometimes win with the worse answer.
+    console.error(
+      `[relay] no peer on ${channel} for request ${message.message.meta.requestId} — liveness will resolve it`,
+    )
+  }
 }
 
 const handleAgentStatus = (
@@ -600,12 +699,29 @@ export const startRelay = (
         let json: unknown
         try {
           json = JSON.parse(raw as string)
-        } catch {
+        } catch (err) {
+          // Unparseable, so it cannot name its own request — a log is all
+          // that is available. Recorded rather than swallowed so a peer
+          // emitting bad frames is visible instead of merely slow.
+          console.error(
+            '[relay] dropped an unparseable frame:',
+            String(err),
+          )
           return
         }
 
         const parsed = relayIncomingSchema.safeParse(json)
         if (!parsed.success) {
+          // Well-formed JSON the schema refuses — a version skew or a bug.
+          // The frame can still name its request, so the waiter gets a real
+          // error instead of a timeout that reads as Figma being slow.
+          reportDrop(
+            ctx,
+            ws,
+            'frame the relay could not validate',
+            requestIdOf(json),
+            channelOf(json),
+          )
           return
         }
         const frame = parsed.data
@@ -621,6 +737,19 @@ export const startRelay = (
           frame.type !== 'agent-status' &&
           !consumeToken(ctx, ws)
         ) {
+          // The comment above says a dropped COMMAND frame hangs the caller,
+          // and exempting agent-status only narrowed that — it did not close
+          // it. Now the drop announces itself, so a rate-limited caller gets
+          // a retryable error rather than a mystery timeout.
+          reportDrop(
+            ctx,
+            ws,
+            'frame over the rate limit',
+            frame.type === 'message'
+              ? frame.message.meta?.requestId
+              : undefined,
+            'channel' in frame ? frame.channel : undefined,
+          )
           return
         }
 

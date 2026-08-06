@@ -996,6 +996,115 @@ describe('relay', () => {
     await closeWs(ws)
   })
 
+  // A frame that names its request must never die quietly: the caller is
+  // waiting on that requestId and a bare drop leaves it to time out against a
+  // message that blames the wrong component. These two cover the paths where
+  // the relay itself is the one that discards.
+  it('answers the waiter when a rate-limited frame names a request', async () => {
+    const PORT = 3151
+    const fakeNow = 2_000_000
+    const dropServer = startRelay(PORT, {
+      rateBurst: 2,
+      rateTokensPerSec: 5,
+      rateNow: () => fakeNow,
+    })
+    try {
+      const ws = await new Promise<WebSocket>(
+        (resolve, reject) => {
+          const sock = new WebSocket(
+            `ws://localhost:${PORT}`,
+          )
+          sock.onopen = () => resolve(sock)
+          sock.onerror = () =>
+            reject(new Error('connect failed'))
+        },
+      )
+      const next = createMessageQueue(ws)
+      ws.send(
+        JSON.stringify({
+          type: 'join',
+          channel: 'drop-ch',
+        }),
+      )
+      await next() // join ack — costs a token
+      // Drain what is left, then send the frame that must be answered.
+      ws.send(
+        JSON.stringify({
+          type: 'join',
+          channel: 'drop-ch',
+        }),
+      )
+      await next()
+      ws.send(
+        JSON.stringify({
+          type: 'message',
+          channel: 'drop-ch',
+          message: {
+            command: 'get_node',
+            meta: { requestId: 'req-rate-1' },
+          },
+        }),
+      )
+      const notice = (await next()) as {
+        type: string
+        message: {
+          meta?: { requestId?: string }
+          error?: string
+        }
+      }
+      expect(notice.type).toBe('broadcast')
+      expect(notice.message.meta?.requestId).toBe(
+        'req-rate-1',
+      )
+      expect(notice.message.error).toContain('rate limit')
+      ws.close()
+    } finally {
+      stopRelay(dropServer)
+    }
+  })
+
+  it('answers the waiter when a frame fails validation', async () => {
+    const PORT = 3152
+    const badFrameServer = startRelay(PORT)
+    try {
+      const ws = await new Promise<WebSocket>(
+        (resolve, reject) => {
+          const sock = new WebSocket(
+            `ws://localhost:${PORT}`,
+          )
+          sock.onopen = () => resolve(sock)
+          sock.onerror = () =>
+            reject(new Error('connect failed'))
+        },
+      )
+      const next = createMessageQueue(ws)
+      // Valid JSON, invalid frame: `channel` must be a non-empty string.
+      // The requestId is still readable, so the waiter can still be told.
+      ws.send(
+        JSON.stringify({
+          type: 'message',
+          channel: 123,
+          message: { meta: { requestId: 'req-bad-1' } },
+        }),
+      )
+      const notice = (await next()) as {
+        type: string
+        message: {
+          meta?: { requestId?: string }
+          error?: string
+        }
+      }
+      expect(notice.type).toBe('broadcast')
+      expect(notice.message.meta?.requestId).toBe(
+        'req-bad-1',
+      )
+      expect(notice.message.error).toContain('validate')
+      ws.close()
+    } finally {
+      stopRelay(badFrameServer)
+    }
+  })
+
   it('token-bucket rate limiter silently drops frames when bucket is empty', async () => {
     // The bucket refills off the wall clock, so the first version of this test
     // raced it: draining the production bucket (100 tokens @ 50/s) took ~100

@@ -15,6 +15,7 @@ import {
   stopRelay,
 } from '@figma-agent-bridge/relay/relay'
 import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
+import { classifyMessage } from '@figma-agent-bridge/server/errors'
 import {
   createFigmaClient,
   discoverChannels,
@@ -231,6 +232,64 @@ describe('figma-client', () => {
     expect(reply.message.error).toContain('boom')
 
     await closeWs(rawPlugin)
+    client.disconnect()
+  })
+
+  // The last link in the no-silent-drops chain: the relay reports a lost
+  // frame as an ordinary error reply, and the client must settle the waiting
+  // command with it rather than let the timeout run. Without this the drop
+  // notice would be emitted and then ignored, which is indistinguishable from
+  // never sending it.
+  it('settles a pending command from a relay drop notice', async () => {
+    const CHANNEL = 'drop-notice-ch'
+    const client = createFigmaClient(WS_URL)
+    await client.joinChannel(CHANNEL, 'fk-drop')
+
+    const rawPeer = await connectRaw()
+    const peerQueue = createMessageQueue(rawPeer)
+    rawPeer.send(
+      JSON.stringify({ type: 'join', channel: CHANNEL }),
+    )
+    await peerQueue()
+
+    const pending = client.sendCommand(
+      'fk-drop',
+      'get_node',
+      {},
+      30_000,
+    )
+    const sent = (await peerQueue()) as BroadcastMessage
+    const requestId = sent.message.meta?.requestId
+    expect(requestId).toBeDefined()
+
+    // Exactly the shape reportDrop emits.
+    rawPeer.send(
+      JSON.stringify({
+        type: 'message',
+        channel: CHANNEL,
+        message: {
+          meta: { requestId },
+          error:
+            'relay dropped a frame over the rate limit — the command did not reach its peer and can be retried',
+        },
+      }),
+    )
+
+    let caught: Error | null = null
+    try {
+      await pending
+    } catch (err) {
+      caught = err as Error
+    }
+    expect(caught).not.toBeNull()
+    // Settled by the notice, NOT by the 30s timeout — a timeout would have
+    // failed this test long before this line.
+    expect((caught as Error).message).toContain('dropped')
+    expect(classifyMessage((caught as Error).message)).toBe(
+      'TRANSPORT_DROPPED',
+    )
+
+    await closeWs(rawPeer)
     client.disconnect()
   })
 

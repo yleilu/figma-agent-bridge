@@ -20,6 +20,7 @@ export type ErrorCode =
   | 'LIBRARY_UNPUBLISHED'
   | 'WRONG_FILE'
   | 'INCOMPATIBLE'
+  | 'TRANSPORT_DROPPED'
   | 'PLUGIN_ERROR'
 
 /** A failure that already knows its own code — classification skips matching. */
@@ -39,7 +40,12 @@ export const errorMessage = (err: unknown): string =>
 // Every pattern here is a string this repo or the Figma runtime actually
 // produces; strings were observed live, not guessed.
 const RULES: [RegExp, ErrorCode][] = [
-  // Transport, before anything else.
+  // Transport, before anything else. The dropped-frame rule precedes the
+  // connection rules: a hop that could not carry a frame is a DIFFERENT
+  // failure from being disconnected, and the caller acts differently on it —
+  // a lost frame is safely retryable, a dead connection is not.
+  [/\bdropped a .*frame\b/i, 'TRANSPORT_DROPPED'],
+  [/\bcould not be delivered\b/i, 'TRANSPORT_DROPPED'],
   [/\bnot connected\b/i, 'DISCONNECTED'],
   [/\bnot joined to file\b/i, 'DISCONNECTED'],
   [/\btimed out\b/i, 'TIMEOUT'],

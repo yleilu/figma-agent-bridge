@@ -108,3 +108,39 @@ describe('the fallback', () => {
     expect(classifyMessage('')).toBe('PLUGIN_ERROR')
   })
 })
+
+// A lost frame is not a dead connection and not a Figma failure. It gets its
+// own code because the agent's next move differs: a dropped frame is safely
+// retryable, where a timeout may mean the work is still running and
+// PLUGIN_ERROR means it already failed.
+describe('a frame the transport lost', () => {
+  it('is TRANSPORT_DROPPED, not DISCONNECTED', () => {
+    expect(
+      classifyMessage(
+        'relay dropped a frame over the rate limit — the command did not reach its peer and can be retried',
+      ),
+    ).toBe('TRANSPORT_DROPPED')
+    expect(
+      classifyMessage(
+        'relay dropped a frame the relay could not validate',
+      ),
+    ).toBe('TRANSPORT_DROPPED')
+  })
+
+  it('covers a reply that could not be serialized on the way out', () => {
+    expect(
+      classifyMessage(
+        'result could not be delivered: TypeError: circular structure',
+      ),
+    ).toBe('TRANSPORT_DROPPED')
+  })
+
+  it('does not swallow an ordinary disconnect', () => {
+    expect(classifyMessage('Not connected')).toBe(
+      'DISCONNECTED',
+    )
+    expect(classifyMessage('Command cmd-1 timed out')).toBe(
+      'TIMEOUT',
+    )
+  })
+})

@@ -286,20 +286,50 @@ export const useRelay = () => {
 
       const ws = wsRef.current
       const channel = channelRef.current
-      if (ws && channel) {
-        ws.send(
-          JSON.stringify({
-            type: 'message',
-            channel,
-            message: {
-              // Echo the command's requestId in meta so the server correlates
-              // this reply to its pending command. msg.id here is the internal
-              // command-result id, which was seeded from meta.requestId when the
-              // inbound command was forwarded to the sandbox below.
-              meta: { requestId: msg.id },
-              result: msg.result,
-            },
-          }),
+      // This is the last hop a reply takes, and it used to be the quietest:
+      // no socket, no channel, an unserializable result or a closing socket
+      // all ended the same way — nothing sent, nothing logged. The command
+      // had already run, so the document changed and the caller learned
+      // nothing. Every one of those now leaves a record.
+      if (!ws || !channel) {
+        console.error(
+          `[bridge] reply for ${msg.id} dropped: no ${ws ? 'channel' : 'socket'} — the command ran, but its result cannot be delivered`,
+        )
+        return
+      }
+      let frame: string
+      try {
+        frame = JSON.stringify({
+          type: 'message',
+          channel,
+          message: {
+            // Echo the command's requestId in meta so the server correlates
+            // this reply to its pending command. msg.id here is the internal
+            // command-result id, which was seeded from meta.requestId when the
+            // inbound command was forwarded to the sandbox below.
+            meta: { requestId: msg.id },
+            result: msg.result,
+          },
+        })
+      } catch (err) {
+        // A result that survived postMessage can still refuse to serialize
+        // here — a circular reference, a BigInt. Answer with the failure so
+        // the caller gets a named error rather than a timeout.
+        frame = JSON.stringify({
+          type: 'message',
+          channel,
+          message: {
+            meta: { requestId: msg.id },
+            error: `result could not be delivered: ${String(err)}`,
+          },
+        })
+      }
+      try {
+        ws.send(frame)
+      } catch (err) {
+        console.error(
+          `[bridge] reply for ${msg.id} could not be sent:`,
+          String(err),
         )
       }
     }
