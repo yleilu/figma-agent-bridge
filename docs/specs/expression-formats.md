@@ -139,6 +139,23 @@ tail lives, so the core stays short.
   `rgba()`, `image(url)` is write-only; reads always emit `image(HASH)` so it
   round-trips.
 
+**A create that names no `fills`/`strokes` inherits Figma's default for that type.** Omitting the
+key is not the same as asking for nothing — Figma's own create APIs return a painted node, and the
+bridge does not override that. What a spec leaves unsaid, a designer drawing the same shape by hand
+would also get:
+
+| Type | Default when the key is absent |
+|---|---|
+| `FRAME` | `fills: [#FFFFFF]` |
+| `RECTANGLE` · `ELLIPSE` · `STAR` | `fills: [#D9D9D9]` |
+| `TEXT` | `fills: [#000000]` |
+| `VECTOR` · `LINE` | `strokes: [#000000]` |
+
+**Pass an empty array to mean none.** `fills: []` and `strokes: []` clear the default and are
+distinct from an absent key — that distinction is the only way to say "deliberately unpainted", so
+neither side of it may be collapsed into the other. The defaults round-trip: a read reports what
+the node actually carries, and writing that back reproduces it.
+
 ### Effects — `effects[]`
 
 | Variant | Form |
