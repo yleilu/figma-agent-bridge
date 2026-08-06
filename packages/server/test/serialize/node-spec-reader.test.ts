@@ -47,6 +47,35 @@ describe('toNodeSpec — atom-grammar leaves', () => {
     expect(spec.radius).toBe('8')
   })
 
+  it('renders a uniform per-corner group as the scalar even with no flat cornerRadius', () => {
+    // B21's underlying shape: Figma reports a uniform corner radius solely
+    // as rectangleCornerRadii and omits `cornerRadius`. Four equal corners
+    // are one radius — the atom is the scalar, not a 4-tuple.
+    const spec = toNodeSpec(
+      {
+        id: '9:1',
+        name: 'UniformRadius',
+        type: 'FRAME',
+        rectangleCornerRadii: [8, 8, 8, 8],
+      },
+      { depth: -1 },
+    )
+    expect(spec.radius).toBe('8')
+  })
+
+  it('elides an all-zero per-corner group (T4 default)', () => {
+    const spec = toNodeSpec(
+      {
+        id: '9:2',
+        name: 'NoRadius',
+        type: 'FRAME',
+        rectangleCornerRadii: [0, 0, 0, 0],
+      },
+      { depth: -1 },
+    )
+    expect(spec.radius).toBeUndefined()
+  })
+
   it('emits position from relativeTransform (T1/T2 round-trip)', () => {
     const spec = toNodeSpec(raw, { depth: -1 })
     // relativeTransform [[1,0,100],[0,1,200]] → [x,y] translation.
@@ -1196,12 +1225,20 @@ describe('toNodeSpec — componentPropertyReferences read-back', () => {
 // all three into the ONE stroke(...) atom's {…} channel via strokeToAtom, same
 // as align/dash already do.
 
+// Every fixture in this block carries a real stroke paint. The atom reports the
+// STROKE's geometry, so a strokeless fixture emits no atom at all and these
+// assertions would be vacuous — they were, until the gate below was added.
+const aStroke = [
+  { type: 'SOLID', color: { r: 0, g: 0, b: 0 } },
+]
+
 describe('toNodeSpec — stroke cap/join/miter read-back', () => {
   it('reads strokeCap into the stroke atom {cap=…}', () => {
     const spec = toNodeSpec(
       {
         id: '2:1',
         type: 'RECTANGLE',
+        strokes: aStroke,
         strokeWeight: 2,
         strokeCap: 'ROUND',
       } as never,
@@ -1223,6 +1260,7 @@ describe('toNodeSpec — stroke cap/join/miter read-back', () => {
         {
           id: '2:1a',
           type: 'VECTOR',
+          strokes: aStroke,
           strokeWeight: 2,
           strokeCap: rest,
         } as never,
@@ -1238,6 +1276,7 @@ describe('toNodeSpec — stroke cap/join/miter read-back', () => {
         {
           id: '2:1b',
           type: 'VECTOR',
+          strokes: aStroke,
           strokeWeight: 2,
           strokeCap: cap,
         } as never,
@@ -1252,6 +1291,7 @@ describe('toNodeSpec — stroke cap/join/miter read-back', () => {
       {
         id: '2:2',
         type: 'RECTANGLE',
+        strokes: aStroke,
         strokeWeight: 2,
         strokeCap: 'NONE',
       } as never,
@@ -1265,6 +1305,7 @@ describe('toNodeSpec — stroke cap/join/miter read-back', () => {
       {
         id: '2:3',
         type: 'RECTANGLE',
+        strokes: aStroke,
         strokeWeight: 2,
         strokeJoin: 'ROUND',
         strokeMiterLimit: 8,
@@ -1287,6 +1328,7 @@ describe('toNodeSpec — stroke cap/join/miter read-back', () => {
       {
         id: '2:3b',
         type: 'RECTANGLE',
+        strokes: aStroke,
         strokeWeight: 2,
         strokeJoin: 'MITER',
         strokeMiterLimit: 4,
@@ -1301,6 +1343,7 @@ describe('toNodeSpec — stroke cap/join/miter read-back', () => {
       {
         id: '2:4',
         type: 'RECTANGLE',
+        strokes: aStroke,
         strokeWeight: 2,
         strokeAlign: 'INSIDE',
         strokeCap: 'ROUND',
@@ -1320,6 +1363,7 @@ describe('toNodeSpec — stroke cap/join/miter read-back', () => {
       {
         id: '2:5',
         type: 'RECTANGLE',
+        strokes: aStroke,
         strokeWeight: 3,
       } as never,
       { depth: 0 },
@@ -1332,6 +1376,7 @@ describe('toNodeSpec — stroke cap/join/miter read-back', () => {
       {
         id: '2:6',
         type: 'RECTANGLE',
+        strokes: aStroke,
         strokeWeight: 2,
         strokeAlign: 'INSIDE',
         strokeCap: 'ROUND',
@@ -1365,6 +1410,7 @@ describe('toNodeSpec — stroke cap/join/miter read-back', () => {
       {
         id: '2:7',
         type: 'RECTANGLE',
+        strokes: aStroke,
         strokeWeight: 2,
         strokeAlign: 'INSIDE',
         strokeJoin: 'MITER',
@@ -1381,6 +1427,109 @@ describe('toNodeSpec — stroke cap/join/miter read-back', () => {
     expect(written.strokeJoin).toBeUndefined()
     expect(written.strokeMiterLimit).toBeUndefined()
     expect(written.strokeAlign).toBe('INSIDE')
+  })
+})
+
+// ─── a strokeless node has no stroke GEOMETRY ────────────────────────────────
+//
+// Figma keeps a default strokeWeight (and strokeAlign) on every node whether or
+// not a stroke exists, so gating the atom on `strokeWeight > 0` alone put
+// `stroke(1){align=INSIDE}` on every FRAME, RECTANGLE and TEXT ever read — 33
+// characters per node describing a stroke that is not there (T4 cost, T7
+// honesty). expression-formats.md frames the atom as "the stroke's GEOMETRY":
+// no stroke, no geometry.
+
+describe('toNodeSpec — stroke geometry needs a stroke', () => {
+  it('emits no stroke atom when the node has no strokes key at all', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:8',
+        type: 'FRAME',
+        strokeWeight: 1,
+        strokeAlign: 'INSIDE',
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBeUndefined()
+    expect('stroke' in spec).toBe(false)
+  })
+
+  it('emits no stroke atom when strokes is an empty array', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:9',
+        type: 'VECTOR',
+        strokes: [],
+        strokeWeight: 1,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBeUndefined()
+    expect('stroke' in spec).toBe(false)
+  })
+
+  it('still emits the full atom when a real stroke paint is present', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:10',
+        type: 'RECTANGLE',
+        strokes: aStroke,
+        strokeWeight: 2,
+        strokeAlign: 'INSIDE',
+        strokeCap: 'ROUND',
+        strokeJoin: 'BEVEL',
+        strokeMiterLimit: 8,
+        dashPattern: [4, 4],
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.strokes).toEqual(['#000000'])
+    expect(spec.stroke).toBe(
+      'stroke(2){align=INSIDE, cap=ROUND, join=BEVEL, miter=8, dash=[4,4]}',
+    )
+  })
+
+  // A hidden stroke is still a stroke — the node HAS one, it is just not
+  // painted. paintArray deliberately keeps `{vis=false}` rather than filtering
+  // it, and the geometry must follow the same rule.
+  it('keeps the geometry when the only stroke is hidden', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:11',
+        type: 'RECTANGLE',
+        strokes: [
+          {
+            type: 'SOLID',
+            visible: false,
+            color: { r: 0, g: 0, b: 1, a: 1 },
+          },
+        ],
+        strokeWeight: 2,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.strokes).toEqual(['#0000FF{vis=false}'])
+    expect(spec.stroke).toBe('stroke(2)')
+  })
+
+  // The write face is independent of the read gate: a spec that supplies
+  // `stroke` must still apply, including alongside `strokes` in the SAME spec.
+  it('the write path still applies stroke, with and without strokes', () => {
+    const geomOnly = specToFigma({
+      stroke: 'stroke(2){align=INSIDE}',
+    }) as Record<string, unknown>
+    expect(geomOnly.strokeWeight).toBe(2)
+    expect(geomOnly.strokeAlign).toBe('INSIDE')
+
+    const both = specToFigma({
+      strokes: ['#000000'],
+      stroke: 'stroke(2){align=INSIDE}',
+    }) as Record<string, unknown>
+    expect(both.strokeWeight).toBe(2)
+    expect(both.strokeAlign).toBe('INSIDE')
+    expect(both.strokes).toEqual([
+      { type: 'SOLID', color: { r: 0, g: 0, b: 0 } },
+    ])
   })
 })
 
@@ -1716,6 +1865,53 @@ describe('toNodeSpec — IMAGE paint read-back (rot/tile/op/blend/vis)', () => {
     )
     expect(spec.fills?.[0]).not.toContain('rot=')
   })
+
+  // B11. JSON_REST_V1 spells the Plugin API's CROP as STRETCH — and STRETCH is
+  // not an ImagePaint.scaleMode at all, so passing it through hands the agent a
+  // value its own next write cannot mean (T2). FILL/FIT/TILE are spelled the
+  // same on both sides; FILL is additionally Figma's default and stays elided
+  // (T4). Asserting the emitted VALUE, not merely that a round-trip is
+  // accepted: the write face copies `scale` into `scaleMode` with no enum
+  // check, so an acceptance assertion passes with the bug present.
+  it.each([
+    ['STRETCH', 'CROP'],
+    ['FILL', 'FILL'],
+    ['FIT', 'FIT'],
+    ['TILE', 'TILE'],
+  ])(
+    'reads REST scaleMode %s as the writable %s',
+    (rest, plugin) => {
+      const spec = toNodeSpec(
+        {
+          id: '5:3',
+          type: 'RECTANGLE',
+          fills: [
+            {
+              type: 'IMAGE',
+              imageRef: 'deadbeef',
+              scaleMode: rest,
+            },
+          ],
+        } as never,
+        { depth: 0 },
+      )
+      const fill = spec.fills?.[0] ?? ''
+      expect(fill).toContain('image(deadbeef)')
+      if (plugin === 'FILL') {
+        expect(fill).not.toContain('scale=')
+      } else {
+        expect(fill).toContain(`{scale=${plugin}}`)
+      }
+      // …and the atom parses back to that same mode.
+      const paint = atomToPaint(fill)
+      if (paint.type !== 'IMAGE') {
+        throw new Error(
+          `expected an IMAGE paint, got ${paint.type}`,
+        )
+      }
+      expect(paint.scaleMode ?? 'FILL').toBe(plugin)
+    },
+  )
 })
 
 // ─── hidden paints survive the read ───────────────────────────────────────────
@@ -1957,5 +2153,129 @@ describe('toNodeSpec — hidden effects survive the read', () => {
     expect(spec.effects).toEqual([
       'shadow(0,4,8,#00000040){vis=false}',
     ])
+  })
+})
+
+// ─── text.runs (B15) ─────────────────────────────────────────────────────────
+//
+// `runs` is not a JSON_REST_V1 field — the plugin projects
+// getStyledTextSegments into it (figma-plugin/src/text-runs.ts). Until that
+// enrichment existed, runSpecs read a key nothing ever produced, so this whole
+// half of the grammar was dead on arrival. These fixtures are the projection's
+// own output shape.
+
+describe('toNodeSpec — text.runs', () => {
+  const mixedText = (
+    extra: Record<string, unknown> = {},
+  ): Record<string, unknown> => ({
+    id: '1:1',
+    name: 'Mixed',
+    type: 'TEXT',
+    characters: 'Hello world',
+    style: {
+      fontFamily: 'Inter',
+      fontStyle: 'Regular',
+      fontSize: 12,
+    },
+    runs: [
+      {
+        at: [0, 5],
+        style: {
+          fontFamily: 'Inter',
+          fontStyle: 'Bold',
+          fontSize: 16,
+        },
+        color: [
+          { type: 'SOLID', color: { r: 1, g: 0, b: 0 } },
+        ],
+      },
+      {
+        at: [5, 11],
+        style: {
+          fontFamily: 'Inter',
+          fontStyle: 'Regular',
+          fontSize: 12,
+        },
+      },
+    ],
+    ...extra,
+  })
+
+  it('renders each run as font/colour atoms scoped by at', () => {
+    const spec = toNodeSpec(mixedText() as never, {
+      depth: 0,
+    })
+    expect(spec.text?.runs).toEqual([
+      {
+        at: [0, 5],
+        font: 'font(Inter,Bold,16)',
+        color: '#FF0000',
+      },
+      { at: [5, 11], font: 'font(Inter,Regular,12)' },
+    ])
+  })
+
+  it('carries lh/ls on the run font atom', () => {
+    const spec = toNodeSpec(
+      mixedText({
+        runs: [
+          {
+            at: [0, 5],
+            style: {
+              fontFamily: 'Inter',
+              fontStyle: 'Bold',
+              fontSize: 16,
+              lineHeightUnit: 'PIXELS',
+              lineHeightPx: 24,
+              letterSpacing: 0.5,
+            },
+          },
+        ],
+      }) as never,
+      { depth: 0 },
+    )
+    expect(spec.text?.runs?.[0].font).toBe(
+      'font(Inter,Bold,16){lh=24, ls=0.5}',
+    )
+  })
+
+  it('emits no runs key for an ordinary single-style text', () => {
+    const spec = toNodeSpec(
+      mixedText({ runs: undefined }) as never,
+      { depth: 0 },
+    )
+    expect(spec.text?.runs).toBeUndefined()
+    expect(spec.warnings).toBeUndefined()
+  })
+
+  // T10: the plugin caps the projection. A short list is never allowed to look
+  // like the whole truth.
+  it('warns rather than truncating silently when the cap bit', () => {
+    const spec = toNodeSpec(
+      mixedText({ runsOmitted: 148 }) as never,
+      { depth: 0 },
+    )
+    expect(spec.text?.runs).toHaveLength(2)
+    expect(spec.warnings?.[0]).toContain('148')
+    expect(spec.warnings?.[0]).toContain('text.runs')
+  })
+
+  it('a run the writer round-trips is the one the reader emitted', () => {
+    const spec = toNodeSpec(mixedText() as never, {
+      depth: 0,
+    })
+    const out = specToFigma(spec) as Record<string, unknown>
+    const text = out.text as Record<string, unknown>
+    const runs = text.runs as Record<string, unknown>[]
+    expect(runs[0].at).toEqual([0, 5])
+    expect(runs[0].font).toEqual({
+      family: 'Inter',
+      style: 'Bold',
+      size: 16,
+    })
+    expect(runs[0].color).toMatchObject({
+      type: 'SOLID',
+      color: { r: 1, g: 0, b: 0 },
+    })
   })
 })

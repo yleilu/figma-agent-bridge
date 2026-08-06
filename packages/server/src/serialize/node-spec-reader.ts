@@ -212,29 +212,93 @@ const num = (v: unknown): number | undefined =>
 const str = (v: unknown): string | undefined =>
   typeof v === 'string' ? v : undefined
 
+// ─── REST→Plugin vocabulary ───────────────────────────────────────────────────
+//
+// Figma spells several enums one way in a JSON_REST_V1 export and another in
+// the Plugin API. The export is what a READ sees; the Plugin API is what a
+// WRITE must supply. So passing REST's spelling through hands the agent a value
+// its own next call rejects. expression-formats.md fixes ONE vocabulary — the
+// Plugin API's, because only that one writes (T2, T8).
+//
+// Every such field is a table below plus one `restVocab(...)` line; a fourth is
+// a table entry, not a fourth hand-rolled function.
+
 /**
- * Translate a single REST constraint value (JSON_REST_V1 vocab) to the Plugin-API
- * vocab used by the spec/writer. REST uses LEFT/RIGHT/TOP/BOTTOM/LEFT_RIGHT/
- * TOP_BOTTOM, the Plugin API uses MIN/MAX/STRETCH (CENTER and SCALE are shared).
- * Any unmapped value — including an already-Plugin value like MIN/MAX — passes
- * through UNCHANGED, since the schema tuple has no enum and we must not corrupt a
- * value that is already in Plugin vocab.
+ * A REST→Plugin lookup with an unchanged pass-through default.
+ *
+ * `undefined` in, `undefined` out — an optional field needs no guard at the
+ * call site.
  */
-const restConstraintToPlugin = (value: string): string => {
-  switch (value) {
-    case 'LEFT':
-    case 'TOP':
-      return 'MIN'
-    case 'RIGHT':
-    case 'BOTTOM':
-      return 'MAX'
-    case 'LEFT_RIGHT':
-    case 'TOP_BOTTOM':
-      return 'STRETCH'
-    default:
-      return value
-  }
+type RestVocab = {
+  (value: string): string
+  (value: string | undefined): string | undefined
 }
+
+/**
+ * Build a normaliser over one REST-spelling → Plugin-spelling table.
+ *
+ * A table may be MANY-TO-ONE: constraints collapse both LEFT and TOP onto the
+ * single Plugin value MIN.
+ *
+ * Tables are per-field on purpose — there is no one global vocabulary to fold
+ * them into, because the same word can sit on opposite sides in two fields:
+ * STRETCH is a Plugin *constraint* value and also REST's spelling of an image's
+ * CROP.
+ *
+ * Anything absent from the table passes through UNCHANGED, including a value
+ * that is already Plugin vocab (MIN, ROUND, CROP). These fields carry no enum
+ * in the schema, and a value that is already right must not be corrupted.
+ */
+const restVocab = (
+  table: Record<string, string>,
+): RestVocab =>
+  ((value: string | undefined) =>
+    value === undefined
+      ? undefined
+      : (table[value] ?? value)) as RestVocab
+
+/**
+ * REST uses LEFT/RIGHT/TOP/BOTTOM/LEFT_RIGHT/TOP_BOTTOM; the Plugin API uses
+ * MIN/MAX/STRETCH (CENTER and SCALE are shared, so neither appears here).
+ */
+const restConstraintToPlugin = restVocab({
+  LEFT: 'MIN',
+  TOP: 'MIN',
+  RIGHT: 'MAX',
+  BOTTOM: 'MAX',
+  LEFT_RIGHT: 'STRETCH',
+  TOP_BOTTOM: 'STRETCH',
+})
+
+/**
+ * REST's spelling of the two arrow caps → the Plugin API's.
+ *
+ * Figma calls the same cap `LINE_ARROW` in a JSON_REST_V1 export and
+ * `ARROW_LINES` in the Plugin API, and likewise `TRIANGLE_ARROW` /
+ * `ARROW_EQUILATERAL` — verified live: create_node answers "Invalid enum value.
+ * Expected 'NONE' | 'ROUND' | 'SQUARE' | 'ARROW_LINES' | 'ARROW_EQUILATERAL'".
+ *
+ * Per-point caps need no such mapping: they come off `vectorNetwork` through
+ * the plugin, which speaks the Plugin API already.
+ */
+const pluginStrokeCap = restVocab({
+  LINE_ARROW: 'ARROW_LINES',
+  TRIANGLE_ARROW: 'ARROW_EQUILATERAL',
+})
+
+/**
+ * REST's spelling of an image's CROP scale mode → the Plugin API's.
+ *
+ * `ImagePaint.scaleMode` is FILL/FIT/CROP/TILE in the Plugin API
+ * (expression-formats.md:116); a JSON_REST_V1 export spells CROP as `STRETCH`,
+ * which is not a scaleMode the Plugin API has any name for. FILL, FIT and TILE
+ * are spelled the same on both sides and pass through (B11).
+ *
+ * IMAGE only: a VIDEO paint carries a scaleMode too, but never reaches this —
+ * `rawToFigmaPaint` returns null for every type but SOLID, the four gradients
+ * and IMAGE.
+ */
+const pluginScaleMode = restVocab({ STRETCH: 'CROP' })
 
 const sizeOf = (raw: RawNode): [number, number] => {
   // Prefer raw.width/height (enriched by plugin — unrotated geometry) over
@@ -438,7 +502,7 @@ const rawToFigmaPaint = (
       imageHash: p.imageRef ?? p.imageHash ?? null,
     }
     if (p.scaleMode !== undefined) {
-      out.scaleMode = p.scaleMode
+      out.scaleMode = pluginScaleMode(p.scaleMode)
     }
     if (p.scalingFactor !== undefined) {
       out.scalingFactor = p.scalingFactor
@@ -577,33 +641,6 @@ const effectArray = (
 
 // ─── stroke geometry ──────────────────────────────────────────────────────────
 
-/**
- * REST's spelling of the two arrow caps → the Plugin API's.
- *
- * Figma calls the same cap `LINE_ARROW` in a JSON_REST_V1 export and
- * `ARROW_LINES` in the Plugin API, and likewise `TRIANGLE_ARROW` /
- * `ARROW_EQUILATERAL`. The export is what a read sees and the Plugin API is
- * what a write must supply, so emitting REST's name hands the agent a value
- * that its own next call rejects — verified live: create_node answers
- * "Invalid enum value. Expected 'NONE' | 'ROUND' | 'SQUARE' | 'ARROW_LINES' |
- * 'ARROW_EQUILATERAL'". expression-formats.md fixes one vocabulary, the Plugin
- * API's, because only that one writes (T2, T8).
- *
- * Per-point caps need no such mapping: they come off `vectorNetwork` through
- * the plugin, which speaks the Plugin API already.
- */
-const REST_STROKE_CAP: Record<string, string> = {
-  LINE_ARROW: 'ARROW_LINES',
-  TRIANGLE_ARROW: 'ARROW_EQUILATERAL',
-}
-
-const pluginStrokeCap = (
-  cap: string | undefined,
-): string | undefined =>
-  cap === undefined
-    ? undefined
-    : (REST_STROKE_CAP[cap] ?? cap)
-
 /** REST's per-side positional keys under `individualStrokeWeights`. */
 const STROKE_WEIGHT_BOUND_KEYS = [
   'BORDER_TOP_WEIGHT',
@@ -612,10 +649,25 @@ const STROKE_WEIGHT_BOUND_KEYS = [
   'BORDER_LEFT_WEIGHT',
 ] as const
 
+/**
+ * The stroke's GEOMETRY (expression-formats.md) — so a node with no stroke has
+ * none to report. `hasStroke` is the caller's already-computed `strokes` atom
+ * array, not a second derivation of it.
+ *
+ * Figma keeps a default `strokeWeight` (and `strokeAlign`) on EVERY node
+ * whether or not a stroke exists, so `weight > 0` alone is not evidence of a
+ * stroke: it put `stroke(1){align=INSIDE}` on every strokeless FRAME,
+ * RECTANGLE and TEXT ever read — 33 characters per node describing something
+ * that is not there (a T4 cost and a T7 honesty problem).
+ */
 const strokeGeom = (
   raw: RawNode,
   bindingNames: BindingNames | undefined,
+  hasStroke: boolean,
 ): string | undefined => {
+  if (!hasStroke) {
+    return undefined
+  }
   const weight = num(raw.strokeWeight)
   if (weight === undefined || weight <= 0) {
     return undefined
@@ -694,17 +746,28 @@ const radiusAtom = (
     | [number, number, number, number]
     | undefined
   const base = (() => {
-    if (
-      per !== undefined &&
-      Array.isArray(per) &&
-      per.length === 4 &&
-      !(
-        per[0] === per[1] &&
-        per[1] === per[2] &&
-        per[2] === per[3]
-      )
-    ) {
-      return `[${per.join(',')}]`
+    if (Array.isArray(per) && per.length === 4) {
+      if (
+        !(
+          per[0] === per[1] &&
+          per[1] === per[2] &&
+          per[2] === per[3]
+        )
+      ) {
+        return `[${per.join(',')}]`
+      }
+      // Four EQUAL corners are one radius, and the group is the only
+      // place that value is guaranteed to appear: Figma omits the flat
+      // `cornerRadius` key whenever the corners are bound to a variable
+      // (live-verified — bind_variable(field:'cornerRadius') on a FRAME
+      // emits boundVariables.rectangleCornerRadii ×4 and no scalar).
+      // Deriving the scalar here is what keeps such a read from losing
+      // BOTH its value and its binding. A 0 group falls through to the
+      // flat key, which is where a T4 default is already elided.
+      const corner = num(per[0])
+      if (corner !== undefined && corner > 0) {
+        return String(corner)
+      }
     }
     const uniform = num(raw.cornerRadius)
     if (uniform !== undefined && uniform > 0) {
@@ -892,13 +955,31 @@ const fontNameFromStyle = (
   return out
 }
 
+/**
+ * The per-range text overrides, from the plugin's `runs` enrichment.
+ *
+ * `runs` is NOT a JSON_REST_V1 field — REST spells mixed text as
+ * `characterStyleOverrides` plus a `styleOverrideTable`, which this reader does
+ * not speak. The plugin projects `getStyledTextSegments` into this shape
+ * instead (figma-plugin/src/text-runs.ts), and that projection is CAPPED: a
+ * text styled per character would otherwise put thousands of runs on one node.
+ * `runsOmitted` carries what the cap dropped, and it becomes a warning here
+ * rather than a silent short list (T7/T10).
+ */
 const runSpecs = (
   raw: RawNode,
   bindingNames: BindingNames | undefined,
+  warnings: string[],
 ): TextRun[] | undefined => {
   const { runs: raws } = raw
   if (!Array.isArray(raws) || raws.length === 0) {
     return undefined
+  }
+  const omitted = num(raw.runsOmitted)
+  if (omitted !== undefined && omitted > 0) {
+    warnings.push(
+      `text.runs: ${omitted} further style run(s) omitted — this text has more distinct style ranges than one read carries; the returned runs cover the start of the text only`,
+    )
   }
   const out: TextRun[] = []
   for (const r of raws as Record<string, unknown>[]) {
@@ -930,6 +1011,7 @@ const runSpecs = (
 const textSpec = (
   raw: RawNode,
   bindingNames: BindingNames | undefined,
+  warnings: string[],
 ): TextSpec | undefined => {
   const content = str(raw.characters)
   const style = raw.style as RawTextStyle | undefined
@@ -986,7 +1068,7 @@ const textSpec = (
   ) {
     out.paragraphSpacing = style.paragraphSpacing
   }
-  const runs = runSpecs(raw, bindingNames)
+  const runs = runSpecs(raw, bindingNames, warnings)
   if (runs !== undefined) {
     out.runs = runs
   }
@@ -1237,7 +1319,11 @@ const buildNode = (
   if (strokes !== undefined) {
     out.strokes = strokes
   }
-  const stroke = strokeGeom(raw, bindingNames)
+  const stroke = strokeGeom(
+    raw,
+    bindingNames,
+    strokes !== undefined,
+  )
   if (stroke !== undefined) {
     out.stroke = stroke
   }
@@ -1411,7 +1497,7 @@ const buildNode = (
     out.clipsContent = true
   }
 
-  const text = textSpec(raw, bindingNames)
+  const text = textSpec(raw, bindingNames, warnings)
   if (text !== undefined) {
     out.text = text
   }

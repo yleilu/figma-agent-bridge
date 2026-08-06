@@ -14,8 +14,14 @@
 import { describe, expect, it } from 'bun:test'
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
-import { handleBatch } from '@figma-agent-bridge/server/tools/batch'
-import { batchParamsSchema } from '@figma-agent-bridge/shared/tool-params'
+import {
+  BATCH_ENTRY_SCHEMAS,
+  handleBatch,
+} from '@figma-agent-bridge/server/tools/batch'
+import {
+  batchOpSchema,
+  batchParamsSchema,
+} from '@figma-agent-bridge/shared/tool-params'
 
 type SentOp = {
   op: string
@@ -406,6 +412,65 @@ describe('handleBatch', () => {
     expect(out.errors[0].code).toBe('PLUGIN_ERROR')
   })
 
+  // Entry validation (batchEntrySchema is .passthrough() BY DESIGN — its doc
+  // promises "the per-op param shape is enforced where each command already
+  // enforces it"). It was not: batch called the converters directly, so a
+  // malformed field reached specToFigma and died as a server-side TypeError
+  // reported as PLUGIN_ERROR ("Figma failed and the server cannot say more") —
+  // when Figma never saw the request. Each entry is now parsed by its op's OWN
+  // registered param schema, the same one index.ts hands the MCP SDK.
+  it('rejects a malformed entry as INVALID_PARAM without aborting the batch', async () => {
+    const sent: Sent[] = []
+    const result = await handleBatch(
+      {
+        op: 'update_node',
+        ops: [
+          // radius is an ATOM STRING; a JSON array is not the grammar.
+          { nodeId: 'a', patch: { radius: [8, 8, 0, 0] } },
+          { nodeId: 'b', patch: { opacity: 0.5 } },
+        ],
+      },
+      stubClient({ sent }),
+    )
+    const out = parse(result.content[0].text)
+    expect(out.errors[0]).toMatchObject({
+      index: 0,
+      code: 'INVALID_PARAM',
+    })
+    expect(out.errors[0].error).toContain('radius')
+    // The sibling still ran — D3 partial success.
+    expect(out.results.find(r => r.index === 1)?.ok).toBe(
+      true,
+    )
+    // The malformed entry never reached the plugin.
+    const forwarded = sent[0].params?.ops as SentOp[]
+    expect(forwarded).toHaveLength(1)
+    expect(forwarded[0].params.nodeId).toBe('b')
+  })
+
+  it('names the offending field for any patch key, not just radius', async () => {
+    const result = await handleBatch(
+      {
+        op: 'update_node',
+        ops: [{ nodeId: 'a', patch: { fills: [123] } }],
+      },
+      stubClient({}),
+    )
+    const out = parse(result.content[0].text)
+    expect(out.errors[0].code).toBe('INVALID_PARAM')
+    expect(out.errors[0].error).toContain('fills')
+  })
+
+  it('rejects a top-level param shape error too (missing required key)', async () => {
+    const result = await handleBatch(
+      { op: 'reparent_node', ops: [{ nodeId: 'a' }] },
+      stubClient({}),
+    )
+    const out = parse(result.content[0].text)
+    expect(out.errors[0].code).toBe('INVALID_PARAM')
+    expect(out.errors[0].error).toContain('parentId')
+  })
+
   it('surfaces a plugin-level {error} as an error', async () => {
     const result = await handleBatch(
       { op: 'delete_node', ops: [{ nodeId: '1:1' }] },
@@ -461,6 +526,61 @@ describe('batch delete_styles — index-tagged like the standalone handler', () 
     // The plugin builds its reply from entry.index; undefined would be dropped
     // by JSON.stringify, leaving a failure the agent cannot map to its input.
     expect(styles.map(s => s.index)).toEqual([0, 1, 2])
+  })
+})
+
+// The coverage guard. Entry validation is only as good as its op map: an op
+// added to batchOpSchema without a schema here would silently rejoin the
+// unvalidated path that produced the raw.trim TypeError. The Record<BatchOp,…>
+// key type already makes that a compile error; this asserts it at runtime too,
+// and catches the other direction (a key that is no longer a batch op).
+describe('batch entry validation covers every op', () => {
+  it('wires a schema for every op batch accepts, and nothing else', () => {
+    expect(Object.keys(BATCH_ENTRY_SCHEMAS).sort()).toEqual(
+      [...batchOpSchema.options].sort(),
+    )
+  })
+
+  it('every wired schema carries the op fields and none of the call fields', () => {
+    for (const op of batchOpSchema.options) {
+      const keys = Object.keys(
+        BATCH_ENTRY_SCHEMAS[op].shape,
+      )
+      // Non-empty: a schema reduced to {} would accept anything.
+      expect([op, keys.length > 0]).toEqual([op, true])
+      expect([op, keys.includes('fileKey')]).toEqual([
+        op,
+        false,
+      ])
+    }
+  })
+
+  it('every wired schema actually rejects an empty entry', () => {
+    // delete_variables is the ONE op whose params are all optional — its "at
+    // least one of variables/collections" rule is enforced in the handler, not
+    // the schema, so .shape survives for MCP registration (tool-params.ts:848).
+    // batch does not run the handlers, so that rule stays unenforced here;
+    // every OTHER op has a required field and must reject {}.
+    const allOptional = new Set(['delete_variables'])
+    for (const op of batchOpSchema.options) {
+      if (allOptional.has(op)) {
+        continue
+      }
+      expect([
+        op,
+        BATCH_ENTRY_SCHEMAS[op].safeParse({}).success,
+      ]).toEqual([op, false])
+    }
+  })
+
+  it('drops the call-level addressing keys — an entry carries only its op params', () => {
+    // fileKey is validated on the CALL by fileTool, never per entry; leaving it
+    // required would fail every well-formed entry.
+    expect(
+      BATCH_ENTRY_SCHEMAS.delete_node.safeParse({
+        nodeId: '1:1',
+      }).success,
+    ).toBe(true)
   })
 })
 

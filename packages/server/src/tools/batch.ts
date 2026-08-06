@@ -21,12 +21,47 @@
 // `warnings?` carries the SAME server-side writer warnings a direct call would
 // emit (e.g. update_node per-side stroke collapse), so a batched op is not a
 // silent lossy conversion (D3/T7).
-// A SERVER-side conversion failure (e.g. a malformed atom) or a missing op is
-// recorded as that entry's error WITHOUT being sent to the plugin, and the entry
-// is sent as a no-op marker so the plugin's results array stays index-aligned.
+// A SERVER-side conversion failure (e.g. a malformed atom), a failed entry
+// VALIDATION or a missing op is recorded as that entry's error WITHOUT being
+// sent to the plugin, and the entry is sent as a no-op marker so the plugin's
+// results array stays index-aligned.
 
+import { z } from 'zod'
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { NodeSpecPatch } from '@figma-agent-bridge/shared/node-spec'
+import {
+  applyStyleParamsSchema,
+  batchOpSchema,
+  bindVariableParamsSchema,
+  booleanOpParamsSchema,
+  cloneNodeParamsSchema,
+  combineVariantsParamsSchema,
+  createPageParamsSchema,
+  createStylesParamsSchema,
+  createVariablesParamsSchema,
+  deleteNodeParamsSchema,
+  deleteStylesParamsSchema,
+  deleteVariablesParamsSchema,
+  duplicatePageParamsSchema,
+  fileTargetParamsSchema,
+  flattenParamsSchema,
+  groupNodesParamsSchema,
+  reorderChildrenParamsSchema,
+  reparentNodeParamsSchema,
+  setAnnotationsParamsSchema,
+  setCurrentPageParamsSchema,
+  setFocusParamsSchema,
+  setInstanceParamsSchema,
+  setPluginDataParamsSchema,
+  setReactionsParamsSchema,
+  setSelectionParamsSchema,
+  swapComponentParamsSchema,
+  transformGroupParamsSchema,
+  updateComponentParamsSchema,
+  updateNodeParamsSchema,
+  updateStylesParamsSchema,
+  updateVariablesParamsSchema,
+} from '@figma-agent-bridge/shared/tool-params'
 import type { ScopedFigmaClient } from '../figma-client'
 import {
   specToFigma,
@@ -48,7 +83,7 @@ import {
   pluginError,
   errorEnvelope,
 } from './shared'
-import { classifyMessage } from '../errors'
+import { type ErrorCode, classifyMessage } from '../errors'
 
 type BatchEntry = Record<string, unknown> & { op?: string }
 
@@ -69,6 +104,179 @@ type EntryResult = {
   error?: string
   /** Server-side writer warnings for this op (D3/T7), when any. */
   warnings?: string[]
+}
+
+// ─── per-op entry VALIDATION ───────────────────────────────────────────────────
+//
+// `batchEntrySchema` is `.passthrough()` by design — it cannot know which op an
+// entry will route to, so it validates only the routing key and promises that
+// "the per-op param shape is enforced where each command already enforces it".
+// That enforcement lives in `fileTool(...)` registration (index.ts), which batch
+// never goes through: it calls the converters directly. So an entry used to
+// reach specToFigma unvalidated and die there as a server-side TypeError,
+// reported as PLUGIN_ERROR — the code that means "Figma failed and the server
+// cannot say more" — for a request Figma never received.
+//
+// The fix reuses the op's OWN registered schema rather than re-stating field
+// rules here: one contract, so batch cannot drift from the direct call again.
+
+/** The batch op set, as the enum that is its source of truth. */
+type BatchOp = z.infer<typeof batchOpSchema>
+
+/**
+ * Addressing/identity keys that belong to the CALL, not to an entry: `fileTool`
+ * has already validated them off the top-level params. Read off the schema so a
+ * new envelope key cannot leave a stale copy here.
+ */
+const CALL_KEYS = Object.keys(fileTargetParamsSchema.shape)
+
+/** An op's registered param schema, reduced to what a batch ENTRY carries. */
+const entrySchema = (
+  schema: z.AnyZodObject,
+): z.AnyZodObject => {
+  const shape: z.ZodRawShape = { ...schema.shape }
+  for (const key of CALL_KEYS) {
+    delete shape[key]
+  }
+  return z.object(shape)
+}
+
+/**
+ * Every op `batch` accepts → the schema `index.ts` registers for that op.
+ * TOTAL BY TYPE: the key type is the `batchOpSchema` enum itself, so adding an
+ * op to that enum without wiring its schema here is a compile error, not a
+ * silent return to the unvalidated path. "batch entry validation covers every
+ * op" in batch.test.ts asserts the same thing at runtime.
+ */
+export const BATCH_ENTRY_SCHEMAS: Record<
+  BatchOp,
+  z.AnyZodObject
+> = {
+  [COMMANDS.UPDATE_NODE]: entrySchema(
+    updateNodeParamsSchema,
+  ),
+  [COMMANDS.DELETE_NODE]: entrySchema(
+    deleteNodeParamsSchema,
+  ),
+  [COMMANDS.SET_SELECTION]: entrySchema(
+    setSelectionParamsSchema,
+  ),
+  [COMMANDS.SET_FOCUS]: entrySchema(setFocusParamsSchema),
+  [COMMANDS.REPARENT_NODE]: entrySchema(
+    reparentNodeParamsSchema,
+  ),
+  [COMMANDS.REORDER_CHILDREN]: entrySchema(
+    reorderChildrenParamsSchema,
+  ),
+  [COMMANDS.CLONE_NODE]: entrySchema(cloneNodeParamsSchema),
+  [COMMANDS.BOOLEAN_OP]: entrySchema(booleanOpParamsSchema),
+  [COMMANDS.FLATTEN]: entrySchema(flattenParamsSchema),
+  [COMMANDS.GROUP_NODES]: entrySchema(
+    groupNodesParamsSchema,
+  ),
+  [COMMANDS.TRANSFORM_GROUP]: entrySchema(
+    transformGroupParamsSchema,
+  ),
+  [COMMANDS.APPLY_STYLE]: entrySchema(
+    applyStyleParamsSchema,
+  ),
+  [COMMANDS.UPDATE_COMPONENT]: entrySchema(
+    updateComponentParamsSchema,
+  ),
+  [COMMANDS.COMBINE_VARIANTS]: entrySchema(
+    combineVariantsParamsSchema,
+  ),
+  [COMMANDS.SWAP_COMPONENT]: entrySchema(
+    swapComponentParamsSchema,
+  ),
+  [COMMANDS.SET_INSTANCE]: entrySchema(
+    setInstanceParamsSchema,
+  ),
+  [COMMANDS.BIND_VARIABLE]: entrySchema(
+    bindVariableParamsSchema,
+  ),
+  [COMMANDS.CREATE_STYLES]: entrySchema(
+    createStylesParamsSchema,
+  ),
+  [COMMANDS.UPDATE_STYLES]: entrySchema(
+    updateStylesParamsSchema,
+  ),
+  [COMMANDS.DELETE_STYLES]: entrySchema(
+    deleteStylesParamsSchema,
+  ),
+  [COMMANDS.CREATE_VARIABLES]: entrySchema(
+    createVariablesParamsSchema,
+  ),
+  [COMMANDS.UPDATE_VARIABLES]: entrySchema(
+    updateVariablesParamsSchema,
+  ),
+  [COMMANDS.DELETE_VARIABLES]: entrySchema(
+    deleteVariablesParamsSchema,
+  ),
+  [COMMANDS.SET_PLUGIN_DATA]: entrySchema(
+    setPluginDataParamsSchema,
+  ),
+  [COMMANDS.SET_REACTIONS]: entrySchema(
+    setReactionsParamsSchema,
+  ),
+  [COMMANDS.SET_ANNOTATIONS]: entrySchema(
+    setAnnotationsParamsSchema,
+  ),
+  [COMMANDS.CREATE_PAGE]: entrySchema(
+    createPageParamsSchema,
+  ),
+  [COMMANDS.SET_CURRENT_PAGE]: entrySchema(
+    setCurrentPageParamsSchema,
+  ),
+  [COMMANDS.DUPLICATE_PAGE]: entrySchema(
+    duplicatePageParamsSchema,
+  ),
+}
+
+/**
+ * `op` is batch's ROUTING key, so an op whose own params also carry a field
+ * called `op` (only `boolean_op`) cannot express it in an entry — the router
+ * consumes the key. Say so instead of reporting a bare "op: Required" at an
+ * agent that plainly supplied one.
+ */
+const ROUTING_KEY_NOTE =
+  "`op` is batch's routing key, so this op's own `op` param cannot be carried in an entry — call the tool directly."
+
+/**
+ * Parse one entry against its op's registered schema. Returns the message
+ * naming the offending field(s), or null when the entry is well-formed. The
+ * caller records a failure as that entry's INVALID_PARAM error and never sends
+ * it to the plugin — one bad entry does not abort its siblings (D3).
+ */
+const validateEntry = (
+  op: string,
+  params: Record<string, unknown>,
+): string | null => {
+  const schema = BATCH_ENTRY_SCHEMAS[op as BatchOp] as
+    | z.AnyZodObject
+    | undefined
+  if (schema === undefined) {
+    return `Unknown op "${op}".`
+  }
+  const parsed = schema.safeParse(params)
+  if (parsed.success) {
+    return null
+  }
+  const issues = parsed.error.errors
+    .map(issue => {
+      const where = issue.path.join('.')
+      return where === ''
+        ? issue.message
+        : `${where}: ${issue.message}`
+    })
+    .join('; ')
+  const routingCollision = parsed.error.errors.some(
+    issue =>
+      issue.path.length === 1 && issue.path[0] === 'op',
+  )
+  return `Invalid ${op} params — ${issues}.${
+    routingCollision ? ` ${ROUTING_KEY_NOTE}` : ''
+  }`
 }
 
 // ─── per-op param conversion (grammar WRITE face) ──────────────────────────────
@@ -327,11 +535,16 @@ export const handleBatch = async (
   }: { op?: string; ops: BatchEntry[] },
   client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  // Resolve + convert each entry server-side, in array order. A missing op or a
-  // malformed atom is recorded as that entry's error and NOT sent to the plugin;
-  // a placeholder keeps the sent ops index-aligned with the plugin's replies.
+  // Resolve, VALIDATE and convert each entry server-side, in array order. A
+  // missing op, an entry its op's schema rejects, or a malformed atom is
+  // recorded as that entry's error and NOT sent to the plugin; a placeholder
+  // keeps the sent ops index-aligned with the plugin's replies.
   const converted: (ConvertedOp | null)[] = []
   const preErrors: Record<number, EntryResult> = {}
+  // Codes for pre-errors that already KNOW their classification. Kept beside
+  // the results rows rather than inside them: an entry's result shape is
+  // {index,op,ok,result?,error?,warnings?} and the code belongs to errors[].
+  const preErrorCodes: Record<number, ErrorCode> = {}
   const effectiveOps: (string | null)[] = []
 
   ops.forEach((entry, index) => {
@@ -345,6 +558,21 @@ export const handleBatch = async (
         error:
           'No op for this entry: set a top-level `op` or a per-entry `op`.',
       }
+      converted[index] = null
+      return
+    }
+    // Validate BEFORE converting: a field the op's schema rejects would
+    // otherwise reach the pure converters and fail as an opaque server-side
+    // TypeError classified PLUGIN_ERROR.
+    const invalid = validateEntry(op, opParams(entry))
+    if (invalid !== null) {
+      preErrors[index] = {
+        index,
+        op,
+        ok: false,
+        error: invalid,
+      }
+      preErrorCodes[index] = 'INVALID_PARAM'
       converted[index] = null
       return
     }
@@ -463,7 +691,11 @@ export const handleBatch = async (
         index: r.index,
         op: r.op,
         error: r.error,
-        code: classifyMessage(r.error ?? ''),
+        // A pre-error the server raised itself already knows its code; only a
+        // message from the plugin (or a converter throw) needs classifying.
+        code:
+          preErrorCodes[r.index] ??
+          classifyMessage(r.error ?? ''),
       }))
 
     // batch ALWAYS succeeds at the tool level (D3 partial success): a per-op
