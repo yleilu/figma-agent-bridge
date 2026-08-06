@@ -5869,16 +5869,27 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
     const localFileKey = figma.fileKey ?? null
     const targetFileKey = msg.targetFileKey ?? null
     if (isTargetMismatch(localFileKey, targetFileKey)) {
-      figma.ui.postMessage({
-        type: 'command-result',
-        id: msg.id,
-        result: {
-          error: targetGuardError(
-            String(targetFileKey),
-            String(localFileKey),
-          ),
-        },
-      })
+      // A refusal is still a reply, and a reply that does not arrive is a
+      // hang. Everything here is a string so this cannot realistically
+      // throw — the guard is here so the property is structural rather than
+      // a fact about today's payload.
+      try {
+        figma.ui.postMessage({
+          type: 'command-result',
+          id: msg.id,
+          result: {
+            error: targetGuardError(
+              String(targetFileKey),
+              String(localFileKey),
+            ),
+          },
+        })
+      } catch (err) {
+        console.error(
+          '[plugin] file-guard refusal could not be sent:',
+          String(err),
+        )
+      }
       return
     }
 
@@ -5956,18 +5967,53 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
   }
 
   if (msg.type === 'storage-get') {
-    const value = await figma.clientStorage.getAsync(
-      msg.key,
-    )
-    figma.ui.postMessage({
-      type: 'storage-result',
-      key: msg.key,
-      value: value !== undefined ? value : null,
-    })
+    // The UI awaits this one. An unhandled throw from clientStorage — or
+    // from postMessage on a stored value that will not clone — used to
+    // reject this whole handler and leave that promise pending forever.
+    // Answering null is the honest degrade: the key is unreadable, which is
+    // what an absent key already means to every caller.
+    let value: unknown = null
+    try {
+      const stored = await figma.clientStorage.getAsync(
+        msg.key,
+      )
+      value = stored !== undefined ? stored : null
+    } catch (err) {
+      console.error(
+        `[plugin] clientStorage.getAsync(${msg.key}) failed:`,
+        String(err),
+      )
+    }
+    try {
+      figma.ui.postMessage({
+        type: 'storage-result',
+        key: msg.key,
+        value,
+      })
+    } catch (err) {
+      console.error(
+        `[plugin] storage-result for ${msg.key} could not be sent:`,
+        String(err),
+      )
+      figma.ui.postMessage({
+        type: 'storage-result',
+        key: msg.key,
+        value: null,
+      })
+    }
   }
 
   if (msg.type === 'storage-set') {
-    await figma.clientStorage.setAsync(msg.key, msg.value)
+    // Nothing awaits this, but an unhandled rejection here would still tear
+    // down the message handler mid-flight and take unrelated work with it.
+    try {
+      await figma.clientStorage.setAsync(msg.key, msg.value)
+    } catch (err) {
+      console.error(
+        `[plugin] clientStorage.setAsync(${msg.key}) failed:`,
+        String(err),
+      )
+    }
   }
 
   if (msg.type === 'storage-delete') {
