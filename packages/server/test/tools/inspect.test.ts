@@ -55,6 +55,28 @@ describe('handleInspect (rebuilt — Rule B)', () => {
     expect(sent[0].params?.nodeId).toBe('10:0')
   })
 
+  // B23: the plugin bounds its enrichment by the `depth` it is handed and has
+  // no budget of its own to reason from, so the depth on the wire is the
+  // RESOLVED one — the same rule truncateTree applies.
+  it('sends a RESOLVED depth: 0 by default, -1 when only a budget was asked for', async () => {
+    const sent: Sent[] = []
+    const client = stubClient({ sent, reply: deepTree })
+    await handleInspect({ nodeId: '10:0' }, client)
+    expect(sent[0].params?.depth).toBe(0)
+
+    await handleInspect(
+      { nodeId: '10:0', budget: 500 },
+      client,
+    )
+    expect(sent[1].params?.depth).toBe(-1)
+
+    await handleInspect(
+      { nodeId: '10:0', depth: 2, budget: 500 },
+      client,
+    )
+    expect(sent[2].params?.depth).toBe(2)
+  })
+
   it('returns {view, truncated} with an empty receipt for a small tree (depth=-1)', async () => {
     const result = await handleInspect(
       { nodeId: '10:0', depth: -1 },

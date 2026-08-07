@@ -10,13 +10,7 @@ import {
 } from './apply-layout'
 import { importComponentByKeyWithDeadline } from './import-by-key'
 import { createFontLoader } from './font-cache'
-import { omitMixed } from './mixed'
-import {
-  applyPointDetail,
-  capsFromNetwork,
-  cornersFromNetwork,
-  joinsFromNetwork,
-} from './vector-points'
+import { applyPointDetail } from './vector-points'
 import {
   applyStrokeGeometry,
   applyExportSettings,
@@ -25,9 +19,13 @@ import {
 import {
   fontsToLoad,
   runsToRangeOps,
-  segmentsToRuns,
   type RangeOp,
 } from './text-runs'
+import {
+  enrichDocument,
+  readContext as readNodeContext,
+  type LiveNode,
+} from './enrich-nodes'
 import { projectComponentDefs } from './project-component-defs'
 import { rollbackCreated } from './rollback'
 import { resolveInstanceProps } from './resolve-instance-props'
@@ -297,70 +295,64 @@ const summarizeChildren = (
       }))
     : []
 
-const readContext = (n: BaseNode): string | undefined => {
-  if (!('getSharedPluginData' in n)) return undefined
-  const v = (
-    n as BaseNode & PluginDataMixin
-  ).getSharedPluginData(CONTEXT_NS, CONTEXT_KEY)
-  return v !== '' ? v : undefined
-}
+// The `BaseNode`-typed face of enrich-nodes' structural reader, so the other
+// context call sites in this file are unchanged.
+const readContext = (n: BaseNode): string | undefined =>
+  readNodeContext(n as unknown as LiveNode)
 
-// context lives in shared pluginData, which reads SYNCHRONOUSLY — so unlike
-// the style/variable name resolution below (ROOT-ONLY, because it is async),
-// walking descendants here costs no round trips. exportAsync has already
-// paid O(subtree) to serialize these same nodes, so this walk adds nothing
-// asymptotically. Scoped to the exported subtree, so it is never O(document).
-const collectContexts = (
-  n: BaseNode,
-  into: Record<string, string>,
-): void => {
-  const ctx = readContext(n)
-  if (ctx !== undefined) {
-    into[n.id] = ctx
-  }
-  if ('children' in n) {
-    for (const child of (n as ChildrenMixin).children) {
-      collectContexts(child, into)
-    }
-  }
-}
+// The two globals enrich-nodes needs, feature-detected here (T7) so the module
+// itself stays free of the Figma runtime and testable without it. A resolver
+// left `undefined` means that half of the wrapper names is simply omitted —
+// never a throw that would lose the whole read.
+const enrichDeps = () => ({
+  mixed: figma.mixed as symbol,
+  getStyleName:
+    typeof figma.getStyleByIdAsync === 'function'
+      ? async (id: string) =>
+          (await figma.getStyleByIdAsync(id))?.name
+      : undefined,
+  getVariableName:
+    typeof figma.variables.getVariableByIdAsync ===
+    'function'
+      ? async (id: string) =>
+          (await figma.variables.getVariableByIdAsync(id))
+            ?.name
+      : undefined,
+})
 
-// Merges the collected id → context map into the exported JSON_REST_V1
-// document tree by id. Covers the root (its id is in the map too) and every
-// descendant, replacing what used to be a root-only assignment.
-const applyContexts = (
-  doc: Record<string, unknown>,
-  contexts: Record<string, string>,
-): void => {
-  const ctx = contexts[doc.id as string]
-  if (ctx !== undefined) {
-    doc.context = ctx
-  }
-  if (Array.isArray(doc.children)) {
-    for (const child of doc.children) {
-      if (typeof child === 'object' && child !== null) {
-        applyContexts(
-          child as Record<string, unknown>,
-          contexts,
-        )
-      }
-    }
-  }
-}
+/**
+ * The `depth` a read command carries, defaulting to 0 — the same default the
+ * server's own read model applies when the caller names none.
+ */
+const readDepth = (
+  params: Record<string, unknown>,
+): number =>
+  typeof params.depth === 'number' ? params.depth : 0
 
+/**
+ * One node's export, enriched to the read's own `depth`.
+ *
+ * `depth` is what the caller asked for — 0 (the node alone) through N, or -1
+ * for every level. It bounds the enrichment ONLY: `exportAsync` returns the
+ * whole subtree either way, and anything past `depth` collapses to an id-stub
+ * server-side, so enriching it would buy nothing (T10).
+ *
+ * Every field JSON_REST_V1 cannot carry — vector geometry, pointCount, the
+ * unrotated size, text runs, style/variable names, component.key — lands on
+ * every node within `depth`, not just the root: see enrich-nodes.ts.
+ */
 const exportNodeDocument = async (
   node: BaseNode,
-  isRoot: boolean,
+  depth: number,
 ): Promise<unknown> => {
   if (node.type === 'DOCUMENT' || node.type === 'PAGE') {
+    const ctx = readContext(node)
     return {
       id: node.id,
       name: node.name,
       type: node.type,
       children: summarizeChildren(node),
-      ...(readContext(node) !== undefined
-        ? { context: readContext(node) }
-        : {}),
+      ...(ctx !== undefined ? { context: ctx } : {}),
     }
   }
   const exported = await (node as SceneNode).exportAsync({
@@ -373,344 +365,12 @@ const exportNodeDocument = async (
   ) {
     const doc = (exported as Record<string, unknown>)
       .document as Record<string, unknown>
-    // Collect context for the whole exported subtree (root + every
-    // descendant) via a synchronous walk of the real Figma nodes, then merge
-    // by id into the JSON_REST_V1 tree exportAsync just produced.
-    const contexts: Record<string, string> = {}
-    collectContexts(node, contexts)
-    applyContexts(doc, contexts)
-    if (node.type === 'VECTOR' && 'vectorPaths' in node) {
-      doc.vectorPaths = (node as VectorNode).vectorPaths
-      // Per-point detail lives on the NETWORK, which vectorPaths cannot
-      // express — without this a hand-drawn shape reads back with sharp
-      // corners the file does not have, and an arrow reads back blunt. Only
-      // the few properties are sent, sparsely; the network itself is unbounded
-      // and stays put (T10). Feature-detected like the vectorPaths guard
-      // beside it.
-      if ('vectorNetwork' in node) {
-        const network = (node as VectorNode).vectorNetwork
-        const detail = doc as Record<string, unknown>
-        const corners = cornersFromNetwork(network)
-        if (corners !== undefined) {
-          detail.vectorCorners = corners
-        }
-        // The node's own cap can be figma.mixed (a Symbol) exactly when the
-        // vertices disagree; only a string is a value to compare against.
-        const nodeCap = (
-          node as unknown as { strokeCap?: unknown }
-        ).strokeCap
-        const caps = capsFromNetwork(
-          network,
-          typeof nodeCap === 'string' ? nodeCap : undefined,
-        )
-        if (caps !== undefined) {
-          detail.vectorCaps = caps
-        }
-        const nodeJoin = (
-          node as unknown as { strokeJoin?: unknown }
-        ).strokeJoin
-        const joins = joinsFromNetwork(
-          network,
-          typeof nodeJoin === 'string'
-            ? nodeJoin
-            : undefined,
-        )
-        if (joins !== undefined) {
-          detail.vectorJoins = joins
-        }
-      }
-    }
-    // runs — the per-range text overrides. NOT a JSON_REST_V1 field: REST
-    // describes mixed text as `characterStyleOverrides` plus a
-    // `styleOverrideTable`, an indirection the reader does not speak, so
-    // without this enrichment the `runs` the write face now applies read back
-    // as nothing at all — the value would land in the file and then be denied
-    // by the very next read.
-    //
-    // Costs nothing on an ordinary node: `getStyledTextSegments` returns ONE
-    // segment for a single-style text and `segmentsToRuns` declines a
-    // single-segment list, so a plain read is byte-identical to before.
-    //
-    // ROOT-ONLY (isRoot===true), like the componentKey / bindingNames
-    // enrichments below: a deep `inspect` must not pay a segment scan on every
-    // text node it passes (T10).
-    if (
-      isRoot &&
-      node.type === 'TEXT' &&
-      typeof (node as TextNode).getStyledTextSegments ===
-        'function'
-    ) {
-      const projected = segmentsToRuns(
-        (node as TextNode).getStyledTextSegments([
-          'fontName',
-          'fontSize',
-          'fills',
-          'lineHeight',
-          'letterSpacing',
-        ]),
-      )
-      if (
-        projected !== undefined &&
-        projected.runs.length > 0
-      ) {
-        doc.runs = projected.runs
-        if (projected.omitted > 0) {
-          // The reader turns this into a warning. Truncating a read without
-          // saying so is the one thing a bounded read must not do (T10/T7).
-          doc.runsOmitted = projected.omitted
-        }
-      }
-    }
-    // width / height — JSON_REST_V1 omits unrotated width/height, emitting only
-    // absoluteBoundingBox which is the AXIS-ALIGNED bbox (inflated when rotated).
-    // B7: enrich with node.width/node.height (Plugin API, always unrotated) so
-    // the reader can prefer them over the bbox. Feature-detected: guard on
-    // 'width' in node — consistent with pointCount/grid enrichment above. O(1)
-    // per node; applies to ALL SceneNode types (no POLYGON/STAR-style gating).
-    if ('width' in node) {
-      doc.width = (
-        node as unknown as { width: number }
-      ).width
-      doc.height = (
-        node as unknown as { height: number }
-      ).height
-    }
-    // strokeJoin / strokeMiterLimit — JSON_REST_V1 carries strokeCap but NOT
-    // these two (live-confirmed absent, 2026-07-31). Plain synchronous
-    // property reads, like width/height above — NOT gated on isRoot (unlike
-    // bindingNames/componentKey, this needs no async lookup). Feature-detect
-    // (T7): a node type without a strokes mixin silently no-ops.
-    if ('strokeJoin' in node) {
-      // A vector whose points carry different joins reports figma.mixed here,
-      // which is a Symbol and cannot cross the plugin boundary — see mixed.ts.
-      // Omitting is the honest answer: mixed is not one value, and the
-      // per-point `joins=` list says what each point actually does.
-      const join = omitMixed(
-        (node as unknown as { strokeJoin: unknown })
-          .strokeJoin,
-        figma.mixed,
-      )
-      if (join !== undefined) {
-        doc.strokeJoin = join
-      }
-    }
-    if ('strokeMiterLimit' in node) {
-      doc.strokeMiterLimit = (
-        node as unknown as { strokeMiterLimit: number }
-      ).strokeMiterLimit
-    }
-    // pointCount (POLYGON + STAR) and innerRadius (STAR-only) are NOT carried by
-    // JSON_REST_V1 — enrich like vectorPaths so they round-trip via get_node
-    // (live-verified 2026-07-17). Feature-detect by PROPERTY (only POLYGON/STAR
-    // have pointCount, only STAR has innerRadius) — robust to the POLYGON vs
-    // REGULAR_POLYGON export-type-name difference.
-    if ('pointCount' in node) {
-      doc.pointCount = (
-        node as unknown as { pointCount: number }
-      ).pointCount
-    }
-    if ('innerRadius' in node) {
-      doc.innerRadius = (
-        node as unknown as { innerRadius: number }
-      ).innerRadius
-    }
-    // isMask / maskType — NOT carried by JSON_REST_V1; enrich from the node's
-    // own property (feature-detected by property presence, consistent with
-    // pointCount/innerRadius enrichment above). Only enriched when isMask is
-    // true to keep unmasked nodes clean.
-    if (
-      'isMask' in node &&
-      (node as unknown as { isMask: boolean }).isMask ===
-        true
-    ) {
-      doc.isMask = true
-      if ('maskType' in node) {
-        doc.maskType = (
-          node as unknown as { maskType: string }
-        ).maskType
-      }
-    }
-    // explicitVariableModes (M13) — per-collection mode pins are NOT carried
-    // by JSON_REST_V1; enrich from the node's own property (feature-detected
-    // by property presence, not by API version check — consistent with
-    // pointCount/innerRadius enrichment above).
-    if (
-      'explicitVariableModes' in node &&
-      typeof (
-        node as unknown as {
-          explicitVariableModes: unknown
-        }
-      ).explicitVariableModes === 'object' &&
-      (
-        node as unknown as {
-          explicitVariableModes: Record<
-            string,
-            string
-          > | null
-        }
-      ).explicitVariableModes !== null
-    ) {
-      const evm = (
-        node as unknown as {
-          explicitVariableModes: Record<string, string>
-        }
-      ).explicitVariableModes
-      if (Object.keys(evm).length > 0) {
-        doc.explicitVariableModes = evm
-      }
-    }
-    // M12 — GRID layout enrichment. JSON_REST_V1 may not carry gridRowCount/
-    // gridColumnCount/gridRowGap/gridColumnGap for GRID-mode frames. Enrich
-    // directly from the node so the reader can round-trip GRID layouts (T2).
-    // Feature-detected: guard on 'gridRowCount' in node (T7). Always enrich
-    // by default (Theme B) — the controller runs a step-0 live gate to confirm
-    // whether REST already carries these.
-    if ('gridRowCount' in node) {
-      const gridNode = node as unknown as {
-        gridRowCount: number
-        gridColumnCount: number
-        gridRowGap: number
-        gridColumnGap: number
-      }
-      doc.gridRowCount = gridNode.gridRowCount
-      doc.gridColumnCount = gridNode.gridColumnCount
-      doc.gridRowGap = gridNode.gridRowGap
-      doc.gridColumnGap = gridNode.gridColumnGap
-    }
-    // B3 — componentPropertyReferences: binding map from a field ('characters',
-    // 'visible', 'mainComponent') to the canonical component property id. Set by
-    // update_component's add+targetNodeId binding; readable here for T2 round-trip.
-    // Present on component sublayers and instance sublayers; null or absent on
-    // everything else. Only enrich when non-null and non-empty.
-    if ('componentPropertyReferences' in node) {
-      const refs = (
-        node as unknown as {
-          componentPropertyReferences: Record<
-            string,
-            string
-          > | null
-        }
-      ).componentPropertyReferences
-      if (refs !== null && Object.keys(refs).length > 0) {
-        doc.componentPropertyReferences = refs
-      }
-    }
-    // M14 — component.key + component.remote enrichment for INSTANCE nodes.
-    // ROOT-ONLY (isRoot===true) so we stay O(targets) not O(document) — a
-    // descendant instance inside a deep inspect keeps its cheap componentId-only
-    // projection (T10). Feature-detect getMainComponentAsync (T7): absent on
-    // older Plugin API versions; failures degrade silently (local componentId
-    // still round-trips locally).
-    if (
-      isRoot &&
-      node.type === 'INSTANCE' &&
-      typeof (
-        node as unknown as {
-          getMainComponentAsync?: unknown
-        }
-      ).getMainComponentAsync === 'function'
-    ) {
-      const main = await (node as InstanceNode)
-        .getMainComponentAsync()
-        .catch(() => null)
-      if (main !== null && main !== undefined) {
-        doc.componentKey = main.key
-        doc.componentRemote = main.remote
-      }
-    }
-    // T1 (wrapper-names) — bindingNames: resolves the four styleId fields
-    // and every boundVariables id to their NAMES, so the server can wrap a
-    // bound fill/stroke/effect/text as style(name) and a bound property as
-    // var(name) instead of emitting the bare resolved value. Only the plugin
-    // can turn a Figma id into a name. ROOT-ONLY (isRoot===true), mirroring
-    // the componentKey enrichment above — O(targets) not O(document); a
-    // descendant inside a deep inspect keeps its cheap id-only projection.
-    // Feature-detect each resolver independently: if either API is missing
-    // on this Figma runtime, omit that half and continue — never throw.
-    if (isRoot) {
-      const bindingNames: {
-        styles?: Record<string, string>
-        variables?: Record<string, string>
-      } = {}
-      if (typeof figma.getStyleByIdAsync === 'function') {
-        const styleIdFields = {
-          fillStyleId: 'fill',
-          strokeStyleId: 'stroke',
-          effectStyleId: 'effect',
-          textStyleId: 'text',
-        } as const
-        const styles: Record<string, string> = {}
-        for (const [idField, gramField] of Object.entries(
-          styleIdFields,
-        )) {
-          if (!(idField in node)) continue
-          const styleId = (
-            node as unknown as Record<string, unknown>
-          )[idField]
-          if (
-            typeof styleId !== 'string' ||
-            styleId.length === 0
-          ) {
-            continue
-          }
-          const style = await figma
-            .getStyleByIdAsync(styleId)
-            .catch(() => null)
-          if (style !== null && style !== undefined) {
-            styles[gramField] = style.name
-          }
-        }
-        if (Object.keys(styles).length > 0) {
-          bindingNames.styles = styles
-        }
-      }
-      if (
-        typeof figma.variables.getVariableByIdAsync ===
-          'function' &&
-        'boundVariables' in node
-      ) {
-        const bound = (
-          node as unknown as {
-            boundVariables?: Record<string, unknown>
-          }
-        ).boundVariables
-        if (bound) {
-          // Dedupe ids first — a node bound to the same variable on
-          // five fields costs one lookup, not five.
-          const ids = new Set<string>()
-          const pushAlias = (a: unknown): void => {
-            const id = (a as { id?: string } | null)?.id
-            if (typeof id === 'string') {
-              ids.add(id)
-            }
-          }
-          for (const val of Object.values(bound)) {
-            if (Array.isArray(val)) {
-              for (const a of val) {
-                pushAlias(a)
-              }
-            } else {
-              pushAlias(val)
-            }
-          }
-          const variables: Record<string, string> = {}
-          for (const id of ids) {
-            const v = await figma.variables
-              .getVariableByIdAsync(id)
-              .catch(() => null)
-            if (v !== null && v !== undefined) {
-              variables[id] = v.name
-            }
-          }
-          if (Object.keys(variables).length > 0) {
-            bindingNames.variables = variables
-          }
-        }
-      }
-      if (Object.keys(bindingNames).length > 0) {
-        doc.bindingNames = bindingNames
-      }
-    }
+    await enrichDocument(
+      node as unknown as LiveNode,
+      doc,
+      depth,
+      enrichDeps(),
+    )
     return doc
   }
   throw new Error(
@@ -2421,11 +2081,10 @@ const handleCommand = async (
       if (!node) {
         return { error: 'Node not found: ' + params.nodeId }
       }
-      // isRoot=true: the node is the direct target of get_node — eligible for
-      // M14 INSTANCE enrichment (componentKey + componentRemote) without the
-      // O(document) cost. Descendants are never passed through exportNodeDocument
-      // individually here; JSON_REST_V1 returns their subtree inline.
-      return exportNodeDocument(node, true)
+      // The read's own depth bounds the enrichment: every node get_node
+      // returns COMPLETE is enriched, and nothing past it (the server stubs
+      // those). Default 0 — the node alone — matching the server's own.
+      return exportNodeDocument(node, readDepth(params))
     }
 
     // inspect returns the SAME raw export the reader consumes; the server's
@@ -2450,9 +2109,14 @@ const handleCommand = async (
         if (sel.length > 1) {
           // Multi-selection → forest of all selected nodes. Resolve every
           // export before returning (each exportNodeDocument is async).
-          // isRoot=true: each selected node is a subtree root, not a descendant.
+          // Each selected node is its own root, so each gets the depth the
+          // caller asked for — the server's +1 for the synthetic SELECTION
+          // wrapper is a server-side concern and is already accounted for in
+          // the depth it sends.
           return Promise.all(
-            sel.map(node => exportNodeDocument(node, true)),
+            sel.map(node =>
+              exportNodeDocument(node, readDepth(params)),
+            ),
           )
         }
         target =
@@ -2465,8 +2129,9 @@ const handleCommand = async (
             ((params.nodeId ?? params.pageId) as string),
         }
       }
-      // isRoot=true: the inspect target is the root of the export.
-      return exportNodeDocument(target, true)
+      // inspect sends an ALREADY-RESOLVED depth (a budget-only read resolves
+      // to -1 there, because that is how deep the budget fill may reach).
+      return exportNodeDocument(target, readDepth(params))
     }
 
     // get_nodes: one entry per id — a raw export (the same shape get_node /
@@ -2480,8 +2145,9 @@ const handleCommand = async (
           if (!node) {
             return { id: nodeId, error: 'Node not found' }
           }
-          // isRoot=true: each explicitly-requested id is a root target.
-          return exportNodeDocument(node, true)
+          // Each explicitly-requested id is its own root, at the one depth
+          // the call carries.
+          return exportNodeDocument(node, readDepth(params))
         }),
       )
     }

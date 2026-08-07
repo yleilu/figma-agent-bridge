@@ -188,9 +188,9 @@ export type NodeSpec = {
      * Read-emitted hint (M14): true when the main component is from a
      * published library (remote). The write path prefers
      * importComponentByKeyAsync(key) when remote===true; id-first is
-     * unchanged for local (non-remote) instances. Root-only: only the
-     * node directly requested by get_node/get_nodes/inspect carries this
-     * flag — descendant instances keep their id-only projection (T10).
+     * unchanged for local (non-remote) instances. Carried by every node
+     * the read returns complete — the requested one and, within `depth`,
+     * its descendants.
      */
     remote?: boolean
   }
