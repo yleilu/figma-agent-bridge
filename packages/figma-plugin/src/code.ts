@@ -9,6 +9,7 @@ import {
   type AppliedLayout,
 } from './apply-layout'
 import { importComponentByKeyWithDeadline } from './import-by-key'
+import { createFontLoader } from './font-cache'
 import { omitMixed } from './mixed'
 import {
   applyPointDetail,
@@ -276,6 +277,14 @@ type PluginMessage =
   | { type: 'storage-set'; key: string; value: unknown }
   | { type: 'storage-delete'; key: string }
   | { type: 'resize'; height: number }
+
+// B24: `loadFontAsync` per text node made `create_tree` exceed its timeout at
+// ~7 texts — one call in the sequence blocks ~11s while newly-created nodes are
+// pending. Asked once per distinct font instead, the same tree builds in
+// milliseconds. Session-scoped: a font stays loaded for the plugin's life.
+const fontLoader = createFontLoader(async font => {
+  await figma.loadFontAsync(font)
+})
 
 const summarizeChildren = (
   node: BaseNode & { children?: readonly BaseNode[] },
@@ -1296,7 +1305,7 @@ const applyTextRuns = async (
   // Every range font, before any setRangeFontName — an unloaded range font
   // throws from inside the loop, having already applied the runs before it.
   for (const font of fontsToLoad(ops)) {
-    await figma.loadFontAsync(font)
+    await fontLoader.ensure(font)
   }
   const declined = new Set<string>()
   for (const op of ops) {
@@ -1376,7 +1385,7 @@ const applyTextProperties = async (
   // answers uniformly for both). Without this the plainest patch there is —
   // "change this string" — would demand the agent restate the type.
   if (font !== undefined) {
-    await figma.loadFontAsync({
+    await fontLoader.ensure({
       family: font.family,
       style: font.style,
     })
@@ -1391,12 +1400,12 @@ const applyTextProperties = async (
       0,
       node.characters.length,
     )) {
-      await figma.loadFontAsync(existing)
+      await fontLoader.ensure(existing)
     }
   } else if (node.fontName !== figma.mixed) {
     // An EMPTY text node has no range to ask about; its single fontName is
     // the one the first write will use.
-    await figma.loadFontAsync(node.fontName)
+    await fontLoader.ensure(node.fontName)
   }
 
   // Text auto-resize (set before content to avoid resize fighting)
@@ -5866,7 +5875,7 @@ const handleCommand = async (
               lineHeight?: LineHeight
               letterSpacing?: LetterSpacing
             }
-            await figma.loadFontAsync({
+            await fontLoader.ensure({
               family: font.family,
               style: font.style,
             })
@@ -6016,7 +6025,7 @@ const handleCommand = async (
               // error that NAMES the applied name/description — an honest partial
               // write, not a silent no-op, and it does not abort other entries.
               try {
-                await figma.loadFontAsync({
+                await fontLoader.ensure({
                   family: font.family,
                   style: font.style,
                 })
