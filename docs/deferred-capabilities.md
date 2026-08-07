@@ -123,7 +123,7 @@ Capabilities that were deferred here and have since landed. Kept for traceabilit
 | **Masks** — `node.isMask` (+ `maskType`) (M9) | `0fa4612` | Writer, plugin-apply and reader all handle mask round-trip. Sibling-ordering semantics documented. |
 | **GROUP creation** — `figma.group(nodes)` (M10) | `f959647` | `group_nodes` tool added; GROUP **read** round-trip also wired (T2 — existing GROUP nodes no longer silently flattened). |
 | **`create_tree` composites — `TRANSFORM_GROUP`** (M15) | `5e7f613` | Shipped as the `transform_group` tool. Decision: composites route to dedicated op tools rather than `create_tree`. `BOOLEAN_OPERATION` remains deferred above. |
-| **Library/remote instance round-trip** (M14) | `7bc5618` | `get_node`/`get_nodes`/`inspect` emit `component.{id, key, remote:true}` for the directly-requested INSTANCE root via `getMainComponentAsync` (feature-detected, T7); `create_node(INSTANCE)` prefers `importComponentByKeyAsync(key)` when `remote===true`, falls back to `id`. **Root-only asymmetry (T10):** the same instance reads back `key+remote` as the `get_node` root but id-only as a descendant inside a deep inspect — a deliberate bounded-scan optimization, not an inconsistency. Resolved via `isRoot` gating. |
+| **Library/remote instance round-trip** (M14) | `7bc5618` | `get_node`/`get_nodes`/`inspect` emit `component.{id, key, remote:true}` for an INSTANCE via `getMainComponentAsync` (feature-detected, T7); `create_node(INSTANCE)` prefers `importComponentByKeyAsync(key)` when `remote===true`, falls back to `id`. Emitted on every node the read returns complete — the requested one and, within `depth`, its descendants (the root-only gating this shipped with was B23). |
 
 ## T1 — symmetry / CRUD holes now closed
 

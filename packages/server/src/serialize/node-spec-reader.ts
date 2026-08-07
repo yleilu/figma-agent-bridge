@@ -16,12 +16,13 @@
 // appearance atom, rendered through the ONE grammar renderer
 // (render-atom.ts's renderWrapper — T8, no hand-concatenation).
 //
-// Both wrappers are ROOT-ONLY (T10): `bindingNames` is a field the plugin
-// populates only on the directly-requested export root (mirrors
-// component.key). This module receives it as a plain parameter threaded
-// from `toNodeSpec` and NEVER forwards it into a recursive `buildNode` call
-// for children — so a descendant can never pick up a wrapper, even if it
-// happens to reuse the same variable id the root resolved a name for.
+// Both wrappers REACH DESCENDANTS: `bindingNames` is a field the plugin
+// populates on every node a read returns complete (expression-formats.md,
+// "Wrappers reach descendants"), so this module reads it off EACH node's own
+// raw export rather than threading the root's down. A descendant therefore
+// wraps its own bindings and only its own — a node that happens to reuse the
+// same variable id still needs its own `bindingNames` entry to render a name,
+// which is exactly the isolation the old root-only threading bought.
 
 import type {
   NodeSpec,
@@ -65,11 +66,12 @@ type RawColor = {
 type RawBoundVariable = { id: string; type: string }
 
 /**
- * Task 1's plugin enrichment, present on `raw.bindingNames` for the export
- * ROOT only: `styles` maps a grammar field name (fill/stroke/effect/text) to
- * the bound style's NAME; `variables` maps a variable id to its NAME. Both
- * are resolved lookups (may omit an id/field the plugin's runtime couldn't
- * resolve) — see the "never fall back to the id" rule below.
+ * The plugin's enrichment, present on `raw.bindingNames` for every node the
+ * read returns complete: `styles` maps a grammar field name
+ * (fill/stroke/effect/text) to the bound style's NAME; `variables` maps a
+ * variable id to its NAME. Both are resolved lookups (may omit an id/field the
+ * plugin's runtime couldn't resolve) — see the "never fall back to the id"
+ * rule below.
  */
 type BindingNames = {
   styles?: Record<string, string>
@@ -1231,15 +1233,17 @@ const toStub = (raw: RawNode): IdStub => {
  *   depth = N  → N full levels below the root; deeper children become stubs
  *   depth = -1 → the complete subtree (fidelity-first; nothing collapsed)
  *
- * `bindingNames` is `undefined` for every call EXCEPT the one `toNodeSpec`
- * makes for the export root — see the T10 note at the top of this file.
+ * `bindingNames` is read off THIS node's own raw export — see the note at the
+ * top of this file. It is never inherited from an ancestor.
  */
 const buildNode = (
   raw: RawNode,
   remaining: number,
   parentBBox: RawBBox | undefined,
-  bindingNames: BindingNames | undefined,
 ): NodeSpec => {
+  const bindingNames = raw.bindingNames as
+    | BindingNames
+    | undefined
   const out: NodeSpec = {
     type: str(raw.type) ?? '',
   }
@@ -1537,12 +1541,12 @@ const buildNode = (
       // Thread THIS node's bbox down so each child's position is computed
       // parent-relative (child.bbox − parent.bbox) when no relativeTransform.
       const childParentBBox = bboxOf(raw)
-      // T10 — bindingNames is ALWAYS undefined below the root: it is never
-      // threaded to a child, regardless of `depth`. A deep, fidelity-first
-      // read still resolves NO binding names on descendants (the same
-      // bounded-scan rule component.key follows) — see the file-header note.
+      // Each child resolves its own bindingNames off its own raw export
+      // (buildNode reads them there), so a wrapper never leaks down from an
+      // ancestor and a descendant the read returns complete keeps the
+      // style(...)/var(...) it actually has.
       const built: NodeSpecOrStub[] = kids.map(c =>
-        buildNode(c, next, childParentBBox, undefined),
+        buildNode(c, next, childParentBBox),
       )
       out.children = built
     }
@@ -1562,12 +1566,5 @@ export const toNodeSpec = (
   const depth = opts.depth ?? 0
   // The export ROOT has no parent frame: positionOf falls back to its own
   // absolute bbox origin (current behavior preserved).
-  //
-  // bindingNames (Task 1) rides on `raw.bindingNames` for the ROOT call
-  // only — the one place this function reads it. Every recursive
-  // `buildNode` call for a child passes `undefined` explicitly (T10).
-  const bindingNames = raw.bindingNames as
-    | BindingNames
-    | undefined
-  return buildNode(raw, depth, undefined, bindingNames)
+  return buildNode(raw, depth, undefined)
 }

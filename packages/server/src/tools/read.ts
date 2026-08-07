@@ -110,7 +110,12 @@ export const handleInspect = async (
       {
         nodeId,
         pageId,
-        depth,
+        // RESOLVED, not raw: the plugin uses `depth` to bound which nodes it
+        // enriches, and it has no budget of its own to reason from. A
+        // budget-only read fills as deep as the budget reaches (truncateTree's
+        // own rule), so the enrichment has to reach that far too — otherwise a
+        // descendant the budget kept would come back incomplete.
+        depth: depth ?? (budget !== undefined ? -1 : 0),
       },
     )) as
       | Record<string, unknown>

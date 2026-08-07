@@ -2,16 +2,16 @@
 // the shared renderer (render-atom.ts's renderWrapper), never by
 // hand-concatenating a raw Figma id.
 //
-// Task 1 (plugin, already landed) emits `bindingNames` on the export ROOT
-// only: `{ styles?: {[gramField]: styleName}, variables?: {[varId]: varName} }`.
+// The plugin emits `bindingNames` on every node a read returns COMPLETE:
+// `{ styles?: {[gramField]: styleName}, variables?: {[varId]: varName} }`.
 // This suite asserts the reader consumes it correctly:
 //   - a style binding wins over a variable binding on the same leaf
 //   - a variable binding renders its NAME, never its id
 //   - non-paint leaves (radius, stroke, effects, font) wrap too
 //   - an unresolvable binding renders the BARE atom — never falls back to id
 //   - a node with no `bindingNames` at all is unchanged
-//   - `bindingNames` is never consulted for anything but the export ROOT
-//     (T10) — even when a descendant happens to reuse the same variable id
+//   - `bindingNames` is read off EACH node's own raw (B23) — a descendant
+//     wraps its own bindings, and inherits none from an ancestor
 
 import { describe, expect, it } from 'bun:test'
 import { toNodeSpec } from '@figma-agent-bridge/server/serialize/node-spec-reader'
@@ -300,7 +300,47 @@ describe('toNodeSpec — wrapper names (style/var render by name)', () => {
     expect(spec.radius).toBe('8')
   })
 
-  it('T10: bindingNames is never consulted below the export root, even when a descendant reuses the same variable id', () => {
+  // B23: a descendant the read returns COMPLETE carries its own
+  // `bindingNames`, so it renders its own wrapper — but only its own. The
+  // root's names are never inherited: a child that reuses the same variable
+  // id and carries no bindingNames of its own still renders the bare literal,
+  // because the plugin resolved no name for it.
+  it('a descendant renders the wrapper from its OWN bindingNames', () => {
+    const raw: Record<string, unknown> = {
+      id: 'root',
+      name: 'Root',
+      type: 'FRAME',
+      children: [
+        {
+          id: 'child',
+          name: 'Child',
+          type: 'FRAME',
+          bindingNames: {
+            variables: { 'VariableID:9:9': 'brand/accent' },
+          },
+          fills: [
+            {
+              type: 'SOLID',
+              color: FF00AA,
+              boundVariables: {
+                color: {
+                  id: 'VariableID:9:9',
+                  type: 'VARIABLE_ALIAS',
+                },
+              },
+            },
+          ],
+        },
+      ],
+    }
+    const spec = toNodeSpec(raw, { depth: -1 })
+    const child = spec.children?.[0] as { fills?: string[] }
+    expect(child.fills?.[0]).toBe(
+      'var(brand/accent)#FF00AA',
+    )
+  })
+
+  it('a descendant with no bindingNames of its own never inherits the root’s', () => {
     const raw: Record<string, unknown> = {
       id: 'root',
       name: 'Root',
