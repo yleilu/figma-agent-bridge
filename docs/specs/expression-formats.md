@@ -425,13 +425,30 @@ tool-surface design).
   that cannot round-trip to be documented rather than silent; this is that
   documentation for the wrappers. The read-only **node fields** are listed
   separately under the node struct.)*
-- **Root-only enrichment (T10).** Resolving a binding to its name costs a lookup
-  per bound field, so a read emits wrappers on the **directly-requested node**
-  only; descendants inside a deep `get_node`/`inspect` subtree carry the resolved
-  literal without the wrapper. This is the same bounded-scan rule
-  `component.key` already follows (tool-surface design → *Expression integration*)
-  and for the same reason: an O(nodes × bound fields) resolution on a deep tree is
-  exactly the unbounded work T10 forbids.
+- **Wrappers reach descendants; resolution is per token, not per field.** A read
+  emits `style(...)`/`var(...)` on every node it returns complete — the requested
+  node and, within `depth`, its descendants. Anything else would contradict the
+  edit reader's own promise of *"the node's complete faithful spec at the
+  requested depth"* (tool-surface → *Read model*): a descendant whose
+  `style(Brand/Primary)` had been flattened to `#0A84FF` looks writable and is
+  not, which is precisely the failure T2 exists to prevent.
+
+  **The bound is per distinct token, not per bound field.** On a 12-card
+  design-system subtree — 97 nodes, **280 bound fields** — the bindings resolve
+  from **8 distinct ids**, because a design system is a few tokens reused
+  everywhere (T9 makes that the house style, so the denser the document the
+  better the ratio). Resolving each distinct id once costs **1 ms**; even
+  resolving per field costs **26 ms**.
+
+  The cost therefore scales with **how many tokens the document defines**, not
+  with how large the subtree is — a bound that tightens as a tree grows. Resolve
+  each distinct id once per read and apply it by id.
+
+  **`component.key` follows, on its own measurement.** An instance's main cannot
+  be looked up by id — each instance must be asked — so batching does not apply
+  and the only question is whether the per-instance call is affordable. It is:
+  48 instances resolve in **2-5 ms** (~0.06 ms each), the same order as the
+  bindings above. One rule covers both.
 
 ## Notes
 
