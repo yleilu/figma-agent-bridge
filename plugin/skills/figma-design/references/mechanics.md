@@ -41,13 +41,19 @@ existing text has mixed styles. Patch shape:
 ```json
 {
   "nodeId": "I<instanceId>;<masterTextNodeId>",
-  "text": {
-    "content": "Revenue",
-    "font": "font(Inter, SemiBold, 14)",
-    "color": "#111827"
+  "patch": {
+    "text": {
+      "content": "Revenue",
+      "font": "font(Inter, SemiBold, 14)",
+      "color": "#111827"
+    }
   }
 }
 ```
+
+(`update_node` is `{nodeId, patch}` — the NodeSpec fields go **inside** `patch`.) When the
+text you are re-writing is token- or style-bound, carry its `var(…)` / `style(…)` wrappers
+into the patch — see **Binding variables and applying styles**.
 
 **Efficiency shortcut.** When overriding text on N instances of the same component:
 
@@ -81,40 +87,113 @@ On `update_node`, giving an existing fixed frame a layout always needs `sizing` 
 
 ## Binding variables and applying styles
 
+**The wrapper is the write.** An inline `var(Name)value` / `style(Name)value` atom
+applies the literal **and then** binds by name — one call, no id lookup:
+
+```json
+{
+  "nodeId": "<cardId>",
+  "patch": {
+    "fills": ["var(surface/2)#141B2E"],
+    "strokes": ["var(border/subtle)#1F2937"],
+    "radius": "var(radius/medium)8"
+  }
+}
+```
+
+```json
+{
+  "nodeId": "<titleId>",
+  "patch": {
+    "text": {
+      "content": "Revenue",
+      "font": "style(Heading/H3)font(Inter,SemiBold,18)",
+      "color": "var(text/primary)#F8FAFC"
+    }
+  }
+}
+```
+
+The same atoms go straight into a `create_node` `spec` or any node of a `create_tree`
+`tree` — binding is a property of the value, not of the tool.
+
+The read-back is the proof: `get_node` returns those same wrapped atoms
+(`var(surface/2)#141B2E`, `style(Heading/H3)font(Inter,SemiBold,18)`) — the wrapper
+came back, so the binding is live. Write back what a read handed you and you keep the
+binding instead of flattening it to a literal.
+
+Binding is **by name**, never by id, and a name that resolves to nothing costs the
+binding, not the write: the literal lands and the reply says which token was missed
+(`var(surface/2): no variable with that name — literal applied unbound`, as a
+`warnings[]` entry or a trailing `Warning:` line). Which fields a wrapper binds is in
+`grammar.md` — **`var()` and `style()` rules**; read it before assuming a field binds.
+
 **On masters, not instances.** Bind variables and apply styles on the **master
 component** — instances inherit automatically. Binding on an instance is overridden
 on the next master edit.
 
-**`bind_variable`** — binds a design token (local variable) to a scalar field on a
-node:
+**`bind_variable` — the retrofit route,** for a field no write is otherwise touching:
 
 ```json
 {
   "nodeId": "<masterNodeId>",
-  "fieldPath": "fills.0.color",
+  "field": "fills",
   "variableId": "<variableId>"
 }
 ```
 
-After binding, `get_node` read-back shows `var(token/name)#RRGGBB` — the `var(...)`
-wrapper confirms the binding is live.
+- `field` is a **flat node field** — `fills`, `strokes`, `opacity`, `itemSpacing`,
+  `cornerRadius`, `strokeWeight`, … — never a dotted path (there is no
+  `fills.0.color`).
+- `fills` / `strokes` bind **every solid paint** in the array; the tool takes no index.
+  (An inline `var()` binds only the paint it sits on.)
+- `variableId` is an **id** from `get_variables`; `field` and `variableId` are mutually
+  required. Names belong to the inline route, ids to this one.
+- A field Figma can't bind degrades rather than fails — the call succeeds and
+  `warnings[]` carries `field "effects" is not bindable on FRAME: …`. Effects take a
+  style (below), not a variable.
 
-**`apply_style`** — applies a named style (text, fill, effect, grid) to a node:
+**`bind_variable`'s other job — the collection-mode pin.** Omit `variableId` and
+`field` entirely and the call binds nothing; it pins which mode of a collection the
+node renders in:
+
+```json
+{
+  "nodeId": "<frameId>",
+  "mode": { "<collectionId>": { "modeName": "Dark" } }
+}
+```
+
+Each entry takes `modeId`, `modeName` (resolved against the collection's modes), or
+`clearMode: true`; read it back as `explicitVariableModes` (`{collectionId: modeId}`).
+A call with neither a field binding nor a mode map is rejected as `INVALID_PARAM`.
+
+**`apply_style` — the same retrofit route for styles:**
 
 ```json
 {
   "nodeId": "<masterNodeId>",
-  "styleType": "TEXT",
-  "styleId": "<styleId>"
+  "styleId": "<styleId>",
+  "field": "text"
 }
 ```
 
-Get style ids from `get_styles`. Read-back shows `style(Name)font(...)` on the
-text's `font` atom.
+`field` is **required** and is one of `fill` | `stroke` | `text` | `effect` | `grid`. It
+names the setter to use, not the style's own type — and a category mismatch (a paint
+style through `field: "text"`) is a hard error, not a warning. Style ids come from
+`get_styles`.
 
-**`bind_variable` vs `apply_style`:** use `bind_variable` for individual token
-bindings (color, spacing, radius); use `apply_style` for composite named styles
-(typography ramp, fill style, effect set).
+**Uniform binds, split doesn't.** A wrapper on a per-corner `radius`, a per-side
+`stroke([…])` weight, or a per-range `text.runs[]` atom writes the literal and warns
+(`var(radius/medium) on a per-corner radius: a single binding cannot express per-corner
+values — literal applied unbound`). Figma binds all four corners — or all four sides —
+at once, so there is nothing faithful to bind. Bind the uniform form, or take the
+literal knowingly.
+
+**Rebind, don't delete-and-recreate.** Deleting a variable or style breaks every
+binding that pointed at it and the delete reply says nothing about it; you find out
+later, when the next `var(Name)` / `style(Name)` write degrades to "no … with that
+name". Prefer `update_variables` / `update_styles` over a delete + create.
 
 ---
 

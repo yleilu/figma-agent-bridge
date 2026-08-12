@@ -169,8 +169,11 @@ After the report, offer:
 
 On approval, apply the requested fixes using `figma-design` mechanics:
 
-- **Token binding:** `bind_variable` on fills / effects; `apply_style` on text nodes.
-  Apply on masters so instances inherit.
+- **Token binding:** re-write the offending field with its wrapper — an `update_node`
+  patch of `fills: ["var(Name)#RRGGBB"]` or `text: {font: "style(Name)font(…)"}` applies
+  the literal and binds it in the same call. `bind_variable` (variables) / `apply_style`
+  (styles; `field`: fill | stroke | text | effect | grid) are the retrofit route for a
+  field you aren't otherwise writing. Apply on masters so instances inherit.
 - **Renaming:** `update_node` with a `name` patch — rename default-named nodes to
   semantic names, and — only when `figma-bridge-prefs` `review-standards` opts into it — add a
   `/` taxonomy path to untaxonomied components. Batch multiple

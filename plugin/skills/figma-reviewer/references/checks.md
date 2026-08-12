@@ -32,6 +32,16 @@ To decide whether to flag it:
    `nit`: hardcoded value that could become a token.
 4. One-off, decorative, or intentionally bespoke → skip.
 
+An **exact** match is the highest-confidence hardcode there is — `warning`, never `nit`:
+the palette was right and the binding was skipped. An inline `var(Name)#RRGGBB` write
+binds as it lands, so a bare value equal to a token is a skipped binding, not a tool
+limit.
+
+**Measure the rate, don't just list offenders.** When more than 25% of the target's
+token-valued paints carry no wrapper, add **one** summary finding stating the measured
+binding rate (`N of M token-valued paints are bound`) alongside the per-node findings —
+a scatter of individual warnings understates a systematic miss.
+
 ### Style matching
 
 A text node is **on-style** when `inspect` shows `style(Style/Name)font(…)`. A bare

@@ -55,9 +55,16 @@ These apply once a design system is in play:
 1. **Single source of truth** — reuse tokens and components; never duplicate.
 2. **Component-first** — repeated elements become components; instances inherit
    changes from the master.
-3. **Don't hardcode a value that has a token** — bind the variable (`bind_variable`)
-   or apply the style (`apply_style`). Hardcoded values that shadow tokens drift
-   silently.
+3. **Bind by writing the wrapper** — the default way to use a token _is_ the write:
+   `fills: ["var(surface/2)#141B2E"]`, `text.font: "style(Heading/H2)font(Inter,SemiBold,20)"`.
+   An inline `var()` / `style()` wrapper binds as it lands (grammar:
+   `references/grammar.md`). Never emit a bare value that merely equals a token — the
+   read-back can't tell it from a hardcode that has drifted. `bind_variable` /
+   `apply_style` are the retrofit route: a node you aren't otherwise writing, and
+   `bind_variable`'s collection-mode pin. The three splits the grammar cuts finer than
+   Figma's binding surface (per-corner radius, per-side stroke weight, per-range run
+   color) degrade to literal + warning — bind them uniformly, or take the literal
+   knowingly.
 
 > **Basic level only.** This skill ships only the **basic (reactive)** level of
 > design-system-first and component-first — adopt a system if one exists, reuse before
@@ -79,8 +86,10 @@ Rules for running the surface smoothly and cheaply:
 - **Mind token usage** — batch calls where the API allows; prefer scoped reads over
   whole-document scans; don't re-scan the document when you already have the ids.
 - **Verify after build** — use `export` (PNG) + `get_node`/`inspect` read-back to
-  confirm the result. Read-back proves `var(…)` bindings and `INSTANCE` types; a
-  visual-only check misses binding state.
+  confirm the result. Read-back proves `var(…)` / `style(…)` bindings and `INSTANCE`
+  types; a visual-only check misses binding state. You don't have to wait for it to
+  learn a token name was wrong: a wrapper that resolved to nothing is reported in the
+  write's own reply.
 
 ---
 
@@ -238,9 +247,15 @@ After any build or edit:
 
 1. `export` the frame (PNG) to get a rendered snapshot.
 2. `get_node` or `inspect` to read the data back — confirm:
-   - fills show `var(…)` wrappers when bound (not bare hex).
+   - every token-valued fill / font carries its `var(…)` / `style(…)` wrapper. A bare
+     hex where a token holds that value is an _unbound_ value, not a bound one.
    - instances show `type: INSTANCE` and correct `component` references.
    - layout mode, sizing, and padding match intent.
+
+A binding that didn't land is announced twice: first by the write's own reply
+(`var(surface/2): no variable with that name — literal applied unbound`), then by the
+missing wrapper in the read-back. The literal landed either way — it looks right on the
+PNG and is bound to nothing.
 
 If a field reads back differently from what was written, that's a signal to check
 whether the tool call succeeded silently with a wrong result — file a bug via the
@@ -277,7 +292,7 @@ The calls that get wrong most often are documented with exact patterns in
 
 - setting text content on an instance child
 - choosing sizing for a fixed-size frame
-- binding variables or applying styles on master components
+- binding a token — the inline wrapper, or the `bind_variable` / `apply_style` retrofit
 - combining variants
 
 The atom value formats (color, font, gradient, effect, stroke, sizing, constraints)
