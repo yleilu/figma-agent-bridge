@@ -54,7 +54,7 @@ flowchart TB
     Q1 -- no --> C1["Connecting… / Bridge offline"]
     Q1 -- yes --> Q0{"version mismatch?"}
     Q0 -- yes --> VM["Version mismatch banner"]
-    Q0 -- no --> Q2{"any agent with a\nlive status?"}
+    Q0 -- no --> Q2{"any agent row?\nreported or derived"}
     Q2 -- yes --> AG["Roster (Tree) + selection bar\nno connection header — connected is implied"]
     Q2 -- no --> C3["No agent active"]
 ```
@@ -81,8 +81,11 @@ flowchart TB
   2. **Connected + version mismatch** → the **Version mismatch banner**, pre-empting the roster even
      if agents are live.
   3. **Connected + no mismatch + ≥1 live agent** → the agent rows (roster below); the normal working
-     state.
-  4. **Connected + no mismatch + no live agent** → **No agent active** ("waiting for an agent").
+     state. A "live agent" is any row — one an agent *reported*, or one the panel *derived* from the
+     command traffic it is carrying (Derived presence, below).
+  4. **Connected + no mismatch + no live agent** → **No agent active** ("waiting for an agent"). This
+     state asserts silence, so it may render only when the panel is genuinely carrying nothing: no
+     reported row, and no command frame within the derived window.
 
 ### The roster — adaptive Tree
 
@@ -245,6 +248,67 @@ carrying the agent's `meta` identity); the relay upserts it into the channel map
 The store is **in-memory only** — never written to disk (unlike feedback). It self-heals: a relay restart
 starts empty and repopulates from the next frames.
 
+## Derived presence — traffic is presence
+
+Every row above is born from a **push**: a `report_status`, or the server's busy+skeleton frame — which it
+emits only for an **identity-bearing** command. Both are enrichments of a fact the panel can already see
+for itself: **commands are arriving**. When neither push lands — the identity headers are absent, or the
+agent simply never narrates — the panel would sit in **No agent active** while an hour of commands flowed
+through it. That is not a missing nicety, it is a **false statement about the file**: the human is told
+nobody is working while an agent edits under their cursor. So the roster carries a second, lower tier that
+the panel derives itself:
+
+> **The panel must never claim silence while command traffic is flowing.**
+
+- **Source — the frames already in hand.** Each command frame the plugin receives, before it dispatches to
+  the sandbox, is evidence of a live agent. No new frame, no new hook, no wire addition: the panel reads
+  presence off the traffic it is already carrying. The liveness `ping` is excluded — that is the bridge
+  probing itself, not an agent working.
+- **Key — one row per session.** `derived:<sessionId>`, from the frame's `meta.sessionId`. With no
+  `sessionId` in the envelope (the identity injector absent — see Degrade / fallback) every frame folds
+  into **one** anonymous derived row: a single generic "an agent is working here", never a row per command.
+- **Text — a verb class, not a narrative.** A derived row cannot know what the agent is *doing*, only what
+  kind of call it is making, and it says exactly that much. The class is one question asked of the command
+  registry — **can this call change the document?** It cannot (a read, or a context move such as selecting
+  a layer or switching page) → `Reading`; it can → `Editing`; an **export** is its own class,
+  `Exporting`; a command the registry does not know → `Working`. This is a *class*, never phrased as a
+  report — a derived row never impersonates a `report_status` line. It stands in for the skeleton: a row
+  that is provably busy shows the class it is busy with.
+- **The dot means traffic, not a call in flight.** A derived row's progress dot is amber for as long as
+  the row lives, because what the panel observed is *a frame within the window* — not whether that call
+  has returned. Only a reported row's dot tracks an actual in-flight action (§ Row anatomy).
+- **Reported pre-empts derived.** A reported row for the same session **replaces** that session's derived
+  row; a derived frame never overwrites, revives, or sits beside it. One agent is one row, and the
+  narrative always wins over the class. The anonymous row claims no session and so cannot be matched to
+  one: **any** reported row pre-empts it, because an unattributable row standing next to an attributed one
+  reads as a second agent that does not exist.
+- **Expiry — 30s of quiet.** A derived row *is* the evidence of traffic, so it lives exactly as long as the
+  evidence: it disappears 30 seconds after the last command frame for its session. It has no idle-fade
+  tier — there is no narrative to leave behind — it is simply gone.
+
+The tier is **panel-local**: derived rows exist only inside the iframe that synthesized them, are never
+stored by the relay, never broadcast, and never reach another plugin. A `status-sync` replay repaints the
+reported rows and leaves the derived ones alone.
+
+### The ghost rule — a row never outlives its agent
+
+Presence is a claim about *now*, so every row expires when its source goes quiet. Each tier sets its own
+clock, and the new tier must not be given a row it can never retire:
+
+| Row | Its source goes quiet when | It expires |
+|---|---|---|
+| Derived | no command frame arrives for its session | 30s after the last frame — the panel's own clock, since nothing outside it knows the row exists |
+| Reported (`report_status` / server push) | no push arrives for that row | idle-fade at `IDLE_MS`, removed at the backstop `TTL_MS` (§ Lifecycle) |
+| Either | the relay socket drops | at once — the invariant is **agent shown ⇒ connected** |
+
+A killed agent that never fires `SubagentStop` / `SessionEnd` is exactly what the backstop `TTL_MS` is
+for, and it retires that row without any hook. What the clocks cannot fix is a row that is being
+*refreshed*: a reported row that carries no identity is keyed by its `label`, so a later agent choosing
+the same label writes into the same row. Such a row stays truthful about its **latest** reporter and says
+nothing about the one that ended — but a human reading it as the earlier agent sees a ghost that appears
+to be still working. Distinguishing the two is what `sessionId` / `agentId` are for
+(§ Identity & grouping); no timeout can separate agents that share a key.
+
 ## Lifecycle — busy / idle / removed
 
 Two timescales drive a row: a fast **activity** state (seconds — the dot and the skeleton) and a slow
@@ -317,6 +381,10 @@ updatedAt }` where `text` is `null` while the row is a skeleton (no narrative ye
 These are new message types, not changes to existing command/reply framing, so they carry no version-skew
 risk beyond additive handling (an older plugin simply ignores an unknown broadcast type).
 
+**Derived presence adds nothing to this table.** It is synthesized inside the plugin from the command
+frames the panel already receives, so it needs no frame, no endpoint and no field on the wire — the only
+mark a derived row carries (that it *is* derived) is panel-local and never serialized.
+
 ## What is removed from the panel
 
 The status monitor **replaces** the old iframe surface. Removed:
@@ -341,15 +409,18 @@ default (`agentType`) is unhelpful. This spec defines only the tool and the pane
 
 - **No `PreToolUse` identity hook** (headers absent) → `sessionId`/`agentId` are absent; an agent that
   still calls `report_status` is keyed by a self-supplied `label` if given, else shown as a single generic
-  "Agent" row. The panel never errors on missing identity.
+  "Agent" row. The panel never errors on missing identity. An agent that reports nothing at all is still
+  visible: its command traffic carries no identity either, so it derives the **one anonymous row**
+  (Derived presence). Identity enriches the roster — it is never what the roster's existence depends on.
 - **No cleanup hooks** → rows never receive an explicit clear; the **idle-fade** and **backstop TTL**
   guarantee they mute and then disappear anyway. Cleanup hooks are an optimisation over the TTL, not a
   correctness dependency.
 - **Plugin reloaded / reopened** → `status-sync` replay repaints current agents immediately.
 - **Relay restarted** → maps start empty; the next pushes repopulate; nothing is lost that isn't
   re-derivable from live agents.
-- **No agent ever pushes** (relay connected) → the panel sits in the "No agent active" resting state
-  indefinitely; this is correct, not an error.
+- **No agent ever pushes** (relay connected) → the panel derives its rows from the command traffic
+  instead, and reaches the "No agent active" resting state only once that traffic has been quiet for the
+  derived window too. A resting panel with no traffic behind it is correct, not an error.
 - **Version mismatch** → the panel shows the banner instead of the roster, however many agents are
   live. It **self-clears** on a matching (re)connect: the plugin resets its mismatch state on every
   connect attempt and again on socket close, so the banner only persists while a fresh, skewed

@@ -1,6 +1,7 @@
 import {
   useState,
   useCallback,
+  useMemo,
   useRef,
   useEffect,
 } from 'react'
@@ -15,6 +16,13 @@ import {
   genToken,
 } from '@figma-agent-bridge/shared'
 import { deriveChannel } from '../file-channel'
+import {
+  DERIVED_SWEEP_MS,
+  mergeStatus,
+  sweepDerived,
+  upsertDerived,
+} from '../derived-presence'
+import type { StatusMap } from '../derived-presence'
 
 type RelayState = {
   status: 'disconnected' | 'connecting' | 'connected'
@@ -56,17 +64,17 @@ export const useRelay = () => {
   const seqRef = useRef(0)
 
   // Agent status monitor (status-monitor.md): live per-agent rows fed by
-  // the relay's agent-status broadcasts, keyed by StatusRecord.key.
-  const [agentStatus, setAgentStatus] = useState<
-    Record<string, StatusRecord>
-  >({})
+  // the relay's agent-status broadcasts, keyed by StatusRecord.key. These
+  // are the REPORTED rows — the tier an agent (or the server) pushes.
+  const [explicitStatus, setExplicitStatus] =
+    useState<StatusMap>({})
   const upsertStatus = useCallback((r: StatusRecord) => {
-    setAgentStatus(prev => ({ ...prev, [r.key]: r }))
+    setExplicitStatus(prev => ({ ...prev, [r.key]: r }))
   }, [])
   const removeStatus = useCallback(
     (sessionId: string, agentId?: string, key?: string) => {
-      setAgentStatus(prev => {
-        const next: Record<string, StatusRecord> = {}
+      setExplicitStatus(prev => {
+        const next: StatusMap = {}
         for (const [k, r] of Object.entries(prev)) {
           // key-scoped remove (TTL sweep) is row-precise; otherwise match
           // by session/agent
@@ -82,6 +90,48 @@ export const useRelay = () => {
       })
     },
     [],
+  )
+
+  // Derived presence (status-monitor.md § Derived presence): the roster's
+  // lower tier — rows synthesized from the command frames this panel already
+  // carries, so it never claims "No agent active" while an agent works. Kept
+  // in their OWN map because an `agent-status-sync` replaces the reported map
+  // wholesale, and a replay of the reported rows must not wipe the derived
+  // ones.
+  const [derivedStatus, setDerivedStatus] =
+    useState<StatusMap>({})
+  const noteCommandTraffic = useCallback(
+    (command: string, sessionId?: string) => {
+      setDerivedStatus(prev =>
+        upsertDerived(prev, command, sessionId, Date.now()),
+      )
+    },
+    [],
+  )
+
+  // The derived TTL needs its own clock: nothing outside this iframe knows a
+  // derived row exists, so no `agent-status-remove` will ever come for one.
+  // A tick that finds every row live returns the same map — React bails out,
+  // and the panel doesn't re-render (which would restart the dot's pulse).
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setDerivedStatus(prev =>
+        sweepDerived(prev, Date.now()),
+      )
+    }, DERIVED_SWEEP_MS)
+    return () => clearInterval(timer)
+  }, [])
+
+  // What the panel renders: the reported rows plus every live, un-pre-empted
+  // derived row.
+  const agentStatus = useMemo(
+    () =>
+      mergeStatus(
+        explicitStatus,
+        derivedStatus,
+        Date.now(),
+      ),
+    [explicitStatus, derivedStatus],
   )
 
   // Version handshake (version-handshake.md): the SERVER owns the major.minor
@@ -485,7 +535,7 @@ export const useRelay = () => {
             data.type === 'agent-status-sync' &&
             Array.isArray(data.records)
           ) {
-            setAgentStatus(
+            setExplicitStatus(
               Object.fromEntries(
                 (data.records as StatusRecord[]).map(r => [
                   r.key,
@@ -561,6 +611,16 @@ export const useRelay = () => {
                 )
                 return
               }
+              // Derived presence (status-monitor.md): this frame is evidence
+              // of a live agent, whether or not the server had the identity
+              // to push a status row for it. Recorded on the frames the
+              // panel actually dispatches — PING already returned above (the
+              // bridge probing itself is not an agent working), and a frame
+              // with no requestId was dropped as unanswerable.
+              noteCommandTraffic(
+                String(msg.command),
+                meta?.sessionId,
+              )
               parent.postMessage(
                 {
                   pluginMessage: {
@@ -603,7 +663,10 @@ export const useRelay = () => {
 
           // A dropped socket means the rows are stale -> fall to the
           // connection fallback (the invariant "agent shown => connected").
-          setAgentStatus({})
+          // BOTH tiers go: a derived row is evidence of traffic that can no
+          // longer arrive (status-monitor.md, the ghost rule).
+          setExplicitStatus({})
+          setDerivedStatus({})
           setMismatch(null)
 
           setState({
@@ -619,6 +682,7 @@ export const useRelay = () => {
       requestIdentity,
       upsertStatus,
       removeStatus,
+      noteCommandTraffic,
       sendFeedFrame,
     ],
   )
