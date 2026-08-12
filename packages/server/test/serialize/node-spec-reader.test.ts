@@ -2520,3 +2520,165 @@ describe('toNodeSpec — text.runs', () => {
     })
   })
 })
+
+// ─── B26: the stale position of an invisible auto-layout child ────────────────
+
+describe('toNodeSpec — invisible auto-layout children omit position', () => {
+  /**
+   * A parent frame at absolute [0,0] with one child; the caller supplies the
+   * parent's `layoutMode` and the child's `visible`/`layoutPositioning`.
+   */
+  const parentWithChild = (
+    parentFields: Record<string, unknown>,
+    childFields: Record<string, unknown>,
+  ): Record<string, unknown> => ({
+    id: 'p:1',
+    name: 'Header',
+    type: 'FRAME',
+    absoluteBoundingBox: {
+      x: 0,
+      y: 0,
+      width: 522,
+      height: 64,
+    },
+    ...parentFields,
+    children: [
+      {
+        id: 'c:1',
+        name: 'Legend',
+        type: 'FRAME',
+        absoluteBoundingBox: {
+          x: 607,
+          y: 12,
+          width: 120,
+          height: 40,
+        },
+        ...childFields,
+      },
+    ],
+  })
+
+  const childOf = (
+    rawNode: Record<string, unknown>,
+  ): NodeSpec =>
+    (
+      toNodeSpec(rawNode as never, { depth: -1 })
+        .children as NodeSpec[]
+    )[0]
+
+  it('omits position on a hidden flow child of an auto-layout parent', () => {
+    // The live sighting: a hidden legend parked at x=607 inside a 522-wide
+    // auto-layout header. Figma never laid it out, so the x is where it last
+    // sat — reading it as live geometry cost a false "the container is broken".
+    const child = childOf(
+      parentWithChild(
+        { layoutMode: 'HORIZONTAL' },
+        { visible: false },
+      ),
+    )
+    expect(child.position).toBeUndefined()
+    // Only position goes. The node still says it is hidden, and its size
+    // still round-trips.
+    expect(child.visible).toBe(false)
+    expect(child.size).toEqual([120, 40])
+  })
+
+  it('keeps position on a hidden ABSOLUTE child (its coordinates are real)', () => {
+    const child = childOf(
+      parentWithChild(
+        { layoutMode: 'HORIZONTAL' },
+        {
+          visible: false,
+          layoutPositioning: 'ABSOLUTE',
+        },
+      ),
+    )
+    expect(child.position).toEqual([607, 12])
+    expect(child.layoutPositioning).toBe('ABSOLUTE')
+  })
+
+  it('keeps position on a visible flow child of an auto-layout parent', () => {
+    const child = childOf(
+      parentWithChild({ layoutMode: 'VERTICAL' }, {}),
+    )
+    expect(child.position).toEqual([607, 12])
+  })
+
+  it('keeps position on a hidden child of a plain frame', () => {
+    // Nothing lays these out, so nothing went stale: the stored x/y is the
+    // node's actual place in its parent.
+    const child = childOf(
+      parentWithChild(
+        { layoutMode: 'NONE' },
+        { visible: false },
+      ),
+    )
+    expect(child.position).toEqual([607, 12])
+  })
+
+  it('keeps position on a hidden child of a frame with no layoutMode at all', () => {
+    const child = childOf(
+      parentWithChild({}, { visible: false }),
+    )
+    expect(child.position).toEqual([607, 12])
+  })
+
+  it('keeps position on a hidden AUTO-LAYOUT child of a plain parent', () => {
+    // The node's OWN layoutMode is irrelevant: what makes a position stale is
+    // what lays THIS node out, not what this node lays out. A hidden
+    // auto-layout frame sitting in a plain parent is still where it was put.
+    const child = childOf(
+      parentWithChild(
+        { layoutMode: 'NONE' },
+        { visible: false, layoutMode: 'VERTICAL' },
+      ),
+    )
+    expect(child.position).toEqual([607, 12])
+    // …and it really is an auto-layout frame itself.
+    expect(child.layout?.mode).toBe('V')
+  })
+
+  it('omits position on a hidden flow child of a GRID parent', () => {
+    const child = childOf(
+      parentWithChild(
+        { layoutMode: 'GRID' },
+        { visible: false },
+      ),
+    )
+    expect(child.position).toBeUndefined()
+  })
+
+  it('keeps position on a hidden ROOT — it has no auto-layout parent in hand', () => {
+    const spec = toNodeSpec(
+      {
+        id: 'r:1',
+        name: 'Hidden root',
+        type: 'FRAME',
+        visible: false,
+        absoluteBoundingBox: {
+          x: 40,
+          y: 80,
+          width: 100,
+          height: 100,
+        },
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.position).toEqual([40, 80])
+  })
+
+  it('a spec with no position still writes back (position is optional)', () => {
+    const child = childOf(
+      parentWithChild(
+        { layoutMode: 'HORIZONTAL' },
+        { visible: false },
+      ),
+    )
+    const figma = specToFigma(child) as Record<
+      string,
+      unknown
+    >
+    expect(figma.position).toBeUndefined()
+    expect(figma.visible).toBe(false)
+  })
+})

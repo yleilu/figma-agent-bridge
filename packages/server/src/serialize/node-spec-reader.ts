@@ -384,6 +384,42 @@ const positionOf = (
   return [bbox.x as number, bbox.y as number]
 }
 
+/**
+ * Does this node lay its children out? Auto-layout (H/V/GRID) does; a plain
+ * frame — `layoutMode: NONE`, or no `layoutMode` at all, which is what
+ * JSON_REST_V1 emits for everything that is not a frame — does not.
+ */
+const laysOutChildren = (raw: RawNode): boolean => {
+  const mode = str(raw.layoutMode)
+  return (
+    mode === 'HORIZONTAL' ||
+    mode === 'VERTICAL' ||
+    mode === 'GRID'
+  )
+}
+
+/**
+ * Is this node's stored x/y a value the layout engine stopped maintaining?
+ *
+ * Figma never lays out an INVISIBLE child of an auto-layout parent: the child
+ * keeps whatever x/y it last had, and both the parent's and the child's own
+ * geometry drift on around it. Emitting that unqualified reads as live
+ * geometry — a hidden legend parked at x=607 inside a 522-wide header says
+ * "this container is broken" when nothing is (T7: a value the engine is not
+ * maintaining is not presented as live).
+ *
+ * Two hidden children keep theirs, because theirs are real: an ABSOLUTE child
+ * is positioned by its own coordinates rather than by the flow, and a hidden
+ * child of a PLAIN frame was never laid out by anything, so nothing went stale.
+ */
+const positionIsStale = (
+  raw: RawNode,
+  parentLaysOutChildren: boolean,
+): boolean =>
+  parentLaysOutChildren &&
+  raw.visible === false &&
+  str(raw.layoutPositioning) !== 'ABSOLUTE'
+
 // ─── paint: raw → FigmaPaint → atom (with var() wrapper) ──────────────────────
 
 /** Convert a JSON_REST_V1 paint to the grammar's FigmaPaint shape. */
@@ -1301,11 +1337,17 @@ const toStub = (raw: RawNode): IdStub => {
  *
  * `bindingNames` is read off THIS node's own raw export — see the note at the
  * top of this file. It is never inherited from an ancestor.
+ *
+ * `parentLaysOutChildren` is the ACTUAL parent's auto-layout state, threaded
+ * down from the recursion site (a node's own `layoutMode` says nothing about
+ * whether something lays IT out). It decides whether this node's stored
+ * position is live — see positionIsStale.
  */
 const buildNode = (
   raw: RawNode,
   remaining: number,
   parentBBox: RawBBox | undefined,
+  parentLaysOutChildren: boolean,
 ): NodeSpec => {
   const bindingNames = raw.bindingNames as
     | BindingNames
@@ -1357,7 +1399,15 @@ const buildNode = (
 
   out.size = sizeOf(raw)
 
-  const position = positionOf(raw, parentBBox)
+  // B26 — an invisible child of an auto-layout parent has no live position, so
+  // it is emitted with none (see positionIsStale). `visible: false` and the
+  // parent's `layout.mode` are both in the read, so the absence is legible.
+  const position = positionIsStale(
+    raw,
+    parentLaysOutChildren,
+  )
+    ? undefined
+    : positionOf(raw, parentBBox)
   if (position !== undefined) {
     out.position = position
   }
@@ -1630,12 +1680,20 @@ const buildNode = (
       // Thread THIS node's bbox down so each child's position is computed
       // parent-relative (child.bbox − parent.bbox) when no relativeTransform.
       const childParentBBox = bboxOf(raw)
+      // …and THIS node's auto-layout state, which is the only place a child can
+      // learn whether anything is laying it out (B26).
+      const childParentLaysOut = laysOutChildren(raw)
       // Each child resolves its own bindingNames off its own raw export
       // (buildNode reads them there), so a wrapper never leaks down from an
       // ancestor and a descendant the read returns complete keeps the
       // style(...)/var(...) it actually has.
       const built: NodeSpecOrStub[] = kids.map(c =>
-        buildNode(c, next, childParentBBox),
+        buildNode(
+          c,
+          next,
+          childParentBBox,
+          childParentLaysOut,
+        ),
       )
       out.children = built
     }
@@ -1654,6 +1712,8 @@ export const toNodeSpec = (
 ): NodeSpec => {
   const depth = opts.depth ?? 0
   // The export ROOT has no parent frame: positionOf falls back to its own
-  // absolute bbox origin (current behavior preserved).
-  return buildNode(raw, depth, undefined)
+  // absolute bbox origin (current behavior preserved), and with no parent in
+  // hand its position is never called stale — the read cannot know what, if
+  // anything, lays the root out.
+  return buildNode(raw, depth, undefined, false)
 }
