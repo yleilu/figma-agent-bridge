@@ -498,6 +498,9 @@ defers to `figma-bridge-prefs` when installed — see
 
 - `SKILL.md` — principles, operating rules, workflow spine, verification.
 - `references/mechanics.md` — the with-example tool-usage patterns + limits.
+- `references/components.md` — component-modeling doctrine: what becomes a component and
+  when (before placement), variants vs booleans, slots vs visibility toggles, sequencing
+  (complex components last, research first).
 - `references/grammar.md` — a **self-contained** snapshot of the atom value formats (the
   installed plugin won't ship `docs/specs/expression-formats.md`, so this can't be a live
   pointer — author it from that spec and keep in sync).
