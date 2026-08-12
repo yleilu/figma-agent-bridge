@@ -215,6 +215,32 @@ describe('handleUpdateNode — unknown patch keys are never silent', () => {
     )
   })
 
+  // A read-modify-write echoes the read's own honesty fields back. They are
+  // NodeSpec fields (expression-formats.md → Read-only node fields), just
+  // read-only ones — so the warning must say READ-ONLY, never that the field
+  // does not exist, which would contradict the grammar the agent read.
+  it('calls an echoed read-only field read-only, not unknown', async () => {
+    const result = await handleUpdateNode(
+      {
+        nodeId: '1:42',
+        patch: {
+          readError: 'node not found',
+          position: [10, 20],
+        } as Record<string, unknown>,
+      },
+      stubClient({}),
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      warnings: string[]
+    }
+    expect(data.warnings).toHaveLength(1)
+    expect(data.warnings[0]).toContain('readError')
+    expect(data.warnings[0]).toContain('read-only')
+    expect(data.warnings[0]).not.toContain(
+      'not a NodeSpec field',
+    )
+  })
+
   it('stays silent about keys it DOES know', async () => {
     const result = await handleUpdateNode(
       { nodeId: '1:42', patch: { position: [10, 20] } },

@@ -212,38 +212,73 @@ const PATCH_KEY_HINTS: Record<string, string> = {
   cornerRadius: 'radius',
 }
 
+/**
+ * Read-only node-struct fields a read emits and the write face ignores
+ * (`expression-formats.md` → *Read-only node fields*). They ARE NodeSpec
+ * fields — a read-modify-write echoes them back by design — so telling the
+ * agent they are "not a NodeSpec field" would contradict the grammar it read.
+ * They get their own wording; genuinely unknown keys keep theirs.
+ */
+const READ_ONLY_PATCH_KEYS: ReadonlySet<string> = new Set([
+  'warnings',
+  'readError',
+  'readErrors',
+])
+
+const nameList = (keys: string[]): string =>
+  keys.map(k => `\`${k}\``).join(', ')
+
 export const unknownPatchKeyWarnings = (
   patch: object,
   converted: FigmaWritePayload,
 ): string[] => {
-  const unknown = Object.keys(patch).filter(
+  const extra = Object.keys(patch).filter(
     k => !NODE_SPEC_PATCH_KEYS.has(k),
   )
-  if (unknown.length === 0) {
+  if (extra.length === 0) {
     return []
   }
-  const hints = [
-    ...new Set(
-      unknown
-        .map(k => PATCH_KEY_HINTS[k])
-        .filter((h): h is string => h !== undefined),
-    ),
-  ]
-  const plural = unknown.length > 1
+  const readOnly = extra.filter(k =>
+    READ_ONLY_PATCH_KEYS.has(k),
+  )
+  const unknown = extra.filter(
+    k => !READ_ONLY_PATCH_KEYS.has(k),
+  )
+  const out: string[] = []
+  if (readOnly.length > 0) {
+    const many = readOnly.length > 1
+    out.push(
+      `${many ? 'keys' : 'key'} ${nameList(readOnly)} ` +
+        `${many ? 'are' : 'is'} read-only and ` +
+        `${many ? 'were' : 'was'} ignored on write`,
+    )
+  }
+  if (unknown.length > 0) {
+    const many = unknown.length > 1
+    const hints = [
+      ...new Set(
+        unknown
+          .map(k => PATCH_KEY_HINTS[k])
+          .filter((h): h is string => h !== undefined),
+      ),
+    ]
+    out.push(
+      `${many ? 'keys' : 'key'} ${nameList(unknown)} ` +
+        `${many ? 'are' : 'is'} not a NodeSpec field and ` +
+        `${many ? 'were' : 'was'} ignored` +
+        (hints.length > 0
+          ? ` — did you mean ${hints.join(' / ')}?`
+          : ''),
+    )
+  }
   // "nothing was changed" only when the whole patch was inert: a patch that
   // also carried a real field DID land, and saying otherwise would be a
   // second dishonesty.
-  const inert = Object.keys(converted).length === 0
-  return [
-    `${plural ? 'keys' : 'key'} ${unknown
-      .map(k => `\`${k}\``)
-      .join(', ')} ${plural ? 'are' : 'is'} not ` +
-      `a NodeSpec field and ${plural ? 'were' : 'was'} ignored` +
-      (hints.length > 0
-        ? ` — did you mean ${hints.join(' / ')}?`
-        : '') +
-      (inert ? ' (nothing was changed by this call)' : ''),
-  ]
+  if (Object.keys(converted).length === 0) {
+    out[out.length - 1] +=
+      ' (nothing was changed by this call)'
+  }
+  return out
 }
 
 /**

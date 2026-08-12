@@ -138,16 +138,37 @@ Bare literals: `opacity` `0.5` · `rotation` `45` · `blendMode` `MULTIPLY` ·
 
 ## `var()` and `style()` rules
 
-- Both wrap **any** atom; the resolved literal **always follows** the wrapper.
+- Both wrap **any** atom; the resolved literal **always follows** the wrapper. A
+  wrapper with **no value** — `fills: [var(surface/2)]` — is an **error** on both
+  faces: the wrapper names the binding, the literal *is* the value.
 - **Both name their source** — `style(Brand/Primary)`, `var(radius/medium)`, never
   an opaque id. The name is what you reason with and what you would write back.
-- **Both are read-only** — emitted on reads to surface an existing binding. On
-  **write**, either resolves to its literal, so writing one sets the appearance
-  and not the binding. Apply bindings with the tool that owns them:
-  `bind_variable` for `var()`, `apply_style` for `style()`.
-- **Only the node you asked for carries a wrapper.** Descendants inside a deep
-  `get_node`/`inspect` show the resolved literal without it, so a binding you care
-  about is best read by requesting that node directly.
+- **A wrapper with a value BINDS on write** — the pair round-trips. Write back the
+  `var(surface/2)#141B2E` a read handed you and the write applies the literal **and
+  then** binds by name: `var(Name)` binds the field to that variable, `style(Name)`
+  applies the local style of that category. Literal first, binding second — the
+  literal is what remains if the binding cannot be made, and a binding that lands
+  governs the value from then on. So a read-modify-write **keeps** the binding it
+  was shown instead of flattening it to a literal.
+- **A name that resolves to nothing degrades, never aborts.** No such variable or
+  style → the literal is applied and one `warnings[]` entry says so
+  (`var(surface/2): no variable with that name — literal applied unbound`). A
+  missing token costs a binding, never the write. Binding is **by name** only; an
+  id inside a wrapper is not accepted.
+- **Where a wrapper binds:** `fills[]`, `strokes[]`, a **uniform** `stroke(…)`
+  weight and a **uniform** `radius` for `var()`; `fills[]`, `strokes[]`,
+  `effects[]`, `text.font` for `style()`; `text.color` for both. Anywhere else the
+  literal still lands and a warning names what could not be bound — including the
+  three the grammar splits finer than Figma's binding surface does: per-range
+  `text.runs[].color`, per-corner `radius` (`[8,8,0,0]`), and per-side stroke
+  weight (`stroke([0,0,1,0])`).
+- `bind_variable` / `apply_style` are still the explicit route — for binding a
+  field a write is not otherwise touching, and for `bind_variable`'s
+  collection-mode pin.
+- **Every node a read returns complete carries its wrappers** — the node you asked
+  for and, within `depth`, its descendants. A descendant's `style(Brand/Primary)`
+  is not flattened to `#0A84FF`, so you can edit deep in a tree without a second
+  read to discover what was bound.
 
 ---
 

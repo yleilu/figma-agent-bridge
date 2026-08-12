@@ -3546,9 +3546,7 @@ const handleCommand = async (
                 )
               }
               for (const w of slotWarnings) {
-                ucWarnings.push(
-                  'slot "' + name + '": ' + w,
-                )
+                ucWarnings.push('slot "' + name + '": ' + w)
               }
             }
           }

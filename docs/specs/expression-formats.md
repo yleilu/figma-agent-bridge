@@ -466,20 +466,23 @@ tool-surface design).
   missing token costs a binding, never the write.
 
   **Scope — a wrapper binds on the fields listed here:** `fills[]`, `strokes[]`,
-  the `stroke(…)` weight and a **uniform** `radius` for `var()`; `fills[]`,
-  `strokes[]`, `effects[]` and `text.font` for `style()`; `text.color` for both
-  (it is the text node's first fill). A `var()` binds per paint, so
+  a **uniform** `stroke(…)` weight and a **uniform** `radius` for `var()`;
+  `fills[]`, `strokes[]`, `effects[]` and `text.font` for `style()`; `text.color`
+  for both (it is the text node's first fill). A `var()` binds per paint, so
   `fills[]`/`strokes[]` bind by index; a `style()` governs the whole array, so it
   binds once per field.
 
   Everywhere else a wrapper still resolves to its literal and reports one
   `warnings[]` entry, so a write is never silent about the half it could not do.
-  Two of those are exceptions a read can itself produce, and both are named
-  deliberately: a per-range **`text.runs[].color`**, which the binding surface
-  reaches only at node level; and a **per-corner `radius`** (`var(radius/md)[8,8,0,0]`),
-  because Figma binds all four corners with one field — binding it would square the
-  corners the tuple says are different, so the geometry is kept and the binding is
-  dropped.
+  Three of those are exceptions a read can itself produce, and all three are named
+  deliberately — each one a value the grammar splits finer than the binding surface
+  does: a per-range **`text.runs[].color`**, which the binding surface reaches only
+  at node level; a **per-corner `radius`** (`var(radius/md)[8,8,0,0]`), because
+  Figma binds all four corners with one field — binding it would square the corners
+  the tuple says are different, so the geometry is kept and the binding is dropped;
+  and a **per-side stroke weight** (`var(border/thin)stroke([0,0,1,0])`), for the
+  same reason on the other axis — one binding cannot express four sides, so the
+  four weights are written and the binding is dropped.
 - **Wrappers reach descendants; resolution is per token, not per field.** A read
   emits `style(...)`/`var(...)` on every node it returns complete — the requested
   node and, within `depth`, its descendants. Anything else would contradict the

@@ -103,9 +103,9 @@ describe('UPDATE_COMPONENT slot-spec wiring', () => {
     // spec apply all run after it on a node that already exists, so reporting
     // one of those failures as SKIPPED would send the agent looking for a node
     // that is really there. Runtime-only ordering — nothing else pins it.
-    expect(slotLoop.indexOf('slotsCreated.push')).toBeLessThan(
-      slotLoop.indexOf('slot.name = name'),
-    )
+    expect(
+      slotLoop.indexOf('slotsCreated.push'),
+    ).toBeLessThan(slotLoop.indexOf('slot.name = name'))
   })
 
   it('hands the appliers a LOCAL sink, so each degrade can name its slot', () => {
@@ -119,6 +119,6 @@ describe('UPDATE_COMPONENT slot-spec wiring', () => {
     expect(applyBlock.length).toBeGreaterThan(100)
     expect(applyBlock).toContain('slotWarnings')
     expect(applyBlock).not.toContain('ucWarnings')
-    expect(slotLoop).toContain('\'slot "\' + name')
+    expect(slotLoop).toContain("'slot \"' + name")
   })
 })
