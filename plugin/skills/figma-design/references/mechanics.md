@@ -85,6 +85,108 @@ On `update_node`, giving an existing fixed frame a layout always needs `sizing` 
 
 ---
 
+## Clipped effects — a frame clips by default
+
+**The problem.** A shadow, a glow, an `align=OUTSIDE` stroke, a blur — each paints
+**outside** the node it sits on, and the nearest clipping ancestor cuts off whatever
+falls past its edge. Frames clip unless told otherwise: the create path never sets
+`clipsContent` for you, so a created FRAME takes Figma's own default of `true`. The
+data stays honest while the render is wrong — `effects: [shadow(0,8,24,#00000059)]`
+reads back exactly as written, because the effect really is on the node; it is the
+ancestor that swallows it. Only the PNG shows the loss, which is how one dashboard
+build shipped 29 of 29 shadowed nodes clipped, 17 of them rendering nothing at all.
+
+**The fix.** Budget for the effect before you add it.
+
+- Work out its **reach** — how far it paints past the node's box, edge by edge, because
+  the offset decides which edges pay: `shadow(x,y,r){spread=s}` reaches `y + r + s`
+  below and `r + s − y` above; `blur(r)` reaches `r` all round; an `align=OUTSIDE`
+  stroke reaches its weight. (`inner-shadow(…)` and `bg-blur(…)` render inside the node
+  and reach nothing.)
+- Give **every clipping ancestor** between the node and the canvas that much slack on
+  the edges the effect reaches — padding, gap, or plain size beyond the node's box.
+- A wrapper that exists only to group its children has no visual reason to clip:
+  create it with `clipsContent: false`.
+
+Reads report `clipsContent: true` and omit the field when clipping is off, so an absent
+`clipsContent` on a frame you read back is a frame that does not clip — but only on an
+**unprojected** read: no narrowing profile carries `clipsContent` at all (`effects`
+survives one, `profile: 'style'`, which drops `clipsContent` in its turn), so a
+`profile: 'layout'` read-back shows a document with nothing clipping anything.
+
+---
+
+## Stroke-only SVG needs `fill="none"`
+
+**The problem.** SVG's own default for `fill` is black, and `create_from_svg` hands
+your markup to Figma unaltered — nothing rewrites it on the way in. So a stroke-only
+`<path>` / `<circle>` that names no `fill` imports as a shape carrying a real
+`#000000` paint: a black slab where a line icon belongs on a dark surface, and an
+off-palette hardcode in every read-back afterwards.
+
+**The fix.** Put `fill="none"` on every stroke-only element before the call:
+
+```xml
+<path d="M4 8h8" fill="none" stroke="#94A3B8" stroke-width="1.5" />
+```
+
+Nothing warns about the black — the check is a read-back of the imported subtree with
+no `#000000` in any `fills`.
+
+---
+
+## A write into a slot is read back, then trusted
+
+**The problem.** A slot arrives with defaults of its own — a vertical stack, 100×100,
+an opaque `#FFFFFF` fill (`components.md` §5) — so a write into one lands _on top of_
+them rather than replacing them, and `sizing` / `size` are where the request and the
+result part company most often: send a row `["FILL", "HUG"]` into a container that
+cannot grant a fill and the `FILL` is simply not there on the read-back, while
+everything built on top inherits the width it did get. A write reports the degrades it
+knows about in `warnings[]` (a slot entry's are prefixed with the slot's name), but a
+warning is a **signal that something moved, not proof of what landed** — it says what
+the writer knew to say, not what Figma did.
+
+**The fix.** After filling a slot, read the subtree back and diff it against what you
+sent:
+
+```json
+{ "nodeId": "<slotId>", "depth": 2 }
+```
+
+Compare `sizing`, `size`, and `layout` field for field, and fix the drift before
+building on top of it — the repair costs whatever you have stacked on the wrong
+number by the time you notice.
+
+---
+
+## Single-edge dividers are per-side strokes
+
+**The problem.** A 1 px rectangle standing in for a bottom border is a node somebody
+has to keep in sync. In the flow it is a real auto-layout child that takes a gap of
+its own; out of the flow (`layoutPositioning: ABSOLUTE`) auto-layout ignores it, so
+nothing resizes it. Either way its width is a literal, and the first time the
+container's width changes the rule stops matching it — silently, because there is
+nothing invalid about a stale rectangle.
+
+**The fix.** Put the edge on the node that owns it — a per-side stroke weight plus a
+stroke paint:
+
+```json
+{
+  "stroke": "stroke([0,0,1,0])",
+  "strokes": ["var(border/subtle)#1F2937"]
+}
+```
+
+Weights are `[top, right, bottom, left]`, so `[0,0,1,0]` is a bottom rule; the atom's
+other keys (align, cap, dash) are in `grammar.md`. The border now belongs to the frame
+and follows every resize the frame makes. One caveat from that same grammar: a
+per-side weight is one of the splits Figma cannot bind, so hang the `var()` on the
+paint in `strokes[]` — which is where the token you care about lives anyway.
+
+---
+
 ## Binding variables and applying styles
 
 **The wrapper is the write.** An inline `var(Name)value` / `style(Name)value` atom
@@ -256,12 +358,19 @@ _is_ the proof the bind landed. Narrowing profiles (`minimal`, `layout`, `style`
 added without `targetNodeId`), fall back to the compound-id override path described
 above.
 
-### Rotated frame bounding box
+### Rotated nodes — the size is true, the position is the bounding box
 
-`get_node` on a rotated frame returns the **bounding-box** dimensions (the axis-
-aligned rectangle enclosing the rotated frame), not the frame's own width and height.
-If you need the frame's intrinsic size, un-rotate it, read, then re-rotate — or check
-the `rotation` field and correct mathematically.
+`size` on a rotated node is its **own unrotated** width and height: the read enriches
+every node it returns complete with the real dimensions, so the axis-aligned bounding
+box (which a rotation inflates — a 30°-rotated 60×60 measures ~82×82) is not what you
+get back.
+
+`position` is the other half and it did **not** get the same treatment: it is derived
+from the bounding box, so on a rotated node it is where that box starts, not where the
+node's corner is. So the two fields describe **different rectangles** the moment
+`rotation` is non-zero (reads omit `rotation` when it is 0, so its presence is the
+flag). Never feed both into one geometry calculation there — for a true origin,
+un-rotate, read, re-rotate.
 
 ### Off-canvas invalid profile
 

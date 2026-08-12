@@ -194,7 +194,8 @@ When the region already holds an instance and you only need to point it somewher
   plan to componentize it later (§1).
 - **After filling a slot, read the write back and diff it against what you sent** — layout and
   sizing are the fields that quietly land differently, and the slot's own defaults are part of
-  what you are diffing against.
+  what you are diffing against. The read-back and the diff are in `mechanics.md`,
+  **A write into a slot is read back, then trusted**.
 
 ---
 

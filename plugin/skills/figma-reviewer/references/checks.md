@@ -276,6 +276,72 @@ Severity: `nit`.
 | Node with `size: [0, 0]` (zero-area)                         | `nit`    |
 | Node positioned entirely outside the frame's clipping bounds | `nit`    |
 
+### Clipped effects — reach vs slack
+
+Frames clip by default, so an outward effect can be perfectly present in the data and
+absent from the render: the read-back returns the `effects` that were written, and an
+ancestor swallows them. This check is **arithmetic — compute it, don't judge it.**
+
+**Read the target unprojected.** `clipsContent` survives no narrowing profile at all, and
+`effects` survives only `profile: 'style'` — which carries neither `clipsContent` nor
+`size` / `position`, so no one narrowed read holds the fields this check needs, and
+`inspect` applies its profile to _every_ node in the tree. Under a narrowed read the walk
+finds no clipping ancestors and silently reports nothing. Read with no `fields` /
+`profile`, or `profile: 'full'`.
+
+Run it on every node carrying a `shadow(…)`, a `blur(…)`, or a
+`stroke(…, {align=OUTSIDE})`. `inner-shadow(…)` and `bg-blur(…)` render inside the
+node's own area — skip both. **Skip anything rotated** — a rotated node's `size` is its
+own unrotated width and height while its `position` is its bounding box's origin, so the
+two describe different rectangles and slack computed from them is fiction. A non-zero
+`rotation` on the node or on any ancestor in the walk means: no finding, and one line in
+the report saying the clip check was skipped there and the PNG is the only judge.
+
+**1. Reach, per side** — how far the paint extends past each edge of the node's box.
+The offset decides which edges pay:
+
+```
+shadow(x,y,r){spread=s}   →  left   max(0, −x + r + s)
+                             right  max(0,  x + r + s)
+                             top    max(0, −y + r + s)
+                             bottom max(0,  y + r + s)
+blur(r)                   →  r on all four sides
+stroke(w,{align=OUTSIDE}) →  w on all four sides
+
+reach[side] = the largest of those present on the node, side by side
+```
+
+**2. Slack, per side** — for each ancestor that clips (reads emit `clipsContent` only
+when it is `true`, so an absent field means that ancestor does not clip), express the
+node's box in that ancestor's coordinates by summing the parent-relative `position`
+values on the way up, then:
+
+```
+slack = [ left: x, top: y, right: W − (x + w), bottom: H − (y + h) ]
+```
+
+`[w,h]` is the node's `size`, `[W,H]` the ancestor's. Walk every clipping ancestor inside
+the reviewed target. **The read's root node carries an absolute canvas position**, not a
+parent-relative one — start the sum below it (or subtract it), or every node in the tree
+comes out flush and the check reports a tree-wide fiction.
+
+**3. Compare, side by side.** Any side where `slack[side] < reach[side]` → `warning`.
+Anchor the finding on **the node that carries the effect** — its name / id fills the
+finding header — and put the clipping ancestor, the side(s), and both numbers per side in
+`Issue:`. `Fix:` is "give `<ancestor>` ≥ `<reach>` px of slack on `<side(s)>`", or "set
+`clipsContent: false` on `<ancestor>`" when that ancestor exists only to group its
+children.
+
+Two words the report has to keep honest:
+
+- **"may be clipped", not "is invisible".** `reach` is an **upper bound** — a shadow
+  fades across its blur radius, so the last pixels it loses can be imperceptible. Report
+  the arithmetic as a suspicion; the export PNG is the proof.
+- **"fully clipped" is the stronger claim** and needs the stronger test: `slack[side] ≤ 0`
+  on **every** side the effect reaches (`reach[side] > 0`) — the node is flush with or
+  outside its ancestor all the way round, so nothing of the effect has anywhere to land.
+  One flush side is a trimmed edge, not an invisible effect.
+
 ---
 
 ## Dimension 5 — Fidelity to intent
@@ -361,6 +427,6 @@ Always `nit` / advisory — never a hard fail, since either field could be the s
 | DS adherence     | —                                                                                                                                          | Hardcoded color/text with matching token/style; detached instance | Near-match token candidate                                       |
 | Consistency      | —                                                                                                                                          | Off-scale spacing ≥ 4 px; > 4 type sizes; misaligned block        | Off-scale ≤ 3 px; radius rounding; type size ±2 px               |
 | Accessibility    | contrast / touch-target / text-size / colour-alone — severity per the user's `figma-bridge-prefs` thresholds (**unchecked** when no prefs) | —                                                                 | —                                                                |
-| Layout hygiene   | —                                                                                                                                          | Pile-up at [0,0]                                                  | Redundant nesting; hidden nodes; default constraints             |
+| Layout hygiene   | —                                                                                                                                          | Pile-up at [0,0]; effect may be clipped (reach > slack on a side) | Redundant nesting; hidden nodes; default constraints             |
 | Fidelity         | Missing named section or feature                                                                                                           | Count mismatch; placeholder content                               | Extra elements not asked for                                     |
 | Naming & context | —                                                                                                                                          | Blank/default-named frames/components; unclosed/over-cap context  | Default-named leaves; missing `purpose`; name↔role contradiction |

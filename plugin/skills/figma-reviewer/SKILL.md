@@ -143,6 +143,12 @@ ABSOLUTE` inside an auto-layout frame, where the positioning could be expressed 
   no value and should be flattened.
 - **Orphan / hidden nodes** — `visible: false` nodes that are not part of a variant or
   interaction; nodes with zero size; nodes clipped entirely outside the frame bounds.
+- **Effect clipped by an ancestor** — a shadow, glow, `align=OUTSIDE` stroke, or blur
+  whose reach past an edge of its node exceeds the slack on that edge inside a clipping
+  ancestor (frames clip by default). The effect reads back intact while the render loses
+  it, so a data-only pass never sees it. Compute reach vs slack **per side** per
+  `references/checks.md` — arithmetic, not judgement — on an **unprojected** read, and
+  flag as `warning`, worded "may be clipped" unless the numbers say fully clipped.
 
 ### 5. Fidelity to intent
 

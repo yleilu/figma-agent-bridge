@@ -237,7 +237,15 @@ A default order, not a mandate — adapt to the request:
 3. **Components** — build master components; add variants via `combine_variants`.
    Complex components (tables, data grids, calendars) go **last** — model them on paper
    first (`references/components.md`).
-4. **Layout** — compose frames with auto-layout (`set_layout_mode`, sizing rules).
+4. **Layout** — auto-layout is the default, and the tool's default too: every created
+   FRAME and SLOT is a vertical stack unless you opt out with `layout: {mode: 'NONE'}`.
+   State `layout` yourself for direction, gap, and padding — and state `sizing` with it,
+   or the stack hugs a stated `size` away (`references/mechanics.md`, **Fixed-size
+   frames**). `NONE` is for frames whose children really are placed by coordinate — a
+   plot area holding gridlines or scatter points — and for nothing else. Align siblings
+   with layout, not coordinates: a shared column is one auto-layout parent with a `gap`,
+   never hand-matched `x` offsets. The concrete spacing scale, if any, comes from
+   `figma-bridge-prefs`.
 5. **Content** — populate text, images, instance overrides.
 6. **Verify** — `export` + read-back; check token bindings and instance types.
 
@@ -256,6 +264,9 @@ After any build or edit:
      hex where a token holds that value is an _unbound_ value, not a bound one.
    - instances show `type: INSTANCE` and correct `component` references.
    - layout mode, sizing, and padding match intent.
+   - every outward effect — shadow, glow, `align=OUTSIDE` stroke, blur — is on the node
+     **and** visible in the PNG: a clipping ancestor cuts the render, never the data
+     (`references/mechanics.md`, **Clipped effects**).
 
 A binding that didn't land is announced twice: first by the write's own reply
 (`var(surface/2): no variable with that name — literal applied unbound`), then by the
@@ -299,6 +310,7 @@ The calls that get wrong most often are documented with exact patterns in
 - choosing sizing for a fixed-size frame
 - binding a token — the inline wrapper, or the `bind_variable` / `apply_style` retrofit
 - combining variants
+- adding a shadow, glow, or blur; importing an SVG; filling a slot; drawing a divider
 
 The atom value formats (color, font, gradient, effect, stroke, sizing, constraints)
 are in `references/grammar.md`. Load it when writing or reading any atom value.
@@ -320,8 +332,9 @@ when, variants vs booleans, slots vs visibility toggles, complex components last
   collection cascades its variables); `delete_styles` removes local styles by id or by
   name + type. Prefer reuse over delete-and-recreate: a delete breaks every binding that
   pointed at that token or style, and nothing warns you.
-- `get_node` on a rotated frame returns the bounding-box size, not the frame's own
-  width/height — account for this when checking dimensions.
+- `get_node` on a rotated node returns its **own unrotated** `size`, but a `position`
+  taken from the axis-aligned **bounding box** — different rectangles, so never mix the
+  two into one geometry calculation (`references/mechanics.md`, **Rotated nodes**).
 - `get_node` may return an invalid profile for nodes that are partially outside the
   canvas — handle gracefully.
 
