@@ -467,3 +467,71 @@ describe('handleCreateTree reply shape — {root, ids[]}', () => {
     })
   })
 })
+
+// B28: the plugin DEGRADES rather than throws on a write Figma refuses (T7) —
+// e.g. `sizing:['FILL',…]` on a child of a parent that is not auto-layout — and
+// the caller only ever sees the ROOT's reply for the whole subtree. So a degrade
+// at any depth rides home on `reply.warnings`, and this handler is the one place
+// it can join the server's own lossy-conversion notes. Not merging here is not a
+// formatting miss: it is the build silently shipping a node sized differently
+// than it asked for.
+//
+// The stubbed warning is the REAL emitter's wording (code.ts
+// applyPostAppendProperties: `sizing not applicable on this node (<TYPE>):
+// <error>`) — a stub that invents its own format tests nothing about the
+// production path.
+describe('handleCreateTree — plugin-reported degrades', () => {
+  it('surfaces a plugin warning as a Warning: line', async () => {
+    const result = await handleCreateTree(
+      {
+        tree: {
+          type: 'FRAME',
+          name: 'Card',
+          children: [{ type: 'FRAME', name: 'Body' }],
+        },
+      },
+      stubClient({
+        reply: {
+          id: 'created:1',
+          name: 'Card',
+          type: 'FRAME',
+          ids: ['created:1', 'created:2'],
+          warnings: [
+            'sizing not applicable on this node (FRAME): Error: FILL can only be set on children of auto-layout frames',
+          ],
+        },
+      }),
+    )
+    const [json, ...rest] =
+      result.content[0].text.split('\n\n')
+    expect(rest.join('\n')).toContain(
+      'Warning: sizing not applicable',
+    )
+    // Reported ONCE: the plugin's array is merged into the rendered warning
+    // list, not also spread into the JSON body.
+    const data = JSON.parse(json) as Record<string, unknown>
+    expect(data.warnings).toBeUndefined()
+    expect(data.ids).toEqual(['created:1', 'created:2'])
+  })
+
+  it('adds no Warning: line when the plugin reports none', async () => {
+    const result = await handleCreateTree(
+      {
+        tree: {
+          type: 'FRAME',
+          name: 'Card',
+          children: [{ type: 'TEXT', name: 'Title' }],
+        },
+      },
+      stubClient({
+        reply: {
+          id: 'created:1',
+          name: 'Card',
+          type: 'FRAME',
+          ids: ['created:1', 'created:2'],
+        },
+      }),
+    )
+    expect(result.content[0].text).not.toContain('Warning:')
+  })
+})

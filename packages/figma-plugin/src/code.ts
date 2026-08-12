@@ -1559,8 +1559,15 @@ const buildSingleNode = async (
     )
   }
 
-  // Apply post-append properties (FILL sizing, ABSOLUTE positioning)
-  applyPostAppendProperties(node, spec)
+  // Apply post-append properties (FILL sizing, ABSOLUTE positioning).
+  // `warnings` is threaded, not omitted: applyPostAppendProperties degrades
+  // rather than throws (T7), and the message is the ONLY signal the caller
+  // gets. Dropping the array here made every create-path degrade silent while
+  // the identical update_node path reported it — e.g. `sizing:['FILL',…]` on a
+  // child of a SLOT, which Figma rejects ("node must be an auto-layout frame
+  // or a child of an auto-layout frame"), leaving the node FIXED with no
+  // notice. A build then ships a node sized differently than it asked for.
+  applyPostAppendProperties(node, spec, warnings)
 
   // THE load-bearing claim: the node is in its real parent and its
   // auto-layout sizing is set, so `hugs()` can decide and the reflow closure
@@ -1627,6 +1634,12 @@ const createTreeNode = async (
   // as ONE realized node — its descendants come along but are not enumerated
   // (walking every clone's subtree is unbounded work, T10).
   created?: string[],
+  // Threaded for the same reason `created` is: a degrade can happen at ANY
+  // depth of the tree, and the caller only ever sees the root's reply. Without
+  // one accumulator spanning the recursion, a lossy write on a grandchild —
+  // e.g. `sizing:['FILL',…]` on a child of a SLOT, which Figma rejects — is
+  // silently discarded (T7 violation).
+  warnings?: string[],
 ): Promise<SceneNode> => {
   const type = spec.type as string
 
@@ -1653,6 +1666,7 @@ const createTreeNode = async (
       refs,
       [...refStack, refKey],
       created,
+      warnings,
     )
   }
 
@@ -1736,7 +1750,12 @@ const createTreeNode = async (
   // BOOLEAN_OPERATION / GROUP still works. Booleans are authored via boolean_op.
 
   // Regular node: create, apply properties, append
-  const node = await createSingleNode(spec, parent, writer)
+  const node = await createSingleNode(
+    spec,
+    parent,
+    writer,
+    warnings,
+  )
   // Pushed BEFORE the children recurse, so the order is root-first depth-first.
   created?.push(node.id)
 
@@ -1757,6 +1776,7 @@ const createTreeNode = async (
         refs,
         refStack,
         created,
+        warnings,
       )
     }
   }
@@ -2885,6 +2905,10 @@ const handleCommand = async (
       // ledger, which is why it lives out here — the catch below has to undo
       // exactly what this call made, and it can only know that from here.
       const createdIds: string[] = []
+      // Collected across the WHOLE recursion, then answered once on the root's
+      // reply — the only reply the caller sees. Omitted when empty so a clean
+      // build's envelope stays clean.
+      const treeWarnings: string[] = []
       try {
         const treeResult = await createTreeNode(
           treeSpec,
@@ -2893,12 +2917,16 @@ const handleCommand = async (
           treeRefs,
           [],
           createdIds,
+          treeWarnings,
         )
         return {
           id: treeResult.id,
           name: treeResult.name,
           type: treeResult.type,
           ids: createdIds,
+          ...(treeWarnings.length > 0
+            ? { warnings: treeWarnings }
+            : {}),
         }
       } catch (err) {
         // T7: a blocked append (e.g. into a non-SLOT instance descendant)
