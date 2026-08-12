@@ -22,16 +22,15 @@ The shortcut shape (see `SKILL.md`) is the canonical form.
 **Why it matters:** Multi-step chains multiply token usage, introduce ordering hazards,
 and produce more failure points. One call is faster, cheaper, and harder to get wrong.
 
-**Project scar — instance text patching:**
-Today, patching the text of N component instances requires:
-1. `get_node(instance)` — parse the text-child id from the response.
-2. `update_node(childId, { content, font, color })` — full patch required; text-only errors on `raw.trim`.
-Repeat N times. Proposed consolidation: `set_instance({ instanceId, text: { "label": "…" } })` —
-one call per instance, the server resolves the child id internally.
+**Project scar — instance text patching (closed):**
+Patching the text of N component instances once cost a `get_node(instance)` per instance to
+parse the text-child id, then an `update_node` on that child. The consolidation shipped: a
+TEXT property bound at definition time (`update_component`'s `add` with `targetNodeId`) turns
+the whole chain into one `set_instance` per instance.
 
-**Project scar — stat-card population:**
-Populating 4 stat-card instances took 12 `update_node` calls. A `set_multiple_text_contents`
-bulk tool (or a `text` arg on `set_instance`) collapses that to 4 or even 1.
+**Project scar — stat-card population (closed):**
+Populating 4 stat-card instances took 12 `update_node` calls. `batch` now carries that chain
+in one request — a generic multi-op envelope rather than a bulk text-specific tool.
 
 ---
 
@@ -40,19 +39,19 @@ bulk tool (or a `text` arg on `set_instance`) collapses that to 4 or even 1.
 **What it is:** Concise/detailed response modes, bounded/paginated scans, server-side
 aggregation — anything that reduces the token cost of a common read path.
 
-**Why it matters:** Expensive reads on large documents (e.g., `get_local_components` scanning
-all instances in a 500-component file) can time out or exhaust the context. Bounded defaults
-and targeted scopes make the tool usable on real documents.
+**Why it matters:** Expensive reads on large documents (e.g. a component scan walking every
+instance in a 500-component file) can time out or exhaust the context. Bounded defaults and
+targeted scopes make the tool usable on real documents.
 
-**Project scar — `get_local_components` scan timeout:**
-`get_local_components` re-scans all instances across the entire document on every call. On a
-large production file it timed out in a live session. Proposed fix: a default `limit` param
-and a paginated `cursor` so partial results are useful rather than a timeout with nothing.
+**Project scar — component-scan timeout (closed):**
+`get_components` used to walk every instance in the document on every call to discover remote
+components; on a large production file it timed out live. Two fixes landed together — the
+expensive scan became opt-in (`includeRemote` defaults to `false`) and the result list became
+bounded (`limit` defaults to 100, `cursor` continues).
 
-**Project scar — `inspect` verbosity:**
-`inspect` on a complex frame returns a deeply nested tree that can flood the context. A
-`depth` param (already present on some tools) and a `budget` cap (token budget for the
-response) would let the agent trade coverage for cost on expensive nodes.
+**Project scar — `inspect` verbosity (closed):**
+`inspect` on a complex frame returned a deeply nested tree that flooded the context. It now
+takes `depth` and a `budget` cap, and reports what it cut in `truncated[]`.
 
 ---
 
@@ -67,16 +66,16 @@ believes it succeeded and moves on. The error only surfaces (if at all) on read-
 which point the context has diverged. An actionable error would have stopped the mistake
 at the source.
 
-**Project scar — `resize_node` on a locked node:**
-`resize_node` called on a locked frame returned a success result; nothing in Figma changed.
-The agent proceeded, the build was wrong. Proposed: return `{ error: "node is locked —
-unlock it first" }` so the agent can surface this to the user immediately.
+**Project scar — a size write against a locked node:**
+A resize aimed at a locked frame returned a success result; nothing in Figma changed. The
+agent proceeded, the build was wrong. Proposed: return `{ error: "node is locked — unlock it
+first" }` so the agent can surface this to the user immediately.
 
-**Project scar — `set_instance` text inertia:**
-`set_instance({ properties: { Label: "Revenue" } })` returned success; the instance text
-was unchanged (the TEXT property was never bound to a text node). Proposed: detect the
-unbound state and return `{ error: "TEXT property 'Label' is not bound to a text node —
-use update_node on the compound child id I<inst>;<masterText> instead" }`.
+**Project scar — `set_instance` text inertia (closed):**
+`set_instance({ properties: { Label: "Revenue" } })` returned success; the instance text was
+unchanged, because the TEXT property had never been bound to a text node. Closed upstream of
+the symptom: `update_component` emits a `warnings[]` entry when a property is added without
+`targetNodeId` ("…it is unbound and set_instance will be inert").
 
 ---
 
@@ -88,15 +87,17 @@ multi-step workaround; a Figma API the bridge doesn't expose at all.
 **Why it matters:** CRUD asymmetry forces the agent to leave state behind it can't clean
 up, and missing args force workarounds that break on edge cases.
 
-**Project scars:**
-- `create_variables` / `create_styles` exist; `delete_variables` / `delete_styles` do not.
-  The agent cannot clean up a token it created by mistake.
-- `update_component` can `add` a TEXT property but cannot bind it to a node — the add is
-  half-formed without a separate bind capability.
-- No `create_page` / `delete_page` in the current surface (though `list_pages` /
-  `set_current_page` exist) — the agent can't reorganize the document structure.
-- No `boolean_op` (union, subtract, intersect, exclude) — vector combination requires a
-  workaround via the Figma UI.
+**Project scars** — four asymmetries the agent hit; three have since shipped:
+
+- `create_variables` / `create_styles` had no `delete_*` twin, so the agent could not clean
+  up a token it created by mistake. Closed — `delete_variables` / `delete_styles` ship.
+- `update_component` could `add` a TEXT property but not bind it to a node, leaving the add
+  half-formed. Closed — the `add` entry takes `targetNodeId`.
+- `boolean_op` (union, subtract, intersect, exclude) was absent, so combining vectors meant
+  leaving for the Figma UI. Closed — `boolean_op` ships.
+- Pages could be listed (`list_pages`) and switched (`set_current_page`) but not created or
+  removed. Half-closed — `create_page` and `duplicate_page` ship; there is still no
+  `delete_page`, so the agent can add pages it cannot remove.
 
 ---
 
@@ -117,9 +118,9 @@ the `inspect` response and teach it in `figma-design/references/mechanics.md` so
 agents don't repeat the discovery cost.
 
 **Project scar — component resolution:**
-`get_node` on an INSTANCE returns `componentId` (opaque UUID), not the component name.
-A `componentName` field alongside `componentId` in the response would let the agent verify
-it instantiated the right component without a follow-up `get_local_components` call.
+`get_node` on an INSTANCE returns `component: { id }` (or `{ key }` for a library main) — an
+opaque handle, never the component's name. A `name` alongside it would let the agent verify it
+instantiated the right component without a follow-up `get_components` call.
 
 ---
 
@@ -133,16 +134,15 @@ node structure.
 only works if read-back is faithful. A lossy read-back means the agent can't tell success
 from silent failure, and the verification step gives false confidence.
 
-**Project scar — variable binding read-back:**
-After `bind_variable` on a fill, `get_node` showed the fill color as a hex value, not as
-`var(--token-name)`. The agent couldn't confirm the bind succeeded without `inspect`, which
-is more expensive. Proposed: `get_node` fill response includes `{ hex: "…", variable: "…" }`
-when a variable is bound, matching the `inspect` response.
+**Project scar — variable binding read-back (closed):**
+After `bind_variable` on a fill, `get_node` showed a bare hex, so the agent could not confirm
+the bind without the more expensive `inspect`. Closed: the read-back now carries the
+`var(token/name)#RRGGBB` wrapper, so one cheap read proves the binding.
 
-**Project scar — style reference in text nodes:**
-After `apply_style` on a text node, `get_node` returned font/size/color as raw values, not
-as a style reference. The style name wasn't visible until `inspect`. Proposed: include
-`textStyleId` and `textStyleName` in the `get_node` text node response.
+**Project scar — style reference in text nodes (closed):**
+After `apply_style` on a text node, `get_node` returned font/size/color as raw values and the
+style name wasn't visible until `inspect`. Closed: the `font` atom reads back as
+`style(Name)font(…)`.
 
 ---
 
@@ -181,15 +181,15 @@ modes. Every time the agent forgets, the result is silently wrong. The right def
 the caller nothing.
 
 **Project scars:**
-- **`sizing` default:** `create_frame` defaults to `HUG` sizing in auto-layout mode, which
-  collapses frames with no content. Nearly every frame the agent creates needs
-  `sizing: ['FIXED', 'FIXED']`. Proposed default: `FIXED` when explicit `width`/`height`
-  are passed, so the agent only overrides when it wants HUG.
-- **Node id in create responses:** `create_frame`, `create_text`, and similar tools return
+- **`sizing` default (closed):** a frame in auto-layout mode defaulted to `HUG` and collapsed
+  when empty, so nearly every frame the agent created needed an explicit
+  `sizing: ['FIXED', 'FIXED']`. Closed: a create that states `size` and no `layout` is pinned
+  `['FIXED', 'FIXED']` for you.
+- **Node id in create responses:** `create_node`, `create_tree`, and every other create return
   the new node's id. This is already correct — flagged here as a positive example. Do not
   regress: if a create tool ever stops returning the id, file it as a least-surprise
   regression.
-- **`inspect` on selection:** `get_selection` returns ids but not node summaries. The agent
-  almost always follows `get_selection` with `inspect` on each selected node. Proposed:
-  `get_selection` includes a brief `{ id, name, type }` per node so the common case needs
-  one call, not N+1.
+- **`inspect` on selection (closed):** `get_selection` once returned bare ids, so the agent
+  followed it with an `inspect` per node. Closed twice over: `get_selection` returns
+  `{ id, name, type }` per node, and `inspect` with no `nodeId`/`pageId` reads the current
+  selection directly — the common case is one call, not N+1.

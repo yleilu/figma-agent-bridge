@@ -131,8 +131,10 @@ The `var()` wrapper applies uniformly: `var(radius/medium)8`.
 
 ## Scalars & enums
 
-Bare literals: `opacity` `0.5` · `rotation` `45` · `blendMode` `MULTIPLY` ·
+Bare literals: `opacity` `0.5` · `rotation` `45` · `blend` `MULTIPLY` ·
 `visible` `true` · `clipsContent` `false`. All wrappable: `var(token/x)0.5`.
+(The node-level field is `blend`; `blendMode` is Figma's own name for it and is
+what a paint or effect entry carries internally.)
 
 ---
 

@@ -126,17 +126,24 @@ first, then combine:
 ```json
 {
   "componentIds": ["<id1>", "<id2>", "<id3>"],
-  "variantPropertyName": "State",
-  "variantValues": ["Default", "Hover", "Pressed"]
+  "name": "Button"
 }
 ```
 
-After combining, the result is a `COMPONENT_SET` node containing `COMPONENT`
-children with `variantProperties` set. Instances of the set get a `variantProperties`
-field that selects which variant is shown.
+Those are the only params — plus an optional `parentId`, which defaults to the first
+component's parent. **The axes are not a param: they come from the component names.**
+Figma reads each name as `Property=Value`, so the three components above are named
+`State=Default`, `State=Hover`, `State=Pressed` _before_ the call, and the set forms one
+`State` axis. Multiple axes comma-separate the pairs: `Style=Primary, Size=Large`.
 
-The variant property name must be consistent across all components in the set; if the
-components already have `variantProperties` set, `combine_variants` merges them.
+A name with no `=` packs its whole value into one anonymous axis, so the set won't form a
+clean one-property-per-axis grouping. That case doesn't fail — the reply carries a
+`warnings[]` entry naming every component whose name lacks the convention.
+
+After combining, the result is a `COMPONENT_SET` node containing `COMPONENT`
+children with `variantProperties` set, and the reply's `variantAxes` reports the axes
+Figma actually derived — read it back to confirm you got the grouping you meant.
+Instances of the set get a `variantProperties` field that selects which variant is shown.
 
 ---
 
@@ -161,21 +168,14 @@ Verified live: with `targetNodeId` supplied, the property genuinely binds via
 updates the actual rendered text on every instance — both the bare property name and
 the full `Name#id` key work as the properties-object key.
 
-**Verifying the bind.** `get_node(masterTextNodeId, { profile: "full" })` currently
-does **not** surface `componentPropertyReferences` (a known `full`-profile gap, filed
-as a bug) — request it explicitly: `get_node(masterTextNodeId, { fields: ["componentPropertyReferences"] })`.
-A `full` read that appears to lack the binding is not proof it's missing; re-check with
-explicit `fields`.
+**Verifying the bind.** `get_node(masterTextNodeId)` surfaces
+`componentPropertyReferences` on every node that carries one, so the map coming back
+_is_ the proof the bind landed. Narrowing profiles (`minimal`, `layout`, `style`,
+`text`) drop it — read it back unnarrowed, or name it: `get_node(masterTextNodeId, { fields: ["componentPropertyReferences"] })`.
 
 **If you truly need it unbound** (or already have a component whose TEXT property was
 added without `targetNodeId`), fall back to the compound-id override path described
 above.
-
-### No `delete_variables` / `delete_styles`
-
-There is no tool to delete variables or styles. The correct pattern is to reuse
-existing ones. If a token or style needs renaming or restructuring, it must be done
-directly in Figma by the user — the agent can't clean up stale tokens.
 
 ### Rotated frame bounding box
 

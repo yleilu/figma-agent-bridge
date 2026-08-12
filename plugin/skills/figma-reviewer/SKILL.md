@@ -241,8 +241,9 @@ On approval:
 ### Routing tool-limit findings
 
 If a finding cannot be fixed with the available tools (e.g. the required Figma API is
-not exposed, or the fix would need a `delete_styles` / `delete_variables` call that
-doesn't exist), do **not** invent a workaround that breaks the design. Instead:
+not exposed, or the fix would need a detached instance re-linked to its component —
+`swap_component` only re-points a node that is still an `INSTANCE`), do **not** invent
+a workaround that breaks the design. Instead:
 
 1. Note in the report: `Fix: (tool limitation — see figma-feedback)`.
 2. After the report, file a `record_feedback` entry under the `proposals` category

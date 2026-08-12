@@ -11,7 +11,7 @@ version: 0.1.0
 
 # figma-design skill
 
-Purpose: teach **how to operate** the 47-tool surface well. This skill deliberately
+Purpose: teach **how to operate** the 61-tool surface well. This skill deliberately
 does not encode visual taste or a house style — _how the outcome looks is the user's
 to specify, per request_. Principles and mechanics age well; baked aesthetics don't.
 The skill covers the full surface: create, inspect, and edit (including the current
@@ -24,7 +24,9 @@ selection). There is no create-only vs. edit split.
 Call `status()`; read the target file's `fileKey` from `joined[]` (or `available[]` on a
 cold start — the server auto-joins an available file on first use) and pass it on **every**
 subsequent file-tool call. If several files are joined and the target is ambiguous, **ask —
-never guess.** (`connect` / `status` take no `fileKey`.) Full multi-file / error model:
+never guess.** (`connect` / `status` are the session pair — neither requires a per-call
+`fileKey`; `connect` takes one only to choose which file to pair with.) Full multi-file /
+error model:
 `figma-connection`.
 
 ---
@@ -290,11 +292,10 @@ are in `references/grammar.md`. Load it when writing or reading any atom value.
   property genuinely updates the instance's rendered text (verified live). Omit
   `targetNodeId` and the property is added unbound — `set_instance` is then inert, and
   the compound-id override path is the fallback (see `references/mechanics.md`).
-- To verify a `componentPropertyReferences` bind, request it explicitly —
-  `get_node(nodeId, { fields: ['componentPropertyReferences'] })`. `profile: 'full'`
-  currently drops it silently (filed as a bug); don't trust a `full` read-back as proof
-  a bind failed.
-- No `delete_variables` or `delete_styles` — reuse rather than clean up.
+- `delete_variables` removes variables by id **and** whole collections (deleting a
+  collection cascades its variables); `delete_styles` removes local styles by id or by
+  name + type. Prefer reuse over delete-and-recreate: a delete breaks every binding that
+  pointed at that token or style, and nothing warns you.
 - `get_node` on a rotated frame returns the bounding-box size, not the frame's own
   width/height — account for this when checking dimensions.
 - `get_node` may return an invalid profile for nodes that are partially outside the

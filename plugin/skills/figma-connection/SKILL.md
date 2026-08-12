@@ -30,8 +30,8 @@ file-addressed call — the server never guesses which file (B3).
 - **`INCOMPATIBLE`** = plugin↔server version skew (reconnecting won't help — update the
   older side; see below).
 
-_(`connect` / `status` / `record_feedback` are the exceptions — they take no per-call
-`fileKey`.)_
+_(`connect` / `status` and the machine-global feedback and GitHub-auth tools are the
+exceptions — they take no per-call `fileKey`.)_
 
 ---
 
