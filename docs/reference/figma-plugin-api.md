@@ -201,6 +201,7 @@ or `node.fillStyleId = id`, `node.strokeStyleId = id`, `node.effectStyleId = id`
 | Method / Property | Notes |
 |-------------------|-------|
 | `figma.getNodeByIdAsync(id)` | Node lookup (async; `getNodeById` is the sync legacy form). **⚠️ Does NOT resolve compound instance-child ids (`I<inst>;<child>`, e.g. a SLOT inside an instance) — it hangs. Traverse the instance instead: `(instance as InstanceNode).findOne(n => n.id === compoundId)`. (live-verified 2026-07-17)** |
+| `node.id` — of a node created **inside a SLOT** | **Two handles, one node.** The id a create returns for a node appended into a slot goes **stale**; the node's canonical id is the full ancestor chain (`I<instance>;<slot>;<child>`). Ids **derived** from the stale handle do not resolve either, so a subtree addressed from it is unreachable, and Figma's error text names the **stale** form *even when the canonical id was the one passed* — the message is not evidence of what you asked for. Recovery is **positional**: re-read down from the slot and take the child by position/name, never by the remembered creation id. (live-verified 2026-08-11; re-verified 2026-08-12 against a plain-FRAME control, which keeps its creation id — this is slot-specific, not a general create-then-read hazard.) |
 | `figma.currentPage` | Current page (settable) |
 | `figma.currentPage.selection` | Current selection |
 | `figma.root` | DocumentNode; `figma.root.children` = all pages |

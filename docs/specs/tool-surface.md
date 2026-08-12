@@ -194,6 +194,20 @@ scans. No deny-list (it grows silently as the grammar grows, a T4 regression). *
 
 **`match` filter, on list/tree node reads (`inspect`/`search`)** — `{name?, regex?, type?(value|array), componentKey?, styleId?, variableId?, instancesOf?}` filters at the source. `type` accepts an array (multi-type in one pass). The fidelity readers (`get_node`/`get_nodes`) carry no `match`.
 
+**Reads degrade per node (T7).** A node whose enrichment fails is returned with a `readError`
+field naming the failure instead of failing the read; every other node is unaffected. A read is
+a walk over many nodes, and any one of them can refuse to be read — a node that no longer
+resolves throws on every property access — so the cost of one bad node is that node, never the
+tree that contains it. When the failing node cannot be identified in the returned tree — the two
+sides of a read can key one node by different ids once a handle has gone stale — the failure is
+reported on the root of the returned tree as `readErrors`, so a read that cannot say *which* node broke
+still says that one did. Both fields **are outside projection** (like `contextSummary`): a
+`fields`/`profile` narrowing cannot hide an unreachable node, and no caller could name them in
+advance anyway, since which node breaks is not knowable before the read. The list reads carry
+the same contract in their own shape: a candidate that cannot be read is **skipped and named** in
+the reply's `warnings` (there is no node struct in a candidate list to hang the field on), and
+the scan still completes.
+
 ### Defaults by job (D4)
 
 - **`get_node`/`get_nodes`** → `depth=0` (the node you'll edit; children as id-stubs). `depth=-1` for a full subtree to round-trip; fidelity-first (no budget truncation).
@@ -319,7 +333,7 @@ Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle
 - `export(nodeId, {format?, scale?}) → image|svg-text` — render-to-see + one-off asset export (`format`: PNG|JPG|SVG|PDF, default PNG; `scale` ignored for SVG/PDF) · T6; §1 visual-confirm, §13 export-assets. *(Persistent `exportSettings` is a `NodeSpec` field — round-trips via `get_node`/`update_node`.)*
 
 ### Read — query & document (3)
-- `search({scope?, pageId?, nodeId?, depth?, match?, cursor?, limit?=50, fields?, profile?}) → {results, truncated, cursor?}` — the one finder (`scope`: document(default)|page|node|selection; `match` incl. `type` array, `instancesOf`, `styleId`/`variableId`); `depth` bounds the **scan scope** (how deep the plugin traverses each root: -1/omitted = whole subtree, 0 = roots only, N = N levels), results stay a flat list (Rule A, bounded by T10); `limit` defaults to **50** (lower than the other list reads' 100 — projected search results are heavier per entry); `cursor` is the opaque pagination token (returned only when `truncated`); `fields` can project `characters` (text-copy inventory); each result also carries a read-only **`contextSummary`** (capped frontmatter slice; server-derived, **not** `fields`/`profile`-projectable; omitted when absent) · T1 (the one finder), T10; §4 all find + text inventory. 🟠 reverse-lookup returns only matching ids — any usage/orphan/audit interpretation is skill-layer (P1).
+- `search({scope?, pageId?, nodeId?, depth?, match?, cursor?, limit?=50, fields?, profile?}) → {results, truncated, cursor?, warnings?}` — the one finder (`scope`: document(default)|page|node|selection; `match` incl. `type` array, `instancesOf`, `styleId`/`variableId`); `depth` bounds the **scan scope** (how deep the plugin traverses each root: -1/omitted = whole subtree, 0 = roots only, N = N levels), results stay a flat list (Rule A, bounded by T10); `limit` defaults to **50** (lower than the other list reads' 100 — projected search results are heavier per entry); `cursor` is the opaque pagination token (returned only when `truncated`); `fields` can project `characters` (text-copy inventory); each result also carries a read-only **`contextSummary`** (capped frontmatter slice; server-derived, **not** `fields`/`profile`-projectable; omitted when absent); `warnings` name every candidate the scan could not read — skipped, never fatal, omitted when the scan was clean (T7, *Reads degrade per node*) · T1 (the one finder), T7, T10; §4 all find + text inventory. 🟠 reverse-lookup returns only matching ids — any usage/orphan/audit interpretation is skill-layer (P1).
 - `list_pages({cursor?, limit?=100}) → {docName, results:pages[{id,name,isCurrent,childCount}], truncated, cursor?}` — document + page enumeration (Rule A, bounded by T10; `limit` defaults to **100**, `cursor` continues when `truncated`) · T10; §2 list-pages.
 - `get_selection() → [{id,name,type}]` — read selection; twin of `set_selection` · T2; §1 selection.
 

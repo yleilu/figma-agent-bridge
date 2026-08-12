@@ -390,4 +390,35 @@ describe('handleSearch (rebuilt — Rule A)', () => {
       code: 'PLUGIN_ERROR',
     })
   })
+
+  // B31 — a candidate the plugin could not read is skipped THERE and named
+  // HERE. The scan that crossed it still returns everything else: before this,
+  // one stale slot-child killed a whole document-wide search.
+  it('surfaces the plugin scan warnings on the success envelope (T7)', async () => {
+    const degradedClient: ScopedFigmaClient = {
+      fileKey: 'fk-test',
+      sendCommand: async () => ({
+        results: candidates,
+        warnings: [
+          'search: skipped I3:1;4:5;6:7: in get_name: The node (instance sublayer or table cell) with id "I3:1;4:5;6:7" does not exist',
+        ],
+      }),
+    }
+    const result = await handleSearch({}, degradedClient)
+    const out = YAML.parse(result.content[0].text) as {
+      results: unknown[]
+      warnings?: string[]
+    }
+    expect(out.results).toHaveLength(4)
+    expect(out.warnings?.[0]).toContain(
+      'search: skipped I3:1;4:5;6:7',
+    )
+  })
+
+  it('omits warnings entirely when the scan was clean', async () => {
+    const result = await handleSearch({}, stubClient({}))
+    expect(
+      YAML.parse(result.content[0].text),
+    ).not.toHaveProperty('warnings')
+  })
 })

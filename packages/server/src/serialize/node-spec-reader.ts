@@ -1266,6 +1266,29 @@ const buildNode = (
     out.context = context
   }
 
+  // The plugin's per-node degrade (T7): this node refused to be read, and the
+  // enrichment named the failure instead of losing the whole export. Passed
+  // straight through — a node that comes back thin has to SAY it is thin, or
+  // the read is quietly wrong about the document.
+  const readError = str(raw.readError)
+  if (readError !== undefined && readError !== '') {
+    out.readError = readError
+  }
+
+  // …and the failures that had no node of their own to land on, reported by
+  // the plugin on the ROOT of the returned tree (a stale handle is named by one
+  // id during the walk and another in the export, so the patch matches
+  // nothing).
+  const { readErrors } = raw
+  if (Array.isArray(readErrors)) {
+    const named = readErrors.filter(
+      (e): e is string => typeof e === 'string' && e !== '',
+    )
+    if (named.length > 0) {
+      out.readErrors = named
+    }
+  }
+
   out.size = sizeOf(raw)
 
   const position = positionOf(raw, parentBBox)

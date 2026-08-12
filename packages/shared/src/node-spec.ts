@@ -210,6 +210,29 @@ export type NodeSpec = {
    */
   warnings?: string[]
 
+  /**
+   * READ-ONLY: this node could not be read, and this is what it said.
+   *
+   * The one failure `warnings` cannot express — not state the read could not
+   * REPRESENT, but a node the read could not REACH (a stale slot-child handle
+   * throws on every property access). The read returns the node labelled
+   * rather than failing, so a broken node costs one node and not the tree
+   * around it (T7). Omitted when the node read cleanly; ignored on write.
+   */
+  readError?: string
+
+  /**
+   * READ-ONLY: failures from BELOW this node that could not be pinned to a
+   * node in the returned tree — `"<id the read saw>: <message>"` each.
+   *
+   * The two sides of a read key the same node by different ids when a handle
+   * has gone stale, so a `readError` sometimes has no node to land on. It is
+   * reported here on the ROOT of the returned tree instead of being dropped: a
+   * read that cannot say WHICH node broke must still say that one did (T7).
+   * Omitted when every failure found its node; ignored on write.
+   */
+  readErrors?: string[]
+
   /** Full round-trippable markdown note, stored in shared pluginData. Omitted on read when absent/empty. Verbatim; the server never parses it. Capped at CONTEXT_MAX_BYTES on write. */
   context?: string
 

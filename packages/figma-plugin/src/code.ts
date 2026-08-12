@@ -2664,24 +2664,74 @@ const handleCommand = async (
       const seen = new Set<string>()
       const scanned: SceneNode[] = []
 
+      // What the scan could not read, named rather than thrown (T7). A node
+      // created inside a component SLOT keeps a stale handle and then throws
+      // on every property read of it — `in get_name: The node … does not
+      // exist` — and one of those in a document-wide scan used to kill the
+      // whole search. The scan now completes and says which ids it lost.
+      const skipped: string[] = []
+      const messageOf = (err: unknown): string =>
+        err instanceof Error ? err.message : String(err)
+      // Even the id in a warning has to be read defensively: a stale handle
+      // answers NOTHING, its own id included.
+      const UNREADABLE = '(unreadable node)'
+      const idOf = (node: BaseNode): string => {
+        try {
+          return node.id
+        } catch {
+          return UNREADABLE
+        }
+      }
+
       // Depth-bounded DFS collector. `levelsLeft < 0` is treated as unlimited
       // (the -1 / scan-all default); each descent decrements it.
       const collect = (
         node: SceneNode,
         levelsLeft: number,
       ): void => {
-        if (!seen.has(node.id)) {
-          seen.add(node.id)
+        // `node.id` is the FIRST touch of the node, so it is inside the guard
+        // like every other read — a throw here would lose the whole scan, and
+        // a node that cannot even be identified cannot be deduped, addressed
+        // or returned.
+        let id: string
+        try {
+          id = node.id
+        } catch (err) {
+          skipped.push(
+            'search: skipped ' +
+              UNREADABLE +
+              ': ' +
+              messageOf(err),
+          )
+          return
+        }
+        if (!seen.has(id)) {
+          seen.add(id)
           scanned.push(node)
         }
         if (levelsLeft === 0) {
           return
         }
-        if ('children' in node) {
-          for (const child of (node as ChildrenMixin)
-            .children) {
-            collect(child, levelsLeft - 1)
+        let children: readonly SceneNode[] = []
+        try {
+          if ('children' in node) {
+            children = (node as ChildrenMixin).children
           }
+        } catch (err) {
+          // Descending is itself a read of the node, so an unreachable
+          // container throws HERE rather than in the enrichment below. Its
+          // subtree cannot be reached through it — report that instead of
+          // returning a short list that looks complete.
+          skipped.push(
+            'search: skipped the children of ' +
+              id +
+              ': ' +
+              messageOf(err),
+          )
+          return
+        }
+        for (const child of children) {
+          collect(child, levelsLeft - 1)
         }
       }
 
@@ -2696,11 +2746,23 @@ const handleCommand = async (
         // (we want its descendants); start the descent from each child at the
         // requested depth so depth=0 yields the page's immediate children.
         for (const root of roots) {
-          if ('children' in root) {
-            for (const child of (root as ChildrenMixin)
-              .children) {
-              collect(child, scanDepth)
+          // A root is a node too: listing its children reads it, so a root
+          // that has gone stale degrades like any other node instead of
+          // aborting the scan of the roots beside it.
+          try {
+            if ('children' in root) {
+              for (const child of (root as ChildrenMixin)
+                .children) {
+                collect(child, scanDepth)
+              }
             }
+          } catch (err) {
+            skipped.push(
+              'search: skipped the children of ' +
+                idOf(root) +
+                ': ' +
+                messageOf(err),
+            )
           }
         }
       }
@@ -2709,104 +2771,131 @@ const handleCommand = async (
       // is cheap and always present; the reverse-lookup metadata + characters
       // are attached only when hinted (B3/B4) so the server's buildMatcher can
       // filter and projectNode can map `characters`.
+      // A candidate that cannot be READ is skipped and named (into `skipped`
+      // above), never thrown: one broken node costs one candidate, not the
+      // scan.
       const candidates: Record<string, unknown>[] = []
       for (const fn of scanned) {
-        const candidate = toCandidate(fn)
+        try {
+          const candidate = toCandidate(fn)
 
-        if (needsEnrich) {
-          // B4 — characters: TEXT nodes expose their text content as a flat
-          // string for copy-inventory scans (non-text nodes leave it undefined).
-          if (collectCharacters && fn.type === 'TEXT') {
-            candidate.characters = (
-              fn as TextNode
-            ).characters
-          }
-
-          // B3 — instancesOf / componentKey: resolve the INSTANCE's main
-          // component (async). `instancesOf` matches by the main component's
-          // NAME; `componentKey` matches by its KEY. Failures degrade silently
-          // (the candidate simply won't match those keys).
-          if (
-            collectComponentRef &&
-            fn.type === 'INSTANCE'
-          ) {
-            const main = await (fn as InstanceNode)
-              .getMainComponentAsync()
-              .catch(() => null)
-            if (main) {
-              candidate.componentKey = main.key
-              candidate.instancesOf = main.name
+          if (needsEnrich) {
+            // B4 — characters: TEXT nodes expose their text content as a flat
+            // string for copy-inventory scans (non-text nodes leave it undefined).
+            if (collectCharacters && fn.type === 'TEXT') {
+              candidate.characters = (
+                fn as TextNode
+              ).characters
             }
-          }
 
-          // B3 — styleId: any of the node's style references. The server's
-          // matcher tests a single `styleId`, so expose the bound style ids and
-          // let buildMatcher match if ANY equals the requested id (see match.ts).
-          if (collectStyleId) {
-            const styleIds: string[] = []
-            const g = fn as Partial<{
-              fillStyleId: string | symbol
-              strokeStyleId: string | symbol
-              effectStyleId: string | symbol
-              gridStyleId: string | symbol
-              textStyleId: string | symbol
-            }>
-            for (const key of [
-              'fillStyleId',
-              'strokeStyleId',
-              'effectStyleId',
-              'gridStyleId',
-              'textStyleId',
-            ] as const) {
-              const v = g[key]
-              // figma.mixed is a symbol; only collect concrete string ids.
-              if (typeof v === 'string' && v.length > 0) {
-                styleIds.push(v)
+            // B3 — instancesOf / componentKey: resolve the INSTANCE's main
+            // component (async). `instancesOf` matches by the main component's
+            // NAME; `componentKey` matches by its KEY. Failures degrade silently
+            // (the candidate simply won't match those keys).
+            if (
+              collectComponentRef &&
+              fn.type === 'INSTANCE'
+            ) {
+              const main = await (fn as InstanceNode)
+                .getMainComponentAsync()
+                .catch(() => null)
+              if (main) {
+                candidate.componentKey = main.key
+                candidate.instancesOf = main.name
               }
             }
-            if (styleIds.length > 0) {
-              candidate.styleIds = styleIds
-            }
-          }
 
-          // B3 — variableId: the ids bound on the node via boundVariables.
-          // boundVariables maps a field → VariableAlias{id} (or an array of
-          // them for paints/strokes). Flatten every bound id so the matcher can
-          // match if ANY equals the requested variableId.
-          if (collectVariableId && 'boundVariables' in fn) {
-            const bound = (
-              fn as SceneNode & {
-                boundVariables?: Record<string, unknown>
-              }
-            ).boundVariables
-            if (bound) {
-              const ids: string[] = []
-              const pushAlias = (a: unknown): void => {
-                const id = (a as { id?: string } | null)?.id
-                if (typeof id === 'string') {
-                  ids.push(id)
+            // B3 — styleId: any of the node's style references. The server's
+            // matcher tests a single `styleId`, so expose the bound style ids and
+            // let buildMatcher match if ANY equals the requested id (see match.ts).
+            if (collectStyleId) {
+              const styleIds: string[] = []
+              const g = fn as Partial<{
+                fillStyleId: string | symbol
+                strokeStyleId: string | symbol
+                effectStyleId: string | symbol
+                gridStyleId: string | symbol
+                textStyleId: string | symbol
+              }>
+              for (const key of [
+                'fillStyleId',
+                'strokeStyleId',
+                'effectStyleId',
+                'gridStyleId',
+                'textStyleId',
+              ] as const) {
+                const v = g[key]
+                // figma.mixed is a symbol; only collect concrete string ids.
+                if (typeof v === 'string' && v.length > 0) {
+                  styleIds.push(v)
                 }
               }
-              for (const val of Object.values(bound)) {
-                if (Array.isArray(val)) {
-                  for (const a of val) {
-                    pushAlias(a)
+              if (styleIds.length > 0) {
+                candidate.styleIds = styleIds
+              }
+            }
+
+            // B3 — variableId: the ids bound on the node via boundVariables.
+            // boundVariables maps a field → VariableAlias{id} (or an array of
+            // them for paints/strokes). Flatten every bound id so the matcher can
+            // match if ANY equals the requested variableId.
+            if (
+              collectVariableId &&
+              'boundVariables' in fn
+            ) {
+              const bound = (
+                fn as SceneNode & {
+                  boundVariables?: Record<string, unknown>
+                }
+              ).boundVariables
+              if (bound) {
+                const ids: string[] = []
+                const pushAlias = (a: unknown): void => {
+                  const id = (a as { id?: string } | null)
+                    ?.id
+                  if (typeof id === 'string') {
+                    ids.push(id)
                   }
-                } else {
-                  pushAlias(val)
                 }
-              }
-              if (ids.length > 0) {
-                candidate.variableIds = ids
+                for (const val of Object.values(bound)) {
+                  if (Array.isArray(val)) {
+                    for (const a of val) {
+                      pushAlias(a)
+                    }
+                  } else {
+                    pushAlias(val)
+                  }
+                }
+                if (ids.length > 0) {
+                  candidate.variableIds = ids
+                }
               }
             }
           }
-        }
 
-        candidates.push(candidate)
+          candidates.push(candidate)
+        } catch (err) {
+          // `idOf`, not `fn.id`: the scan read this id once, but the node can
+          // go stale between the walk and the enrichment.
+          skipped.push(
+            'search: skipped ' +
+              idOf(fn) +
+              ': ' +
+              messageOf(err),
+          )
+        }
       }
 
-      return { results: candidates }
+      // warnings[] rides on the SUCCESS reply and is omitted when empty — the
+      // same shape every other degrading read answers with.
+      const searchReply: {
+        results: Record<string, unknown>[]
+        warnings?: string[]
+      } = { results: candidates }
+      if (skipped.length > 0) {
+        searchReply.warnings = skipped
+      }
+      return searchReply
     }
 
     // create_node (M2 single-node): the spec is a FigmaWritePayload already

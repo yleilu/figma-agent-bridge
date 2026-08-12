@@ -548,6 +548,97 @@ describe('toNodeSpec — context read-back', () => {
   })
 })
 
+// ─── readError read-back (B31 — the per-node degrade must reach the agent) ────
+
+describe('toNodeSpec — readError read-back', () => {
+  it('carries the plugin degrade onto the node that failed, and only it', () => {
+    const spec = toNodeSpec(
+      {
+        id: '1:1',
+        type: 'FRAME',
+        children: [
+          {
+            id: 'I3:1;4:5;6:7',
+            type: 'FRAME',
+            readError:
+              'Error: in getSharedPluginData: The node (instance sublayer or table cell) with id "I3:1;4:5;6:7" does not exist',
+          },
+          { id: '1:3', type: 'RECTANGLE' },
+        ],
+      } as never,
+      { depth: 1 },
+    )
+    const [broken, fine] = spec.children as {
+      readError?: string
+    }[]
+    expect(broken.readError).toContain('does not exist')
+    expect(fine.readError).toBeUndefined()
+    expect(spec.readError).toBeUndefined()
+  })
+
+  it('omits an empty readError', () => {
+    expect(
+      toNodeSpec(
+        { id: '1', type: 'FRAME', readError: '' } as never,
+        { depth: 0 },
+      ).readError,
+    ).toBeUndefined()
+  })
+
+  it('carries readErrors — the failures that had no node to land on', () => {
+    expect(
+      toNodeSpec(
+        {
+          id: '1:1',
+          type: 'FRAME',
+          readErrors: [
+            'I<stale>;6:7: Error: in getSharedPluginData: … does not exist',
+          ],
+        } as never,
+        { depth: 0 },
+      ).readErrors,
+    ).toEqual([
+      'I<stale>;6:7: Error: in getSharedPluginData: … does not exist',
+    ])
+  })
+
+  it('omits readErrors when it is empty or holds nothing readable', () => {
+    expect(
+      toNodeSpec(
+        {
+          id: '1',
+          type: 'FRAME',
+          readErrors: [],
+        } as never,
+        { depth: 0 },
+      ).readErrors,
+    ).toBeUndefined()
+    expect(
+      toNodeSpec(
+        {
+          id: '1',
+          type: 'FRAME',
+          readErrors: ['', 7],
+        } as never,
+        { depth: 0 },
+      ).readErrors,
+    ).toBeUndefined()
+  })
+
+  it('keeps the readable entries of a mixed list', () => {
+    expect(
+      toNodeSpec(
+        {
+          id: '1',
+          type: 'FRAME',
+          readErrors: ['', 'real'],
+        } as never,
+        { depth: 0 },
+      ).readErrors,
+    ).toEqual(['real'])
+  })
+})
+
 // ─── vectorPaths read-back (raw.vectorPaths → NodeSpec.vectorPaths atoms) ───────
 
 describe('toNodeSpec — vectorPaths read-back', () => {
