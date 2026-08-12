@@ -13,9 +13,26 @@ import { createFontLoader } from './font-cache'
 import { applyPointDetail } from './vector-points'
 import {
   applyStrokeGeometry,
+  applyStrokeWeights,
   applyExportSettings,
   applyGrids,
+  capabilityWarnings,
 } from './apply-node-fields'
+import {
+  applyStyleField,
+  applyWrapperBindings,
+  bindNodeField,
+  bindPaintField,
+  createBindingLookups,
+  STYLE_TYPES,
+  type BindTargetNode,
+  type StyleCategory,
+  type StyleField,
+} from './bind-wrappers'
+import {
+  readSlotEntry,
+  type SlotEntry,
+} from './slot-entries'
 import {
   fontsToLoad,
   runsToRangeOps,
@@ -320,6 +337,81 @@ const enrichDeps = () => ({
       : undefined,
 })
 
+// ─── binding (var()/style() wrappers, bind_variable, apply_style) ────────────
+
+/**
+ * A local-token lister, feature-detected at CALL time (the enrichDeps rule):
+ * every one of these globals is optional in principle, and a plugin that
+ * dereferenced them while loading would die before it could degrade. An absent
+ * API throws here instead, which the binder catches into one warning (T7).
+ */
+const lister =
+  <T>(
+    label: string,
+    pick: () => (() => Promise<T[]>) | undefined,
+  ) =>
+  (): Promise<T[]> => {
+    const fn = pick()
+    if (typeof fn !== 'function') {
+      throw new Error(
+        label + ' unavailable in this Figma version',
+      )
+    }
+    return fn()
+  }
+
+/**
+ * Name → variable/style lookups, cached for ONE command dispatch (`reset()`
+ * runs at the top of handleCommand). A binding names a token, and only an
+ * enumeration turns that name into the object Figma binds; a create_tree that
+ * reuses eight tokens across a hundred nodes pays for one scan rather than one
+ * per node.
+ */
+const bindingLookups = createBindingLookups({
+  listVariables: lister('getLocalVariablesAsync', () =>
+    figma.variables?.getLocalVariablesAsync?.bind(
+      figma.variables,
+    ),
+  ),
+  listStyles: {
+    paint: lister('getLocalPaintStylesAsync', () =>
+      figma.getLocalPaintStylesAsync?.bind(figma),
+    ),
+    text: lister('getLocalTextStylesAsync', () =>
+      figma.getLocalTextStylesAsync?.bind(figma),
+    ),
+    effect: lister('getLocalEffectStylesAsync', () =>
+      figma.getLocalEffectStylesAsync?.bind(figma),
+    ),
+    grid: lister('getLocalGridStylesAsync', () =>
+      figma.getLocalGridStylesAsync?.bind(figma),
+    ),
+  },
+})
+
+/** figma.variables.setBoundVariableForPaint + figma.mixed, feature-detected. */
+const paintBindDeps = () => ({
+  mixed: figma.mixed as unknown,
+  setBoundVariableForPaint: (
+    figma.variables as
+      | {
+          setBoundVariableForPaint?: (
+            paint: unknown,
+            f: 'color',
+            v: unknown,
+          ) => unknown
+        }
+      | undefined
+  )?.setBoundVariableForPaint,
+})
+
+/** Everything the inline-wrapper binder needs: the two lookups + the paint deps. */
+const wrapperBindDeps = () => ({
+  ...paintBindDeps(),
+  variableByName: bindingLookups.variableByName,
+  styleByName: bindingLookups.styleByName,
+})
+
 /**
  * The `depth` a read command carries, defaulting to 0 — the same default the
  * server's own read model applies when the caller names none.
@@ -570,6 +662,16 @@ const applyCommonProperties = async (
     ;(node as GeometryMixin & SceneNode).strokeWeight =
       spec.strokeWeight as number
   }
+  // Per-side stroke weights [t,r,b,l] (B27) — pure helper, see
+  // apply-node-fields.ts. The writer emits `strokeWeights` INSTEAD of
+  // `strokeWeight` when the four sides differ, so the two never fight; a node
+  // type without IndividualStrokesMixin collapses to the top side and warns,
+  // where the type is known (T7).
+  applyStrokeWeights(
+    node as GeometryMixin & SceneNode,
+    spec.strokeWeights,
+    warnings,
+  )
   if (
     spec.strokeAlign !== undefined &&
     'strokeAlign' in node
@@ -1559,8 +1661,26 @@ const buildSingleNode = async (
     )
   }
 
-  // Apply post-append properties (FILL sizing, ABSOLUTE positioning)
-  applyPostAppendProperties(node, spec)
+  // Apply post-append properties (FILL sizing, ABSOLUTE positioning).
+  // `warnings` is threaded, not omitted: applyPostAppendProperties degrades
+  // rather than throws (T7), and the message is the ONLY signal the caller
+  // gets. Dropping the array here made every create-path degrade silent while
+  // the identical update_node path reported it — e.g. `sizing:['FILL',…]` on a
+  // child of a SLOT, which Figma rejects ("node must be an auto-layout frame
+  // or a child of an auto-layout frame"), leaving the node FIXED with no
+  // notice. A build then ships a node sized differently than it asked for.
+  applyPostAppendProperties(node, spec, warnings)
+
+  // Bindings LAST: `var(surface/2)#141B2E` sets the paint above and binds the
+  // token here, so the binding always lands on a node that already looks
+  // right — and on a TEXT node, after applyTextProperties has set the font a
+  // style(...) would otherwise be detached by.
+  await applyWrapperBindings(
+    node as unknown as BindTargetNode,
+    spec.bindings,
+    wrapperBindDeps(),
+    warnings ?? [],
+  )
 
   // THE load-bearing claim: the node is in its real parent and its
   // auto-layout sizing is set, so `hugs()` can decide and the reflow closure
@@ -1627,6 +1747,12 @@ const createTreeNode = async (
   // as ONE realized node — its descendants come along but are not enumerated
   // (walking every clone's subtree is unbounded work, T10).
   created?: string[],
+  // Threaded for the same reason `created` is: a degrade can happen at ANY
+  // depth of the tree, and the caller only ever sees the root's reply. Without
+  // one accumulator spanning the recursion, a lossy write on a grandchild —
+  // e.g. `sizing:['FILL',…]` on a child of a SLOT, which Figma rejects — is
+  // silently discarded (T7 violation).
+  warnings?: string[],
 ): Promise<SceneNode> => {
   const type = spec.type as string
 
@@ -1653,6 +1779,7 @@ const createTreeNode = async (
       refs,
       [...refStack, refKey],
       created,
+      warnings,
     )
   }
 
@@ -1736,7 +1863,12 @@ const createTreeNode = async (
   // BOOLEAN_OPERATION / GROUP still works. Booleans are authored via boolean_op.
 
   // Regular node: create, apply properties, append
-  const node = await createSingleNode(spec, parent, writer)
+  const node = await createSingleNode(
+    spec,
+    parent,
+    writer,
+    warnings,
+  )
   // Pushed BEFORE the children recurse, so the order is root-first depth-first.
   created?.push(node.id)
 
@@ -1757,6 +1889,7 @@ const createTreeNode = async (
         refs,
         refStack,
         created,
+        warnings,
       )
     }
   }
@@ -1932,10 +2065,16 @@ const resolveParentNode = async (
 // resolveStyle: shared helper for update_styles and delete_styles.
 // Looks up a BaseStyle by `id` (direct async lookup) or by `name`+`type`
 // (linear scan of the matching local-style lister). Returns null when not found.
+//
+// Deliberately NOT the cached `bindingLookups.styleByName` an inline
+// `style(Name)` write uses: these two tools RENAME and DELETE styles entry by
+// entry, so a scan cached across one dispatch would answer a later entry from a
+// document that no longer exists. Binding never mutates the style table, which
+// is what makes caching safe there and not here.
 const resolveStyle = async (entry: {
   id?: string
   name?: string
-  type?: 'paint' | 'text' | 'effect' | 'grid'
+  type?: StyleCategory
 }): Promise<BaseStyle | null> => {
   if (entry.id !== undefined) {
     return figma.getStyleByIdAsync(entry.id)
@@ -1965,6 +2104,10 @@ const handleCommand = async (
   params: Record<string, unknown>,
   writer: string,
 ): Promise<unknown> => {
+  // Name lookups are cached for the length of ONE dispatch: a tree pays for one
+  // enumeration, and the next command still sees variables/styles this one (or
+  // the designer) created. A batch re-dispatches per op, so each op re-reads.
+  bindingLookups.reset()
   switch (command) {
     case 'get_document_info':
       return {
@@ -2644,24 +2787,74 @@ const handleCommand = async (
       const seen = new Set<string>()
       const scanned: SceneNode[] = []
 
+      // What the scan could not read, named rather than thrown (T7). A node
+      // created inside a component SLOT keeps a stale handle and then throws
+      // on every property read of it — `in get_name: The node … does not
+      // exist` — and one of those in a document-wide scan used to kill the
+      // whole search. The scan now completes and says which ids it lost.
+      const skipped: string[] = []
+      const messageOf = (err: unknown): string =>
+        err instanceof Error ? err.message : String(err)
+      // Even the id in a warning has to be read defensively: a stale handle
+      // answers NOTHING, its own id included.
+      const UNREADABLE = '(unreadable node)'
+      const idOf = (node: BaseNode): string => {
+        try {
+          return node.id
+        } catch {
+          return UNREADABLE
+        }
+      }
+
       // Depth-bounded DFS collector. `levelsLeft < 0` is treated as unlimited
       // (the -1 / scan-all default); each descent decrements it.
       const collect = (
         node: SceneNode,
         levelsLeft: number,
       ): void => {
-        if (!seen.has(node.id)) {
-          seen.add(node.id)
+        // `node.id` is the FIRST touch of the node, so it is inside the guard
+        // like every other read — a throw here would lose the whole scan, and
+        // a node that cannot even be identified cannot be deduped, addressed
+        // or returned.
+        let id: string
+        try {
+          id = node.id
+        } catch (err) {
+          skipped.push(
+            'search: skipped ' +
+              UNREADABLE +
+              ': ' +
+              messageOf(err),
+          )
+          return
+        }
+        if (!seen.has(id)) {
+          seen.add(id)
           scanned.push(node)
         }
         if (levelsLeft === 0) {
           return
         }
-        if ('children' in node) {
-          for (const child of (node as ChildrenMixin)
-            .children) {
-            collect(child, levelsLeft - 1)
+        let children: readonly SceneNode[] = []
+        try {
+          if ('children' in node) {
+            children = (node as ChildrenMixin).children
           }
+        } catch (err) {
+          // Descending is itself a read of the node, so an unreachable
+          // container throws HERE rather than in the enrichment below. Its
+          // subtree cannot be reached through it — report that instead of
+          // returning a short list that looks complete.
+          skipped.push(
+            'search: skipped the children of ' +
+              id +
+              ': ' +
+              messageOf(err),
+          )
+          return
+        }
+        for (const child of children) {
+          collect(child, levelsLeft - 1)
         }
       }
 
@@ -2676,11 +2869,23 @@ const handleCommand = async (
         // (we want its descendants); start the descent from each child at the
         // requested depth so depth=0 yields the page's immediate children.
         for (const root of roots) {
-          if ('children' in root) {
-            for (const child of (root as ChildrenMixin)
-              .children) {
-              collect(child, scanDepth)
+          // A root is a node too: listing its children reads it, so a root
+          // that has gone stale degrades like any other node instead of
+          // aborting the scan of the roots beside it.
+          try {
+            if ('children' in root) {
+              for (const child of (root as ChildrenMixin)
+                .children) {
+                collect(child, scanDepth)
+              }
             }
+          } catch (err) {
+            skipped.push(
+              'search: skipped the children of ' +
+                idOf(root) +
+                ': ' +
+                messageOf(err),
+            )
           }
         }
       }
@@ -2689,104 +2894,131 @@ const handleCommand = async (
       // is cheap and always present; the reverse-lookup metadata + characters
       // are attached only when hinted (B3/B4) so the server's buildMatcher can
       // filter and projectNode can map `characters`.
+      // A candidate that cannot be READ is skipped and named (into `skipped`
+      // above), never thrown: one broken node costs one candidate, not the
+      // scan.
       const candidates: Record<string, unknown>[] = []
       for (const fn of scanned) {
-        const candidate = toCandidate(fn)
+        try {
+          const candidate = toCandidate(fn)
 
-        if (needsEnrich) {
-          // B4 — characters: TEXT nodes expose their text content as a flat
-          // string for copy-inventory scans (non-text nodes leave it undefined).
-          if (collectCharacters && fn.type === 'TEXT') {
-            candidate.characters = (
-              fn as TextNode
-            ).characters
-          }
-
-          // B3 — instancesOf / componentKey: resolve the INSTANCE's main
-          // component (async). `instancesOf` matches by the main component's
-          // NAME; `componentKey` matches by its KEY. Failures degrade silently
-          // (the candidate simply won't match those keys).
-          if (
-            collectComponentRef &&
-            fn.type === 'INSTANCE'
-          ) {
-            const main = await (fn as InstanceNode)
-              .getMainComponentAsync()
-              .catch(() => null)
-            if (main) {
-              candidate.componentKey = main.key
-              candidate.instancesOf = main.name
+          if (needsEnrich) {
+            // B4 — characters: TEXT nodes expose their text content as a flat
+            // string for copy-inventory scans (non-text nodes leave it undefined).
+            if (collectCharacters && fn.type === 'TEXT') {
+              candidate.characters = (
+                fn as TextNode
+              ).characters
             }
-          }
 
-          // B3 — styleId: any of the node's style references. The server's
-          // matcher tests a single `styleId`, so expose the bound style ids and
-          // let buildMatcher match if ANY equals the requested id (see match.ts).
-          if (collectStyleId) {
-            const styleIds: string[] = []
-            const g = fn as Partial<{
-              fillStyleId: string | symbol
-              strokeStyleId: string | symbol
-              effectStyleId: string | symbol
-              gridStyleId: string | symbol
-              textStyleId: string | symbol
-            }>
-            for (const key of [
-              'fillStyleId',
-              'strokeStyleId',
-              'effectStyleId',
-              'gridStyleId',
-              'textStyleId',
-            ] as const) {
-              const v = g[key]
-              // figma.mixed is a symbol; only collect concrete string ids.
-              if (typeof v === 'string' && v.length > 0) {
-                styleIds.push(v)
+            // B3 — instancesOf / componentKey: resolve the INSTANCE's main
+            // component (async). `instancesOf` matches by the main component's
+            // NAME; `componentKey` matches by its KEY. Failures degrade silently
+            // (the candidate simply won't match those keys).
+            if (
+              collectComponentRef &&
+              fn.type === 'INSTANCE'
+            ) {
+              const main = await (fn as InstanceNode)
+                .getMainComponentAsync()
+                .catch(() => null)
+              if (main) {
+                candidate.componentKey = main.key
+                candidate.instancesOf = main.name
               }
             }
-            if (styleIds.length > 0) {
-              candidate.styleIds = styleIds
-            }
-          }
 
-          // B3 — variableId: the ids bound on the node via boundVariables.
-          // boundVariables maps a field → VariableAlias{id} (or an array of
-          // them for paints/strokes). Flatten every bound id so the matcher can
-          // match if ANY equals the requested variableId.
-          if (collectVariableId && 'boundVariables' in fn) {
-            const bound = (
-              fn as SceneNode & {
-                boundVariables?: Record<string, unknown>
-              }
-            ).boundVariables
-            if (bound) {
-              const ids: string[] = []
-              const pushAlias = (a: unknown): void => {
-                const id = (a as { id?: string } | null)?.id
-                if (typeof id === 'string') {
-                  ids.push(id)
+            // B3 — styleId: any of the node's style references. The server's
+            // matcher tests a single `styleId`, so expose the bound style ids and
+            // let buildMatcher match if ANY equals the requested id (see match.ts).
+            if (collectStyleId) {
+              const styleIds: string[] = []
+              const g = fn as Partial<{
+                fillStyleId: string | symbol
+                strokeStyleId: string | symbol
+                effectStyleId: string | symbol
+                gridStyleId: string | symbol
+                textStyleId: string | symbol
+              }>
+              for (const key of [
+                'fillStyleId',
+                'strokeStyleId',
+                'effectStyleId',
+                'gridStyleId',
+                'textStyleId',
+              ] as const) {
+                const v = g[key]
+                // figma.mixed is a symbol; only collect concrete string ids.
+                if (typeof v === 'string' && v.length > 0) {
+                  styleIds.push(v)
                 }
               }
-              for (const val of Object.values(bound)) {
-                if (Array.isArray(val)) {
-                  for (const a of val) {
-                    pushAlias(a)
+              if (styleIds.length > 0) {
+                candidate.styleIds = styleIds
+              }
+            }
+
+            // B3 — variableId: the ids bound on the node via boundVariables.
+            // boundVariables maps a field → VariableAlias{id} (or an array of
+            // them for paints/strokes). Flatten every bound id so the matcher can
+            // match if ANY equals the requested variableId.
+            if (
+              collectVariableId &&
+              'boundVariables' in fn
+            ) {
+              const bound = (
+                fn as SceneNode & {
+                  boundVariables?: Record<string, unknown>
+                }
+              ).boundVariables
+              if (bound) {
+                const ids: string[] = []
+                const pushAlias = (a: unknown): void => {
+                  const id = (a as { id?: string } | null)
+                    ?.id
+                  if (typeof id === 'string') {
+                    ids.push(id)
                   }
-                } else {
-                  pushAlias(val)
                 }
-              }
-              if (ids.length > 0) {
-                candidate.variableIds = ids
+                for (const val of Object.values(bound)) {
+                  if (Array.isArray(val)) {
+                    for (const a of val) {
+                      pushAlias(a)
+                    }
+                  } else {
+                    pushAlias(val)
+                  }
+                }
+                if (ids.length > 0) {
+                  candidate.variableIds = ids
+                }
               }
             }
           }
-        }
 
-        candidates.push(candidate)
+          candidates.push(candidate)
+        } catch (err) {
+          // `idOf`, not `fn.id`: the scan read this id once, but the node can
+          // go stale between the walk and the enrichment.
+          skipped.push(
+            'search: skipped ' +
+              idOf(fn) +
+              ': ' +
+              messageOf(err),
+          )
+        }
       }
 
-      return { results: candidates }
+      // warnings[] rides on the SUCCESS reply and is omitted when empty — the
+      // same shape every other degrading read answers with.
+      const searchReply: {
+        results: Record<string, unknown>[]
+        warnings?: string[]
+      } = { results: candidates }
+      if (skipped.length > 0) {
+        searchReply.warnings = skipped
+      }
+      return searchReply
     }
 
     // create_node (M2 single-node): the spec is a FigmaWritePayload already
@@ -2885,6 +3117,10 @@ const handleCommand = async (
       // ledger, which is why it lives out here — the catch below has to undo
       // exactly what this call made, and it can only know that from here.
       const createdIds: string[] = []
+      // Collected across the WHOLE recursion, then answered once on the root's
+      // reply — the only reply the caller sees. Omitted when empty so a clean
+      // build's envelope stays clean.
+      const treeWarnings: string[] = []
       try {
         const treeResult = await createTreeNode(
           treeSpec,
@@ -2893,12 +3129,16 @@ const handleCommand = async (
           treeRefs,
           [],
           createdIds,
+          treeWarnings,
         )
         return {
           id: treeResult.id,
           name: treeResult.name,
           type: treeResult.type,
           ids: createdIds,
+          ...(treeWarnings.length > 0
+            ? { warnings: treeWarnings }
+            : {}),
         }
       } catch (err) {
         // T7: a blocked append (e.g. into a non-SLOT instance descendant)
@@ -3185,10 +3425,24 @@ const handleCommand = async (
       // the returned node's .name. No pre-existing child needed.
       // createSlot is absent from typings ≤1.123.0 — cast + feature-detect.
       // Guard: createSlot is per-component; skip + warn if comp is a COMPONENT_SET.
-      const slotNames = params.slots as string[] | undefined
+      //
+      // B30: an entry may also carry a SPEC (already converted server-side).
+      // The fresh slot is born 100×100 FIXED with an opaque #FFFFFF fill, so a
+      // usable slot otherwise costs two update_node follow-ups. Applying it
+      // here runs the SAME pipeline every other write runs — literal fields,
+      // then post-append fields, then the bindings an inline var()/style()
+      // wrapper asked for. The layout in that spec may be the server's
+      // creation default rather than the caller's (B29); nothing here can or
+      // need tell them apart.
+      const slotEntries = params.slots as
+        | SlotEntry[]
+        | undefined
       const slotsCreated: string[] = []
       const slotsSkipped: string[] = []
-      if (slotNames && slotNames.length > 0) {
+      if (slotEntries && slotEntries.length > 0) {
+        const slotNames = slotEntries.map(
+          e => readSlotEntry(e).name,
+        )
         if (comp.type === 'COMPONENT_SET') {
           for (const name of slotNames) {
             slotsSkipped.push(name)
@@ -3209,20 +3463,16 @@ const handleCommand = async (
               'createSlot unavailable in this Figma version; slot(s) not created',
             )
           } else {
-            for (const name of slotNames) {
+            for (const entry of slotEntries) {
+              const { name, spec } = readSlotEntry(entry)
+              // ONLY createSlot itself decides created-vs-skipped. Once it has
+              // returned, the SLOT is in the document — naming it, claiming it
+              // or applying its spec can all fail without un-creating it, and
+              // reporting it as skipped would send the agent looking for a node
+              // that is really there (and really unnamed).
+              let slot: { name: string } | undefined
               try {
-                const slot = compWithSlot.createSlot!()
-                if (slot && name) slot.name = name
-                // createSlot() returns a node already inside the component;
-                // the local typing is a minimal { name } shape, hence the
-                // cast.
-                if (slot) {
-                  writeScope.claim(
-                    writer,
-                    slot as unknown as BaseNode,
-                  )
-                }
-                slotsCreated.push(name)
+                slot = compWithSlot.createSlot!()
               } catch (e) {
                 slotsSkipped.push(name)
                 ucWarnings.push(
@@ -3231,6 +3481,72 @@ const handleCommand = async (
                     '": ' +
                     String(e),
                 )
+                continue
+              }
+              slotsCreated.push(name)
+              if (!slot) {
+                continue
+              }
+              // Every note this slot produces goes to a LOCAL sink and is
+              // prefixed with the slot's name before joining the reply: N slots
+              // failing the same way would otherwise emit N identical strings
+              // and the agent could not tell which one to fix.
+              const slotWarnings: string[] = []
+              try {
+                if (name) slot.name = name
+                // createSlot() returns a node already inside the component;
+                // the local typing is a minimal { name } shape, hence the
+                // cast.
+                writeScope.claim(
+                  writer,
+                  slot as unknown as BaseNode,
+                )
+              } catch (e) {
+                slotWarnings.push(
+                  'created, but could not be named: ' +
+                    String(e),
+                )
+              }
+              if (spec) {
+                const slotNode =
+                  slot as unknown as SceneNode
+                try {
+                  await applyCommonProperties(
+                    slotNode,
+                    spec,
+                    comp as ParentNode,
+                    slotWarnings,
+                  )
+                  applyPostAppendProperties(
+                    slotNode,
+                    spec,
+                    slotWarnings,
+                  )
+                  // Same order as every other write path: literal first,
+                  // binding second.
+                  await applyWrapperBindings(
+                    slotNode as unknown as BindTargetNode,
+                    spec.bindings,
+                    wrapperBindDeps(),
+                    slotWarnings,
+                  )
+                } catch (e) {
+                  slotWarnings.push(
+                    'created, but its spec could not be fully applied: ' +
+                      String(e),
+                  )
+                }
+                // warn-on-no-op (T7), the same list update_node runs: a field
+                // this node type cannot carry was dropped by the appliers'
+                // capability guards, and on a slot that silence would hide the
+                // headline feature failing (a SLOT without layoutMode would
+                // take the layout nowhere and say nothing).
+                slotWarnings.push(
+                  ...capabilityWarnings(slotNode, spec),
+                )
+              }
+              for (const w of slotWarnings) {
+                ucWarnings.push('slot "' + name + '": ' + w)
               }
             }
           }
@@ -3590,30 +3906,10 @@ const handleCommand = async (
 
       // warn-on-no-op (T7): a patched property that the target node type does
       // not support is dropped by applyCommonProperties' `'X' in node` guards.
-      // On update_node the target is arbitrary, so name the dropped field rather
-      // than skipping silently. (capability key → spec key)
-      const capabilityChecks: [string, string][] = [
-        ['layoutMode', 'layout'],
-        ['fills', 'fills'],
-        ['strokes', 'strokes'],
-        ['effects', 'effects'],
-        ['opacity', 'opacity'],
-        ['cornerRadius', 'radius'],
-        ['clipsContent', 'clipsContent'],
-        ['pointCount', 'pointCount'],
-        ['innerRadius', 'innerRadius'],
-        ['sectionContentsHidden', 'sectionContentsHidden'],
-      ]
-      for (const [cap, key] of capabilityChecks) {
-        if (spec[key] !== undefined && !(cap in node)) {
-          warnings.push(
-            key +
-              ' ignored — not supported on a ' +
-              node.type +
-              ' node',
-          )
-        }
-      }
+      // On update_node the target is arbitrary, so name the dropped field
+      // rather than skipping silently. The list is SHARED with the
+      // update_component slot loop — the same silence, the same wording.
+      warnings.push(...capabilityWarnings(node, spec))
 
       // warn-on-no-op (T7, B6): the document/root node's .name is read-only in
       // the plugin API — the setter silently no-ops. Renaming the file is
@@ -3645,6 +3941,13 @@ const handleCommand = async (
       applyPostAppendProperties(
         node as SceneNode,
         spec,
+        warnings,
+      )
+      // Same order as the create path: literal first, binding second.
+      await applyWrapperBindings(
+        node as unknown as BindTargetNode,
+        spec.bindings,
+        wrapperBindDeps(),
         warnings,
       )
 
@@ -3816,105 +4119,27 @@ const handleCommand = async (
       // so node.setBoundVariable('fills', v) would throw. They bind per-paint via
       // figma.variables.setBoundVariableForPaint(paint,'color',variable), then the
       // paint array is re-assigned. Feature-detect it (T7): warn+skip if absent.
+      //
+      // Both routes live in bind-wrappers.ts, because an INLINE `var(name)value`
+      // written through create/update binds through the very same code — one
+      // binding implementation, one set of degrade messages (T8).
       if (field === 'fills' || field === 'strokes') {
-        const paintHost = node as SceneNode & {
-          fills?: readonly Paint[] | typeof figma.mixed
-          strokes?: readonly Paint[]
-        }
-        if (!(field in node)) {
-          warnings.push(
-            'field "' +
-              field +
-              '" is not bindable on ' +
-              node.type,
-          )
-          return { id: node.id, warnings }
-        }
-        const setForPaint = (
-          figma.variables as {
-            setBoundVariableForPaint?: (
-              paint: Paint,
-              f: 'color',
-              v: Variable,
-            ) => Paint
-          }
-        ).setBoundVariableForPaint
-        if (typeof setForPaint !== 'function') {
-          warnings.push(
-            'setBoundVariableForPaint unavailable in this Figma version; paint binding skipped',
-          )
-          return { id: node.id, warnings }
-        }
-        const current =
-          field === 'fills'
-            ? paintHost.fills
-            : paintHost.strokes
-        if (
-          current === figma.mixed ||
-          !Array.isArray(current)
-        ) {
-          warnings.push(
-            field +
-              ' has no bindable paints on ' +
-              node.type +
-              '; paint binding skipped',
-          )
-          return { id: node.id, warnings }
-        }
-        try {
-          const bound = (current as Paint[]).map(paint =>
-            paint.type === 'SOLID'
-              ? setForPaint(paint, 'color', variable)
-              : paint,
-          )
-          if (field === 'fills') {
-            ;(node as GeometryMixin & SceneNode).fills =
-              bound
-          } else {
-            ;(node as GeometryMixin & SceneNode).strokes =
-              bound
-          }
-        } catch (e) {
-          warnings.push(
-            'binding ' +
-              field +
-              ' on ' +
-              node.type +
-              ' failed: ' +
-              String(e),
-          )
-        }
+        bindPaintField(
+          node as unknown as BindTargetNode,
+          field,
+          variable,
+          paintBindDeps(),
+          warnings,
+        )
         return { id: node.id, warnings }
       }
 
-      const bindable = node as SceneNode & {
-        setBoundVariable?: (
-          f: VariableBindableNodeField,
-          v: Variable,
-        ) => void
-      }
-      // Feature-detect/warn (T7): degrade returns {id,warnings}, NEVER {error}.
-      if (typeof bindable.setBoundVariable !== 'function') {
-        warnings.push(
-          'setBoundVariable unavailable in this Figma version; binding skipped',
-        )
-        return { id: node.id, warnings }
-      }
-      try {
-        bindable.setBoundVariable(
-          field as VariableBindableNodeField,
-          variable,
-        )
-      } catch (e) {
-        warnings.push(
-          'field "' +
-            field +
-            '" is not bindable on ' +
-            node.type +
-            ': ' +
-            String(e),
-        )
-      }
+      bindNodeField(
+        node as unknown as BindTargetNode,
+        field,
+        variable,
+        warnings,
+      )
       return { id: node.id, warnings }
     }
 
@@ -5815,12 +6040,7 @@ const handleCommand = async (
         return { error: 'Node not found: ' + nodeId }
       }
       const styleId = params.styleId as string
-      const field = params.field as
-        | 'fill'
-        | 'stroke'
-        | 'text'
-        | 'effect'
-        | 'grid'
+      const field = params.field as StyleField
       // A genuinely invalid styleId is NOT a degrade — surface {error} up front
       // (mirrors the node-not-found guard above).
       const style = await figma.getStyleByIdAsync(styleId)
@@ -5829,13 +6049,7 @@ const handleCommand = async (
       }
       // Wrong-category binding (e.g. a PAINT style via field:'text') is a
       // genuine invalid → {error}, not a warning.
-      const expectedType = {
-        fill: 'PAINT',
-        stroke: 'PAINT',
-        text: 'TEXT',
-        effect: 'EFFECT',
-        grid: 'GRID',
-      }[field]
+      const expectedType = STYLE_TYPES[field]
       if (style.type !== expectedType) {
         return {
           error:
@@ -5850,38 +6064,15 @@ const handleCommand = async (
             ' style',
         }
       }
-      const setterName = {
-        fill: 'setFillStyleIdAsync',
-        stroke: 'setStrokeStyleIdAsync',
-        text: 'setTextStyleIdAsync',
-        effect: 'setEffectStyleIdAsync',
-        grid: 'setGridStyleIdAsync',
-      }[field]
+      // The setter + its degrade wording live in bind-wrappers.ts, shared with
+      // the inline `style(Name)value` write path (T8: one implementation).
       const warnings: string[] = []
-      const styled = node as unknown as Record<
-        string,
-        (id: string) => Promise<void>
-      >
-      if (typeof styled[setterName] !== 'function') {
-        warnings.push(
-          setterName +
-            ' unavailable on ' +
-            node.type +
-            '; style not applied',
-        )
-        return { id: node.id, warnings }
-      }
-      try {
-        await styled[setterName](styleId)
-      } catch (e) {
-        warnings.push(
-          field +
-            ' style not applicable on ' +
-            node.type +
-            ': ' +
-            String(e),
-        )
-      }
+      await applyStyleField(
+        node as unknown as BindTargetNode,
+        field,
+        styleId,
+        warnings,
+      )
       return { id: node.id, warnings }
     }
 

@@ -226,6 +226,28 @@ export const partialNodeSpecSchema = z
 export const NODE_SPEC_PATCH_KEYS: ReadonlySet<string> =
   new Set(Object.keys(partialNodeSpecSchema.shape))
 
+// slotSpecSchema — one `update_component` slot entry in its object form (B30):
+// the slot's NAME plus the spec applied to the freshly created slot. A fresh
+// slot is born 100×100 FIXED and opaque #FFFFFF (its layout is the creation
+// default's — B29), so `fills`/`sizing`/`size` are the fields that make it
+// usable and `layout` is stated only to override the default — but the
+// spec is applied by the SAME write face `update_node`'s patch goes through, so
+// this IS that patch with `name` required. Restating a subset here would be a
+// second, drifting definition of one shape: a field typed here and not there
+// (or vice versa) is exactly how `{strokes: 5}` used to reach the converter and
+// die as an opaque server-side TypeError instead of a clean param rejection.
+// Passthrough is inherited: an unknown key survives so the handler can REPORT
+// it (T7) rather than have zod strip it silently.
+export const slotSpecSchema = partialNodeSpecSchema.extend({
+  name: z.string(),
+})
+
+/** A slot entry: a bare name (back-compat) or a name plus its spec. */
+export const slotEntrySchema = z.union([
+  z.string(),
+  slotSpecSchema,
+])
+
 // treeNodeSpecSchema — create_tree shape: a NodeSpec with recursive
 // TreeNodeSpec children, a { ref } pool reference, or an { id } clone.
 export const treeNodeSpecSchema: z.ZodType<TreeNodeSpec> =

@@ -30,6 +30,18 @@
 // would buy nothing. `depth: -1` means every level, which is what the caller
 // asked for.
 //
+// DEGRADES PER NODE (T7): every step of this walk is a property read on a live
+// node, and a node can refuse — one created inside a component SLOT keeps a
+// stale handle and then throws on EVERY read of it ("The node … with id 'I…;…'
+// does not exist"). Unguarded, one such node inside a subtree took the whole
+// read down: a 978 KB read-back answered 151 bytes of PLUGIN_ERROR. So each
+// node's collection is wrapped on its own — the throw becomes that node's
+// `readError` and every other node comes back whole. Never around the map: a
+// guard that spans the walk loses the read it was added to save. And when the
+// failing node cannot be found again in the exported tree — same stale id, seen
+// from the other side — the failure lands on the ROOT as `readErrors` instead
+// of disappearing (see `applyPatches`).
+//
 // Nodes are seen STRUCTURALLY (`LiveNode`) rather than as `BaseNode` so this is
 // testable without a Figma runtime — the same reason `omitMixed` takes
 // `figma.mixed` as an argument.
@@ -77,14 +89,27 @@ const STYLE_ID_FIELDS = {
   textStyleId: 'text',
 } as const
 
-const childrenOf = (n: LiveNode): LiveNode[] => {
-  if (!('children' in n)) return []
-  const kids = n.children
-  if (kids === null || kids === undefined) return []
-  // `Array.from` rather than a cast: it accepts a real array, an array-like
-  // and an iterable alike, and yields [] for anything else — this runs inside
-  // the export path, where a throw would lose the whole read.
-  return Array.from(kids as ArrayLike<LiveNode>)
+const childrenOf = (
+  n: LiveNode,
+  onError?: (err: unknown) => void,
+): LiveNode[] => {
+  try {
+    if (!('children' in n)) return []
+    const kids = n.children
+    if (kids === null || kids === undefined) return []
+    // `Array.from` rather than a cast: it accepts a real array, an array-like
+    // and an iterable alike, and yields [] for anything else.
+    return Array.from(kids as ArrayLike<LiveNode>)
+  } catch (err) {
+    // The shape `Array.from` was guarding against was never the danger — the
+    // ACCESS is. A node that no longer resolves (the stale handle a slot-child
+    // create hands back) throws on every property read, `children` among them,
+    // and this runs inside the export path, where a throw loses the whole
+    // read. The node stays in the walk and its own patch names the failure, so
+    // the subtree missing from here is reported rather than quietly absent.
+    onError?.(err)
+    return []
+  }
 }
 
 /**
@@ -92,17 +117,23 @@ const childrenOf = (n: LiveNode): LiveNode[] => {
  *
  * `depth: 0` is the root alone, `N` is the root plus N levels, `-1` is all of
  * them.
+ *
+ * `onError` is called with the node whose children could not be listed; the
+ * walk continues past it either way.
  */
 export const nodesWithin = (
   root: LiveNode,
   depth: number,
+  onError?: (node: LiveNode, err: unknown) => void,
 ): LiveNode[] => {
   const out: LiveNode[] = []
   const walk = (n: LiveNode, remaining: number): void => {
     out.push(n)
     if (remaining === 0) return
     const next = remaining < 0 ? remaining : remaining - 1
-    for (const child of childrenOf(n)) {
+    for (const child of childrenOf(n, err =>
+      onError?.(n, err),
+    )) {
       walk(child, next)
     }
   }
@@ -248,6 +279,37 @@ export const syncPatch = (
     patch.strokeMiterLimit = node.strokeMiterLimit
   }
 
+  // Per-side stroke weights (B27) — only when the four sides DIFFER.
+  //
+  // A node whose sides differ reports `figma.mixed` for `strokeWeight`, so the
+  // uniform field cannot describe it at all: without these four the read of a
+  // `stroke([0,0,1,0])` divider says either nothing or the wrong thing, and
+  // writing that read back erases the rule. Only frame-like and RECTANGLE
+  // nodes carry them (IndividualStrokesMixin), hence the property probe.
+  //
+  // Uniform sides are deliberately NOT patched: `strokeWeight` already says it,
+  // the read face emits the plain number as the canonical form, and four extra
+  // numbers on every stroked node in a large read is the T4 cost this module
+  // stays clear of. (These are plain numbers — never `figma.mixed` — so no
+  // Symbol can reach the wire through them.)
+  if ('strokeTopWeight' in node) {
+    const sides = [
+      node.strokeTopWeight,
+      node.strokeRightWeight,
+      node.strokeBottomWeight,
+      node.strokeLeftWeight,
+    ]
+    if (
+      sides.every(w => typeof w === 'number') &&
+      !sides.every(w => w === sides[0])
+    ) {
+      patch.strokeTopWeight = sides[0]
+      patch.strokeRightWeight = sides[1]
+      patch.strokeBottomWeight = sides[2]
+      patch.strokeLeftWeight = sides[3]
+    }
+  }
+
   // pointCount (POLYGON + STAR) and innerRadius (STAR). Feature-detected by
   // PROPERTY, which is robust to the POLYGON vs REGULAR_POLYGON export-type
   // name difference.
@@ -373,13 +435,83 @@ const resolveNames = async (
   if (resolve === undefined) return out
   await Promise.all(
     [...new Set(ids)].map(async id => {
-      const name = await resolve(id).catch(() => undefined)
+      // try/catch, not `.catch()`: a resolver can throw SYNCHRONOUSLY (the
+      // Figma call refusing before it ever returns a promise), and there is no
+      // promise to attach a handler to when it does. One id that cannot be
+      // named loses that name and nothing else.
+      let name: string | undefined
+      try {
+        name = await resolve(id)
+      } catch {
+        return
+      }
       if (name !== undefined) {
         out.set(id, name)
       }
     }),
   )
   return out
+}
+
+/** The node's id, or undefined when it cannot even be identified. */
+const idOf = (n: LiveNode): string | undefined => {
+  try {
+    return typeof n.id === 'string' ? n.id : undefined
+  } catch {
+    // A patch is merged BY id, so there is nothing to attach to a node whose
+    // id is unreadable — it drops out exactly as an id-less node always has.
+    return undefined
+  }
+}
+
+/** One node's collected state, before the async halves land on it. */
+type Pending = {
+  node: LiveNode
+  id: string
+  patch: Patch
+  styleIds: Record<string, string>
+  variableIds: string[]
+}
+
+/**
+ * One node's synchronous collection — guarded PER NODE (T7).
+ *
+ * The guard is here and not around the walk on purpose: `syncPatch`,
+ * `styleIdsOf` and `variableIdsOf` are all plain property reads, and a node
+ * that no longer resolves throws on every one of them. Wrapping the whole map
+ * would trade a lost read for a lost read; wrapping one node costs one node.
+ * The failure becomes a field, so the caller learns WHICH node it lost.
+ */
+const collectOne = (
+  node: LiveNode,
+  id: string,
+  mixed: symbol,
+  walkError: string | undefined,
+): Pending => {
+  try {
+    const patch = syncPatch(node, mixed)
+    if (walkError !== undefined) {
+      patch.readError = walkError
+    }
+    return {
+      node,
+      id,
+      patch,
+      styleIds: styleIdsOf(node),
+      variableIds: variableIdsOf(node),
+    }
+  } catch (err) {
+    // `readError` alone: whatever `syncPatch` had gathered before it threw is
+    // not reachable from out here, and half a patch off a node that cannot be
+    // read is worth less than the name of what went wrong.
+    return {
+      node,
+      id,
+      patch: { readError: String(err) },
+      styleIds: {},
+      variableIds: [],
+    }
+  }
 }
 
 /**
@@ -396,21 +528,26 @@ export const collectPatches = async (
   depth: number,
   deps: EnrichDeps,
 ): Promise<Map<string, Patch>> => {
-  const pending = nodesWithin(root, depth)
-    .map(node => ({
-      node,
-      id: typeof node.id === 'string' ? node.id : undefined,
-    }))
+  // A node whose children could not be listed is still a node in the read; the
+  // error is held here and lands on its own patch below, beside whatever of
+  // that node WAS readable.
+  const walkErrors = new Map<LiveNode, string>()
+  const pending = nodesWithin(root, depth, (node, err) => {
+    walkErrors.set(node, String(err))
+  })
+    .map(node => ({ node, id: idOf(node) }))
     .filter(
       (p): p is { node: LiveNode; id: string } =>
         p.id !== undefined,
     )
-    .map(p => ({
-      ...p,
-      patch: syncPatch(p.node, deps.mixed),
-      styleIds: styleIdsOf(p.node),
-      variableIds: variableIdsOf(p.node),
-    }))
+    .map(p =>
+      collectOne(
+        p.node,
+        p.id,
+        deps.mixed,
+        walkErrors.get(p.node),
+      ),
+    )
 
   const [styleNames, variableNames] = await Promise.all([
     resolveNames(
@@ -425,10 +562,20 @@ export const collectPatches = async (
 
   await Promise.all(
     pending.map(async p => {
-      const main = await mainComponentOf(p.node)
-      if (main !== null && main !== undefined) {
-        p.patch.componentKey = main.key
-        p.patch.componentRemote = main.remote
+      try {
+        const main = await mainComponentOf(p.node)
+        if (main !== null && main !== undefined) {
+          p.patch.componentKey = main.key
+          p.patch.componentRemote = main.remote
+        }
+      } catch (err) {
+        // Same rule as the sync half, and it needs its own guard: reaching
+        // `getMainComponentAsync` reads the node, so an unreachable INSTANCE
+        // throws here — synchronously, before there is a promise to reject —
+        // even when every other node in the read resolved fine.
+        if (p.patch.readError === undefined) {
+          p.patch.readError = String(err)
+        }
       }
     }),
   )
@@ -481,22 +628,37 @@ export const collectPatches = async (
  *
  * Bounded by the same `depth` the patches were collected at — past it there is
  * nothing to apply, and the exported subtree can be far larger than the read.
+ *
+ * A FAILURE THAT CANNOT BE MERGED IS STILL REPORTED. The two sides are keyed by
+ * id, and the id the live walk reads is not always the id the export carries:
+ * the same slot-nested node that throws on every read also answers the STALE
+ * form of its id (`I<creationId>;<child>`) while the export names it by the
+ * canonical ancestor chain. The patch then matches nothing, and a silently
+ * dropped `readError` is exactly the quiet failure this whole module exists to
+ * remove — so unattachable failures are collected onto the ROOT as `readErrors`
+ * (`"<id the walk saw>: <message>"`). Distinct field, distinct claim:
+ * `readError` says THIS node failed, `readErrors` says a node below me failed
+ * and I could not tell you which one it is in this tree.
+ *
+ * Only failures get the fallback. A clean patch that finds no home is dropped
+ * as it always has been — it carries nothing the caller needs to act on.
  */
 export const applyPatches = (
   doc: Record<string, unknown>,
   patches: Map<string, Patch>,
   depth: number,
 ): void => {
+  const merged = new Set<string>()
   const walk = (
     n: Record<string, unknown>,
     remaining: number,
   ): void => {
+    const id = typeof n.id === 'string' ? n.id : undefined
     const patch =
-      typeof n.id === 'string'
-        ? patches.get(n.id)
-        : undefined
-    if (patch !== undefined) {
+      id !== undefined ? patches.get(id) : undefined
+    if (patch !== undefined && id !== undefined) {
       Object.assign(n, patch)
+      merged.add(id)
     }
     if (remaining === 0) return
     const next = remaining < 0 ? remaining : remaining - 1
@@ -508,6 +670,20 @@ export const applyPatches = (
     }
   }
   walk(doc, depth)
+
+  const unattached: string[] = []
+  for (const [id, patch] of patches) {
+    if (merged.has(id)) continue
+    const failure = patch.readError
+    if (typeof failure !== 'string') continue
+    unattached.push(id + ': ' + failure)
+  }
+  if (unattached.length > 0) {
+    const existing = doc.readErrors
+    doc.readErrors = Array.isArray(existing)
+      ? [...existing, ...unattached]
+      : unattached
+  }
 }
 
 /**

@@ -143,6 +143,38 @@ describe('handleInspect (rebuilt — Rule B)', () => {
     expect(parsed.view.contextSummary).toBe('purpose: CTA')
     expect(parsed.view.context).toBeUndefined()
   })
+
+  // B31 — the point of the per-node degrade is that the agent LEARNS a node
+  // was unreachable. A profile that hid it would hand back a node that merely
+  // looks thin, which is the failure the field exists to prevent — so
+  // `readError` is outside projection, exactly like `contextSummary` above.
+  it('carries readError through a profile narrow (outside projection)', async () => {
+    const res = await handleInspect(
+      { nodeId: 'I3:1;4:5;6:7', profile: 'minimal' },
+      stubClient({
+        reply: {
+          id: 'I3:1;4:5;6:7',
+          type: 'FRAME',
+          name: 'In a slot',
+          readError:
+            'Error: in getSharedPluginData: The node (instance sublayer or table cell) with id "I3:1;4:5;6:7" does not exist',
+        },
+      }),
+    )
+    const parsed = YAML.parse(res.content[0].text) as {
+      view: Record<string, unknown>
+    }
+    expect(parsed.view.readError).toContain(
+      'does not exist',
+    )
+    // …and the narrowing still did its job on everything else.
+    expect(Object.keys(parsed.view).sort()).toEqual([
+      'id',
+      'name',
+      'readError',
+      'type',
+    ])
+  })
 })
 
 // ─── multi-selection inspect (M2 chunk F) ─────────────────────────────────────

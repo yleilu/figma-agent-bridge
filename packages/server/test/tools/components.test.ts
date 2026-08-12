@@ -275,8 +275,8 @@ describe('handleUpdateComponent', () => {
     )
     expect(sent[0].command).toBe(COMMANDS.UPDATE_COMPONENT)
     expect(sent[0].params?.slots).toEqual([
-      'content',
-      'footer',
+      { name: 'content', layout: { mode: 'V' } },
+      { name: 'footer', layout: { mode: 'V' } },
     ])
   })
 
@@ -377,6 +377,212 @@ describe('handleUpdateComponent', () => {
     expect(out.slotsCreated).toEqual([])
     expect(out.slotsSkipped).toEqual(['header', 'body'])
     expect(out.warnings[0]).toContain('COMPONENT_SET')
+  })
+
+  // ── B30: a slot entry carries a spec ───────────────────────────────────────
+  // The object form goes through the SAME write face create_node/update_node
+  // use, so what reaches the plugin is a CONVERTED payload (Figma objects, not
+  // atom strings). The bare string IS `{name}` (B29) — one entry, one meaning,
+  // whichever way it is spelled — so it is converted like one.
+
+  it('B30/B29: a bare name and its {name} twin reach the plugin identically', async () => {
+    const sent: Sent[] = []
+    await handleUpdateComponent(
+      {
+        componentId: 'c:1',
+        slots: ['content', { name: 'footer' }],
+      },
+      stubClient({
+        sent,
+        reply: {
+          id: 'c:1',
+          properties: [],
+          slotsCreated: ['content', 'footer'],
+          slotsSkipped: [],
+          warnings: [],
+        },
+      }),
+    )
+    const slots = sent[0].params?.slots as Record<
+      string,
+      unknown
+    >[]
+    expect(slots[0]).toEqual({
+      name: 'content',
+      layout: { mode: 'V' },
+    })
+    expect(slots[1]).toEqual({
+      name: 'footer',
+      layout: { mode: 'V' },
+    })
+  })
+
+  it('B30: an object slot entry reaches the plugin CONVERTED (atoms parsed, layout flattened)', async () => {
+    const sent: Sent[] = []
+    await handleUpdateComponent(
+      {
+        componentId: 'c:1',
+        slots: [
+          {
+            name: 'Content',
+            layout: {
+              mode: 'V',
+              gap: 8,
+              pad: [16, 16, 16, 16],
+            },
+            fills: ['#141B2E'],
+            sizing: ['FILL', 'HUG'],
+            size: [320, 200],
+          },
+        ],
+      },
+      stubClient({
+        sent,
+        reply: {
+          id: 'c:1',
+          properties: [],
+          slotsCreated: ['Content'],
+          slotsSkipped: [],
+          warnings: [],
+        },
+      }),
+    )
+    const slot = (
+      sent[0].params?.slots as Record<string, unknown>[]
+    )[0]
+    expect(slot.name).toBe('Content')
+    // layout → the flat plugin-side shape applyLayout consumes.
+    expect(slot.layout).toEqual({
+      mode: 'V',
+      spacing: 8,
+      padding: [16, 16, 16, 16],
+    })
+    // fills → parsed Paint objects, never the atom string.
+    const fills = slot.fills as { type: string }[]
+    expect(fills[0].type).toBe('SOLID')
+    expect(fills[0]).not.toBe('#141B2E')
+    expect(slot.sizing).toEqual(['FILL', 'HUG'])
+    expect(slot.size).toEqual([320, 200])
+  })
+
+  it('B30: an inline var() wrapper on a slot fill carries its binding intent (I39)', async () => {
+    const sent: Sent[] = []
+    await handleUpdateComponent(
+      {
+        componentId: 'c:1',
+        slots: [
+          {
+            name: 'Content',
+            fills: ['var(surface/2)#141B2E'],
+          },
+        ],
+      },
+      stubClient({
+        sent,
+        reply: {
+          id: 'c:1',
+          properties: [],
+          slotsCreated: ['Content'],
+          slotsSkipped: [],
+          warnings: [],
+        },
+      }),
+    )
+    const slot = (
+      sent[0].params?.slots as Record<string, unknown>[]
+    )[0]
+    expect(slot.bindings).toEqual([
+      {
+        kind: 'var',
+        name: 'surface/2',
+        field: 'fills',
+        index: 0,
+      },
+    ])
+  })
+
+  it('B30 (T7): a key the write face does not know is REPORTED, attributed to its slot', async () => {
+    const result = await handleUpdateComponent(
+      {
+        componentId: 'c:1',
+        slots: [{ name: 'Content', width: 320 }],
+      },
+      stubClient({
+        reply: {
+          id: 'c:1',
+          properties: [],
+          slotsCreated: ['Content'],
+          slotsSkipped: [],
+          warnings: [],
+        },
+      }),
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const out = JSON.parse(result.content[0].text) as {
+      slotsCreated: string[]
+      warnings: string[]
+    }
+    // The slot still landed — an unknown key never costs the slot.
+    expect(out.slotsCreated).toEqual(['Content'])
+    expect(out.warnings).toHaveLength(1)
+    expect(out.warnings[0]).toContain('slot "Content"')
+    expect(out.warnings[0]).toContain('`width`')
+    expect(out.warnings[0]).toContain('size')
+  })
+
+  it('B30 (T7): a server-side conversion warning MERGES into the reply warnings, keeping the plugin ones', async () => {
+    const result = await handleUpdateComponent(
+      {
+        componentId: 'c:1',
+        slots: [
+          {
+            name: 'Content',
+            // GRID-only keys on a V mode — the writer's own lossy-conversion note.
+            layout: { mode: 'V', rows: 2, cols: 2 },
+          },
+        ],
+      },
+      stubClient({
+        reply: {
+          id: 'c:1',
+          properties: [],
+          slotsCreated: ['Content'],
+          slotsSkipped: [],
+          warnings: ['a warning the plugin raised'],
+        },
+      }),
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      warnings: string[]
+    }
+    expect(out.warnings).toHaveLength(2)
+    expect(out.warnings[0]).toBe(
+      'a warning the plugin raised',
+    )
+    expect(out.warnings[1]).toContain('slot "Content"')
+    expect(out.warnings[1]).toContain('GRID-only')
+  })
+
+  it('B30: no slots param converts nothing and adds no warnings', async () => {
+    const sent: Sent[] = []
+    const result = await handleUpdateComponent(
+      { componentId: 'c:1', description: 'A card' },
+      stubClient({
+        sent,
+        reply: {
+          id: 'c:1',
+          properties: [],
+          slotsCreated: [],
+          slotsSkipped: [],
+          warnings: [],
+        },
+      }),
+    )
+    expect(sent[0].params?.slots).toBeUndefined()
+    const out = JSON.parse(result.content[0].text) as {
+      warnings: string[]
+    }
+    expect(out.warnings).toEqual([])
   })
 
   // B3: targetNodeId + field binding — handler threads them to the plugin

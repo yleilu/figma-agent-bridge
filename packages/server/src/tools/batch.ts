@@ -19,7 +19,7 @@
 //   results: [{ index, op, ok, result?, error?, warnings? }] — one per op, in order
 //   errors:  [{ index, op, error, code }]              — the failures, summarized
 // `warnings?` carries the SAME server-side writer warnings a direct call would
-// emit (e.g. update_node per-side stroke collapse), so a batched op is not a
+// emit (e.g. GRID-only `layout` keys on an H/V mode), so a batched op is not a
 // silent lossy conversion (D3/T7).
 // A SERVER-side conversion failure (e.g. a malformed atom), a failed entry
 // VALIDATION or a missing op is recorded as that entry's error WITHOUT being
@@ -28,7 +28,10 @@
 
 import { z } from 'zod'
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { NodeSpecPatch } from '@figma-agent-bridge/shared/node-spec'
+import type {
+  NodeSpecPatch,
+  SlotEntry,
+} from '@figma-agent-bridge/shared/node-spec'
 import {
   applyStyleParamsSchema,
   batchOpSchema,
@@ -64,6 +67,7 @@ import {
 } from '@figma-agent-bridge/shared/tool-params'
 import type { ScopedFigmaClient } from '../figma-client'
 import {
+  slotEntryToFigma,
   specToFigma,
   unknownPatchKeyWarnings,
 } from '../serialize/node-spec-writer'
@@ -91,7 +95,7 @@ type BatchEntry = Record<string, unknown> & { op?: string }
 type ConvertedOp = {
   op: string
   params: Record<string, unknown>
-  /** Server-side lossy-conversion warnings (e.g. per-side stroke collapse). */
+  /** Server-side lossy-conversion warnings (e.g. an unbindable wrapper). */
   warnings?: string[]
 }
 
@@ -304,13 +308,32 @@ const convertUpdateNode = (
     patch?: NodeSpecPatch
   }
   // D3/T7: thread the writer warnings sink so a batched update_node surfaces the
-  // SAME per-op warnings (e.g. per-side stroke collapse, an unknown patch key)
+  // SAME per-op warnings (e.g. GRID-only layout keys, an unknown patch key)
   // a direct update_node does — no longer a silent lossy conversion.
   const spec = specToFigma(patch ?? {}, warnings)
   warnings?.push(
     ...unknownPatchKeyWarnings(patch ?? {}, spec),
   )
   return { nodeId, spec }
+}
+
+const convertUpdateComponent = (
+  params: Record<string, unknown>,
+  warnings?: string[],
+): Record<string, unknown> => {
+  // B30: a slot entry may carry a spec, and a batched update_component must
+  // convert it on the SAME write face the standalone handler uses — otherwise
+  // atom strings would reach the plugin as-is and be assigned raw.
+  const { slots } = params as { slots?: SlotEntry[] }
+  if (slots === undefined) {
+    return params
+  }
+  return {
+    ...params,
+    slots: slots.map(entry =>
+      slotEntryToFigma(entry, warnings),
+    ),
+  }
 }
 
 const convertCreateStyles = (
@@ -486,7 +509,7 @@ const convertUpdateVariables = (
 /**
  * Ops that need grammar atom → Figma object conversion before the plugin runs.
  * Each converter takes an optional warnings sink so a lossy conversion (e.g.
- * per-side stroke collapse on update_node) surfaces per-op (D3/T7).
+ * a `var()` wrapper the surface cannot bind) surfaces per-op (D3/T7).
  */
 const CONVERTERS: Record<
   string,
@@ -496,6 +519,7 @@ const CONVERTERS: Record<
   ) => Record<string, unknown>
 > = {
   [COMMANDS.UPDATE_NODE]: convertUpdateNode,
+  [COMMANDS.UPDATE_COMPONENT]: convertUpdateComponent,
   [COMMANDS.CREATE_STYLES]: convertCreateStyles,
   [COMMANDS.UPDATE_STYLES]: convertUpdateStyles,
   [COMMANDS.DELETE_STYLES]: convertDeleteStyles,
@@ -658,8 +682,8 @@ export const handleBatch = async (
             }
           | undefined
         const op = effectiveOps[index] ?? null
-        // Server-side writer warnings for this op (e.g. update_node per-side
-        // stroke collapse), collected during conversion (D3/T7).
+        // Server-side writer warnings for this op (e.g. update_node GRID-only
+        // layout keys on an H/V mode), collected during conversion (D3/T7).
         const opWarnings = converted[index]?.warnings
         if (reply === undefined) {
           return {

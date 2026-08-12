@@ -78,6 +78,83 @@ const mockResolveInstanceProps = (
   return { resolved, warnings }
 }
 
+// FAITHFUL mirror of the figma-plugin bind-wrappers helper (I39): a converted
+// spec carries `bindings[]` — the NAME each inline var()/style() wrapper named —
+// and the plugin resolves each name against the document AFTER the literal has
+// landed, degrading an unresolvable name to ONE warning (never an abort). The
+// mock resolves against its own document fixtures (the get_variables /
+// get_styles cases below) and keeps the warning wording byte-faithful, so a
+// behavioural test asserts the real plugin's contract.
+// Both names this mock document defines: the get_variables collection entry,
+// and the name the card fixture's bound fill reads back as (bindingNames) —
+// which is what makes a read → write round-trip re-bind here.
+const MOCK_VARIABLE_NAMES = [
+  'Brand/Primary',
+  'surface/card-bg',
+]
+
+const MOCK_STYLE_NAMES: Record<string, string[]> = {
+  paint: ['Brand/Primary'],
+  text: ['Heading'],
+  effect: ['Card Shadow'],
+  grid: ['Layout/Columns'],
+}
+
+const MOCK_STYLE_CATEGORIES: Record<string, string> = {
+  fill: 'paint',
+  stroke: 'paint',
+  text: 'text',
+  effect: 'effect',
+  grid: 'grid',
+}
+
+type MockBinding = {
+  kind: 'var' | 'style'
+  name: string
+  field: string
+  index?: number
+}
+
+const mockApplyWrapperBindings = (
+  bindings: unknown,
+): { applied: MockBinding[]; warnings: string[] } => {
+  const applied: MockBinding[] = []
+  const warnings: string[] = []
+  if (!Array.isArray(bindings)) {
+    return { applied, warnings }
+  }
+  for (const binding of bindings as MockBinding[]) {
+    if (binding.kind === 'var') {
+      if (!MOCK_VARIABLE_NAMES.includes(binding.name)) {
+        warnings.push(
+          'var(' +
+            binding.name +
+            '): no variable with that name — literal applied unbound',
+        )
+        continue
+      }
+      applied.push(binding)
+      continue
+    }
+    const category = MOCK_STYLE_CATEGORIES[binding.field]
+    if (
+      category === undefined ||
+      !MOCK_STYLE_NAMES[category].includes(binding.name)
+    ) {
+      warnings.push(
+        'style(' +
+          binding.name +
+          '): no ' +
+          (category ?? binding.field) +
+          ' style with that name — literal applied unbound',
+      )
+      continue
+    }
+    applied.push(binding)
+  }
+  return { applied, warnings }
+}
+
 type MockPluginOptions = {
   relayUrl: string
   channel: string
@@ -175,6 +252,269 @@ export const createMockPlugin = (
   // when present, and the get_components/get_styles fixtures below carry a raw
   // `description` (+ optional `context`) so the read surfacing is exercised e2e.
   const sharedContext = new Map<string, string>()
+
+  // APPLIED NODE STATE — the fields a write LANDS, so a later read returns what
+  // the write changed rather than what the request said. Same shape and
+  // lifetime as `sharedContext` above (keyed by node id, per-plugin-instance).
+  //
+  // Echoing the request payload back into the reply proves only that the server
+  // sent it: a plugin that applied nothing at all would look identical. So the
+  // fields whose whole point is surviving to the next read are modelled here
+  // and merged onto the fixture by `get_node`.
+  const appliedState = new Map<
+    string,
+    Record<string, unknown>
+  >()
+
+  /**
+   * Model the plugin's stroke apply (B27), including what the EXPORT then
+   * reports back.
+   *
+   * `strokeWeights` lands on IndividualStrokesMixin's four sides; the node's
+   * own `strokeWeight` is `figma.mixed` once they differ, which is exactly when
+   * the plugin's enrichment patches the four flat Plugin-API keys onto the
+   * exported node (and only then — equal sides are the uniform field).
+   */
+  const applyStrokeState = (
+    id: string,
+    spec: Record<string, unknown>,
+  ): void => {
+    const state = appliedState.get(id) ?? {}
+    if (Array.isArray(spec.strokes)) {
+      state.strokes = spec.strokes
+    }
+    if (typeof spec.strokeWeight === 'number') {
+      state.strokeWeight = spec.strokeWeight
+      delete state.strokeTopWeight
+      delete state.strokeRightWeight
+      delete state.strokeBottomWeight
+      delete state.strokeLeftWeight
+    }
+    if (Array.isArray(spec.strokeWeights)) {
+      const [top, right, bottom, left] =
+        spec.strokeWeights as number[]
+      if (right === top && bottom === top && left === top) {
+        state.strokeWeight = top
+      } else {
+        delete state.strokeWeight
+        state.strokeTopWeight = top
+        state.strokeRightWeight = right
+        state.strokeBottomWeight = bottom
+        state.strokeLeftWeight = left
+      }
+    }
+    if (Object.keys(state).length > 0) {
+      appliedState.set(id, state)
+    }
+  }
+
+  // SLOT NODES minted by update_component (B30), keyed by id → the raw export a
+  // later get_node serves. Same reasoning as appliedState above: the reply's
+  // echo proves only that the server sent the spec, so the slot's LANDED state
+  // is modelled here and read back through the ordinary read path.
+  const createdSlots = new Map<
+    string,
+    Record<string, unknown>
+  >()
+
+  /**
+   * Model `component.createSlot()` plus the apply pipeline the fresh slot then
+   * runs (B30).
+   *
+   * A created slot is born 100×100 FIXED, opaque #FFFFFF, no auto-layout
+   * (live-verified — docs/reference/figma-plugin-api.md). The CONVERTED payload
+   * is applied on top, in the plugin's own order, and the RESULT is the export
+   * a later `get_node` serves — so an e2e asserts what landed, not what was
+   * asked for.
+   *
+   * `autoLayoutParent: false` models a component that is not an auto-layout
+   * frame: `layoutSizing* = FILL` on its direct child is refused by Figma
+   * ("FILL can only be set on children of auto-layout frames"), which the
+   * plugin degrades to a warning while the slot stays created and named. It is
+   * FILL alone that is refused — `FIXED` lands whatever the parent is, which
+   * matters now that a slot stating a `size` is pinned FIXED by the creation
+   * default (B29) and would otherwise be warned about here for a refusal Figma
+   * never makes.
+   *
+   * Every note goes into a LOCAL sink and is prefixed with the slot's name on
+   * the way out, exactly as the plugin's loop does — N slots failing the same
+   * way must not emit N identical strings.
+   *
+   * The id is DETERMINISTIC (`slot:<name>`) — a mock affordance, since the real
+   * plugin's ids come from Figma — so a test can address the node the write
+   * created without a mock-only echo in the reply.
+   */
+  const createSlotNode = (
+    name: string,
+    spec: Record<string, unknown> | undefined,
+    warnings: string[],
+    autoLayoutParent: boolean,
+  ): string => {
+    const node: Record<string, unknown> = {
+      id: `slot:${name}`,
+      name: name === '' ? 'Slot' : name,
+      type: 'SLOT',
+      absoluteBoundingBox: {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 100,
+      },
+      fills: [
+        {
+          type: 'SOLID',
+          visible: true,
+          opacity: 1,
+          blendMode: 'NORMAL',
+          color: { r: 1, g: 1, b: 1, a: 1 },
+        },
+      ],
+      strokes: [],
+      strokeWeight: 0,
+      strokeAlign: 'INSIDE',
+      layoutMode: 'NONE',
+      layoutSizingHorizontal: 'FIXED',
+      layoutSizingVertical: 'FIXED',
+      children: [],
+    }
+    const slotId = node.id as string
+    if (spec === undefined) {
+      createdSlots.set(slotId, node)
+      return slotId
+    }
+    // applyCommonProperties' share: name, size, fills.
+    if (typeof spec.name === 'string') {
+      node.name = spec.name
+    }
+    if (Array.isArray(spec.size)) {
+      const [w, h] = spec.size as number[]
+      node.absoluteBoundingBox = {
+        x: 0,
+        y: 0,
+        width: w,
+        height: h,
+      }
+    }
+    if (Array.isArray(spec.fills)) {
+      node.fills = spec.fills
+    }
+    // …and the layout, in the export vocabulary a read consumes.
+    const layout = spec.layout as
+      | {
+          mode?: string
+          spacing?: number
+          padding?: number[]
+          align?: string[]
+          wrap?: boolean
+        }
+      | undefined
+    if (layout !== undefined) {
+      node.layoutMode =
+        layout.mode === 'H'
+          ? 'HORIZONTAL'
+          : layout.mode === 'V'
+            ? 'VERTICAL'
+            : layout.mode === 'GRID'
+              ? 'GRID'
+              : 'NONE'
+      if (typeof layout.spacing === 'number') {
+        node.itemSpacing = layout.spacing
+      }
+      if (Array.isArray(layout.padding)) {
+        const [pt, pr, pb, pl] = layout.padding
+        node.paddingTop = pt
+        node.paddingRight = pr
+        node.paddingBottom = pb
+        node.paddingLeft = pl
+      }
+      if (Array.isArray(layout.align)) {
+        const [primary, counter] = layout.align
+        node.primaryAxisAlignItems = primary
+        node.counterAxisAlignItems = counter
+      }
+      if (layout.wrap === true) {
+        node.layoutWrap = 'WRAP'
+      }
+    }
+    // applyPostAppendProperties' share: sizing, which is exactly the field a
+    // non-auto-layout parent refuses (T7 degrade, warn and continue).
+    const slotWarnings: string[] = []
+    if (Array.isArray(spec.sizing)) {
+      const [h, v] = spec.sizing as string[]
+      // The plugin assigns horizontal THEN vertical inside one try, so the real
+      // partial case is `['FIXED','FILL']` on a non-auto-layout parent: FIXED
+      // lands on horizontal, FILL throws on vertical, and one warning covers
+      // the pair. This models the two ends — both land, or neither does — which
+      // is exact for every shape a test exercises today (`['FILL','FILL']`,
+      // `['FILL','HUG']`, and the pinned `['FIXED','FIXED']`). The mixed
+      // FIXED-then-FILL shape would land its first axis in Figma and not here;
+      // no test writes it, and the day one does, split the assignment.
+      const refused =
+        !autoLayoutParent && (h === 'FILL' || v === 'FILL')
+      if (refused) {
+        slotWarnings.push(
+          'sizing not applicable on this node (SLOT): Error: FILL can only be set on children of auto-layout frames',
+        )
+      } else {
+        node.layoutSizingHorizontal = h
+        node.layoutSizingVertical = v
+      }
+    }
+    // …then the bindings, literal first exactly as the plugin orders them. An
+    // APPLIED var() binding is modelled the way the file reports one — the
+    // paint carries boundVariables and the node carries the id → name map the
+    // plugin's enrichment adds — so the read emits the wrapper back and the
+    // test can tell a landed binding from a merely-unwarned one.
+    const applied = mockApplyWrapperBindings(spec.bindings)
+    slotWarnings.push(...applied.warnings)
+    const boundNames: Record<string, string> = {}
+    for (const binding of applied.applied) {
+      if (binding.kind !== 'var') {
+        continue
+      }
+      const paints = node[binding.field] as
+        | Record<string, unknown>[]
+        | undefined
+      if (!Array.isArray(paints)) {
+        continue
+      }
+      const varId = `var:mock:${binding.name}`
+      for (const [i, paint] of paints.entries()) {
+        if (
+          binding.index === undefined ||
+          binding.index === i
+        ) {
+          paint.boundVariables = {
+            color: { id: varId, type: 'VARIABLE_ALIAS' },
+          }
+          boundNames[varId] = binding.name
+        }
+      }
+    }
+    if (Object.keys(boundNames).length > 0) {
+      node.bindingNames = { variables: boundNames }
+    }
+    // warn-on-no-op (T7), mirroring the plugin's capabilityWarnings over a
+    // SLOT: SlotNode extends DefaultFrameMixin, so it carries layout / fills /
+    // strokes / effects / opacity / radius / clipsContent and NOT these four.
+    for (const key of [
+      'pointCount',
+      'innerRadius',
+      'sectionContentsHidden',
+      'text',
+    ]) {
+      if (spec[key] !== undefined) {
+        slotWarnings.push(
+          key + ' ignored — not supported on a SLOT node',
+        )
+      }
+    }
+    warnings.push(
+      ...slotWarnings.map(w => `slot "${name}": ${w}`),
+    )
+    createdSlots.set(slotId, node)
+    return slotId
+  }
 
   // L5 timing knobs — TEST INFRASTRUCTURE for the L6 watchdog tests only.
   // `silent` withholds every reply (incl. ping); `delayedCommands` maps a
@@ -320,7 +660,15 @@ export const createMockPlugin = (
         const gnNodeId = cmd.params?.nodeId as
           | string
           | undefined
-        if (gnNodeId === 'remote-inst:1') {
+        // B30: a slot minted by update_component reads back as itself — the
+        // whole point of modelling the apply rather than echoing the payload.
+        const gnSlot =
+          gnNodeId === undefined
+            ? undefined
+            : createdSlots.get(gnNodeId)
+        if (gnSlot !== undefined) {
+          result = { ...gnSlot }
+        } else if (gnNodeId === 'remote-inst:1') {
           result = {
             id: 'remote-inst:1',
             name: 'LibraryButton',
@@ -340,6 +688,10 @@ export const createMockPlugin = (
         } else {
           result = {
             ...cardFixture,
+            // What earlier writes actually landed on this node — merged AFTER
+            // the fixture so a read reflects the file, not the fixture's
+            // starting state.
+            ...(appliedState.get(cardFixture.id) ?? {}),
             ...(sharedContext.get(cardFixture.id)
               ? {
                   context: sharedContext.get(
@@ -864,6 +1216,12 @@ export const createMockPlugin = (
             sharedContext.set(unId, spec.context)
           }
         }
+        // The stroke fields LAND on the node (B27) — see applyStrokeState. A
+        // node that cannot carry them is handled in the incompat branch below,
+        // which warns instead of applying.
+        if (!unId.startsWith('incompat:')) {
+          applyStrokeState(unId, spec)
+        }
         // Mirror the real plugin's warn-on-no-op + degrade behavior on an
         // INCOMPATIBLE target (modeled by an `incompat:` nodeId — a node that
         // lacks layoutMode/fills/etc. capability). 3a: a patched property that
@@ -899,6 +1257,10 @@ export const createMockPlugin = (
             ['opacity', 'opacity'],
             ['cornerRadius', 'radius'],
             ['clipsContent', 'clipsContent'],
+            // A SLICE has no `characters`, and applyTextProperties runs only
+            // for a TEXT node, so a text patch here is a silent no-op unless
+            // named — the row capabilityWarnings gained with B30.
+            ['characters', 'text'],
           ]
           for (const [, label] of capChecks) {
             if (spec[label] !== undefined) {
@@ -909,6 +1271,18 @@ export const createMockPlugin = (
                   ' node',
               )
             }
+          }
+          // B27 per-side stroke weights: the real plugin's applyStrokeWeights
+          // feature-detects IndividualStrokesMixin, then the uniform
+          // strokeWeight, and only warns when a node carries neither — which
+          // is exactly a SLICE. A node that DOES carry the four sides applies
+          // them silently, which is why this lives inside the incompat branch.
+          if (spec.strokeWeights !== undefined) {
+            unWarnings.push(
+              'per-side stroke weights ignored — not supported on a ' +
+                unType +
+                ' node',
+            )
           }
           // constraints warn-on-no-op: the real plugin guards on
           // `'constraints' in node` and warns with this exact wording when the
@@ -935,6 +1309,12 @@ export const createMockPlugin = (
             )
           }
         }
+        // I39: the update path applies bindings in the same order the create
+        // path does — literal first, binding second — and degrades the same way.
+        const unBind = mockApplyWrapperBindings(
+          spec.bindings,
+        )
+        unWarnings.push(...unBind.warnings)
         result = {
           id: unId,
           name: (spec.name as string) ?? 'Card',
@@ -943,6 +1323,7 @@ export const createMockPlugin = (
           // Echo the converted spec so the e2e can assert the parsed paint
           // arrived intact.
           spec,
+          appliedBindings: unBind.applied,
         }
         break
       }
@@ -1190,6 +1571,19 @@ export const createMockPlugin = (
             sharedContext.set(createdId, nodeSpec.context)
           }
         }
+        // …and the same stroke apply the update path models (B27), so a created
+        // node carries the sides it was created with.
+        if (nodeSpec !== undefined && nodeSpec !== null) {
+          applyStrokeState(createdId, nodeSpec)
+        }
+        // I39: bindings are applied AFTER the literal properties, exactly as
+        // buildSingleNode does — an unresolvable name warns and the literal
+        // stands. `appliedBindings` is a MOCK-ONLY echo (like `resolvedBy`
+        // above) so a test can tell a landed binding from a degraded one.
+        const cnBind = mockApplyWrapperBindings(
+          nodeSpec?.bindings,
+        )
+        cnWarnings.push(...cnBind.warnings)
         result = {
           ...echo,
           id: createdId,
@@ -1197,6 +1591,7 @@ export const createMockPlugin = (
           type: createdType,
           parentId,
           warnings: cnWarnings,
+          appliedBindings: cnBind.applied,
           // M14: echo resolvedBy for the INSTANCE create path so tests can
           // assert key-first (remote) vs id-first (local) behavior.
           ...(instanceResolvedBy !== undefined
@@ -1244,6 +1639,14 @@ export const createMockPlugin = (
         // the server can answer the tool-surface `{root, ids[]}`. A `{ ref }`
         // expands to its whole rebuilt subtree; an `{ id }` clone is ONE
         // realized node (its descendants come along, unenumerated).
+        //
+        // I39: every realized node applies ITS OWN bindings as it is built —
+        // the tree path runs through the same buildSingleNode the single create
+        // does, so a wrapper on a child binds exactly like a wrapper on a root,
+        // and a child's degrade lands in the ROOT's warnings (the only reply
+        // the caller sees).
+        const treeApplied: MockBinding[] = []
+        const treeBindWarnings: string[] = []
         const collectIds = (
           node: Record<string, unknown>,
           out: string[],
@@ -1283,6 +1686,11 @@ export const createMockPlugin = (
             return
           }
           mint()
+          const built = mockApplyWrapperBindings(
+            node.bindings,
+          )
+          treeApplied.push(...built.applied)
+          treeBindWarnings.push(...built.warnings)
           const children = node.children as
             | Record<string, unknown>[]
             | undefined
@@ -1314,6 +1722,12 @@ export const createMockPlugin = (
             parentId: treeParentId,
             refs: treeRefs,
             totalNodes: ids.length,
+            // The real plugin answers `warnings` only when the walk produced
+            // any (omitted when clean); `appliedBindings` is the mock-only echo.
+            ...(treeBindWarnings.length > 0
+              ? { warnings: treeBindWarnings }
+              : {}),
+            appliedBindings: treeApplied,
           }
         } catch (e) {
           error = String(e instanceof Error ? e.message : e)
@@ -1508,7 +1922,9 @@ export const createMockPlugin = (
       // warnings}. `properties` is the catalogue ARRAY of
       // {id,name,type,defaultValue,variantOptions?}. An `expose` list degrades
       // (warn, never error) — exposeNestedInstances is gated. A `slots` list
-      // also degrades (createSlot is runtime-only; mock echoes slotsSkipped).
+      // CREATES slot nodes (createSlotNode above) and applies each entry's
+      // spec, so a later get_node reads what landed (B30); the componentId
+      // prefixes below model the two slot degrade paths.
       // addComponentProperty returns a CANONICAL id (`<name>#<suffix>`)
       // that agents need for later setProperties, so the mock mirrors the real
       // plugin by carrying it inside each `properties` entry's `id` field.
@@ -1516,6 +1932,12 @@ export const createMockPlugin = (
       //  - componentId `err:` → {error:'Component not found: …'} (not-found).
       //  - componentId `notcomp:` → {error:'Node is not a component …'} (the
       //    node resolves but is the wrong type).
+      // Slot-path conventions (degrades, never errors):
+      //  - componentId `noslot:` → createSlot unavailable in this Figma
+      //    version: every name lands in slotsSkipped with the T7 warning.
+      //  - componentId `noautolayout:` → the component is not an auto-layout
+      //    frame, so a slot `sizing` is refused (warn + continue) while the
+      //    slot is still created, named, and given its other fields.
       case 'update_component': {
         const ucId = cmd.params?.componentId as string
         if (ucId.startsWith('err:')) {
@@ -1542,7 +1964,7 @@ export const createMockPlugin = (
           | string[]
           | undefined
         const ucSlots = cmd.params?.slots as
-          | string[]
+          | (string | Record<string, unknown>)[]
           | undefined
         const ucWarnings: string[] = []
         const properties: {
@@ -1579,18 +2001,46 @@ export const createMockPlugin = (
             'exposeNestedInstances unavailable in this Figma version; expose skipped',
           )
         }
-        // slots: mock degrades (T7) — createSlot is runtime-only and unavailable
-        // in the headless mock. Echo slotsCreated:[] / slotsSkipped:[...names] with
-        // the degrade warning, matching the real plugin's T7 degrade path.
+        // slots: a bare string is a name and nothing else (back-compat); an
+        // object entry carries the CONVERTED spec, which createSlotNode applies
+        // to the fresh slot. `noslot:` models the T7 unavailable-createSlot
+        // degrade the real plugin feature-detects.
         const slotsCreated: string[] = []
         const slotsSkipped: string[] = []
         if (ucSlots && ucSlots.length > 0) {
-          for (const name of ucSlots) {
-            slotsSkipped.push(name)
-          }
-          ucWarnings.push(
-            'createSlot unavailable in this Figma version; slot(s) not created',
+          // Read each entry once, the way the plugin's readSlotEntry does: a
+          // bare string is a name with no spec; an object carries both.
+          const ucSlotEntries = ucSlots.map(entry =>
+            typeof entry === 'string'
+              ? { name: entry, spec: undefined }
+              : {
+                  name:
+                    typeof entry.name === 'string'
+                      ? entry.name
+                      : '',
+                  spec: entry,
+                },
           )
+          if (ucId.startsWith('noslot:')) {
+            slotsSkipped.push(
+              ...ucSlotEntries.map(e => e.name),
+            )
+            ucWarnings.push(
+              'createSlot unavailable in this Figma version; slot(s) not created',
+            )
+          } else {
+            const ucAutoLayout =
+              !ucId.startsWith('noautolayout:')
+            for (const { name, spec } of ucSlotEntries) {
+              createSlotNode(
+                name,
+                spec,
+                ucWarnings,
+                ucAutoLayout,
+              )
+              slotsCreated.push(name)
+            }
+          }
         }
         result = {
           id: ucId,

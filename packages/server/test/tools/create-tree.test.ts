@@ -58,6 +58,28 @@ describe('convertTree (recursive children + ref-pool)', () => {
     ])
   })
 
+  it('B29: a sized frame WITH a child keeps the size it stated', () => {
+    // The live regression this rule exists for: `size:[300,200]` plus one child
+    // read back [300,30] / ["FIXED","HUG"] — the injected auto-layout hugged
+    // the height away. An empty frame keeps its size either way, which is why
+    // the shape that matters here is the one with a child.
+    const out = convertTree({
+      type: 'FRAME',
+      name: 'Card',
+      size: [300, 200],
+      children: [{ type: 'RECTANGLE', size: [100, 20] }],
+    })
+    expect(out.layout).toEqual({ mode: 'V' })
+    expect(out.sizing).toEqual(['FIXED', 'FIXED'])
+    // The child stated a size and no layout of its own, and is not a frame —
+    // it takes neither half of the default.
+    const child = (
+      out.children as Record<string, unknown>[]
+    )[0]
+    expect(child.layout).toBeUndefined()
+    expect(child.sizing).toBeUndefined()
+  })
+
   it('recurses into children, converting each level', () => {
     const out = convertTree({
       type: 'FRAME',
@@ -465,5 +487,73 @@ describe('handleCreateTree reply shape — {root, ids[]}', () => {
       error: 'Parent not found',
       code: 'NODE_NOT_FOUND',
     })
+  })
+})
+
+// B28: the plugin DEGRADES rather than throws on a write Figma refuses (T7) —
+// e.g. `sizing:['FILL',…]` on a child of a parent that is not auto-layout — and
+// the caller only ever sees the ROOT's reply for the whole subtree. So a degrade
+// at any depth rides home on `reply.warnings`, and this handler is the one place
+// it can join the server's own lossy-conversion notes. Not merging here is not a
+// formatting miss: it is the build silently shipping a node sized differently
+// than it asked for.
+//
+// The stubbed warning is the REAL emitter's wording (code.ts
+// applyPostAppendProperties: `sizing not applicable on this node (<TYPE>):
+// <error>`) — a stub that invents its own format tests nothing about the
+// production path.
+describe('handleCreateTree — plugin-reported degrades', () => {
+  it('surfaces a plugin warning as a Warning: line', async () => {
+    const result = await handleCreateTree(
+      {
+        tree: {
+          type: 'FRAME',
+          name: 'Card',
+          children: [{ type: 'FRAME', name: 'Body' }],
+        },
+      },
+      stubClient({
+        reply: {
+          id: 'created:1',
+          name: 'Card',
+          type: 'FRAME',
+          ids: ['created:1', 'created:2'],
+          warnings: [
+            'sizing not applicable on this node (FRAME): Error: FILL can only be set on children of auto-layout frames',
+          ],
+        },
+      }),
+    )
+    const [json, ...rest] =
+      result.content[0].text.split('\n\n')
+    expect(rest.join('\n')).toContain(
+      'Warning: sizing not applicable',
+    )
+    // Reported ONCE: the plugin's array is merged into the rendered warning
+    // list, not also spread into the JSON body.
+    const data = JSON.parse(json) as Record<string, unknown>
+    expect(data.warnings).toBeUndefined()
+    expect(data.ids).toEqual(['created:1', 'created:2'])
+  })
+
+  it('adds no Warning: line when the plugin reports none', async () => {
+    const result = await handleCreateTree(
+      {
+        tree: {
+          type: 'FRAME',
+          name: 'Card',
+          children: [{ type: 'TEXT', name: 'Title' }],
+        },
+      },
+      stubClient({
+        reply: {
+          id: 'created:1',
+          name: 'Card',
+          type: 'FRAME',
+          ids: ['created:1', 'created:2'],
+        },
+      }),
+    )
+    expect(result.content[0].text).not.toContain('Warning:')
   })
 })

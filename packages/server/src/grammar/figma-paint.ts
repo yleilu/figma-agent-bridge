@@ -154,7 +154,14 @@ export type FigmaFontName = {
 export type FigmaStrokeGeom = {
   /** Uniform weight, or per-side [top,right,bottom,left]. */
   weight?: number
-  weights?: [number, number, number, number]
+  /**
+   * The positional list AS WRITTEN — length is NOT guaranteed to be 4. The
+   * parser reports what the atom said; the write face is where a list that is
+   * not four sides degrades with a warning, because that is where there is a
+   * warning sink to degrade onto. Silently slicing it to four here is what let
+   * `stroke([1,2,3,4,5])` through as a well-formed four-sided stroke.
+   */
+  weights?: number[]
   align?: string
   cap?: string
   join?: string
@@ -1007,12 +1014,7 @@ export const atomToStroke = (
   if (a?.kind === 'scalar') {
     out.weight = Number(a.value)
   } else if (a?.kind === 'tuple') {
-    out.weights = a.items.map(Number) as [
-      number,
-      number,
-      number,
-      number,
-    ]
+    out.weights = a.items.map(Number)
   }
   if (attrs !== undefined) {
     if (typeof attrs.align === 'string') {

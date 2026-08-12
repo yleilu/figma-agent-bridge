@@ -226,18 +226,23 @@ Bare literals: `opacity` `0.5` · `rotation` `45` · `blendMode` `MULTIPLY` ·
 Composite types render as YAML maps; their leaves are atoms. The fields a struct
 exposes:
 
-- **node** — `type, name, id, size, position, layoutPositioning, fills[], strokes[], stroke, effects[], radius, opacity, rotation, blend, visible, clipsContent, exportSettings[], layout, sizing, constraints, text, component, componentProperties, variantProperties, overrides, warnings, context, children[]` (children are nested node structs).
-- **layout** — `{mode: H|V|NONE|GRID, gap, pad: [t,r,b,l], align: [primary, counter], wrap, rows, cols, rowGap, colGap}`. `mode: NONE` turns auto-layout off. `mode: GRID` enables Figma's CSS-Grid-like layout; the four grid keys (`rows`, `cols`, `rowGap`, `colGap`) are GRID-only — `gap`/`align`/`wrap` are H/V-only. Deferred follow-on: `gridRowSizes`/`gridColumnSizes` (track sizing) and per-child `gridRowSpan`/`gridColumnSpan`/`gridChild*Align` (child placement) — see `docs/deferred-capabilities.md`.
+- **node** — `type, name, id, size, position, layoutPositioning, fills[], strokes[], stroke, effects[], radius, opacity, rotation, blend, visible, clipsContent, exportSettings[], layout, sizing, constraints, text, component, componentProperties, variantProperties, overrides, warnings, readError, readErrors, context, children[]` (children are nested node structs).
+- **layout** — `{mode: H|V|NONE|GRID, gap, pad: [t,r,b,l], align: [primary, counter], wrap, rows, cols, rowGap, colGap}`. `mode: NONE` turns auto-layout off — and is the opt-out from the creation default that gives a frame with no stated `layout` a vertical stack (`tool-surface.md`, *Write model → Create / update*). `mode: GRID` enables Figma's CSS-Grid-like layout; the four grid keys (`rows`, `cols`, `rowGap`, `colGap`) are GRID-only — `gap`/`align`/`wrap` are H/V-only. Deferred follow-on: `gridRowSizes`/`gridColumnSizes` (track sizing) and per-child `gridRowSpan`/`gridColumnSpan`/`gridChild*Align` (child placement) — see `docs/deferred-capabilities.md`.
 - **text** — `{content, font, color, align, valign, decoration, case, paragraphSpacing, runs}`. `font`/`color` are atoms; `runs` carries per-range overrides (see below). Line height and letter spacing are canonical on the `font(...)` atom (`font(...){lh=24, ls=0.5}`) — there are no separate top-level `lh`/`ls` text keys.
 - **exportSettings** — array of persistent export presets, each `{format: PNG|JPG|SVG|PDF, suffix?, constraint?: [SCALE|WIDTH|HEIGHT, value]}`. Round-trips via `get_node`/`update_node` (the persistent-presets path; the `export` tool itself is one-off render/asset output).
+- **position** — `[x, y]`, parent-relative. **Omitted on an invisible child of an auto-layout parent when the read includes the parent** — Figma does not lay out hidden children, so the stored value is stale (T7: a value the engine is not maintaining is not presented as live). A read entered AT such a node (drill-by-id) cannot see its parent, and returns the stored value. A hidden `ABSOLUTE` child keeps its position, and so does a hidden child of a plain (non-auto-layout) frame: those coordinates are real.
 - **layoutPositioning** — `AUTO` | `ABSOLUTE` (a child's flow vs absolute participation). Paired with the parent's `layout.mode` it is what distinguishes a true absolute child from a flow child (the §7 absolute-positioning audit reads this — `position` alone can't, since flow children still carry x/y).
 - **componentProperties / variantProperties** *(on INSTANCE / variant nodes)* — the instance's current property values and variant selection. The `componentPropertyDefinitions` (the schema) live on the component/set and are read via `get_components`. **Read-only** — see *Read-only node fields* below.
 - **warnings** — the read's honesty channel: one entry per piece of the node's state this read **could not represent**, naming the field and the reason (e.g. a `VIDEO` fill the grammar does not render yet). Omitted entirely when nothing was lost, so its presence is the signal. **Read-only** — see below.
-- **Read-only node fields (T2 asymmetries).** Four fields of the node struct are emitted on reads and **ignored on writes**, deliberately:
+- **readError** — the one entry `warnings` cannot carry: not a piece of state the read could not *represent*, but a node the read could not *reach*. It names the failure (the message the node itself raised) on that node alone, so a read that crosses an unresolvable node returns it labelled instead of returning nothing at all — every sibling and ancestor comes back whole. Omitted when the node read cleanly, so its presence is the signal. **Read-only** — see below.
+- **readErrors** — the same failure when it has no node to land on: a list of `"<id the read saw>: <message>"` entries, reported on the root of the returned tree. A stale handle is named by one id while the read walks and by another in what the read returns, so the failure cannot always be pinned to a node in the tree the caller receives — it is still reported, at the root, rather than dropped. Omitted when every failure found its own node. **Read-only** — see below.
+- **Read-only node fields (T2 asymmetries).** Six fields of the node struct are emitted on reads and **ignored on writes**, deliberately:
   - **`componentProperties`** — a *projection* of the instance's current property values. Setting them is `set_instance`'s job, which validates each value against the component's `componentPropertyDefinitions`; a blind spec write-back would have no schema to check against.
   - **`variantProperties`** — likewise a projection of which variant is selected. The variant is chosen by `set_instance`, or by `swap_component` for a different main.
   - **`id`** — assigned by Figma when the node is created. A create cannot choose it, and an update addresses the node by it.
   - **`warnings`** — an observation *about* the read, not a property of the node. It exists so a lossy read says so instead of handing back an array that looks complete; a read-modify-write that echoes it back changes nothing.
+  - **`readError`** — likewise an observation about the read: which node refused to be read, and why. There is nothing to write back, and a node that carries one is precisely a node whose spec is *not* trustworthy to write back.
+  - **`readErrors`** — the same observation about a node the read could not even locate in what it returned. It describes the read's own blind spot, not this node's state, so writing it back would assert nothing.
 
   A read-modify-write therefore preserves these values in the document without the
   write asserting them, which is why they can be echoed back safely. Anything else
@@ -411,20 +416,73 @@ tool-surface design).
 
 ## var() / style() rules
 
-- Both wrap **any** atom; the resolved literal always follows.
+- Both wrap **any** atom; the resolved literal always follows. A wrapper with no
+  value — `fills: [var(surface/2)]` — is an error on both faces: the wrapper names
+  the binding, the literal *is* the value, and a write carrying only a name would
+  leave the appearance undefined until something else resolved it.
 - **Both wrappers name their source.** A read emits `style(Brand/Primary)` and
   `var(radius/medium)` — the design-system **name**, never the opaque runtime id.
   The name is what the agent reasons with and what it would write back; an id
   identifies the binding to Figma but tells the agent nothing about which token it
   is looking at, and costs a second call to find out.
-- **Both wrappers are read-only — the two *wrapper* asymmetries** (principle T2).
-  Each is emitted on a read to surface an existing binding; on **write** each
-  resolves to its literal, and the binding is applied by the tool that owns it —
-  `bind_variable` for `var()`, `apply_style` for `style()`. Writing a wrapper
-  therefore sets the appearance, never the binding. *(Principle T2 requires a field
-  that cannot round-trip to be documented rather than silent; this is that
-  documentation for the wrappers. The read-only **node fields** are listed
-  separately under the node struct.)*
+- **A wrapper with a value BINDS on write — the wrappers round-trip** (principle
+  T2). A read emits `var(surface/2)#141B2E`; writing that same atom back applies
+  the literal **and then** re-establishes the binding — `var(name)` resolves a
+  variable **by name** and binds the field, `style(Name)` resolves a local style by
+  name and category and applies it. Literal first, binding second, and the order
+  decides who wins: the literal guarantees the field is never left undefined and
+  is what **remains** if the binding cannot be made, while a binding that lands
+  **governs** the value from then on — a token whose value has moved on since the
+  agent last read it overrides the stale literal, which is exactly what being
+  bound means.
+
+  This is what makes the pair **symmetric**: the read face and the write face
+  speak the same string, so a read-modify-write preserves the binding it was shown
+  instead of flattening it to a literal. `bind_variable` / `apply_style` remain the
+  explicit route — for binding a field a write is not otherwise touching, and for
+  the things only they do (`bind_variable`'s collection-mode pin).
+
+  It also makes the design-system path the **cheap** one, which is what T9 needs
+  from the grammar. A binding that costs a second call per node per field loses
+  to a literal that is inline and looks identical on the canvas — so the agent
+  writes the right *value* and skips the *token*, and the document ends up
+  unbound at exactly the scale where tokens matter most. Inline, the two cost the
+  same, and the atom the read handed over is already the bound one.
+
+  **Binding is by NAME; an id is never accepted inline.** The name is what the read
+  emitted and what the agent reasons with (above); an id inside a wrapper is not a
+  shorter spelling of the same thing but a second vocabulary, and the grammar keeps
+  one. A name resolves to the **first match among the file's local collections** (or
+  local styles of that category), so two collections publishing the same name are
+  indistinguishable inline and a colliding name may bind a variable other than the
+  one the read reported — the standing cost of a name-only grammar, and the reason a
+  design system wants distinct token names.
+
+  **An unresolvable name degrades, never aborts** (T7). A `var(name)` with no
+  matching variable, or a `style(Name)` with no matching style of that category,
+  applies the literal and reports one `warnings[]` entry naming the wrapper
+  (`var(surface/2): no variable with that name — literal applied unbound`). The
+  node is still created or updated with the appearance that was asked for; a
+  missing token costs a binding, never the write.
+
+  **Scope — a wrapper binds on the fields listed here:** `fills[]`, `strokes[]`,
+  a **uniform** `stroke(…)` weight and a **uniform** `radius` for `var()`;
+  `fills[]`, `strokes[]`, `effects[]` and `text.font` for `style()`; `text.color`
+  for both (it is the text node's first fill). A `var()` binds per paint, so
+  `fills[]`/`strokes[]` bind by index; a `style()` governs the whole array, so it
+  binds once per field.
+
+  Everywhere else a wrapper still resolves to its literal and reports one
+  `warnings[]` entry, so a write is never silent about the half it could not do.
+  Three of those are exceptions a read can itself produce, and all three are named
+  deliberately — each one a value the grammar splits finer than the binding surface
+  does: a per-range **`text.runs[].color`**, which the binding surface reaches only
+  at node level; a **per-corner `radius`** (`var(radius/md)[8,8,0,0]`), because
+  Figma binds all four corners with one field — binding it would square the corners
+  the tuple says are different, so the geometry is kept and the binding is dropped;
+  and a **per-side stroke weight** (`var(border/thin)stroke([0,0,1,0])`), for the
+  same reason on the other axis — one binding cannot express four sides, so the
+  four weights are written and the binding is dropped.
 - **Wrappers reach descendants; resolution is per token, not per field.** A read
   emits `style(...)`/`var(...)` on every node it returns complete — the requested
   node and, within `depth`, its descendants. Anything else would contradict the

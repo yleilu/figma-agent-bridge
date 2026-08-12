@@ -154,22 +154,43 @@ describe('handleCreateNode (rebuilt — single NodeSpec)', () => {
     expect(result.content[0].text).toContain('create_tree')
   })
 
-  it('surfaces a per-side stroke collapse warning on success (writer threads it)', async () => {
+  // B27: the create path sends the FOUR sides through rather than a collapsed
+  // top weight. `stroke([0,0,1,0])` is a bottom rule — the commonest divider in
+  // table and list design — and collapsing it to the top side made it weight 0,
+  // i.e. invisible.
+  it('sends per-side stroke weights through on create', async () => {
+    const sent: Sent[] = []
     const result = await handleCreateNode(
       {
         spec: {
           type: 'RECTANGLE',
-          stroke: 'stroke([2,0,2,0])',
+          stroke: 'stroke([0,0,1,0])',
+        },
+      },
+      stubClient({ sent }),
+    )
+    expect(result.content[0].text).not.toStartWith('Error')
+    const spec = sent[0].params?.spec as Record<
+      string,
+      unknown
+    >
+    expect(spec.strokeWeights).toEqual([0, 0, 1, 0])
+    expect(spec.strokeWeight).toBeUndefined()
+  })
+
+  it('surfaces a server-side writer warning on success (writer threads it)', async () => {
+    const result = await handleCreateNode(
+      {
+        spec: {
+          type: 'FRAME',
+          layout: { mode: 'V', rows: 2 },
         },
       },
       stubClient({}),
     )
-    // Success path (not an Error) carrying the writer's collapse warning.
+    // Success path (not an Error) carrying the writer's warning.
     expect(result.content[0].text).not.toStartWith('Error')
-    expect(result.content[0].text).toContain(
-      'Per-side stroke',
-    )
-    expect(result.content[0].text).toContain('collapsed')
+    expect(result.content[0].text).toContain('GRID-only')
   })
 
   it('surfaces a plugin-side {error} as an error (not success)', async () => {

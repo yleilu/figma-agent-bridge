@@ -272,8 +272,8 @@ describe('handleBatch', () => {
   })
 
   // D3/T7: a batched update_node emits the SAME server-side writer warnings a
-  // direct update_node would (e.g. per-side stroke collapse). Each entry gains
-  // an optional warnings[] surfacing them.
+  // direct update_node would (e.g. GRID-only layout keys on a non-GRID mode).
+  // Each entry gains an optional warnings[] surfacing them.
   it('surfaces per-op server-side writer warnings on a batched update_node entry', async () => {
     const result = await handleBatch(
       {
@@ -281,7 +281,7 @@ describe('handleBatch', () => {
           {
             op: 'update_node',
             nodeId: '1:1',
-            patch: { stroke: 'stroke([1,2,3,4])' },
+            patch: { layout: { mode: 'V', rows: 2 } },
           },
         ],
       },
@@ -295,7 +295,9 @@ describe('handleBatch', () => {
     expect(out.results[0].ok).toBe(true)
     expect(
       (out.results[0].warnings ?? []).some(w =>
-        w.includes('collapsed to a single strokeWeight'),
+        w.includes(
+          'rows/cols/rowGap/colGap keys are GRID-only',
+        ),
       ),
     ).toBe(true)
   })
@@ -526,6 +528,43 @@ describe('batch delete_styles — index-tagged like the standalone handler', () 
     // The plugin builds its reply from entry.index; undefined would be dropped
     // by JSON.stringify, leaving a failure the agent cannot map to its input.
     expect(styles.map(s => s.index)).toEqual([0, 1, 2])
+  })
+})
+
+// B30: a batched update_component must convert its slot specs on the SAME
+// write face the standalone handler uses — an unconverted atom string would
+// otherwise be assigned to the slot raw.
+describe('batch update_component — slot specs are converted', () => {
+  it('parses a slot entry fill atom, and converts a bare name the same way', async () => {
+    const sent: Sent[] = []
+    await handleBatch(
+      {
+        op: 'update_component',
+        ops: [
+          {
+            componentId: 'c:1',
+            slots: [
+              'Header',
+              { name: 'Content', fills: ['#141B2E'] },
+            ],
+          },
+        ],
+      } as unknown as Parameters<typeof handleBatch>[0],
+      stubClient({ sent }),
+    )
+    const forwarded = sent[0].params?.ops as SentOp[]
+    const slots = forwarded[0].params.slots as unknown[]
+    // B29: a bare name is `{name}`, and a created slot stacks.
+    expect(slots[0]).toEqual({
+      name: 'Header',
+      layout: { mode: 'V' },
+    })
+    const specced = slots[1] as {
+      name: string
+      fills: { type: string }[]
+    }
+    expect(specced.name).toBe('Content')
+    expect(specced.fills[0].type).toBe('SOLID')
   })
 })
 

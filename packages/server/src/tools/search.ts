@@ -13,8 +13,9 @@
 // limit+cursor are applied by the shared `paginateList` helper (read/paginate),
 // the one implementation behind every bounded list read (T10).
 //
-// Emits { results, truncated, cursor? } as JSON. `cursor` is present only when
-// more results remain after this page.
+// Emits { results, truncated, cursor?, warnings? } as JSON. `cursor` is present
+// only when more results remain after this page; `warnings` only when the scan
+// had to skip a candidate it could not read (T7).
 
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import type {
@@ -119,6 +120,7 @@ export const handleSearch = async (
       ...buildCollectHints(params),
     })) as {
       results?: Record<string, unknown>[]
+      warnings?: unknown
       error?: string
     } | null
 
@@ -193,9 +195,21 @@ export const handleSearch = async (
       results: unknown[]
       truncated: boolean
       cursor?: string
+      warnings?: string[]
     } = { results: projected, truncated: bounded.truncated }
     if (bounded.cursor !== undefined) {
       out.cursor = bounded.cursor
+    }
+    // A candidate the plugin could not read is skipped THERE and named here
+    // (T7) — a scan that crossed an unreachable node returns the rest of the
+    // document rather than an error, and the shortfall is stated instead of
+    // being read as "no such node". Carried on the SUCCESS envelope, omitted
+    // when the scan was clean, so its presence is the signal.
+    if (
+      Array.isArray(raw.warnings) &&
+      raw.warnings.length
+    ) {
+      out.warnings = raw.warnings as string[]
     }
 
     return textResult(JSON.stringify(out, null, 2))

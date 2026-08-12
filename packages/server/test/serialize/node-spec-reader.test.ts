@@ -548,6 +548,97 @@ describe('toNodeSpec — context read-back', () => {
   })
 })
 
+// ─── readError read-back (B31 — the per-node degrade must reach the agent) ────
+
+describe('toNodeSpec — readError read-back', () => {
+  it('carries the plugin degrade onto the node that failed, and only it', () => {
+    const spec = toNodeSpec(
+      {
+        id: '1:1',
+        type: 'FRAME',
+        children: [
+          {
+            id: 'I3:1;4:5;6:7',
+            type: 'FRAME',
+            readError:
+              'Error: in getSharedPluginData: The node (instance sublayer or table cell) with id "I3:1;4:5;6:7" does not exist',
+          },
+          { id: '1:3', type: 'RECTANGLE' },
+        ],
+      } as never,
+      { depth: 1 },
+    )
+    const [broken, fine] = spec.children as {
+      readError?: string
+    }[]
+    expect(broken.readError).toContain('does not exist')
+    expect(fine.readError).toBeUndefined()
+    expect(spec.readError).toBeUndefined()
+  })
+
+  it('omits an empty readError', () => {
+    expect(
+      toNodeSpec(
+        { id: '1', type: 'FRAME', readError: '' } as never,
+        { depth: 0 },
+      ).readError,
+    ).toBeUndefined()
+  })
+
+  it('carries readErrors — the failures that had no node to land on', () => {
+    expect(
+      toNodeSpec(
+        {
+          id: '1:1',
+          type: 'FRAME',
+          readErrors: [
+            'I<stale>;6:7: Error: in getSharedPluginData: … does not exist',
+          ],
+        } as never,
+        { depth: 0 },
+      ).readErrors,
+    ).toEqual([
+      'I<stale>;6:7: Error: in getSharedPluginData: … does not exist',
+    ])
+  })
+
+  it('omits readErrors when it is empty or holds nothing readable', () => {
+    expect(
+      toNodeSpec(
+        {
+          id: '1',
+          type: 'FRAME',
+          readErrors: [],
+        } as never,
+        { depth: 0 },
+      ).readErrors,
+    ).toBeUndefined()
+    expect(
+      toNodeSpec(
+        {
+          id: '1',
+          type: 'FRAME',
+          readErrors: ['', 7],
+        } as never,
+        { depth: 0 },
+      ).readErrors,
+    ).toBeUndefined()
+  })
+
+  it('keeps the readable entries of a mixed list', () => {
+    expect(
+      toNodeSpec(
+        {
+          id: '1',
+          type: 'FRAME',
+          readErrors: ['', 'real'],
+        } as never,
+        { depth: 0 },
+      ).readErrors,
+    ).toEqual(['real'])
+  })
+})
+
 // ─── vectorPaths read-back (raw.vectorPaths → NodeSpec.vectorPaths atoms) ───────
 
 describe('toNodeSpec — vectorPaths read-back', () => {
@@ -1430,6 +1521,156 @@ describe('toNodeSpec — stroke cap/join/miter read-back', () => {
   })
 })
 
+// ─── per-side stroke weights (B27) ───────────────────────────────────────────
+//
+// expression-formats.md:192 has always promised `stroke([t,r,b,l])`, and Figma
+// carries the four sides on frame-like and RECTANGLE nodes
+// (IndividualStrokesMixin). The single commonest divider in table/list design
+// is `stroke([0,0,1,0])` — a bottom rule — and collapsing it to the TOP side
+// made it weight 0, i.e. invisible.
+//
+// WHERE THE FOUR VALUES COME FROM. The guaranteed source is the plugin's
+// enrichment (enrich-nodes.ts `syncPatch`), which patches the FLAT Plugin-API
+// keys `strokeTopWeight`/`strokeRightWeight`/`strokeBottomWeight`/
+// `strokeLeftWeight` onto the exported node — and only when the four DIFFER, so
+// an ordinary uniformly-stroked node costs nothing. A raw JSON_REST_V1 dump
+// that happens to carry REST's nested `individualStrokeWeights` object is read
+// too (same four numbers, REST's spelling); a dump carrying NEITHER reads
+// exactly as it always has, from the uniform `strokeWeight`.
+//
+// Note also that the live node's `strokeWeight` is `figma.mixed` precisely when
+// the sides differ, so the export may carry no usable uniform weight at all —
+// the tuple must not depend on one being present.
+describe('toNodeSpec — per-side stroke weights', () => {
+  it('emits the [t,r,b,l] tuple when the four plugin-enriched sides differ', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:20',
+        type: 'FRAME',
+        strokes: aStroke,
+        strokeTopWeight: 0,
+        strokeRightWeight: 0,
+        strokeBottomWeight: 1,
+        strokeLeftWeight: 0,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe('stroke([0,0,1,0])')
+  })
+
+  it('keeps the plain number when all four sides are equal (canonical form)', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:21',
+        type: 'FRAME',
+        strokes: aStroke,
+        strokeWeight: 2,
+        strokeTopWeight: 2,
+        strokeRightWeight: 2,
+        strokeBottomWeight: 2,
+        strokeLeftWeight: 2,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe('stroke(2)')
+  })
+
+  it('carries the {…} channel alongside the tuple', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:22',
+        type: 'RECTANGLE',
+        strokes: aStroke,
+        strokeAlign: 'INSIDE',
+        strokeTopWeight: 1,
+        strokeRightWeight: 0,
+        strokeBottomWeight: 1,
+        strokeLeftWeight: 0,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe(
+      'stroke([1,0,1,0]){align=INSIDE}',
+    )
+  })
+
+  it('reads REST nested individualStrokeWeights when a dump carries it', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:23',
+        type: 'FRAME',
+        strokes: aStroke,
+        strokeWeight: 1,
+        individualStrokeWeights: {
+          top: 0,
+          right: 0,
+          bottom: 1,
+          left: 0,
+        },
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe('stroke([0,0,1,0])')
+  })
+
+  it('emits no atom when every side is 0 (nothing is drawn)', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:24',
+        type: 'FRAME',
+        strokes: aStroke,
+        strokeTopWeight: 0,
+        strokeRightWeight: 0,
+        strokeBottomWeight: 0,
+        strokeLeftWeight: 0,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBeUndefined()
+  })
+
+  it('ignores a partial set of sides and falls back to the uniform weight', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:25',
+        type: 'FRAME',
+        strokes: aStroke,
+        strokeWeight: 2,
+        strokeBottomWeight: 1,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe('stroke(2)')
+  })
+
+  // THE ACCEPTANCE BAR: write `stroke([0,0,1,0])`, read back `stroke([0,0,1,0])`.
+  // The middle hop — the plugin assigning the four sides — is covered by
+  // figma-plugin/src/apply-node-fields.test.ts (`applyStrokeWeights`); here the
+  // node it produces is stood up directly, so the two faces meet.
+  it('round-trips a bottom-only divider through the write payload', () => {
+    const written = specToFigma({
+      stroke: 'stroke([0,0,1,0])',
+    }) as Record<string, unknown>
+    expect(written.strokeWeights).toEqual([0, 0, 1, 0])
+
+    const [top, right, bottom, left] =
+      written.strokeWeights as number[]
+    const spec = toNodeSpec(
+      {
+        id: '2:26',
+        type: 'FRAME',
+        strokes: aStroke,
+        strokeTopWeight: top,
+        strokeRightWeight: right,
+        strokeBottomWeight: bottom,
+        strokeLeftWeight: left,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe('stroke([0,0,1,0])')
+  })
+})
+
 // ─── a strokeless node has no stroke GEOMETRY ────────────────────────────────
 //
 // Figma keeps a default strokeWeight (and strokeAlign) on every node whether or
@@ -2277,5 +2518,167 @@ describe('toNodeSpec — text.runs', () => {
       type: 'SOLID',
       color: { r: 1, g: 0, b: 0 },
     })
+  })
+})
+
+// ─── B26: the stale position of an invisible auto-layout child ────────────────
+
+describe('toNodeSpec — invisible auto-layout children omit position', () => {
+  /**
+   * A parent frame at absolute [0,0] with one child; the caller supplies the
+   * parent's `layoutMode` and the child's `visible`/`layoutPositioning`.
+   */
+  const parentWithChild = (
+    parentFields: Record<string, unknown>,
+    childFields: Record<string, unknown>,
+  ): Record<string, unknown> => ({
+    id: 'p:1',
+    name: 'Header',
+    type: 'FRAME',
+    absoluteBoundingBox: {
+      x: 0,
+      y: 0,
+      width: 522,
+      height: 64,
+    },
+    ...parentFields,
+    children: [
+      {
+        id: 'c:1',
+        name: 'Legend',
+        type: 'FRAME',
+        absoluteBoundingBox: {
+          x: 607,
+          y: 12,
+          width: 120,
+          height: 40,
+        },
+        ...childFields,
+      },
+    ],
+  })
+
+  const childOf = (
+    rawNode: Record<string, unknown>,
+  ): NodeSpec =>
+    (
+      toNodeSpec(rawNode as never, { depth: -1 })
+        .children as NodeSpec[]
+    )[0]
+
+  it('omits position on a hidden flow child of an auto-layout parent', () => {
+    // The live sighting: a hidden legend parked at x=607 inside a 522-wide
+    // auto-layout header. Figma never laid it out, so the x is where it last
+    // sat — reading it as live geometry cost a false "the container is broken".
+    const child = childOf(
+      parentWithChild(
+        { layoutMode: 'HORIZONTAL' },
+        { visible: false },
+      ),
+    )
+    expect(child.position).toBeUndefined()
+    // Only position goes. The node still says it is hidden, and its size
+    // still round-trips.
+    expect(child.visible).toBe(false)
+    expect(child.size).toEqual([120, 40])
+  })
+
+  it('keeps position on a hidden ABSOLUTE child (its coordinates are real)', () => {
+    const child = childOf(
+      parentWithChild(
+        { layoutMode: 'HORIZONTAL' },
+        {
+          visible: false,
+          layoutPositioning: 'ABSOLUTE',
+        },
+      ),
+    )
+    expect(child.position).toEqual([607, 12])
+    expect(child.layoutPositioning).toBe('ABSOLUTE')
+  })
+
+  it('keeps position on a visible flow child of an auto-layout parent', () => {
+    const child = childOf(
+      parentWithChild({ layoutMode: 'VERTICAL' }, {}),
+    )
+    expect(child.position).toEqual([607, 12])
+  })
+
+  it('keeps position on a hidden child of a plain frame', () => {
+    // Nothing lays these out, so nothing went stale: the stored x/y is the
+    // node's actual place in its parent.
+    const child = childOf(
+      parentWithChild(
+        { layoutMode: 'NONE' },
+        { visible: false },
+      ),
+    )
+    expect(child.position).toEqual([607, 12])
+  })
+
+  it('keeps position on a hidden child of a frame with no layoutMode at all', () => {
+    const child = childOf(
+      parentWithChild({}, { visible: false }),
+    )
+    expect(child.position).toEqual([607, 12])
+  })
+
+  it('keeps position on a hidden AUTO-LAYOUT child of a plain parent', () => {
+    // The node's OWN layoutMode is irrelevant: what makes a position stale is
+    // what lays THIS node out, not what this node lays out. A hidden
+    // auto-layout frame sitting in a plain parent is still where it was put.
+    const child = childOf(
+      parentWithChild(
+        { layoutMode: 'NONE' },
+        { visible: false, layoutMode: 'VERTICAL' },
+      ),
+    )
+    expect(child.position).toEqual([607, 12])
+    // …and it really is an auto-layout frame itself.
+    expect(child.layout?.mode).toBe('V')
+  })
+
+  it('omits position on a hidden flow child of a GRID parent', () => {
+    const child = childOf(
+      parentWithChild(
+        { layoutMode: 'GRID' },
+        { visible: false },
+      ),
+    )
+    expect(child.position).toBeUndefined()
+  })
+
+  it('keeps position on a hidden ROOT — it has no auto-layout parent in hand', () => {
+    const spec = toNodeSpec(
+      {
+        id: 'r:1',
+        name: 'Hidden root',
+        type: 'FRAME',
+        visible: false,
+        absoluteBoundingBox: {
+          x: 40,
+          y: 80,
+          width: 100,
+          height: 100,
+        },
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.position).toEqual([40, 80])
+  })
+
+  it('a spec with no position still writes back (position is optional)', () => {
+    const child = childOf(
+      parentWithChild(
+        { layoutMode: 'HORIZONTAL' },
+        { visible: false },
+      ),
+    )
+    const figma = specToFigma(child) as Record<
+      string,
+      unknown
+    >
+    expect(figma.position).toBeUndefined()
+    expect(figma.visible).toBe(false)
   })
 })

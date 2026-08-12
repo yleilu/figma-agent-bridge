@@ -210,6 +210,29 @@ export type NodeSpec = {
    */
   warnings?: string[]
 
+  /**
+   * READ-ONLY: this node could not be read, and this is what it said.
+   *
+   * The one failure `warnings` cannot express — not state the read could not
+   * REPRESENT, but a node the read could not REACH (a stale slot-child handle
+   * throws on every property access). The read returns the node labelled
+   * rather than failing, so a broken node costs one node and not the tree
+   * around it (T7). Omitted when the node read cleanly; ignored on write.
+   */
+  readError?: string
+
+  /**
+   * READ-ONLY: failures from BELOW this node that could not be pinned to a
+   * node in the returned tree — `"<id the read saw>: <message>"` each.
+   *
+   * The two sides of a read key the same node by different ids when a handle
+   * has gone stale, so a `readError` sometimes has no node to land on. It is
+   * reported here on the ROOT of the returned tree instead of being dropped: a
+   * read that cannot say WHICH node broke must still say that one did (T7).
+   * Omitted when every failure found its node; ignored on write.
+   */
+  readErrors?: string[]
+
   /** Full round-trippable markdown note, stored in shared pluginData. Omitted on read when absent/empty. Verbatim; the server never parses it. Capped at CONTEXT_MAX_BYTES on write. */
   context?: string
 
@@ -254,6 +277,26 @@ export type NodeSpecPatch = Omit<
   Partial<NodeSpec>,
   'text'
 > & { text?: Partial<TextSpec> }
+
+/**
+ * One `update_component` slot entry (B30).
+ *
+ * `component.createSlot()` takes no argument, so a fresh slot is born 100×100
+ * FIXED with an opaque #FFFFFF fill and no auto-layout. The spec is applied to
+ * it through the SAME write face `update_node`'s patch goes through — hence
+ * literally a `NodeSpecPatch` with `name` required — so one call yields a
+ * usable slot instead of a create plus two `update_node` follow-ups.
+ *
+ * The index signature is the passthrough half of the schema: an unknown key
+ * SURVIVES validation so the handler can report it (T7), and is never applied.
+ */
+export type SlotSpec = NodeSpecPatch & {
+  name: string
+  [key: string]: unknown
+}
+
+/** A slot entry: a bare name, or a name plus the spec applied to the slot. */
+export type SlotEntry = string | SlotSpec
 
 /**
  * The create_tree node shape: a NodeSpec with recursive children, a

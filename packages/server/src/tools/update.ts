@@ -32,8 +32,8 @@ export const handleUpdateNode = async (
 ): Promise<ToolResult> => {
   try {
     assertContextWithinCap(patch)
-    // The writer pushes lossy-conversion notes (e.g. per-side stroke collapse)
-    // onto `warnings`.
+    // The writer pushes lossy-conversion notes (e.g. GRID-only layout keys on
+    // an H/V mode) onto `warnings`.
     const warnings: string[] = []
     const spec = specToFigma(patch, warnings)
     // A key the write face does not know is DROPPED, not applied — say so

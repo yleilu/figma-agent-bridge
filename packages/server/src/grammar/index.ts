@@ -9,8 +9,10 @@
 //                      emit hex (6/8-char UPPERCASE), image(HASH) — never
 //                      write sugar.
 //   Write face:        atomToPaint/etc. also accept rgb()/rgba() and
-//                      image(url) sugar the view never emits. var() is
-//                      read-only (binding rides on bind_variable).
+//                      image(url) sugar the view never emits. The typed
+//                      converters resolve an atom to its LITERAL; the
+//                      wrapper's binding intent is carried separately by
+//                      serialize/wrapper-bindings.ts.
 
 export type {
   AtomAST,

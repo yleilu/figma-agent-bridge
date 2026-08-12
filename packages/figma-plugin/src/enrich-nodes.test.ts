@@ -160,6 +160,61 @@ describe('syncPatch — the fields REST cannot carry', () => {
     ).toBe(false)
   })
 
+  // B27 — per-side stroke weights. The node's own `strokeWeight` is
+  // figma.mixed exactly when the four sides disagree, so the uniform field
+  // cannot describe a divider; the four sides can, and only they cross.
+  it('carries the four per-side stroke weights when they DIFFER', () => {
+    const patch = syncPatch(
+      node({
+        id: '1:3b',
+        type: 'FRAME',
+        strokeWeight: MIXED,
+        strokeTopWeight: 0,
+        strokeRightWeight: 0,
+        strokeBottomWeight: 1,
+        strokeLeftWeight: 0,
+      }),
+      MIXED,
+    )
+    expect(patch).toMatchObject({
+      strokeTopWeight: 0,
+      strokeRightWeight: 0,
+      strokeBottomWeight: 1,
+      strokeLeftWeight: 0,
+    })
+    expect(
+      Object.values(patch).some(v => typeof v === 'symbol'),
+    ).toBe(false)
+  })
+
+  it('adds nothing when the four sides are EQUAL — the uniform weight already says it', () => {
+    const patch = syncPatch(
+      node({
+        id: '1:3c',
+        type: 'FRAME',
+        strokeWeight: 2,
+        strokeTopWeight: 2,
+        strokeRightWeight: 2,
+        strokeBottomWeight: 2,
+        strokeLeftWeight: 2,
+      }),
+      MIXED,
+    )
+    expect('strokeTopWeight' in patch).toBe(false)
+  })
+
+  it('adds nothing for a node type without per-side support', () => {
+    const patch = syncPatch(
+      node({
+        id: '1:3d',
+        type: 'ELLIPSE',
+        strokeWeight: 1,
+      }),
+      MIXED,
+    )
+    expect('strokeTopWeight' in patch).toBe(false)
+  })
+
   it('projects the runs of a mixed-run TEXT', () => {
     const patch = syncPatch(mixedText('1:4'), MIXED)
     const runs = patch.runs as { at: number[] }[]
@@ -460,6 +515,131 @@ describe('collectPatches — the async halves, batched', () => {
   })
 })
 
+describe('collectPatches — one bad node costs one node (B31)', () => {
+  // The live failure, verbatim: a node created inside a component SLOT keeps a
+  // stale creation-id, and every property read on it throws. ONE such node
+  // inside a 978 KB read used to return 151 bytes of PLUGIN_ERROR.
+  const STALE =
+    'in getSharedPluginData: The node (instance sublayer or table cell) with id "I3:1;4:5;6:7" does not exist'
+
+  /** A node that no longer resolves: reading its context throws. */
+  const unreadable = (id: string): LiveNode =>
+    node({
+      id,
+      type: 'FRAME',
+      getSharedPluginData: () => {
+        throw new Error(STALE)
+      },
+    })
+
+  it('names the failure on the throwing node and returns its siblings whole', async () => {
+    const root = node({ id: 'root', type: 'FRAME' }, [
+      star('good-before'),
+      unreadable('gone'),
+      star('good-after'),
+    ])
+
+    const patches = await collectPatches(root, -1, deps())
+
+    expect(patches.get('gone')?.readError).toContain(STALE)
+    for (const id of ['good-before', 'good-after']) {
+      expect(patches.get(id)).toMatchObject({
+        pointCount: 7,
+        innerRadius: 0.4,
+      })
+      expect('readError' in patches.get(id)!).toBe(false)
+    }
+  })
+
+  it('survives a node that throws in the ASYNC half too', async () => {
+    const root = node({ id: 'root', type: 'FRAME' }, [
+      node({
+        id: 'stale-instance',
+        type: 'INSTANCE',
+        // Throws SYNCHRONOUSLY, as an unreachable node does — there is no
+        // promise to reject, so a .catch() on the result never runs.
+        getMainComponentAsync: () => {
+          throw new Error(STALE)
+        },
+      }),
+      node({
+        id: 'live-instance',
+        type: 'INSTANCE',
+        getMainComponentAsync: async () => ({
+          key: 'abc123',
+          remote: false,
+        }),
+      }),
+    ])
+
+    const patches = await collectPatches(root, -1, deps())
+
+    expect(
+      patches.get('stale-instance')?.readError,
+    ).toContain(STALE)
+    expect(patches.get('live-instance')).toMatchObject({
+      componentKey: 'abc123',
+    })
+  })
+
+  it('survives a node whose CHILDREN cannot be listed, and says so on that node', async () => {
+    const broken: LiveNode = {
+      id: 'no-children',
+      type: 'FRAME',
+      width: 10,
+      height: 10,
+    }
+    Object.defineProperty(broken, 'children', {
+      get() {
+        throw new Error(
+          'in get_children: The node with id "I3:1;4:5" does not exist',
+        )
+      },
+      enumerable: true,
+      configurable: true,
+    })
+    const root = node({ id: 'root', type: 'FRAME' }, [
+      broken,
+      star('sibling'),
+    ])
+
+    const patches = await collectPatches(root, -1, deps())
+
+    expect(patches.get('no-children')).toMatchObject({
+      width: 10,
+    })
+    expect(patches.get('no-children')?.readError).toContain(
+      'in get_children',
+    )
+    expect(patches.get('sibling')?.pointCount).toBe(7)
+  })
+
+  it('a resolver that throws SYNCHRONOUSLY still loses only its own name', async () => {
+    const patches = await collectPatches(
+      node({
+        id: 'root',
+        type: 'RECTANGLE',
+        fillStyleId: 'S:gone',
+        pointCount: 5,
+      }),
+      0,
+      deps({
+        getStyleName: (() => {
+          throw new Error('deleted')
+        }) as unknown as (
+          id: string,
+        ) => Promise<string | undefined>,
+      }),
+    )
+    expect(patches.get('root')).toMatchObject({
+      pointCount: 5,
+    })
+    expect('bindingNames' in patches.get('root')!).toBe(
+      false,
+    )
+  })
+})
+
 describe('applyPatches / enrichDocument — merge by id', () => {
   it('merges each patch onto the exported node with the matching id', () => {
     const doc: Record<string, unknown> = {
@@ -486,6 +666,53 @@ describe('applyPatches / enrichDocument — merge by id', () => {
     const before = JSON.stringify(doc)
     applyPatches(doc, new Map(), 1)
     expect(JSON.stringify(doc)).toBe(before)
+  })
+
+  // B31 round 2, live-caught: the walk and the export key the SAME node by
+  // DIFFERENT ids — the walk sees the stale slot handle, the export names the
+  // canonical ancestor chain — so the patch matches nothing and the failure
+  // used to vanish at the merge, after being caught correctly.
+  it('reports a failure it cannot attach on the ROOT as readErrors', () => {
+    const doc: Record<string, unknown> = {
+      id: 'root',
+      type: 'FRAME',
+      children: [{ id: 'kid', type: 'STAR' }],
+    }
+    applyPatches(
+      doc,
+      new Map([
+        ['kid', { pointCount: 7 }],
+        [
+          'I<stale>;6:7',
+          {
+            readError:
+              'Error: in getSharedPluginData: The node (instance sublayer or table cell) with id "I<stale>;6:7" does not exist',
+          },
+        ],
+      ]),
+      1,
+    )
+    const errors = doc.readErrors as string[]
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('I<stale>;6:7: ')
+    expect(errors[0]).toContain('does not exist')
+    // The sibling that DID match still merged.
+    expect(
+      (doc.children as Record<string, unknown>[])[0],
+    ).toMatchObject({ pointCount: 7 })
+  })
+
+  it('does NOT invent readErrors for a clean patch that finds no home', () => {
+    const doc: Record<string, unknown> = {
+      id: 'root',
+      type: 'FRAME',
+    }
+    applyPatches(
+      doc,
+      new Map([['nowhere', { pointCount: 7 }]]),
+      -1,
+    )
+    expect('readErrors' in doc).toBe(false)
   })
 
   it('B23 end to end: a descendant reads exactly as it does as a root', async () => {

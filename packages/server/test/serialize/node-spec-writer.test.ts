@@ -1,14 +1,17 @@
 // node-spec-writer.test.ts — specToFigma / specToFigmaForCreate
 //
-// Tests the NodeSpec → FigmaWritePayload converter. This is a PURE
-// converter: it emits ONLY keys present in `spec`, never injecting
-// defaults. The plugin's applyCommonProperties/applyTextProperties/
+// Tests the NodeSpec → FigmaWritePayload converter. `specToFigma` is a PURE
+// converter: it emits ONLY keys present in `spec`, never injecting defaults.
+// The CREATE wrappers (`specToFigmaForCreate`, `slotEntryToFigma`) are where
+// the few creation defaults live — the `name ?? type` fallback and the frame
+// layout default. The plugin's applyCommonProperties/applyTextProperties/
 // applyPostAppendProperties read the flat payload keys.
 
 import { describe, expect, it } from 'bun:test'
 import {
   specToFigma,
   specToFigmaForCreate,
+  slotEntryToFigma,
 } from '@figma-agent-bridge/server/serialize/node-spec-writer'
 
 // ─── omit-untouched (pure) ───────────────────────────────────────────────────
@@ -37,13 +40,21 @@ describe('specToFigma — fills', () => {
     })
   })
 
-  it('var() wrapper is auto-dropped to the resolved literal', () => {
+  it('var() wrapper resolves to the literal AND carries its binding intent (I39)', () => {
     const result = specToFigma({
       fills: ['var(Brand/Primary)#FF0000'],
     })
     expect(result).toEqual({
       fills: [
         { type: 'SOLID', color: { r: 1, g: 0, b: 0 } },
+      ],
+      bindings: [
+        {
+          kind: 'var',
+          name: 'Brand/Primary',
+          field: 'fills',
+          index: 0,
+        },
       ],
     })
   })
@@ -80,28 +91,62 @@ describe('specToFigma — stroke geometry', () => {
     })
   })
 
-  it('per-side stroke weights collapse to the top side (strokeWeight)', () => {
-    const result = specToFigma({
-      stroke: 'stroke([2,0,2,0])',
-    })
-    expect(result).toMatchObject({ strokeWeight: 2 })
-  })
-
-  it('per-side stroke with DIFFERING sides pushes a collapse warning onto the sink', () => {
+  // B27: per-side weights are APPLIED, not collapsed. The four sides ride the
+  // payload as `strokeWeights` and the plugin assigns
+  // strokeTopWeight/… (IndividualStrokesMixin). The writer cannot know the
+  // target's node type, so it no longer warns here — the feature detection and
+  // its warning live where the node is (T7).
+  it('per-side stroke weights emit the four sides as strokeWeights', () => {
     const warnings: string[] = []
-    specToFigma({ stroke: 'stroke([2,0,2,0])' }, warnings)
-    expect(warnings).toHaveLength(1)
-    expect(warnings[0]).toContain('Per-side stroke')
-    expect(warnings[0]).toContain('collapsed')
+    const result = specToFigma(
+      { stroke: 'stroke([0,0,1,0])' },
+      warnings,
+    )
+    expect(result).toMatchObject({
+      strokeWeights: [0, 0, 1, 0],
+    })
+    // No uniform weight beside it: one owner for the value, so nothing can
+    // re-collapse the tuple after the fact.
+    expect(result.strokeWeight).toBeUndefined()
+    expect(warnings).toHaveLength(0)
   })
 
-  it('per-side stroke with EQUAL sides is a lossless collapse — no warning', () => {
+  // A five-entry list used to lose its fifth to a destructure and land as a
+  // well-formed four-sided stroke — the caller asked for something this
+  // surface does not have and was told nothing. Degrade WHOLE instead.
+  it.each([
+    ['stroke([1,2,3,4,5])', 5],
+    ['stroke([1,2,3])', 3],
+  ])('a %s tuple degrades whole, with a warning', atom => {
+    const warnings: string[] = []
+    const result = specToFigma({ stroke: atom }, warnings)
+    expect(result.strokeWeights).toBeUndefined()
+    expect(result.strokeWeight).toBeUndefined()
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain(
+      'takes four weights [top,right,bottom,left]',
+    )
+  })
+
+  it('a non-numeric side degrades whole rather than writing NaN', () => {
+    const warnings: string[] = []
+    const result = specToFigma(
+      { stroke: 'stroke([1,x,1,0])' },
+      warnings,
+    )
+    expect(result.strokeWeight).toBeUndefined()
+    expect(result.strokeWeights).toBeUndefined()
+    expect(warnings).toHaveLength(1)
+  })
+
+  it('per-side stroke with EQUAL sides emits the plain uniform weight', () => {
     const warnings: string[] = []
     const result = specToFigma(
       { stroke: 'stroke([2,2,2,2])' },
       warnings,
     )
     expect(result).toMatchObject({ strokeWeight: 2 })
+    expect(result.strokeWeights).toBeUndefined()
     expect(warnings).toHaveLength(0)
   })
 
@@ -133,13 +178,25 @@ describe('specToFigma — radius', () => {
   // which Figma rejects ("Expected number, received null", verified live). A
   // read-modify-write on any token-bound node failed outright — precisely the
   // design-system workflow T9 exists to encourage.
-  it('strips a var() wrapper from a uniform radius', () => {
+  it('resolves a var()-wrapped uniform radius to its number (and binds it — I39)', () => {
     expect(
       specToFigma({ radius: 'var(radius/medium)8' }),
-    ).toEqual({ radius: 8 })
+    ).toEqual({
+      radius: 8,
+      bindings: [
+        {
+          kind: 'var',
+          name: 'radius/medium',
+          field: 'cornerRadius',
+        },
+      ],
+    })
   })
 
-  it('strips a var() wrapper from a per-corner radius', () => {
+  // A per-corner radius keeps the old strip-behaviour on purpose: Figma's one
+  // cornerRadius binding covers all four corners, so binding here would square
+  // the corners this tuple says are different (I39 — the loss is warned about).
+  it('resolves a var()-wrapped per-corner radius to its tuple, unbound', () => {
     expect(
       specToFigma({
         radius: 'var(radius/medium)[8,8,0,0]',
@@ -576,6 +633,209 @@ describe('specToFigmaForCreate', () => {
     expect(result).toHaveProperty('fills')
     const fills = result.fills as { type: string }[]
     expect(fills[0].type).toBe('SOLID')
+  })
+})
+
+// ─── creation layout default (B29) ────────────────────────────────────────────
+//
+// A created FRAME stacks. The default fills a SILENCE only: any layout the spec
+// states — `NONE` included — is what the plugin receives.
+
+describe('specToFigmaForCreate — creation layout default', () => {
+  it('a FRAME that states no layout is created as a vertical stack', () => {
+    expect(
+      specToFigmaForCreate({ type: 'FRAME' }).layout,
+    ).toEqual({ mode: 'V' })
+  })
+
+  it('an explicit layout passes through untouched', () => {
+    expect(
+      specToFigmaForCreate({
+        type: 'FRAME',
+        layout: { mode: 'H', gap: 8 },
+      }).layout,
+    ).toEqual({ mode: 'H', spacing: 8 })
+  })
+
+  it('layout NONE is the opt-out — absolute, not the default', () => {
+    expect(
+      specToFigmaForCreate({
+        type: 'FRAME',
+        layout: { mode: 'NONE' },
+      }).layout,
+    ).toEqual({ mode: 'NONE' })
+  })
+
+  it('a SLOT asked for by create_node takes the same default', () => {
+    expect(
+      specToFigmaForCreate({ type: 'SLOT' }).layout,
+    ).toEqual({ mode: 'V' })
+  })
+
+  it('every other node type is untouched', () => {
+    for (const type of [
+      'TEXT',
+      'RECTANGLE',
+      'ELLIPSE',
+      'LINE',
+      'POLYGON',
+      'STAR',
+      'VECTOR',
+      'SECTION',
+      'SLICE',
+      'INSTANCE',
+    ] as const) {
+      expect(
+        specToFigmaForCreate({ type }).layout,
+      ).toBeUndefined()
+    }
+  })
+
+  it('the default is creation-only — the patch converter still injects nothing', () => {
+    // update_node's omitted `layout` means "leave untouched", and an existing
+    // absolute frame must never be converted behind the agent's back.
+    expect(
+      specToFigma({ type: 'FRAME' } as never).layout,
+    ).toBeUndefined()
+  })
+
+  it('each create gets its own layout object (no shared mutable default)', () => {
+    const a = specToFigmaForCreate({ type: 'FRAME' })
+    const b = specToFigmaForCreate({ type: 'FRAME' })
+    expect(a.layout).not.toBe(b.layout)
+  })
+})
+
+// ─── the injected layout pins a stated size (B29) ─────────────────────────────
+//
+// Figma's auto-layout hugs by default, so the injected layout would otherwise
+// SHRINK a frame that stated its size — live: a FRAME created at [300,200] with
+// one child read back [300,30], sizing ["FIXED","HUG"]. The default may add an
+// arrangement; it may not discard a field the caller stated.
+
+describe('specToFigmaForCreate — the default never shrinks a sized frame', () => {
+  it('a stated size with no sizing is pinned FIXED', () => {
+    const out = specToFigmaForCreate({
+      type: 'FRAME',
+      size: [300, 200],
+    })
+    expect(out.layout).toEqual({ mode: 'V' })
+    expect(out.sizing).toEqual(['FIXED', 'FIXED'])
+  })
+
+  it('an explicit sizing is left alone — the caller already answered', () => {
+    expect(
+      specToFigmaForCreate({
+        type: 'FRAME',
+        size: [300, 200],
+        sizing: ['FILL', 'HUG'],
+      }).sizing,
+    ).toEqual(['FILL', 'HUG'])
+  })
+
+  it('no size stated, no sizing invented — hug is right for a container that named no height', () => {
+    const out = specToFigmaForCreate({ type: 'FRAME' })
+    expect(out.layout).toEqual({ mode: 'V' })
+    expect(out.sizing).toBeUndefined()
+  })
+
+  it('an explicit layout owns its own sizing — nothing is pinned', () => {
+    const out = specToFigmaForCreate({
+      type: 'FRAME',
+      size: [300, 200],
+      layout: { mode: 'H' },
+    })
+    expect(out.layout).toEqual({ mode: 'H' })
+    expect(out.sizing).toBeUndefined()
+  })
+
+  it('mode NONE stays absolute — no layout injected, so no sizing either', () => {
+    const out = specToFigmaForCreate({
+      type: 'FRAME',
+      size: [300, 200],
+      layout: { mode: 'NONE' },
+    })
+    expect(out.layout).toEqual({ mode: 'NONE' })
+    expect(out.sizing).toBeUndefined()
+  })
+
+  it('a non-frame type takes neither half of the default', () => {
+    const out = specToFigmaForCreate({
+      type: 'RECTANGLE',
+      size: [300, 200],
+    })
+    expect(out.layout).toBeUndefined()
+    expect(out.sizing).toBeUndefined()
+  })
+})
+
+// ─── slotEntryToFigma ────────────────────────────────────────────────────────
+
+describe('slotEntryToFigma — creation layout default', () => {
+  it('an entry that states no layout is created as a vertical stack', () => {
+    expect(
+      slotEntryToFigma({ name: 'Body', fills: ['#FFF'] }),
+    ).toMatchObject({
+      name: 'Body',
+      layout: { mode: 'V' },
+    })
+  })
+
+  it('a bare name is exactly {name} — and takes the same default', () => {
+    expect(slotEntryToFigma('Body')).toEqual({
+      name: 'Body',
+      layout: { mode: 'V' },
+    })
+  })
+
+  it('an explicit layout passes through untouched', () => {
+    expect(
+      slotEntryToFigma({
+        name: 'Row',
+        layout: { mode: 'H', gap: 12 },
+      }).layout,
+    ).toEqual({ mode: 'H', spacing: 12 })
+  })
+
+  it('layout NONE is the opt-out here too', () => {
+    expect(
+      slotEntryToFigma({
+        name: 'Free',
+        layout: { mode: 'NONE' },
+      }).layout,
+    ).toEqual({ mode: 'NONE' })
+  })
+
+  it('a stated size is pinned FIXED, on the same terms as a frame', () => {
+    const out = slotEntryToFigma({
+      name: 'Body',
+      size: [320, 480],
+    })
+    expect(out.layout).toEqual({ mode: 'V' })
+    expect(out.sizing).toEqual(['FIXED', 'FIXED'])
+  })
+
+  it('a stated sizing is left alone', () => {
+    expect(
+      slotEntryToFigma({
+        name: 'Body',
+        size: [320, 480],
+        sizing: ['FILL', 'FILL'],
+      }).sizing,
+    ).toEqual(['FILL', 'FILL'])
+  })
+
+  it('an entry that states its own layout owns its sizing too', () => {
+    const out = slotEntryToFigma({
+      name: 'Row',
+      size: [320, 48],
+      layout: { mode: 'H' },
+    })
+    expect(out.sizing).toBeUndefined()
+  })
+
+  it('a bare name states no size, so nothing is pinned', () => {
+    expect(slotEntryToFigma('Body').sizing).toBeUndefined()
   })
 })
 

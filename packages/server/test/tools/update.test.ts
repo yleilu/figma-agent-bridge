@@ -111,14 +111,14 @@ describe('handleUpdateNode', () => {
     )
   })
 
-  // 3c: a server-side writer warning (per-side stroke collapse) is MERGED into
-  // the reply's structured warnings[] — one concept, one surface — rather than
-  // appended as loose trailing text after the JSON.
+  // 3c: a server-side writer warning (GRID-only layout keys on a non-GRID
+  // mode) is MERGED into the reply's structured warnings[] — one concept, one
+  // surface — rather than appended as loose trailing text after the JSON.
   it('merges server-side writer warnings into the structured warnings[]', async () => {
     const result = await handleUpdateNode(
       {
         nodeId: '1:42',
-        patch: { stroke: 'stroke([1,2,3,4])' },
+        patch: { layout: { mode: 'V', rows: 2 } },
       },
       stubClient({
         reply: {
@@ -135,11 +135,13 @@ describe('handleUpdateNode', () => {
       warnings: string[]
     }
     expect(out.id).toBe('1:42')
-    // Both the plugin warning and the server collapse warning live in warnings[].
+    // Both the plugin warning and the server writer warning live in warnings[].
     expect(out.warnings).toContain('a plugin warning')
     expect(
       out.warnings.some(w =>
-        w.includes('collapsed to a single strokeWeight'),
+        w.includes(
+          'rows/cols/rowGap/colGap keys are GRID-only',
+        ),
       ),
     ).toBe(true)
   })
@@ -210,6 +212,32 @@ describe('handleUpdateNode — unknown patch keys are never silent', () => {
     }
     expect(data.warnings.join(' ')).toContain(
       'nothing was changed',
+    )
+  })
+
+  // A read-modify-write echoes the read's own honesty fields back. They are
+  // NodeSpec fields (expression-formats.md → Read-only node fields), just
+  // read-only ones — so the warning must say READ-ONLY, never that the field
+  // does not exist, which would contradict the grammar the agent read.
+  it('calls an echoed read-only field read-only, not unknown', async () => {
+    const result = await handleUpdateNode(
+      {
+        nodeId: '1:42',
+        patch: {
+          readError: 'node not found',
+          position: [10, 20],
+        } as Record<string, unknown>,
+      },
+      stubClient({}),
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      warnings: string[]
+    }
+    expect(data.warnings).toHaveLength(1)
+    expect(data.warnings[0]).toContain('readError')
+    expect(data.warnings[0]).toContain('read-only')
+    expect(data.warnings[0]).not.toContain(
+      'not a NodeSpec field',
     )
   })
 

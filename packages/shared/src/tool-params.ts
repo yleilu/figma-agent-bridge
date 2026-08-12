@@ -26,6 +26,7 @@ import { FEEDBACK_CATEGORIES } from './feedback'
 import {
   nodeSpecSchema,
   partialNodeSpecSchema,
+  slotEntrySchema,
   treeNodeSpecSchema,
 } from './node-spec-schema'
 import {
@@ -573,7 +574,7 @@ export const updateNodeParamsSchema = z.object({
 export const createNodeParamsSchema = z.object({
   ...fileTargetParamsSchema.shape,
   spec: nodeSpecSchema.describe(
-    'The NodeSpec to create. Its `type` selects the Figma node kind.',
+    'The NodeSpec to create. Its `type` selects the Figma node kind. A FRAME that names no `layout` is created as a vertical auto-layout stack, and a `size` it stated is pinned FIXED so the stack cannot hug it away; pass `layout:{mode:"NONE"}` for an absolutely-positioned frame, or any other `layout` to choose your own (then `sizing` is yours to state too).',
   ),
   parentId: z
     .string()
@@ -592,7 +593,7 @@ export const createNodeParamsSchema = z.object({
 export const createTreeParamsSchema = z.object({
   ...fileTargetParamsSchema.shape,
   tree: treeNodeSpecSchema.describe(
-    'The root TreeNodeSpec (recursive children, { ref } reuse, or { id } clone).',
+    'The root TreeNodeSpec (recursive children, { ref } reuse, or { id } clone). Every FRAME in the tree that names no `layout` is created as a vertical auto-layout stack, and a `size` it stated is pinned FIXED so the stack cannot hug it away; pass `layout:{mode:"NONE"}` on the ones that position their children absolutely.',
   ),
   parentId: z
     .string()
@@ -1311,10 +1312,10 @@ export const updateComponentParamsSchema = z.object({
       'Nested instance node IDs to expose (T7-gated: degrades with a warning if unsupported).',
     ),
   slots: z
-    .array(z.string())
+    .array(slotEntrySchema)
     .optional()
     .describe(
-      'Names of slots to CREATE inside this component. Each becomes a new empty SLOT node (named accordingly) that instances fill per-screen. T7-gated: degrades with a warning if createSlot is unavailable.',
+      "Slots to CREATE inside this component. Each entry becomes a new empty SLOT node (named accordingly) that instances fill per-screen. An entry is either a bare NAME, or `{name, ...spec}` where the spec is update_node's own patch with `name` required — every field it accepts is accepted here, in the same atom grammar (inline var()/style() wrappers included), and applied to the fresh slot. `fills`, `sizing` and `size` are the ones that make a slot usable in one call, since a created slot is born 100×100 FIXED with an opaque #FFFFFF fill — but `radius`, `opacity`, `strokes`, `effects` and the rest land too. An entry that names no `layout` — a bare name included — is created as a vertical auto-layout stack, and a `size` it stated is pinned FIXED so the stack cannot hug it away; pass `layout:{mode:'NONE'}` (or any other layout) to choose otherwise. T7-gated: degrades with a warning if createSlot is unavailable; a field the SLOT cannot take is named in warnings[] (attributed to the slot) while the slot is still created, named, and given its other fields.",
     ),
 })
 

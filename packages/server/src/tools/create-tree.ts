@@ -70,7 +70,8 @@ const isCloneNode = (
  *   are recursively converted and re-attached.
  *
  * `warnings` is an optional sink: lossy conversions anywhere in the tree (e.g.
- * a per-side stroke collapse) push onto it so the handler can surface them.
+ * a `var()` wrapper the surface cannot bind) push onto it so the handler can
+ * surface them.
  */
 export const convertTree = (
   spec: TreeNodeSpec,
@@ -147,6 +148,7 @@ const shapeReply = (
     name?: string
     type?: string
     ids?: string[]
+    warnings?: string[]
   } | null,
   warnings: string[],
 ):
@@ -159,7 +161,19 @@ const shapeReply = (
   ) {
     return result
   }
-  const { id, name, type, ids, ...rest } = result
+  // `warnings` is pulled out and dropped here on purpose: the caller has
+  // already merged it into the shared list that gets rendered as `Warning:`
+  // lines. Leaving it in `rest` would spread it into the JSON body too and
+  // report every degrade twice.
+  const {
+    id,
+    name,
+    type,
+    ids,
+    warnings: pluginWarnings,
+    ...rest
+  } = result
+  void pluginWarnings
   if (!Array.isArray(ids)) {
     warnings.push(
       'the plugin reported no created ids — only the root is addressable from this reply; re-read the subtree to address its children',
@@ -205,7 +219,17 @@ export const handleCreateTree = async (
       name?: string
       type?: string
       ids?: string[]
+      warnings?: string[]
     } | null
+
+    // Plugin-side degrades (T7) join the server's own lossy-conversion notes in
+    // ONE list. The plugin can only degrade at write time — a `sizing:['FILL',…]`
+    // Figma refuses on a child of a SLOT, an x/y the auto-layout parent
+    // overwrites — and the caller sees a single reply for the whole subtree, so
+    // if these are not merged here they are lost.
+    if (Array.isArray(result?.warnings)) {
+      warnings.push(...result.warnings)
+    }
 
     const mutation = formatMutationResult(
       shapeReply(result, warnings),

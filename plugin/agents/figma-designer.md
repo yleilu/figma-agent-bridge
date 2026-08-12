@@ -75,7 +75,8 @@ Follow the figma-design skill for all tool mechanics:
 - Work the workflow spine: tokens → styles → components → layout → content.
 - Bind variables and apply styles to masters so instances inherit.
 - Use the compound-id override for instance text content.
-- Set `sizing:['FIXED','FIXED']` on fixed frames so they don't collapse.
+- Set `sizing:['FIXED','FIXED']` on fixed frames whose `layout` you stated yourself, so they
+  don't collapse — a create that states no layout gets its stated size pinned for it.
 - Batch calls where possible; prefer scoped reads over full-document scans.
 
 Name every node semantically as you create it. Never leave default names like

@@ -87,6 +87,9 @@ export const PROFILES: Record<
  *
  * Unknown field names in `fields` are silently ignored (no throw).
  * Returns the node unchanged (same reference) when no selector is given.
+ *
+ * `readError`/`readErrors` survive every selector — see the note at the end of
+ * the body.
  */
 export const projectNode = (
   n: NodeSpec,
@@ -132,6 +135,21 @@ export const projectNode = (
         n as Record<string, unknown>
       )[k]
     }
+  }
+  // `readError`/`readErrors` are OUTSIDE projection, like `contextSummary`:
+  // they do not say what the node IS, they say a node could not be read. A
+  // profile that hides them hands back a node that merely looks thin, which is
+  // the failure the fields exist to prevent (T7) — and no `fields` list can
+  // ask for them, because the caller cannot know in advance which node will be
+  // unreachable. Exempted HERE rather than at each caller (the way
+  // `contextSummary` is) because these are pass-through fields, not ones
+  // derived after the fact: one clause covers inspect, get_node, get_nodes and
+  // search alike.
+  if (n.readError !== undefined) {
+    result.readError = n.readError
+  }
+  if (n.readErrors !== undefined) {
+    result.readErrors = n.readErrors
   }
   return result
 }

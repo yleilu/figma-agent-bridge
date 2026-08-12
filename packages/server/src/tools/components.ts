@@ -6,7 +6,11 @@
 //   create_tree first, then promote the returned id.
 //   → COMMANDS.CREATE_COMPONENT → {id,key,name,type}.
 // update_component: add/edit/delete componentPropertyDefinitions, set the
-//   description, expose nested instances (T7-gated). → COMMANDS.UPDATE_COMPONENT
+//   description, expose nested instances (T7-gated), create slots. A slot entry
+//   is a bare name (which IS `{name}`) or `{name, …spec}` — the spec is CONVERTED
+//   here on the shared write face (slotEntryToFigma) so the plugin applies it
+//   to the fresh slot through its ordinary apply pipeline (B30); conversion
+//   warnings merge into the reply's warnings[]. → COMMANDS.UPDATE_COMPONENT
 //   → {id,properties,warnings} where `properties` is the catalogue ARRAY of
 //   {id,name,type,defaultValue,variantOptions?} (round-trips get_components; each
 //   entry's `id` is the canonical property id added properties need).
@@ -31,14 +35,17 @@
 // ride along on success).
 
 import { COMMANDS } from '@figma-agent-bridge/shared'
+import type { SlotEntry } from '@figma-agent-bridge/shared/node-spec'
 import type { ScopedFigmaClient } from '../figma-client'
 import { splitComponentProperties } from '../serialize/node-spec-reader'
+import { slotEntryToFigma } from '../serialize/node-spec-writer'
 import {
   type ToolResult,
   formatMutationResult,
   toolError,
   pluginError,
   errorEnvelope,
+  isErrorResult,
   textResult,
 } from './shared'
 
@@ -94,11 +101,20 @@ export const handleUpdateComponent = async (
     delete?: string[]
     description?: string
     expose?: string[]
-    slots?: string[]
+    slots?: SlotEntry[]
   },
   client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
   try {
+    // B30: a slot entry may carry a spec. Convert it HERE, on the same write
+    // face create_node/update_node use, so the plugin receives Figma objects
+    // (and the `bindings[]` an inline var()/style() wrapper implies) rather
+    // than atom strings. A bare name is `{name}` and goes through the same
+    // converter, so both spellings create the same slot (B29).
+    const warnings: string[] = []
+    const convertedSlots = slots?.map(entry =>
+      slotEntryToFigma(entry, warnings),
+    )
     const result = (await client.sendCommand(
       COMMANDS.UPDATE_COMPONENT,
       {
@@ -108,13 +124,23 @@ export const handleUpdateComponent = async (
         delete: del,
         description,
         expose,
-        slots,
+        slots: convertedSlots,
       },
-    )) as { error?: string } | null
-    return formatMutationResult(
+    )) as { error?: string; warnings?: string[] } | null
+    const mutation = formatMutationResult(
       result,
       'Failed to update component.',
     )
+    if (warnings.length === 0 || isErrorResult(mutation)) {
+      return mutation
+    }
+    // Merge the server-side conversion warnings INTO the reply's structured
+    // warnings[] (one concept, one surface), exactly as update_node does.
+    const merged = {
+      ...result,
+      warnings: [...(result?.warnings ?? []), ...warnings],
+    }
+    return textResult(JSON.stringify(merged, null, 2))
   } catch (err) {
     return toolError(err)
   }

@@ -384,6 +384,42 @@ const positionOf = (
   return [bbox.x as number, bbox.y as number]
 }
 
+/**
+ * Does this node lay its children out? Auto-layout (H/V/GRID) does; a plain
+ * frame — `layoutMode: NONE`, or no `layoutMode` at all, which is what
+ * JSON_REST_V1 emits for everything that is not a frame — does not.
+ */
+const laysOutChildren = (raw: RawNode): boolean => {
+  const mode = str(raw.layoutMode)
+  return (
+    mode === 'HORIZONTAL' ||
+    mode === 'VERTICAL' ||
+    mode === 'GRID'
+  )
+}
+
+/**
+ * Is this node's stored x/y a value the layout engine stopped maintaining?
+ *
+ * Figma never lays out an INVISIBLE child of an auto-layout parent: the child
+ * keeps whatever x/y it last had, and both the parent's and the child's own
+ * geometry drift on around it. Emitting that unqualified reads as live
+ * geometry — a hidden legend parked at x=607 inside a 522-wide header says
+ * "this container is broken" when nothing is (T7: a value the engine is not
+ * maintaining is not presented as live).
+ *
+ * Two hidden children keep theirs, because theirs are real: an ABSOLUTE child
+ * is positioned by its own coordinates rather than by the flow, and a hidden
+ * child of a PLAIN frame was never laid out by anything, so nothing went stale.
+ */
+const positionIsStale = (
+  raw: RawNode,
+  parentLaysOutChildren: boolean,
+): boolean =>
+  parentLaysOutChildren &&
+  raw.visible === false &&
+  str(raw.layoutPositioning) !== 'ABSOLUTE'
+
 // ─── paint: raw → FigmaPaint → atom (with var() wrapper) ──────────────────────
 
 /** Convert a JSON_REST_V1 paint to the grammar's FigmaPaint shape. */
@@ -651,6 +687,53 @@ const STROKE_WEIGHT_BOUND_KEYS = [
   'BORDER_LEFT_WEIGHT',
 ] as const
 
+/** REST's per-side keys, in the tuple's [top,right,bottom,left] order. */
+const REST_STROKE_WEIGHT_KEYS = [
+  'top',
+  'right',
+  'bottom',
+  'left',
+] as const
+
+/**
+ * The four per-side stroke weights as `[t,r,b,l]`, or undefined when this node
+ * does not report them (B27).
+ *
+ * TWO SOURCES, one shape. The guaranteed one is the plugin's enrichment
+ * (enrich-nodes.ts `syncPatch`), which patches the FLAT Plugin-API field names
+ * onto the exported node — and only when the sides DIFFER, so an ordinary
+ * uniformly-stroked node carries none of this. The second is REST's own nested
+ * `individualStrokeWeights` object, read when a raw JSON_REST_V1 dump happens
+ * to carry it; a dump carrying neither reads from the uniform `strokeWeight`
+ * exactly as it always has.
+ *
+ * All four or nothing: a partial set says nothing trustworthy about the sides
+ * it omits, and half a tuple would be a worse answer than the uniform number.
+ */
+const perSideWeights = (
+  raw: RawNode,
+): [number, number, number, number] | undefined => {
+  const flat = [
+    num(raw.strokeTopWeight),
+    num(raw.strokeRightWeight),
+    num(raw.strokeBottomWeight),
+    num(raw.strokeLeftWeight),
+  ]
+  if (flat.every(w => w !== undefined)) {
+    return flat as [number, number, number, number]
+  }
+  const nested = raw.individualStrokeWeights
+  if (nested === null || typeof nested !== 'object') {
+    return undefined
+  }
+  const rest = REST_STROKE_WEIGHT_KEYS.map(k =>
+    num((nested as Record<string, unknown>)[k]),
+  )
+  return rest.every(w => w !== undefined)
+    ? (rest as [number, number, number, number])
+    : undefined
+}
+
 /**
  * The stroke's GEOMETRY (expression-formats.md) — so a node with no stroke has
  * none to report. `hasStroke` is the caller's already-computed `strokes` atom
@@ -670,11 +753,30 @@ const strokeGeom = (
   if (!hasStroke) {
     return undefined
   }
-  const weight = num(raw.strokeWeight)
+  // Per-side weights first (B27). They are the only truthful account of a node
+  // whose sides differ — its `strokeWeight` is `figma.mixed` there, so the
+  // uniform field is either absent from the export or not one value at all.
+  // The tuple is emitted ONLY when the sides actually differ: four equal sides
+  // are the plain number, which is what the write face round-trips back and
+  // what expression-formats.md shows.
+  const per = perSideWeights(raw)
+  const uniform =
+    per === undefined ||
+    (per[0] === per[1] &&
+      per[1] === per[2] &&
+      per[2] === per[3])
+  // A non-uniform node is drawn wherever ANY side is non-zero — `[0,0,1,0]` is
+  // a bottom rule, not an absent stroke — so the "is anything drawn" gate reads
+  // the largest side.
+  const weight = uniform
+    ? (per?.[0] ?? num(raw.strokeWeight))
+    : Math.max(...(per as number[]))
   if (weight === undefined || weight <= 0) {
     return undefined
   }
-  const geom: FigmaStrokeGeom = { weight }
+  const geom: FigmaStrokeGeom = uniform
+    ? { weight }
+    : { weights: per }
   const align = str(raw.strokeAlign)
   if (align !== undefined && align !== 'CENTER') {
     geom.align = align
@@ -1235,11 +1337,17 @@ const toStub = (raw: RawNode): IdStub => {
  *
  * `bindingNames` is read off THIS node's own raw export — see the note at the
  * top of this file. It is never inherited from an ancestor.
+ *
+ * `parentLaysOutChildren` is the ACTUAL parent's auto-layout state, threaded
+ * down from the recursion site (a node's own `layoutMode` says nothing about
+ * whether something lays IT out). It decides whether this node's stored
+ * position is live — see positionIsStale.
  */
 const buildNode = (
   raw: RawNode,
   remaining: number,
   parentBBox: RawBBox | undefined,
+  parentLaysOutChildren: boolean,
 ): NodeSpec => {
   const bindingNames = raw.bindingNames as
     | BindingNames
@@ -1266,9 +1374,40 @@ const buildNode = (
     out.context = context
   }
 
+  // The plugin's per-node degrade (T7): this node refused to be read, and the
+  // enrichment named the failure instead of losing the whole export. Passed
+  // straight through — a node that comes back thin has to SAY it is thin, or
+  // the read is quietly wrong about the document.
+  const readError = str(raw.readError)
+  if (readError !== undefined && readError !== '') {
+    out.readError = readError
+  }
+
+  // …and the failures that had no node of their own to land on, reported by
+  // the plugin on the ROOT of the returned tree (a stale handle is named by one
+  // id during the walk and another in the export, so the patch matches
+  // nothing).
+  const { readErrors } = raw
+  if (Array.isArray(readErrors)) {
+    const named = readErrors.filter(
+      (e): e is string => typeof e === 'string' && e !== '',
+    )
+    if (named.length > 0) {
+      out.readErrors = named
+    }
+  }
+
   out.size = sizeOf(raw)
 
-  const position = positionOf(raw, parentBBox)
+  // B26 — an invisible child of an auto-layout parent has no live position, so
+  // it is emitted with none (see positionIsStale). `visible: false` and the
+  // parent's `layout.mode` are both in the read, so the absence is legible.
+  const position = positionIsStale(
+    raw,
+    parentLaysOutChildren,
+  )
+    ? undefined
+    : positionOf(raw, parentBBox)
   if (position !== undefined) {
     out.position = position
   }
@@ -1541,12 +1680,20 @@ const buildNode = (
       // Thread THIS node's bbox down so each child's position is computed
       // parent-relative (child.bbox − parent.bbox) when no relativeTransform.
       const childParentBBox = bboxOf(raw)
+      // …and THIS node's auto-layout state, which is the only place a child can
+      // learn whether anything is laying it out (B26).
+      const childParentLaysOut = laysOutChildren(raw)
       // Each child resolves its own bindingNames off its own raw export
       // (buildNode reads them there), so a wrapper never leaks down from an
       // ancestor and a descendant the read returns complete keeps the
       // style(...)/var(...) it actually has.
       const built: NodeSpecOrStub[] = kids.map(c =>
-        buildNode(c, next, childParentBBox),
+        buildNode(
+          c,
+          next,
+          childParentBBox,
+          childParentLaysOut,
+        ),
       )
       out.children = built
     }
@@ -1565,6 +1712,8 @@ export const toNodeSpec = (
 ): NodeSpec => {
   const depth = opts.depth ?? 0
   // The export ROOT has no parent frame: positionOf falls back to its own
-  // absolute bbox origin (current behavior preserved).
-  return buildNode(raw, depth, undefined)
+  // absolute bbox origin (current behavior preserved), and with no parent in
+  // hand its position is never called stale — the read cannot know what, if
+  // anything, lays the root out.
+  return buildNode(raw, depth, undefined, false)
 }
