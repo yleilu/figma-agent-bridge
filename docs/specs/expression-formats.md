@@ -415,20 +415,70 @@ tool-surface design).
 
 ## var() / style() rules
 
-- Both wrap **any** atom; the resolved literal always follows.
+- Both wrap **any** atom; the resolved literal always follows. A wrapper with no
+  value — `fills: [var(surface/2)]` — is an error on both faces: the wrapper names
+  the binding, the literal *is* the value, and a write carrying only a name would
+  leave the appearance undefined until something else resolved it.
 - **Both wrappers name their source.** A read emits `style(Brand/Primary)` and
   `var(radius/medium)` — the design-system **name**, never the opaque runtime id.
   The name is what the agent reasons with and what it would write back; an id
   identifies the binding to Figma but tells the agent nothing about which token it
   is looking at, and costs a second call to find out.
-- **Both wrappers are read-only — the two *wrapper* asymmetries** (principle T2).
-  Each is emitted on a read to surface an existing binding; on **write** each
-  resolves to its literal, and the binding is applied by the tool that owns it —
-  `bind_variable` for `var()`, `apply_style` for `style()`. Writing a wrapper
-  therefore sets the appearance, never the binding. *(Principle T2 requires a field
-  that cannot round-trip to be documented rather than silent; this is that
-  documentation for the wrappers. The read-only **node fields** are listed
-  separately under the node struct.)*
+- **A wrapper with a value BINDS on write — the wrappers round-trip** (principle
+  T2). A read emits `var(surface/2)#141B2E`; writing that same atom back applies
+  the literal **and then** re-establishes the binding — `var(name)` resolves a
+  variable **by name** and binds the field, `style(Name)` resolves a local style by
+  name and category and applies it. Literal first, binding second, and the order
+  decides who wins: the literal guarantees the field is never left undefined and
+  is what **remains** if the binding cannot be made, while a binding that lands
+  **governs** the value from then on — a token whose value has moved on since the
+  agent last read it overrides the stale literal, which is exactly what being
+  bound means.
+
+  This is what makes the pair **symmetric**: the read face and the write face
+  speak the same string, so a read-modify-write preserves the binding it was shown
+  instead of flattening it to a literal. `bind_variable` / `apply_style` remain the
+  explicit route — for binding a field a write is not otherwise touching, and for
+  the things only they do (`bind_variable`'s collection-mode pin).
+
+  It also makes the design-system path the **cheap** one, which is what T9 needs
+  from the grammar. A binding that costs a second call per node per field loses
+  to a literal that is inline and looks identical on the canvas — so the agent
+  writes the right *value* and skips the *token*, and the document ends up
+  unbound at exactly the scale where tokens matter most. Inline, the two cost the
+  same, and the atom the read handed over is already the bound one.
+
+  **Binding is by NAME; an id is never accepted inline.** The name is what the read
+  emitted and what the agent reasons with (above); an id inside a wrapper is not a
+  shorter spelling of the same thing but a second vocabulary, and the grammar keeps
+  one. A name resolves to the **first match among the file's local collections** (or
+  local styles of that category), so two collections publishing the same name are
+  indistinguishable inline and a colliding name may bind a variable other than the
+  one the read reported — the standing cost of a name-only grammar, and the reason a
+  design system wants distinct token names.
+
+  **An unresolvable name degrades, never aborts** (T7). A `var(name)` with no
+  matching variable, or a `style(Name)` with no matching style of that category,
+  applies the literal and reports one `warnings[]` entry naming the wrapper
+  (`var(surface/2): no variable with that name — literal applied unbound`). The
+  node is still created or updated with the appearance that was asked for; a
+  missing token costs a binding, never the write.
+
+  **Scope — a wrapper binds on the fields listed here:** `fills[]`, `strokes[]`,
+  the `stroke(…)` weight and a **uniform** `radius` for `var()`; `fills[]`,
+  `strokes[]`, `effects[]` and `text.font` for `style()`; `text.color` for both
+  (it is the text node's first fill). A `var()` binds per paint, so
+  `fills[]`/`strokes[]` bind by index; a `style()` governs the whole array, so it
+  binds once per field.
+
+  Everywhere else a wrapper still resolves to its literal and reports one
+  `warnings[]` entry, so a write is never silent about the half it could not do.
+  Two of those are exceptions a read can itself produce, and both are named
+  deliberately: a per-range **`text.runs[].color`**, which the binding surface
+  reaches only at node level; and a **per-corner `radius`** (`var(radius/md)[8,8,0,0]`),
+  because Figma binds all four corners with one field — binding it would square the
+  corners the tuple says are different, so the geometry is kept and the binding is
+  dropped.
 - **Wrappers reach descendants; resolution is per token, not per field.** A read
   emits `style(...)`/`var(...)` on every node it returns complete — the requested
   node and, within `depth`, its descendants. Anything else would contradict the

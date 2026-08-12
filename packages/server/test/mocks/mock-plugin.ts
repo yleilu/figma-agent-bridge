@@ -78,6 +78,83 @@ const mockResolveInstanceProps = (
   return { resolved, warnings }
 }
 
+// FAITHFUL mirror of the figma-plugin bind-wrappers helper (I39): a converted
+// spec carries `bindings[]` — the NAME each inline var()/style() wrapper named —
+// and the plugin resolves each name against the document AFTER the literal has
+// landed, degrading an unresolvable name to ONE warning (never an abort). The
+// mock resolves against its own document fixtures (the get_variables /
+// get_styles cases below) and keeps the warning wording byte-faithful, so a
+// behavioural test asserts the real plugin's contract.
+// Both names this mock document defines: the get_variables collection entry,
+// and the name the card fixture's bound fill reads back as (bindingNames) —
+// which is what makes a read → write round-trip re-bind here.
+const MOCK_VARIABLE_NAMES = [
+  'Brand/Primary',
+  'surface/card-bg',
+]
+
+const MOCK_STYLE_NAMES: Record<string, string[]> = {
+  paint: ['Brand/Primary'],
+  text: ['Heading'],
+  effect: ['Card Shadow'],
+  grid: ['Layout/Columns'],
+}
+
+const MOCK_STYLE_CATEGORIES: Record<string, string> = {
+  fill: 'paint',
+  stroke: 'paint',
+  text: 'text',
+  effect: 'effect',
+  grid: 'grid',
+}
+
+type MockBinding = {
+  kind: 'var' | 'style'
+  name: string
+  field: string
+  index?: number
+}
+
+const mockApplyWrapperBindings = (
+  bindings: unknown,
+): { applied: MockBinding[]; warnings: string[] } => {
+  const applied: MockBinding[] = []
+  const warnings: string[] = []
+  if (!Array.isArray(bindings)) {
+    return { applied, warnings }
+  }
+  for (const binding of bindings as MockBinding[]) {
+    if (binding.kind === 'var') {
+      if (!MOCK_VARIABLE_NAMES.includes(binding.name)) {
+        warnings.push(
+          'var(' +
+            binding.name +
+            '): no variable with that name — literal applied unbound',
+        )
+        continue
+      }
+      applied.push(binding)
+      continue
+    }
+    const category = MOCK_STYLE_CATEGORIES[binding.field]
+    if (
+      category === undefined ||
+      !MOCK_STYLE_NAMES[category].includes(binding.name)
+    ) {
+      warnings.push(
+        'style(' +
+          binding.name +
+          '): no ' +
+          (category ?? binding.field) +
+          ' style with that name — literal applied unbound',
+      )
+      continue
+    }
+    applied.push(binding)
+  }
+  return { applied, warnings }
+}
+
 type MockPluginOptions = {
   relayUrl: string
   channel: string
@@ -935,6 +1012,12 @@ export const createMockPlugin = (
             )
           }
         }
+        // I39: the update path applies bindings in the same order the create
+        // path does — literal first, binding second — and degrades the same way.
+        const unBind = mockApplyWrapperBindings(
+          spec.bindings,
+        )
+        unWarnings.push(...unBind.warnings)
         result = {
           id: unId,
           name: (spec.name as string) ?? 'Card',
@@ -943,6 +1026,7 @@ export const createMockPlugin = (
           // Echo the converted spec so the e2e can assert the parsed paint
           // arrived intact.
           spec,
+          appliedBindings: unBind.applied,
         }
         break
       }
@@ -1190,6 +1274,14 @@ export const createMockPlugin = (
             sharedContext.set(createdId, nodeSpec.context)
           }
         }
+        // I39: bindings are applied AFTER the literal properties, exactly as
+        // buildSingleNode does — an unresolvable name warns and the literal
+        // stands. `appliedBindings` is a MOCK-ONLY echo (like `resolvedBy`
+        // above) so a test can tell a landed binding from a degraded one.
+        const cnBind = mockApplyWrapperBindings(
+          nodeSpec?.bindings,
+        )
+        cnWarnings.push(...cnBind.warnings)
         result = {
           ...echo,
           id: createdId,
@@ -1197,6 +1289,7 @@ export const createMockPlugin = (
           type: createdType,
           parentId,
           warnings: cnWarnings,
+          appliedBindings: cnBind.applied,
           // M14: echo resolvedBy for the INSTANCE create path so tests can
           // assert key-first (remote) vs id-first (local) behavior.
           ...(instanceResolvedBy !== undefined
@@ -1244,6 +1337,14 @@ export const createMockPlugin = (
         // the server can answer the tool-surface `{root, ids[]}`. A `{ ref }`
         // expands to its whole rebuilt subtree; an `{ id }` clone is ONE
         // realized node (its descendants come along, unenumerated).
+        //
+        // I39: every realized node applies ITS OWN bindings as it is built —
+        // the tree path runs through the same buildSingleNode the single create
+        // does, so a wrapper on a child binds exactly like a wrapper on a root,
+        // and a child's degrade lands in the ROOT's warnings (the only reply
+        // the caller sees).
+        const treeApplied: MockBinding[] = []
+        const treeBindWarnings: string[] = []
         const collectIds = (
           node: Record<string, unknown>,
           out: string[],
@@ -1283,6 +1384,11 @@ export const createMockPlugin = (
             return
           }
           mint()
+          const built = mockApplyWrapperBindings(
+            node.bindings,
+          )
+          treeApplied.push(...built.applied)
+          treeBindWarnings.push(...built.warnings)
           const children = node.children as
             | Record<string, unknown>[]
             | undefined
@@ -1314,6 +1420,12 @@ export const createMockPlugin = (
             parentId: treeParentId,
             refs: treeRefs,
             totalNodes: ids.length,
+            // The real plugin answers `warnings` only when the walk produced
+            // any (omitted when clean); `appliedBindings` is the mock-only echo.
+            ...(treeBindWarnings.length > 0
+              ? { warnings: treeBindWarnings }
+              : {}),
+            appliedBindings: treeApplied,
           }
         } catch (e) {
           error = String(e instanceof Error ? e.message : e)

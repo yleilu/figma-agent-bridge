@@ -34,6 +34,9 @@
 //       text.color, text.decoration, text.case, text.paragraphSpacing,
 //       text.lineHeight / text.letterSpacing ({value,unit}), textAutoResize
 //     applyPostAppendProperties — sizing, layoutPositioning
+//     applyWrapperBindings   — bindings (the NAME each inline var()/style()
+//       wrapper carried; applied AFTER the literal, on the create AND the
+//       update path — see serialize/wrapper-bindings.ts)
 //     createSingleNode (INSTANCE case) — component { id | key, properties }
 //       (resolves the main component, createInstance(), then setProperties)
 //
@@ -68,6 +71,7 @@ import {
   atomToPath,
   tokenize,
 } from '../grammar'
+import { collectWrapperBindings } from './wrapper-bindings'
 
 export type FigmaWritePayload = Record<string, unknown>
 
@@ -465,6 +469,19 @@ export const specToFigma = (
   }
   if (spec.context !== undefined) {
     out.context = spec.context
+  }
+
+  // ── binding intent (I39) ─────────────────────────────────────────────────
+  // Every converter above resolves its atom to the LITERAL and drops the
+  // wrapper — which is right, the literal is what Figma sets. The wrapper's
+  // NAME is the other half: a write of `var(surface/2)#141B2E` applies the
+  // paint AND re-establishes the binding (expression-formats.md). `bindings`
+  // carries that name to the plugin, which binds it once the literal has
+  // landed. Emitted only when a wrapper was actually present — the pure-emit
+  // contract holds for this key like every other.
+  const bindings = collectWrapperBindings(spec, warnings)
+  if (bindings.length > 0) {
+    out.bindings = bindings
   }
 
   return out

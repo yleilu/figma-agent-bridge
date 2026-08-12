@@ -17,6 +17,17 @@ import {
   applyGrids,
 } from './apply-node-fields'
 import {
+  applyStyleField,
+  applyWrapperBindings,
+  bindNodeField,
+  bindPaintField,
+  createBindingLookups,
+  STYLE_TYPES,
+  type BindTargetNode,
+  type StyleCategory,
+  type StyleField,
+} from './bind-wrappers'
+import {
   fontsToLoad,
   runsToRangeOps,
   type RangeOp,
@@ -318,6 +329,81 @@ const enrichDeps = () => ({
           (await figma.variables.getVariableByIdAsync(id))
             ?.name
       : undefined,
+})
+
+// ─── binding (var()/style() wrappers, bind_variable, apply_style) ────────────
+
+/**
+ * A local-token lister, feature-detected at CALL time (the enrichDeps rule):
+ * every one of these globals is optional in principle, and a plugin that
+ * dereferenced them while loading would die before it could degrade. An absent
+ * API throws here instead, which the binder catches into one warning (T7).
+ */
+const lister =
+  <T>(
+    label: string,
+    pick: () => (() => Promise<T[]>) | undefined,
+  ) =>
+  (): Promise<T[]> => {
+    const fn = pick()
+    if (typeof fn !== 'function') {
+      throw new Error(
+        label + ' unavailable in this Figma version',
+      )
+    }
+    return fn()
+  }
+
+/**
+ * Name → variable/style lookups, cached for ONE command dispatch (`reset()`
+ * runs at the top of handleCommand). A binding names a token, and only an
+ * enumeration turns that name into the object Figma binds; a create_tree that
+ * reuses eight tokens across a hundred nodes pays for one scan rather than one
+ * per node.
+ */
+const bindingLookups = createBindingLookups({
+  listVariables: lister('getLocalVariablesAsync', () =>
+    figma.variables?.getLocalVariablesAsync?.bind(
+      figma.variables,
+    ),
+  ),
+  listStyles: {
+    paint: lister('getLocalPaintStylesAsync', () =>
+      figma.getLocalPaintStylesAsync?.bind(figma),
+    ),
+    text: lister('getLocalTextStylesAsync', () =>
+      figma.getLocalTextStylesAsync?.bind(figma),
+    ),
+    effect: lister('getLocalEffectStylesAsync', () =>
+      figma.getLocalEffectStylesAsync?.bind(figma),
+    ),
+    grid: lister('getLocalGridStylesAsync', () =>
+      figma.getLocalGridStylesAsync?.bind(figma),
+    ),
+  },
+})
+
+/** figma.variables.setBoundVariableForPaint + figma.mixed, feature-detected. */
+const paintBindDeps = () => ({
+  mixed: figma.mixed as unknown,
+  setBoundVariableForPaint: (
+    figma.variables as
+      | {
+          setBoundVariableForPaint?: (
+            paint: unknown,
+            f: 'color',
+            v: unknown,
+          ) => unknown
+        }
+      | undefined
+  )?.setBoundVariableForPaint,
+})
+
+/** Everything the inline-wrapper binder needs: the two lookups + the paint deps. */
+const wrapperBindDeps = () => ({
+  ...paintBindDeps(),
+  variableByName: bindingLookups.variableByName,
+  styleByName: bindingLookups.styleByName,
 })
 
 /**
@@ -1569,6 +1655,17 @@ const buildSingleNode = async (
   // notice. A build then ships a node sized differently than it asked for.
   applyPostAppendProperties(node, spec, warnings)
 
+  // Bindings LAST: `var(surface/2)#141B2E` sets the paint above and binds the
+  // token here, so the binding always lands on a node that already looks
+  // right — and on a TEXT node, after applyTextProperties has set the font a
+  // style(...) would otherwise be detached by.
+  await applyWrapperBindings(
+    node as unknown as BindTargetNode,
+    spec.bindings,
+    wrapperBindDeps(),
+    warnings ?? [],
+  )
+
   // THE load-bearing claim: the node is in its real parent and its
   // auto-layout sizing is set, so `hugs()` can decide and the reflow closure
   // is the true one. The POC measured both — the at-creation closure is
@@ -1952,10 +2049,16 @@ const resolveParentNode = async (
 // resolveStyle: shared helper for update_styles and delete_styles.
 // Looks up a BaseStyle by `id` (direct async lookup) or by `name`+`type`
 // (linear scan of the matching local-style lister). Returns null when not found.
+//
+// Deliberately NOT the cached `bindingLookups.styleByName` an inline
+// `style(Name)` write uses: these two tools RENAME and DELETE styles entry by
+// entry, so a scan cached across one dispatch would answer a later entry from a
+// document that no longer exists. Binding never mutates the style table, which
+// is what makes caching safe there and not here.
 const resolveStyle = async (entry: {
   id?: string
   name?: string
-  type?: 'paint' | 'text' | 'effect' | 'grid'
+  type?: StyleCategory
 }): Promise<BaseStyle | null> => {
   if (entry.id !== undefined) {
     return figma.getStyleByIdAsync(entry.id)
@@ -1985,6 +2088,10 @@ const handleCommand = async (
   params: Record<string, unknown>,
   writer: string,
 ): Promise<unknown> => {
+  // Name lookups are cached for the length of ONE dispatch: a tree pays for one
+  // enumeration, and the next command still sees variables/styles this one (or
+  // the designer) created. A batch re-dispatches per op, so each op re-reads.
+  bindingLookups.reset()
   switch (command) {
     case 'get_document_info':
       return {
@@ -3764,6 +3871,13 @@ const handleCommand = async (
         spec,
         warnings,
       )
+      // Same order as the create path: literal first, binding second.
+      await applyWrapperBindings(
+        node as unknown as BindTargetNode,
+        spec.bindings,
+        wrapperBindDeps(),
+        warnings,
+      )
 
       return {
         id: node.id,
@@ -3933,105 +4047,27 @@ const handleCommand = async (
       // so node.setBoundVariable('fills', v) would throw. They bind per-paint via
       // figma.variables.setBoundVariableForPaint(paint,'color',variable), then the
       // paint array is re-assigned. Feature-detect it (T7): warn+skip if absent.
+      //
+      // Both routes live in bind-wrappers.ts, because an INLINE `var(name)value`
+      // written through create/update binds through the very same code — one
+      // binding implementation, one set of degrade messages (T8).
       if (field === 'fills' || field === 'strokes') {
-        const paintHost = node as SceneNode & {
-          fills?: readonly Paint[] | typeof figma.mixed
-          strokes?: readonly Paint[]
-        }
-        if (!(field in node)) {
-          warnings.push(
-            'field "' +
-              field +
-              '" is not bindable on ' +
-              node.type,
-          )
-          return { id: node.id, warnings }
-        }
-        const setForPaint = (
-          figma.variables as {
-            setBoundVariableForPaint?: (
-              paint: Paint,
-              f: 'color',
-              v: Variable,
-            ) => Paint
-          }
-        ).setBoundVariableForPaint
-        if (typeof setForPaint !== 'function') {
-          warnings.push(
-            'setBoundVariableForPaint unavailable in this Figma version; paint binding skipped',
-          )
-          return { id: node.id, warnings }
-        }
-        const current =
-          field === 'fills'
-            ? paintHost.fills
-            : paintHost.strokes
-        if (
-          current === figma.mixed ||
-          !Array.isArray(current)
-        ) {
-          warnings.push(
-            field +
-              ' has no bindable paints on ' +
-              node.type +
-              '; paint binding skipped',
-          )
-          return { id: node.id, warnings }
-        }
-        try {
-          const bound = (current as Paint[]).map(paint =>
-            paint.type === 'SOLID'
-              ? setForPaint(paint, 'color', variable)
-              : paint,
-          )
-          if (field === 'fills') {
-            ;(node as GeometryMixin & SceneNode).fills =
-              bound
-          } else {
-            ;(node as GeometryMixin & SceneNode).strokes =
-              bound
-          }
-        } catch (e) {
-          warnings.push(
-            'binding ' +
-              field +
-              ' on ' +
-              node.type +
-              ' failed: ' +
-              String(e),
-          )
-        }
+        bindPaintField(
+          node as unknown as BindTargetNode,
+          field,
+          variable,
+          paintBindDeps(),
+          warnings,
+        )
         return { id: node.id, warnings }
       }
 
-      const bindable = node as SceneNode & {
-        setBoundVariable?: (
-          f: VariableBindableNodeField,
-          v: Variable,
-        ) => void
-      }
-      // Feature-detect/warn (T7): degrade returns {id,warnings}, NEVER {error}.
-      if (typeof bindable.setBoundVariable !== 'function') {
-        warnings.push(
-          'setBoundVariable unavailable in this Figma version; binding skipped',
-        )
-        return { id: node.id, warnings }
-      }
-      try {
-        bindable.setBoundVariable(
-          field as VariableBindableNodeField,
-          variable,
-        )
-      } catch (e) {
-        warnings.push(
-          'field "' +
-            field +
-            '" is not bindable on ' +
-            node.type +
-            ': ' +
-            String(e),
-        )
-      }
+      bindNodeField(
+        node as unknown as BindTargetNode,
+        field,
+        variable,
+        warnings,
+      )
       return { id: node.id, warnings }
     }
 
@@ -5932,12 +5968,7 @@ const handleCommand = async (
         return { error: 'Node not found: ' + nodeId }
       }
       const styleId = params.styleId as string
-      const field = params.field as
-        | 'fill'
-        | 'stroke'
-        | 'text'
-        | 'effect'
-        | 'grid'
+      const field = params.field as StyleField
       // A genuinely invalid styleId is NOT a degrade — surface {error} up front
       // (mirrors the node-not-found guard above).
       const style = await figma.getStyleByIdAsync(styleId)
@@ -5946,13 +5977,7 @@ const handleCommand = async (
       }
       // Wrong-category binding (e.g. a PAINT style via field:'text') is a
       // genuine invalid → {error}, not a warning.
-      const expectedType = {
-        fill: 'PAINT',
-        stroke: 'PAINT',
-        text: 'TEXT',
-        effect: 'EFFECT',
-        grid: 'GRID',
-      }[field]
+      const expectedType = STYLE_TYPES[field]
       if (style.type !== expectedType) {
         return {
           error:
@@ -5967,38 +5992,15 @@ const handleCommand = async (
             ' style',
         }
       }
-      const setterName = {
-        fill: 'setFillStyleIdAsync',
-        stroke: 'setStrokeStyleIdAsync',
-        text: 'setTextStyleIdAsync',
-        effect: 'setEffectStyleIdAsync',
-        grid: 'setGridStyleIdAsync',
-      }[field]
+      // The setter + its degrade wording live in bind-wrappers.ts, shared with
+      // the inline `style(Name)value` write path (T8: one implementation).
       const warnings: string[] = []
-      const styled = node as unknown as Record<
-        string,
-        (id: string) => Promise<void>
-      >
-      if (typeof styled[setterName] !== 'function') {
-        warnings.push(
-          setterName +
-            ' unavailable on ' +
-            node.type +
-            '; style not applied',
-        )
-        return { id: node.id, warnings }
-      }
-      try {
-        await styled[setterName](styleId)
-      } catch (e) {
-        warnings.push(
-          field +
-            ' style not applicable on ' +
-            node.type +
-            ': ' +
-            String(e),
-        )
-      }
+      await applyStyleField(
+        node as unknown as BindTargetNode,
+        field,
+        styleId,
+        warnings,
+      )
       return { id: node.id, warnings }
     }
 

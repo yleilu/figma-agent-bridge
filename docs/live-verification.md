@@ -150,6 +150,14 @@ and confirming the expected result. The harness ids (`T1.a`, …) match
       `get_node`.
       _Expect:_ bind returns without error; `get_node` round-trips. On a build with
       paint binding available, the fill renders as a `var(...)` atom.
+- [ ] **T1.b2 — inline wrapper binds on write.** `create_node`(FRAME,
+      `fills:['var(<color>)#<hex>']`) → `get_node` → `update_node` with a second
+      `var()` fill → `create_tree` with a wrapped child fill → TEXT with
+      `style(<text style>)font(...)` → per-corner `radius:'var(<num>)[t,r,b,l]'` →
+      bogus `var(nope/x)#FF0000`.
+      _Expect:_ every resolvable wrapper reads back as its `var(...)`/`style(...)`
+      atom; per-corner applies the tuple unbound with a warning; the bogus name
+      applies the literal with a `no variable with that name` warning; nothing aborts.
 - [ ] **T1.c — boolean tree + ref-pool.** `create_tree` with a
       `BOOLEAN_OPERATION` child (two ELLIPSEs) and a `{ref:'dot'}` reused **twice**
       from the ref-pool.

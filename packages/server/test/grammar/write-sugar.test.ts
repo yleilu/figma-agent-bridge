@@ -1,6 +1,7 @@
 // write-sugar.test.ts — the write parser accepts forms the view never
 // emits (rgb()/rgba(), solid(), image(url), inner-arg {…}); the renderer
-// normalizes them to the canonical (lossy) view face. var() is read-only.
+// normalizes them to the canonical (lossy) view face. var() resolves to its
+// literal — the binding rides on bindings[].
 
 import { describe, expect, it } from 'bun:test'
 import {
@@ -102,7 +103,7 @@ describe('whitespace tolerance on parse', () => {
   })
 })
 
-describe('var() is read-only — resolves to a literal on write', () => {
+describe('var() resolves to its literal — the binding rides on bindings[]', () => {
   it('atomToPaint drops the var() wrapper to the resolved literal', () => {
     expect(atomToPaint('var(color/blue)#3B82F6')).toEqual(
       atomToPaint('#3B82F6'),

@@ -37,13 +37,21 @@ describe('specToFigma — fills', () => {
     })
   })
 
-  it('var() wrapper is auto-dropped to the resolved literal', () => {
+  it('var() wrapper resolves to the literal AND carries its binding intent (I39)', () => {
     const result = specToFigma({
       fills: ['var(Brand/Primary)#FF0000'],
     })
     expect(result).toEqual({
       fills: [
         { type: 'SOLID', color: { r: 1, g: 0, b: 0 } },
+      ],
+      bindings: [
+        {
+          kind: 'var',
+          name: 'Brand/Primary',
+          field: 'fills',
+          index: 0,
+        },
       ],
     })
   })
@@ -133,13 +141,25 @@ describe('specToFigma — radius', () => {
   // which Figma rejects ("Expected number, received null", verified live). A
   // read-modify-write on any token-bound node failed outright — precisely the
   // design-system workflow T9 exists to encourage.
-  it('strips a var() wrapper from a uniform radius', () => {
+  it('resolves a var()-wrapped uniform radius to its number (and binds it — I39)', () => {
     expect(
       specToFigma({ radius: 'var(radius/medium)8' }),
-    ).toEqual({ radius: 8 })
+    ).toEqual({
+      radius: 8,
+      bindings: [
+        {
+          kind: 'var',
+          name: 'radius/medium',
+          field: 'cornerRadius',
+        },
+      ],
+    })
   })
 
-  it('strips a var() wrapper from a per-corner radius', () => {
+  // A per-corner radius keeps the old strip-behaviour on purpose: Figma's one
+  // cornerRadius binding covers all four corners, so binding here would square
+  // the corners this tuple says are different (I39 — the loss is warned about).
+  it('resolves a var()-wrapped per-corner radius to its tuple, unbound', () => {
     expect(
       specToFigma({
         radius: 'var(radius/medium)[8,8,0,0]',
