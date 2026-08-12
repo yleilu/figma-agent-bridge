@@ -228,8 +228,9 @@ export const NODE_SPEC_PATCH_KEYS: ReadonlySet<string> =
 
 // slotSpecSchema — one `update_component` slot entry in its object form (B30):
 // the slot's NAME plus the spec applied to the freshly created slot. A fresh
-// slot is born 100×100 FIXED, opaque #FFFFFF and without auto-layout, so
-// `layout`/`fills`/`sizing`/`size` are the fields that make it usable — but the
+// slot is born 100×100 FIXED and opaque #FFFFFF (its layout is the creation
+// default's — B29), so `fills`/`sizing`/`size` are the fields that make it
+// usable and `layout` is stated only to override the default — but the
 // spec is applied by the SAME write face `update_node`'s patch goes through, so
 // this IS that patch with `name` required. Restating a subset here would be a
 // second, drifting definition of one shape: a field typed here and not there

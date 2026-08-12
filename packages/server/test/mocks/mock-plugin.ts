@@ -330,7 +330,11 @@ export const createMockPlugin = (
    * `autoLayoutParent: false` models a component that is not an auto-layout
    * frame: `layoutSizing* = FILL` on its direct child is refused by Figma
    * ("FILL can only be set on children of auto-layout frames"), which the
-   * plugin degrades to a warning while the slot stays created and named.
+   * plugin degrades to a warning while the slot stays created and named. It is
+   * FILL alone that is refused — `FIXED` lands whatever the parent is, which
+   * matters now that a slot stating a `size` is pinned FIXED by the creation
+   * default (B29) and would otherwise be warned about here for a refusal Figma
+   * never makes.
    *
    * Every note goes into a LOCAL sink and is prefixed with the slot's name on
    * the way out, exactly as the plugin's loop does — N slots failing the same
@@ -436,14 +440,24 @@ export const createMockPlugin = (
     // non-auto-layout parent refuses (T7 degrade, warn and continue).
     const slotWarnings: string[] = []
     if (Array.isArray(spec.sizing)) {
-      if (autoLayoutParent) {
-        const [h, v] = spec.sizing as string[]
-        node.layoutSizingHorizontal = h
-        node.layoutSizingVertical = v
-      } else {
+      const [h, v] = spec.sizing as string[]
+      // The plugin assigns horizontal THEN vertical inside one try, so the real
+      // partial case is `['FIXED','FILL']` on a non-auto-layout parent: FIXED
+      // lands on horizontal, FILL throws on vertical, and one warning covers
+      // the pair. This models the two ends — both land, or neither does — which
+      // is exact for every shape a test exercises today (`['FILL','FILL']`,
+      // `['FILL','HUG']`, and the pinned `['FIXED','FIXED']`). The mixed
+      // FIXED-then-FILL shape would land its first axis in Figma and not here;
+      // no test writes it, and the day one does, split the assignment.
+      const refused =
+        !autoLayoutParent && (h === 'FILL' || v === 'FILL')
+      if (refused) {
         slotWarnings.push(
           'sizing not applicable on this node (SLOT): Error: FILL can only be set on children of auto-layout frames',
         )
+      } else {
+        node.layoutSizingHorizontal = h
+        node.layoutSizingVertical = v
       }
     }
     // …then the bindings, literal first exactly as the plugin orders them. An

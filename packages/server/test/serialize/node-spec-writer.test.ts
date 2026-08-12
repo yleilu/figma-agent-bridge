@@ -1,14 +1,17 @@
 // node-spec-writer.test.ts — specToFigma / specToFigmaForCreate
 //
-// Tests the NodeSpec → FigmaWritePayload converter. This is a PURE
-// converter: it emits ONLY keys present in `spec`, never injecting
-// defaults. The plugin's applyCommonProperties/applyTextProperties/
+// Tests the NodeSpec → FigmaWritePayload converter. `specToFigma` is a PURE
+// converter: it emits ONLY keys present in `spec`, never injecting defaults.
+// The CREATE wrappers (`specToFigmaForCreate`, `slotEntryToFigma`) are where
+// the few creation defaults live — the `name ?? type` fallback and the frame
+// layout default. The plugin's applyCommonProperties/applyTextProperties/
 // applyPostAppendProperties read the flat payload keys.
 
 import { describe, expect, it } from 'bun:test'
 import {
   specToFigma,
   specToFigmaForCreate,
+  slotEntryToFigma,
 } from '@figma-agent-bridge/server/serialize/node-spec-writer'
 
 // ─── omit-untouched (pure) ───────────────────────────────────────────────────
@@ -630,6 +633,209 @@ describe('specToFigmaForCreate', () => {
     expect(result).toHaveProperty('fills')
     const fills = result.fills as { type: string }[]
     expect(fills[0].type).toBe('SOLID')
+  })
+})
+
+// ─── creation layout default (B29) ────────────────────────────────────────────
+//
+// A created FRAME stacks. The default fills a SILENCE only: any layout the spec
+// states — `NONE` included — is what the plugin receives.
+
+describe('specToFigmaForCreate — creation layout default', () => {
+  it('a FRAME that states no layout is created as a vertical stack', () => {
+    expect(
+      specToFigmaForCreate({ type: 'FRAME' }).layout,
+    ).toEqual({ mode: 'V' })
+  })
+
+  it('an explicit layout passes through untouched', () => {
+    expect(
+      specToFigmaForCreate({
+        type: 'FRAME',
+        layout: { mode: 'H', gap: 8 },
+      }).layout,
+    ).toEqual({ mode: 'H', spacing: 8 })
+  })
+
+  it('layout NONE is the opt-out — absolute, not the default', () => {
+    expect(
+      specToFigmaForCreate({
+        type: 'FRAME',
+        layout: { mode: 'NONE' },
+      }).layout,
+    ).toEqual({ mode: 'NONE' })
+  })
+
+  it('a SLOT asked for by create_node takes the same default', () => {
+    expect(
+      specToFigmaForCreate({ type: 'SLOT' }).layout,
+    ).toEqual({ mode: 'V' })
+  })
+
+  it('every other node type is untouched', () => {
+    for (const type of [
+      'TEXT',
+      'RECTANGLE',
+      'ELLIPSE',
+      'LINE',
+      'POLYGON',
+      'STAR',
+      'VECTOR',
+      'SECTION',
+      'SLICE',
+      'INSTANCE',
+    ] as const) {
+      expect(
+        specToFigmaForCreate({ type }).layout,
+      ).toBeUndefined()
+    }
+  })
+
+  it('the default is creation-only — the patch converter still injects nothing', () => {
+    // update_node's omitted `layout` means "leave untouched", and an existing
+    // absolute frame must never be converted behind the agent's back.
+    expect(
+      specToFigma({ type: 'FRAME' } as never).layout,
+    ).toBeUndefined()
+  })
+
+  it('each create gets its own layout object (no shared mutable default)', () => {
+    const a = specToFigmaForCreate({ type: 'FRAME' })
+    const b = specToFigmaForCreate({ type: 'FRAME' })
+    expect(a.layout).not.toBe(b.layout)
+  })
+})
+
+// ─── the injected layout pins a stated size (B29) ─────────────────────────────
+//
+// Figma's auto-layout hugs by default, so the injected layout would otherwise
+// SHRINK a frame that stated its size — live: a FRAME created at [300,200] with
+// one child read back [300,30], sizing ["FIXED","HUG"]. The default may add an
+// arrangement; it may not discard a field the caller stated.
+
+describe('specToFigmaForCreate — the default never shrinks a sized frame', () => {
+  it('a stated size with no sizing is pinned FIXED', () => {
+    const out = specToFigmaForCreate({
+      type: 'FRAME',
+      size: [300, 200],
+    })
+    expect(out.layout).toEqual({ mode: 'V' })
+    expect(out.sizing).toEqual(['FIXED', 'FIXED'])
+  })
+
+  it('an explicit sizing is left alone — the caller already answered', () => {
+    expect(
+      specToFigmaForCreate({
+        type: 'FRAME',
+        size: [300, 200],
+        sizing: ['FILL', 'HUG'],
+      }).sizing,
+    ).toEqual(['FILL', 'HUG'])
+  })
+
+  it('no size stated, no sizing invented — hug is right for a container that named no height', () => {
+    const out = specToFigmaForCreate({ type: 'FRAME' })
+    expect(out.layout).toEqual({ mode: 'V' })
+    expect(out.sizing).toBeUndefined()
+  })
+
+  it('an explicit layout owns its own sizing — nothing is pinned', () => {
+    const out = specToFigmaForCreate({
+      type: 'FRAME',
+      size: [300, 200],
+      layout: { mode: 'H' },
+    })
+    expect(out.layout).toEqual({ mode: 'H' })
+    expect(out.sizing).toBeUndefined()
+  })
+
+  it('mode NONE stays absolute — no layout injected, so no sizing either', () => {
+    const out = specToFigmaForCreate({
+      type: 'FRAME',
+      size: [300, 200],
+      layout: { mode: 'NONE' },
+    })
+    expect(out.layout).toEqual({ mode: 'NONE' })
+    expect(out.sizing).toBeUndefined()
+  })
+
+  it('a non-frame type takes neither half of the default', () => {
+    const out = specToFigmaForCreate({
+      type: 'RECTANGLE',
+      size: [300, 200],
+    })
+    expect(out.layout).toBeUndefined()
+    expect(out.sizing).toBeUndefined()
+  })
+})
+
+// ─── slotEntryToFigma ────────────────────────────────────────────────────────
+
+describe('slotEntryToFigma — creation layout default', () => {
+  it('an entry that states no layout is created as a vertical stack', () => {
+    expect(
+      slotEntryToFigma({ name: 'Body', fills: ['#FFF'] }),
+    ).toMatchObject({
+      name: 'Body',
+      layout: { mode: 'V' },
+    })
+  })
+
+  it('a bare name is exactly {name} — and takes the same default', () => {
+    expect(slotEntryToFigma('Body')).toEqual({
+      name: 'Body',
+      layout: { mode: 'V' },
+    })
+  })
+
+  it('an explicit layout passes through untouched', () => {
+    expect(
+      slotEntryToFigma({
+        name: 'Row',
+        layout: { mode: 'H', gap: 12 },
+      }).layout,
+    ).toEqual({ mode: 'H', spacing: 12 })
+  })
+
+  it('layout NONE is the opt-out here too', () => {
+    expect(
+      slotEntryToFigma({
+        name: 'Free',
+        layout: { mode: 'NONE' },
+      }).layout,
+    ).toEqual({ mode: 'NONE' })
+  })
+
+  it('a stated size is pinned FIXED, on the same terms as a frame', () => {
+    const out = slotEntryToFigma({
+      name: 'Body',
+      size: [320, 480],
+    })
+    expect(out.layout).toEqual({ mode: 'V' })
+    expect(out.sizing).toEqual(['FIXED', 'FIXED'])
+  })
+
+  it('a stated sizing is left alone', () => {
+    expect(
+      slotEntryToFigma({
+        name: 'Body',
+        size: [320, 480],
+        sizing: ['FILL', 'FILL'],
+      }).sizing,
+    ).toEqual(['FILL', 'FILL'])
+  })
+
+  it('an entry that states its own layout owns its sizing too', () => {
+    const out = slotEntryToFigma({
+      name: 'Row',
+      size: [320, 48],
+      layout: { mode: 'H' },
+    })
+    expect(out.sizing).toBeUndefined()
+  })
+
+  it('a bare name states no size, so nothing is pinned', () => {
+    expect(slotEntryToFigma('Body').sizing).toBeUndefined()
   })
 })
 

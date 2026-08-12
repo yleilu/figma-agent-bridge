@@ -58,6 +58,28 @@ describe('convertTree (recursive children + ref-pool)', () => {
     ])
   })
 
+  it('B29: a sized frame WITH a child keeps the size it stated', () => {
+    // The live regression this rule exists for: `size:[300,200]` plus one child
+    // read back [300,30] / ["FIXED","HUG"] — the injected auto-layout hugged
+    // the height away. An empty frame keeps its size either way, which is why
+    // the shape that matters here is the one with a child.
+    const out = convertTree({
+      type: 'FRAME',
+      name: 'Card',
+      size: [300, 200],
+      children: [{ type: 'RECTANGLE', size: [100, 20] }],
+    })
+    expect(out.layout).toEqual({ mode: 'V' })
+    expect(out.sizing).toEqual(['FIXED', 'FIXED'])
+    // The child stated a size and no layout of its own, and is not a frame —
+    // it takes neither half of the default.
+    const child = (
+      out.children as Record<string, unknown>[]
+    )[0]
+    expect(child.layout).toBeUndefined()
+    expect(child.sizing).toBeUndefined()
+  })
+
   it('recurses into children, converting each level', () => {
     const out = convertTree({
       type: 'FRAME',

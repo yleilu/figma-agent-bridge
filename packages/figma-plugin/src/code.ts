@@ -3427,11 +3427,13 @@ const handleCommand = async (
       // Guard: createSlot is per-component; skip + warn if comp is a COMPONENT_SET.
       //
       // B30: an entry may also carry a SPEC (already converted server-side).
-      // The fresh slot is born 100×100 FIXED with an opaque #FFFFFF fill and no
-      // auto-layout, so a usable slot otherwise costs two update_node
-      // follow-ups. Applying it here runs the SAME pipeline every other write
-      // runs — literal fields, then post-append fields, then the bindings an
-      // inline var()/style() wrapper asked for.
+      // The fresh slot is born 100×100 FIXED with an opaque #FFFFFF fill, so a
+      // usable slot otherwise costs two update_node follow-ups. Applying it
+      // here runs the SAME pipeline every other write runs — literal fields,
+      // then post-append fields, then the bindings an inline var()/style()
+      // wrapper asked for. The layout in that spec may be the server's
+      // creation default rather than the caller's (B29); nothing here can or
+      // need tell them apart.
       const slotEntries = params.slots as
         | SlotEntry[]
         | undefined

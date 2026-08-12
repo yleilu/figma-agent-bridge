@@ -59,7 +59,7 @@ existing text has mixed styles. Patch shape:
 ## Fixed-size frames — sizing
 
 Auto-layout frames default to `HUG` sizing on both axes, which collapses the frame
-to its content. For a fixed-size frame, always set sizing explicitly:
+to its content. Set sizing explicitly whenever you want a fixed-size frame:
 
 ```json
 { "sizing": ["FIXED", "FIXED"] }
@@ -67,8 +67,15 @@ to its content. For a fixed-size frame, always set sizing explicitly:
 
 Values: `FIXED` / `HUG` / `FILL`. Tuple is `[horizontal, vertical]`.
 
-If you create a frame with a target size but omit sizing, auto-layout will override
-the dimensions on render. Set sizing at the same time as `size`.
+**On a create, it depends on whether you stated a `layout`:**
+
+- **No `layout` stated** — the frame is created as a vertical stack and the `size` you
+  stated is pinned `["FIXED","FIXED"]` for you. Nothing to add. (Want it to hug? State
+  `sizing` yourself, or omit `size`.)
+- **`layout` stated** (for `gap` / `pad` / a horizontal row) — it is yours, and so is the
+  sizing: pass `sizing` alongside `size`, or the layout hugs the dimensions away.
+
+On `update_node`, giving an existing fixed frame a layout always needs `sizing` with it.
 
 ---
 

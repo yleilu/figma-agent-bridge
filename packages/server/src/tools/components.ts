@@ -7,7 +7,7 @@
 //   → COMMANDS.CREATE_COMPONENT → {id,key,name,type}.
 // update_component: add/edit/delete componentPropertyDefinitions, set the
 //   description, expose nested instances (T7-gated), create slots. A slot entry
-//   is a bare name (passed through) or `{name, …spec}` — the spec is CONVERTED
+//   is a bare name (which IS `{name}`) or `{name, …spec}` — the spec is CONVERTED
 //   here on the shared write face (slotEntryToFigma) so the plugin applies it
 //   to the fresh slot through its ordinary apply pipeline (B30); conversion
 //   warnings merge into the reply's warnings[]. → COMMANDS.UPDATE_COMPONENT
@@ -109,7 +109,8 @@ export const handleUpdateComponent = async (
     // B30: a slot entry may carry a spec. Convert it HERE, on the same write
     // face create_node/update_node use, so the plugin receives Figma objects
     // (and the `bindings[]` an inline var()/style() wrapper implies) rather
-    // than atom strings. A bare string is passed through untouched.
+    // than atom strings. A bare name is `{name}` and goes through the same
+    // converter, so both spellings create the same slot (B29).
     const warnings: string[] = []
     const convertedSlots = slots?.map(entry =>
       slotEntryToFigma(entry, warnings),

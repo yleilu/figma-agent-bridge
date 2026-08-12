@@ -561,8 +561,10 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
       unknown
     >
     expect(spec.fills).toEqual(['#FFFFFF'])
-    // …and a bare string is still exactly a name: no layout, born FIXED.
-    expect(spec.layout).toBeUndefined()
+    // …and a bare name is exactly `{name}`: the created slot takes the
+    // creation layout default (B29) and keeps Figma's own born size, so what
+    // an entry still has to say is the fill.
+    expect(spec.layout).toEqual({ mode: 'V' })
     expect(spec.sizing).toEqual(['FIXED', 'FIXED'])
   })
 
@@ -628,6 +630,38 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
     // The field that failed kept the born value; the ones that worked landed.
     expect(spec.sizing).toEqual(['FIXED', 'FIXED'])
     expect(spec.layout).toEqual({ mode: 'H', gap: 4 })
+  })
+
+  it('B29: a slot that states a size keeps it, and says nothing about it', async () => {
+    // The pinned `sizing:['FIXED','FIXED']` the creation default adds must not
+    // read as a caller asking for something the parent refuses: Figma refuses
+    // FILL on a child of a non-auto-layout parent, not FIXED. A warning here
+    // would be the surface apologising for its own default.
+    const result = await handleUpdateComponent(
+      {
+        componentId: 'noautolayout:c:2',
+        slots: [{ name: 'Sized', size: [320, 480] }],
+      },
+      scoped,
+    )
+    const reply = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(reply.error).toBeUndefined()
+    expect(reply.slotsCreated).toEqual(['Sized'])
+    expect(reply.warnings).toEqual([])
+
+    const read = await handleGetNode(
+      { nodeId: 'slot:Sized', depth: 0 },
+      scoped,
+    )
+    const spec = YAML.parse(read.content[0].text) as Record<
+      string,
+      unknown
+    >
+    expect(spec.size).toEqual([320, 480])
+    expect(spec.sizing).toEqual(['FIXED', 'FIXED'])
+    expect(spec.layout).toEqual({ mode: 'V' })
   })
 
   it('B30 (T7): each degrade names ITS slot — two failing the same way are told apart', async () => {

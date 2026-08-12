@@ -1,8 +1,10 @@
 // serialize/node-spec-writer.ts — NodeSpec → FigmaWritePayload
 //
 // PURE converter: emits ONLY keys present in `spec`. Omitted ⇒ absent ⇒
-// untouched. No defaults are injected except in specToFigmaForCreate
-// (name fallback).
+// untouched. No defaults are injected except in the CREATE wrappers
+// (specToFigmaForCreate / slotEntryToFigma): the `name ?? type` fallback and
+// the frame layout default (B29). Creation-only, by construction — the patch
+// face update_node runs on is this pure converter.
 //
 // The emitted payload matches the plugin's apply-contract:
 //   Phase 1  applyCommonProperties  reads the flat keys
@@ -515,35 +517,118 @@ export const specToFigma = (
   return out
 }
 
+// ─── creation defaults ───────────────────────────────────────────────────────
+
+/**
+ * The node types a created frame's layout default applies to (B29).
+ *
+ * A FRAME is born absolutely-positioned and a SLOT is born without auto-layout,
+ * so under Figma's own defaults the MODERN arrangement — a stack — is the one
+ * that had to be asked for, and the child that asks for `FILL` inside a fresh
+ * slot is refused until someone remembers to set the layout. The default is
+ * inverted here: a create that says nothing about layout stacks vertically.
+ *
+ * `SLOT` is listed because create_node accepts the type (the plugin builds a
+ * FRAME placeholder for it); real slots are minted by update_component and go
+ * through slotEntryToFigma below.
+ */
+const LAYOUT_DEFAULT_TYPES: ReadonlySet<string> = new Set([
+  'FRAME',
+  'SLOT',
+])
+
+/**
+ * The layout a create gets when it states none. A FRESH object per call — one
+ * shared literal would put the same mutable reference in every payload.
+ */
+const defaultCreateLayout = (): Record<
+  string,
+  unknown
+> => ({ mode: 'V' })
+
+/**
+ * Apply the creation default to a create payload, in place.
+ *
+ * TWO halves, and the second is what keeps the first honest. Figma's
+ * auto-layout HUGS by default, so injecting a layout into a spec that stated a
+ * `size` would throw that size away: live, a FRAME created at `[300,200]` with
+ * one child read back `[300,30]`, `sizing:["FIXED","HUG"]`. An empty frame
+ * keeps its size, which is why a simple probe looks fine and the child case is
+ * the one that bites. So when the default is injected AND the spec states a
+ * `size` but no `sizing`, the size is pinned `['FIXED','FIXED']` — which is
+ * precisely the behaviour the old absolute default gave: a stated size is
+ * honored. The default may add an arrangement; it may not silently discard a
+ * field the caller stated.
+ *
+ * Both halves are conditional on INJECTION. A stated layout (`NONE` included)
+ * means the caller is arranging the node themselves and owns its sizing with
+ * it; a spec that states no size is asking for nothing in particular, and hug
+ * is the right answer for a container that named no height.
+ */
+const applyCreationDefaults = (
+  spec: NodeSpecPatch,
+  out: FigmaWritePayload,
+): void => {
+  if (spec.layout !== undefined) {
+    return
+  }
+  out.layout = defaultCreateLayout()
+  if (
+    spec.size !== undefined &&
+    spec.sizing === undefined
+  ) {
+    out.sizing = ['FIXED', 'FIXED']
+  }
+}
+
 // ─── specToFigmaForCreate ─────────────────────────────────────────────────────
 
 /**
  * CREATE wrapper. Carries the discriminator `type` through (the plugin's
  * createSingleNode switches on it to pick the Figma node kind — specToFigma
- * itself never emits `type`, being a property-patch converter), and adds the
- * `name ?? type` fallback. Keep defaulting minimal — type pass-through and the
- * name fallback are the only firm create-only rules.
+ * itself never emits `type`, being a property-patch converter), adds the
+ * `name ?? type` fallback, and applies the creation defaults (B29 — the frame
+ * layout, and the `sizing` pin that keeps it from hugging a stated size away).
+ *
+ * Defaulting stays minimal and CREATION-ONLY: `specToFigma` — the patch face
+ * `update_node` runs on — injects nothing, so an omitted `layout` on a patch
+ * still means *left untouched* and an existing absolute frame is never
+ * converted behind the agent's back. Here the default fills a SILENCE only:
+ * a stated `layout` (`{mode:'NONE'}` included, the documented opt-out) is
+ * carried through exactly as `convertLayout` emitted it.
  */
 export const specToFigmaForCreate = (
   spec: NodeSpec,
   warnings?: string[],
-): FigmaWritePayload => ({
-  ...specToFigma(spec, warnings),
-  type: spec.type,
-  name: spec.name ?? spec.type,
-})
+): FigmaWritePayload => {
+  const out: FigmaWritePayload = {
+    ...specToFigma(spec, warnings),
+    type: spec.type,
+    name: spec.name ?? spec.type,
+  }
+  if (LAYOUT_DEFAULT_TYPES.has(spec.type)) {
+    applyCreationDefaults(spec, out)
+  }
+  return out
+}
 
 // ─── slot entries ─────────────────────────────────────────────────────────────
 
 /**
  * Convert one `update_component` slot entry (B30).
  *
- * A bare string is a name and nothing else — it crosses the wire UNCHANGED, so
- * an older plugin build reads exactly what it always read (back-compat). The
- * object form goes through the SAME `specToFigma` write face as
+ * The object form goes through the SAME `specToFigma` write face as
  * `create_node`/`update_node`, which is the whole point: atoms are parsed here
  * once, and an inline `var()`/`style()` wrapper rides along in `bindings[]`
  * with no parallel path to maintain.
+ *
+ * A bare string is a name and nothing else — but the spec defines it as exactly
+ * `{name}`, so it is CONVERTED like one rather than forwarded verbatim. That
+ * matters for the layout default (B29): a slot created from a bare name is the
+ * cheapest thing the surface offers and the one live builds reach for, so
+ * leaving it absolutely-positioned while `{name}` stacks would make the default
+ * depend on which of two spellings of the same entry was used. The plugin reads
+ * both shapes either way (`readSlotEntry`).
  *
  * Every warning raised while converting is ATTRIBUTED to the slot by name —
  * one call can carry several slots, and an unattributed "layout: …" note would
@@ -552,9 +637,9 @@ export const specToFigmaForCreate = (
 export const slotEntryToFigma = (
   entry: SlotEntry,
   warnings?: string[],
-): string | FigmaWritePayload => {
+): FigmaWritePayload => {
   if (typeof entry === 'string') {
-    return entry
+    return { name: entry, layout: defaultCreateLayout() }
   }
   const { name, ...rest } = entry
   const local: string[] = []
@@ -563,6 +648,10 @@ export const slotEntryToFigma = (
     local,
   )
   const payload: FigmaWritePayload = { ...converted, name }
+  // The created slot takes the same creation defaults a created FRAME takes,
+  // and on the same terms: only when the entry states no layout of its own,
+  // and the size it stated is pinned so the layout cannot hug it away.
+  applyCreationDefaults(rest as NodeSpecPatch, payload)
   // `payload` (not `converted`) so the "nothing was changed" tail never fires:
   // the name always lands, whatever else the entry got wrong.
   local.push(...unknownPatchKeyWarnings(rest, payload))

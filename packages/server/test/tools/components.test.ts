@@ -275,8 +275,8 @@ describe('handleUpdateComponent', () => {
     )
     expect(sent[0].command).toBe(COMMANDS.UPDATE_COMPONENT)
     expect(sent[0].params?.slots).toEqual([
-      'content',
-      'footer',
+      { name: 'content', layout: { mode: 'V' } },
+      { name: 'footer', layout: { mode: 'V' } },
     ])
   })
 
@@ -382,9 +382,10 @@ describe('handleUpdateComponent', () => {
   // ── B30: a slot entry carries a spec ───────────────────────────────────────
   // The object form goes through the SAME write face create_node/update_node
   // use, so what reaches the plugin is a CONVERTED payload (Figma objects, not
-  // atom strings). A bare string still crosses the wire as a bare string.
+  // atom strings). The bare string IS `{name}` (B29) — one entry, one meaning,
+  // whichever way it is spelled — so it is converted like one.
 
-  it('B30: a bare-string slot entry crosses the wire unchanged (back-compat)', async () => {
+  it('B30/B29: a bare name and its {name} twin reach the plugin identically', async () => {
     const sent: Sent[] = []
     await handleUpdateComponent(
       {
@@ -402,9 +403,18 @@ describe('handleUpdateComponent', () => {
         },
       }),
     )
-    const slots = sent[0].params?.slots as unknown[]
-    expect(slots[0]).toBe('content')
-    expect(slots[1]).toEqual({ name: 'footer' })
+    const slots = sent[0].params?.slots as Record<
+      string,
+      unknown
+    >[]
+    expect(slots[0]).toEqual({
+      name: 'content',
+      layout: { mode: 'V' },
+    })
+    expect(slots[1]).toEqual({
+      name: 'footer',
+      layout: { mode: 'V' },
+    })
   })
 
   it('B30: an object slot entry reaches the plugin CONVERTED (atoms parsed, layout flattened)', async () => {

@@ -535,7 +535,7 @@ describe('batch delete_styles — index-tagged like the standalone handler', () 
 // write face the standalone handler uses — an unconverted atom string would
 // otherwise be assigned to the slot raw.
 describe('batch update_component — slot specs are converted', () => {
-  it('parses a slot entry fill atom and passes a bare name through', async () => {
+  it('parses a slot entry fill atom, and converts a bare name the same way', async () => {
     const sent: Sent[] = []
     await handleBatch(
       {
@@ -554,7 +554,11 @@ describe('batch update_component — slot specs are converted', () => {
     )
     const forwarded = sent[0].params?.ops as SentOp[]
     const slots = forwarded[0].params.slots as unknown[]
-    expect(slots[0]).toBe('Header')
+    // B29: a bare name is `{name}`, and a created slot stacks.
+    expect(slots[0]).toEqual({
+      name: 'Header',
+      layout: { mode: 'V' },
+    })
     const specced = slots[1] as {
       name: string
       fills: { type: string }[]

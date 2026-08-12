@@ -470,7 +470,12 @@ code snippets** (tool-usage patterns, not visual templates):
 
 - Instance-content override: `update_node` on the compound child id `I<inst>;<masterText>`
   with a **full** text patch (content+font+color) — text-only errors on `raw.trim`.
-- `sizing:['FIXED','FIXED']` for fixed frames (auto-layout defaults to HUG → collapse).
+- `sizing:['FIXED','FIXED']` for fixed frames (auto-layout defaults to HUG → collapse) —
+  needed whenever a frame gets a layout the caller stated: an `update_node` that gives an
+  existing frame one, and a create that states its own `layout` (for `gap`/`pad`) alongside a
+  `size`. A created frame that states **no** layout needs no such call — the default pins its
+  stated size; one that states its own layout owns its sizing too (`tool-surface.md`,
+  *Write model → Create / update*).
 - `bind_variable` (fills → color vars) + `apply_style` (text → styles), on **masters** so
   instances inherit; `combine_variants` for variants.
 - **Limits to route around:** `update_component` add doesn't bind props (`set_instance` text
