@@ -56,12 +56,68 @@ To decide:
 
 ### Component detection
 
-Check for duplicate subtrees:
+Duplicate detection is **mechanical** — run this on every review, not on suspicion.
 
-- Two or more sibling frames/groups with the same `name` prefix and same child count
-  and same layout mode → `warning`: consider making one a component and the others instances.
-- A node of `type: FRAME` or `GROUP` whose structure exactly mirrors a known component
-  in `get_components` but is not `type: INSTANCE` → `warning`: detached instance.
+A node's **signature** is its child count plus the types of its first-level children,
+sorted: `1 · [TEXT]`, `3 · [FRAME, TEXT, TEXT]`. A leaf's signature is `0 · []`.
+
+**1. Inventory the real masters (two reads).** `get_components` enumerates components and
+sets but **never a set's variant children** — and it is bounded (`limit` defaults to 100),
+so page it with the returned `cursor` while `truncated` is true, or say in the report that
+you checked the first N. Collect every `COMPONENT` and `COMPONENT_SET` id, then read them
+all in one batch:
+
+```json
+{
+  "nodeIds": ["<componentId>", "<componentSetId>", "…"],
+  "depth": 2,
+  "fields": ["id", "name", "type", "size", "children"]
+}
+```
+
+`depth: 2` is what makes a variant set legible: a set's children _are_ its variants, so
+depth 1 would hand you `[COMPONENT, COMPONENT]` — an anatomy of nothing. At depth 2 each
+variant's own children come back, and since the projection applies to the top-level node
+only, those children arrive with their `fills` and `text` intact — which is what step 3
+needs. A **set contributes one inventory entry per variant child** (the variants are the
+real masters); each entry is `{name, signature, size, first-level child descriptors}`,
+using the set's name for a variant.
+
+**2. Signature-match the target.** For every node in the target that is not an `INSTANCE`
+and not a descendant of one, compute its signature and look it up. **No type filter and no
+child-count floor**: a one-child `FRAME` duplicating a `Button` master, and a bare `TEXT`
+duplicating a `Chip` master, are exactly the cases this check exists for.
+
+**3. Corroborate before flagging.** A signature alone never flags — `2 · [TEXT, TEXT]` is
+every card header in the file. Flag only when the signature matches **and at least one** of
+these holds:
+
+- **Name affinity** — the candidate's name, or its parent's, shares a ≥ 4-character
+  case-insensitive stem with the master's name (compare the segment before `/` or `=`).
+- **Size affinity** — both dimensions within ±10% of the master's (or ±4 px, whichever is
+  larger).
+- **Leaf affinity** — child for child, in order, the candidate's first-level children match
+  the master's on type _and_ on the atom that carries their look: `text.font` for a TEXT
+  child, the first `fills` entry otherwise.
+
+All three come out of reads you already have, and each one fails independently of the
+signature: a copy inherits the master's wording, its geometry, or its paint — a coincidence
+of shape inherits none of them.
+
+**Ambiguity guard.** A signature that matches **≥ 3 different masters** is generic; skip
+that candidate whatever the corroborators say.
+
+Findings:
+
+- Signature + ≥ 1 corroborator on a non-`INSTANCE` node → `warning`: detached or duplicated
+  element — **name the master it matches and the corroborator that fired**.
+- ≥ 2 siblings sharing a signature and a corroborator with **no** master matching →
+  `warning`: component candidate.
+
+**Skip what the design says is deliberate:** a candidate whose `context` (`purpose` /
+`role`) or whose name declares a different role from the master's is a look-alike, not a
+copy. Signature + corroborator is strong evidence, never proof — report what matched and
+let the human judge.
 
 ---
 

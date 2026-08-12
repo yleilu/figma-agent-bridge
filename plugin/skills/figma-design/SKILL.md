@@ -53,8 +53,11 @@ Detection tools: `get_variables` (local variable collections), `get_styles`,
 These apply once a design system is in play:
 
 1. **Single source of truth** — reuse tokens and components; never duplicate.
-2. **Component-first** — repeated elements become components; instances inherit
-   changes from the master.
+2. **Component-first** — repeats and stateful things become components **before** they
+   are placed, and instances inherit from the master. Never build-place-promote: a node
+   inside a SLOT cannot be componentized at all. The modeling doctrine — what must be a
+   component, variants vs booleans, slots vs visibility toggles, what to build last —
+   is `references/components.md`; load it before creating any component, variant, or slot.
 3. **Bind by writing the wrapper** — the default way to use a token _is_ the write:
    `fills: ["var(surface/2)#141B2E"]`, `text.font: "style(Heading/H2)font(Inter,SemiBold,20)"`.
    An inline `var()` / `style()` wrapper binds as it lands (grammar:
@@ -232,6 +235,8 @@ A default order, not a mandate — adapt to the request:
    scales).
 2. **Styles** — map tokens to text styles, effect styles.
 3. **Components** — build master components; add variants via `combine_variants`.
+   Complex components (tables, data grids, calendars) go **last** — model them on paper
+   first (`references/components.md`).
 4. **Layout** — compose frames with auto-layout (`set_layout_mode`, sizing rules).
 5. **Content** — populate text, images, instance overrides.
 6. **Verify** — `export` + read-back; check token bindings and instance types.
@@ -297,6 +302,10 @@ The calls that get wrong most often are documented with exact patterns in
 
 The atom value formats (color, font, gradient, effect, stroke, sizing, constraints)
 are in `references/grammar.md`. Load it when writing or reading any atom value.
+
+The modeling decision that comes _before_ those calls — what becomes a component and
+when, variants vs booleans, slots vs visibility toggles, complex components last — is
+`references/components.md`. Load it before creating any component, variant, or slot.
 
 ---
 

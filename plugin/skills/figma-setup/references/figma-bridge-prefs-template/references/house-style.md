@@ -19,6 +19,9 @@ floor.
 
 ## Component-first (strict)
 
+- **Everything placed on a page is an instance** — author in components, compose pages
+  from instances only. A block gets its states (responsive sizes, variants) at authoring
+  time; page content is then swapped by changing variants, never by editing the page.
 - Any element used twice or more **must** be a component.
 - Prefer variants over duplicated components.
 - Never detach an instance.

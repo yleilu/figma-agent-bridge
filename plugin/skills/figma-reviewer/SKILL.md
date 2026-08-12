@@ -77,12 +77,15 @@ When a design system exists, check for:
   but a matching `var(…)` token exists in the local variable collection.
 - **Text off a style** — `font(…)` without a `style(…)` wrapper where a matching
   text style is defined (`get_styles` to enumerate).
-- **Duplicated element that should be a component** — identical subtrees (same
-  structure + content) that do not share a master. Instances should be `INSTANCE`
-  nodes pointing at one `COMPONENT`.
-- **Detached instance** — a node whose `type` is `FRAME` or `GROUP` but whose
-  shape exactly matches a known component (check `get_components`). Indicates a
-  past Detach-from-Component action that broke the link.
+- **Duplicated element that should be a component** — sibling nodes sharing a
+  signature (child count + child types) plus a corroborating name, size, or leaf
+  style, with no master behind them. They should be one `COMPONENT` and N
+  `INSTANCE`s.
+- **Detached instance** — any node that is not an `INSTANCE` whose signature
+  matches a master's, corroborated the same way. A set's variants count as
+  masters, and a one-child frame counts as a candidate. Run the mechanical
+  procedure in `references/checks.md` (inventory → match → corroborate) on every
+  review; it is the authority for what flags and what is skipped.
 
 ### 2. Consistency
 
