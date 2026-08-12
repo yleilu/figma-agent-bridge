@@ -279,6 +279,37 @@ export const syncPatch = (
     patch.strokeMiterLimit = node.strokeMiterLimit
   }
 
+  // Per-side stroke weights (B27) — only when the four sides DIFFER.
+  //
+  // A node whose sides differ reports `figma.mixed` for `strokeWeight`, so the
+  // uniform field cannot describe it at all: without these four the read of a
+  // `stroke([0,0,1,0])` divider says either nothing or the wrong thing, and
+  // writing that read back erases the rule. Only frame-like and RECTANGLE
+  // nodes carry them (IndividualStrokesMixin), hence the property probe.
+  //
+  // Uniform sides are deliberately NOT patched: `strokeWeight` already says it,
+  // the read face emits the plain number as the canonical form, and four extra
+  // numbers on every stroked node in a large read is the T4 cost this module
+  // stays clear of. (These are plain numbers — never `figma.mixed` — so no
+  // Symbol can reach the wire through them.)
+  if ('strokeTopWeight' in node) {
+    const sides = [
+      node.strokeTopWeight,
+      node.strokeRightWeight,
+      node.strokeBottomWeight,
+      node.strokeLeftWeight,
+    ]
+    if (
+      sides.every(w => typeof w === 'number') &&
+      !sides.every(w => w === sides[0])
+    ) {
+      patch.strokeTopWeight = sides[0]
+      patch.strokeRightWeight = sides[1]
+      patch.strokeBottomWeight = sides[2]
+      patch.strokeLeftWeight = sides[3]
+    }
+  }
+
   // pointCount (POLYGON + STAR) and innerRadius (STAR). Feature-detected by
   // PROPERTY, which is robust to the POLYGON vs REGULAR_POLYGON export-type
   // name difference.

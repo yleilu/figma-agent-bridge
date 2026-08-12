@@ -1521,6 +1521,156 @@ describe('toNodeSpec — stroke cap/join/miter read-back', () => {
   })
 })
 
+// ─── per-side stroke weights (B27) ───────────────────────────────────────────
+//
+// expression-formats.md:192 has always promised `stroke([t,r,b,l])`, and Figma
+// carries the four sides on frame-like and RECTANGLE nodes
+// (IndividualStrokesMixin). The single commonest divider in table/list design
+// is `stroke([0,0,1,0])` — a bottom rule — and collapsing it to the TOP side
+// made it weight 0, i.e. invisible.
+//
+// WHERE THE FOUR VALUES COME FROM. The guaranteed source is the plugin's
+// enrichment (enrich-nodes.ts `syncPatch`), which patches the FLAT Plugin-API
+// keys `strokeTopWeight`/`strokeRightWeight`/`strokeBottomWeight`/
+// `strokeLeftWeight` onto the exported node — and only when the four DIFFER, so
+// an ordinary uniformly-stroked node costs nothing. A raw JSON_REST_V1 dump
+// that happens to carry REST's nested `individualStrokeWeights` object is read
+// too (same four numbers, REST's spelling); a dump carrying NEITHER reads
+// exactly as it always has, from the uniform `strokeWeight`.
+//
+// Note also that the live node's `strokeWeight` is `figma.mixed` precisely when
+// the sides differ, so the export may carry no usable uniform weight at all —
+// the tuple must not depend on one being present.
+describe('toNodeSpec — per-side stroke weights', () => {
+  it('emits the [t,r,b,l] tuple when the four plugin-enriched sides differ', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:20',
+        type: 'FRAME',
+        strokes: aStroke,
+        strokeTopWeight: 0,
+        strokeRightWeight: 0,
+        strokeBottomWeight: 1,
+        strokeLeftWeight: 0,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe('stroke([0,0,1,0])')
+  })
+
+  it('keeps the plain number when all four sides are equal (canonical form)', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:21',
+        type: 'FRAME',
+        strokes: aStroke,
+        strokeWeight: 2,
+        strokeTopWeight: 2,
+        strokeRightWeight: 2,
+        strokeBottomWeight: 2,
+        strokeLeftWeight: 2,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe('stroke(2)')
+  })
+
+  it('carries the {…} channel alongside the tuple', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:22',
+        type: 'RECTANGLE',
+        strokes: aStroke,
+        strokeAlign: 'INSIDE',
+        strokeTopWeight: 1,
+        strokeRightWeight: 0,
+        strokeBottomWeight: 1,
+        strokeLeftWeight: 0,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe(
+      'stroke([1,0,1,0]){align=INSIDE}',
+    )
+  })
+
+  it('reads REST nested individualStrokeWeights when a dump carries it', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:23',
+        type: 'FRAME',
+        strokes: aStroke,
+        strokeWeight: 1,
+        individualStrokeWeights: {
+          top: 0,
+          right: 0,
+          bottom: 1,
+          left: 0,
+        },
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe('stroke([0,0,1,0])')
+  })
+
+  it('emits no atom when every side is 0 (nothing is drawn)', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:24',
+        type: 'FRAME',
+        strokes: aStroke,
+        strokeTopWeight: 0,
+        strokeRightWeight: 0,
+        strokeBottomWeight: 0,
+        strokeLeftWeight: 0,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBeUndefined()
+  })
+
+  it('ignores a partial set of sides and falls back to the uniform weight', () => {
+    const spec = toNodeSpec(
+      {
+        id: '2:25',
+        type: 'FRAME',
+        strokes: aStroke,
+        strokeWeight: 2,
+        strokeBottomWeight: 1,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe('stroke(2)')
+  })
+
+  // THE ACCEPTANCE BAR: write `stroke([0,0,1,0])`, read back `stroke([0,0,1,0])`.
+  // The middle hop — the plugin assigning the four sides — is covered by
+  // figma-plugin/src/apply-node-fields.test.ts (`applyStrokeWeights`); here the
+  // node it produces is stood up directly, so the two faces meet.
+  it('round-trips a bottom-only divider through the write payload', () => {
+    const written = specToFigma({
+      stroke: 'stroke([0,0,1,0])',
+    }) as Record<string, unknown>
+    expect(written.strokeWeights).toEqual([0, 0, 1, 0])
+
+    const [top, right, bottom, left] =
+      written.strokeWeights as number[]
+    const spec = toNodeSpec(
+      {
+        id: '2:26',
+        type: 'FRAME',
+        strokes: aStroke,
+        strokeTopWeight: top,
+        strokeRightWeight: right,
+        strokeBottomWeight: bottom,
+        strokeLeftWeight: left,
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.stroke).toBe('stroke([0,0,1,0])')
+  })
+})
+
 // ─── a strokeless node has no stroke GEOMETRY ────────────────────────────────
 //
 // Figma keeps a default strokeWeight (and strokeAlign) on every node whether or

@@ -651,6 +651,53 @@ const STROKE_WEIGHT_BOUND_KEYS = [
   'BORDER_LEFT_WEIGHT',
 ] as const
 
+/** REST's per-side keys, in the tuple's [top,right,bottom,left] order. */
+const REST_STROKE_WEIGHT_KEYS = [
+  'top',
+  'right',
+  'bottom',
+  'left',
+] as const
+
+/**
+ * The four per-side stroke weights as `[t,r,b,l]`, or undefined when this node
+ * does not report them (B27).
+ *
+ * TWO SOURCES, one shape. The guaranteed one is the plugin's enrichment
+ * (enrich-nodes.ts `syncPatch`), which patches the FLAT Plugin-API field names
+ * onto the exported node — and only when the sides DIFFER, so an ordinary
+ * uniformly-stroked node carries none of this. The second is REST's own nested
+ * `individualStrokeWeights` object, read when a raw JSON_REST_V1 dump happens
+ * to carry it; a dump carrying neither reads from the uniform `strokeWeight`
+ * exactly as it always has.
+ *
+ * All four or nothing: a partial set says nothing trustworthy about the sides
+ * it omits, and half a tuple would be a worse answer than the uniform number.
+ */
+const perSideWeights = (
+  raw: RawNode,
+): [number, number, number, number] | undefined => {
+  const flat = [
+    num(raw.strokeTopWeight),
+    num(raw.strokeRightWeight),
+    num(raw.strokeBottomWeight),
+    num(raw.strokeLeftWeight),
+  ]
+  if (flat.every(w => w !== undefined)) {
+    return flat as [number, number, number, number]
+  }
+  const nested = raw.individualStrokeWeights
+  if (nested === null || typeof nested !== 'object') {
+    return undefined
+  }
+  const rest = REST_STROKE_WEIGHT_KEYS.map(k =>
+    num((nested as Record<string, unknown>)[k]),
+  )
+  return rest.every(w => w !== undefined)
+    ? (rest as [number, number, number, number])
+    : undefined
+}
+
 /**
  * The stroke's GEOMETRY (expression-formats.md) — so a node with no stroke has
  * none to report. `hasStroke` is the caller's already-computed `strokes` atom
@@ -670,11 +717,30 @@ const strokeGeom = (
   if (!hasStroke) {
     return undefined
   }
-  const weight = num(raw.strokeWeight)
+  // Per-side weights first (B27). They are the only truthful account of a node
+  // whose sides differ — its `strokeWeight` is `figma.mixed` there, so the
+  // uniform field is either absent from the export or not one value at all.
+  // The tuple is emitted ONLY when the sides actually differ: four equal sides
+  // are the plain number, which is what the write face round-trips back and
+  // what expression-formats.md shows.
+  const per = perSideWeights(raw)
+  const uniform =
+    per === undefined ||
+    (per[0] === per[1] &&
+      per[1] === per[2] &&
+      per[2] === per[3])
+  // A non-uniform node is drawn wherever ANY side is non-zero — `[0,0,1,0]` is
+  // a bottom rule, not an absent stroke — so the "is anything drawn" gate reads
+  // the largest side.
+  const weight = uniform
+    ? (per?.[0] ?? num(raw.strokeWeight))
+    : Math.max(...(per as number[]))
   if (weight === undefined || weight <= 0) {
     return undefined
   }
-  const geom: FigmaStrokeGeom = { weight }
+  const geom: FigmaStrokeGeom = uniform
+    ? { weight }
+    : { weights: per }
   const align = str(raw.strokeAlign)
   if (align !== undefined && align !== 'CENTER') {
     geom.align = align

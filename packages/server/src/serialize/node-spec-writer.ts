@@ -15,7 +15,8 @@
 //
 //   CONSUMED by the current plugin:
 //     applyCommonProperties  — name, size, position, fills, strokes,
-//       strokeWeight, strokeAlign, strokeDash (→ dashPattern),
+//       strokeWeight, strokeWeights (per-side [t,r,b,l] → strokeTopWeight/…,
+//       applyStrokeWeights), strokeAlign, strokeDash (→ dashPattern),
 //       strokeCap/strokeJoin/strokeMiterLimit (applyStrokeGeometry),
 //       exportSettings (applyExportSettings), grids → layoutGrids
 //       (applyGrids), radius, opacity, blendMode, rotation, visible,
@@ -247,9 +248,10 @@ export const unknownPatchKeyWarnings = (
  *
  * PURE — emits ONLY keys present in `spec`. Never injects defaults.
  *
- * `warnings` is an OPTIONAL sink: when supplied, lossy conversions (e.g. a
- * per-side `stroke([t,r,b,l])` collapsing to a single weight — see below) push
- * a human-readable note onto it. The M3 create/update/component handlers pass
+ * `warnings` is an OPTIONAL sink: when supplied, a conversion that cannot carry
+ * what the spec asked for (e.g. GRID-only `layout` keys on an H/V mode, or a
+ * `var()` wrapper on a field with no binding route) pushes a human-readable
+ * note onto it. The M3 create/update/component handlers pass
  * their own warnings array so the agent sees the loss; callers that only need
  * the payload (and the ~40 `.toEqual()` converter tests) omit it and get the
  * exact same return value.
@@ -315,26 +317,51 @@ export const specToFigma = (
       out.strokeWeight = geom.weight
     }
     if (geom.weights !== undefined) {
-      // Per-side weights [t,r,b,l]. M3-E DECISION: warn (not apply). The
-      // plugin's apply-contract has no per-side stroke key today — applying
-      // real per-side weights would mean emitting strokeTopWeight/etc AND
-      // teaching the plugin to read+feature-detect them (T7), a write-contract
-      // change well beyond this polish sweep that would also break the round-
-      // trip honesty the header documents. So we still collapse to the top
-      // side, but no longer SILENTLY: when the four sides differ we push a
-      // warning onto the optional sink (the M3 handlers pass one). When the
-      // sides are equal the collapse is lossless, so we stay quiet.
-      const [top, right, bottom, left] = geom.weights
-      out.strokeWeight = top
+      // Per-side weights [t,r,b,l] (B27). The four sides ride the payload as
+      // `strokeWeights` and the plugin assigns strokeTopWeight/… — Figma
+      // carries them on frame-like and RECTANGLE nodes (IndividualStrokesMixin).
+      //
+      // This used to collapse to the TOP side with a warning, which made
+      // `stroke([0,0,1,0])` — a bottom rule, the commonest divider in table and
+      // list design — weight 0, i.e. INVISIBLE, against a grammar that has
+      // promised per-side since expression-formats.md:192.
+      //
+      // The writer does not warn about the sides it cannot apply, because it
+      // does not know the target's node type: the feature detection and its
+      // collapse warning belong where the node is (T7, figma-plugin's
+      // applyStrokeWeights).
+      //
+      // EQUAL sides are emitted as the plain uniform weight instead. That is
+      // the canonical form on the read face too, and it keeps ONE owner of the
+      // value in the payload — nothing can re-collapse a tuple after the fact.
+      //
+      // A list that is not four finite numbers degrades WHOLE. The parser
+      // reports the positional list as written, so `stroke([1,2,3,4,5])` used
+      // to lose its fifth entry to a destructure and land as a well-formed
+      // four-sided stroke — a silent misread of what the caller asked for. The
+      // stroke's weight is left untouched instead, and the sink is told why
+      // (matching applyStrokeWeights' own malformed-tuple degrade).
+      const sides = geom.weights
       if (
-        warnings !== undefined &&
-        (right !== top || bottom !== top || left !== top)
+        sides.length !== 4 ||
+        sides.some(w => !Number.isFinite(w))
       ) {
-        warnings.push(
-          `Per-side stroke weights [${top}, ${right}, ${bottom}, ${left}] ` +
-            `collapsed to a single strokeWeight (${top}); the plugin has no ` +
-            `per-side stroke key, so the right/bottom/left weights were dropped.`,
+        warnings?.push(
+          `stroke([…]) takes four weights [top,right,bottom,left]; got ` +
+            `${sides.length} (${sides.join(', ')}) — the per-side weights ` +
+            `were ignored and the stroke weight is unchanged.`,
         )
+      } else {
+        const [top, right, bottom, left] = sides
+        if (
+          right === top &&
+          bottom === top &&
+          left === top
+        ) {
+          out.strokeWeight = top
+        } else {
+          out.strokeWeights = [top, right, bottom, left]
+        }
       }
     }
     if (geom.align !== undefined) {

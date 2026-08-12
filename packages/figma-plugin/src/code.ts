@@ -13,6 +13,7 @@ import { createFontLoader } from './font-cache'
 import { applyPointDetail } from './vector-points'
 import {
   applyStrokeGeometry,
+  applyStrokeWeights,
   applyExportSettings,
   applyGrids,
 } from './apply-node-fields'
@@ -656,6 +657,16 @@ const applyCommonProperties = async (
     ;(node as GeometryMixin & SceneNode).strokeWeight =
       spec.strokeWeight as number
   }
+  // Per-side stroke weights [t,r,b,l] (B27) — pure helper, see
+  // apply-node-fields.ts. The writer emits `strokeWeights` INSTEAD of
+  // `strokeWeight` when the four sides differ, so the two never fight; a node
+  // type without IndividualStrokesMixin collapses to the top side and warns,
+  // where the type is known (T7).
+  applyStrokeWeights(
+    node as GeometryMixin & SceneNode,
+    spec.strokeWeights,
+    warnings,
+  )
   if (
     spec.strokeAlign !== undefined &&
     'strokeAlign' in node

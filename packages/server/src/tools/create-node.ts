@@ -10,8 +10,8 @@
 // present we strip it before converting (no recursion) and append a warning
 // pointing the agent at create_tree (M3). This is the canonical create_node
 // handler (the legacy tools/create.ts was retired in M3-E). Lossy conversions
-// in the writer (e.g. per-side stroke weights collapsing) push onto the same
-// warnings sink, so the agent sees them alongside the children note.
+// in the writer (e.g. a `var()` wrapper on a field it cannot bind) push onto
+// the same warnings sink, so the agent sees them alongside the children note.
 
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { NodeSpec } from '@figma-agent-bridge/shared/node-spec'
@@ -85,8 +85,8 @@ export const handleCreateNode = async (
     }
     const flat: NodeSpec = { ...spec }
     delete flat.children
-    // The writer pushes lossy-conversion notes (e.g. per-side stroke collapse)
-    // onto `warnings`.
+    // The writer pushes lossy-conversion notes (e.g. GRID-only layout keys on
+    // an H/V mode) onto `warnings`.
     const payload = specToFigmaForCreate(flat, warnings)
 
     const result = (await client.sendCommand(

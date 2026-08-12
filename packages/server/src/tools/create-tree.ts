@@ -70,7 +70,8 @@ const isCloneNode = (
  *   are recursively converted and re-attached.
  *
  * `warnings` is an optional sink: lossy conversions anywhere in the tree (e.g.
- * a per-side stroke collapse) push onto it so the handler can surface them.
+ * a `var()` wrapper the surface cannot bind) push onto it so the handler can
+ * surface them.
  */
 export const convertTree = (
   spec: TreeNodeSpec,

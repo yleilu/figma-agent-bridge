@@ -111,14 +111,14 @@ describe('handleUpdateNode', () => {
     )
   })
 
-  // 3c: a server-side writer warning (per-side stroke collapse) is MERGED into
-  // the reply's structured warnings[] — one concept, one surface — rather than
-  // appended as loose trailing text after the JSON.
+  // 3c: a server-side writer warning (GRID-only layout keys on a non-GRID
+  // mode) is MERGED into the reply's structured warnings[] — one concept, one
+  // surface — rather than appended as loose trailing text after the JSON.
   it('merges server-side writer warnings into the structured warnings[]', async () => {
     const result = await handleUpdateNode(
       {
         nodeId: '1:42',
-        patch: { stroke: 'stroke([1,2,3,4])' },
+        patch: { layout: { mode: 'V', rows: 2 } },
       },
       stubClient({
         reply: {
@@ -135,11 +135,13 @@ describe('handleUpdateNode', () => {
       warnings: string[]
     }
     expect(out.id).toBe('1:42')
-    // Both the plugin warning and the server collapse warning live in warnings[].
+    // Both the plugin warning and the server writer warning live in warnings[].
     expect(out.warnings).toContain('a plugin warning')
     expect(
       out.warnings.some(w =>
-        w.includes('collapsed to a single strokeWeight'),
+        w.includes(
+          'rows/cols/rowGap/colGap keys are GRID-only',
+        ),
       ),
     ).toBe(true)
   })

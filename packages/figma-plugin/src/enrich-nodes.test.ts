@@ -160,6 +160,61 @@ describe('syncPatch — the fields REST cannot carry', () => {
     ).toBe(false)
   })
 
+  // B27 — per-side stroke weights. The node's own `strokeWeight` is
+  // figma.mixed exactly when the four sides disagree, so the uniform field
+  // cannot describe a divider; the four sides can, and only they cross.
+  it('carries the four per-side stroke weights when they DIFFER', () => {
+    const patch = syncPatch(
+      node({
+        id: '1:3b',
+        type: 'FRAME',
+        strokeWeight: MIXED,
+        strokeTopWeight: 0,
+        strokeRightWeight: 0,
+        strokeBottomWeight: 1,
+        strokeLeftWeight: 0,
+      }),
+      MIXED,
+    )
+    expect(patch).toMatchObject({
+      strokeTopWeight: 0,
+      strokeRightWeight: 0,
+      strokeBottomWeight: 1,
+      strokeLeftWeight: 0,
+    })
+    expect(
+      Object.values(patch).some(v => typeof v === 'symbol'),
+    ).toBe(false)
+  })
+
+  it('adds nothing when the four sides are EQUAL — the uniform weight already says it', () => {
+    const patch = syncPatch(
+      node({
+        id: '1:3c',
+        type: 'FRAME',
+        strokeWeight: 2,
+        strokeTopWeight: 2,
+        strokeRightWeight: 2,
+        strokeBottomWeight: 2,
+        strokeLeftWeight: 2,
+      }),
+      MIXED,
+    )
+    expect('strokeTopWeight' in patch).toBe(false)
+  })
+
+  it('adds nothing for a node type without per-side support', () => {
+    const patch = syncPatch(
+      node({
+        id: '1:3d',
+        type: 'ELLIPSE',
+        strokeWeight: 1,
+      }),
+      MIXED,
+    )
+    expect('strokeTopWeight' in patch).toBe(false)
+  })
+
   it('projects the runs of a mixed-run TEXT', () => {
     const patch = syncPatch(mixedText('1:4'), MIXED)
     const runs = patch.runs as { at: number[] }[]

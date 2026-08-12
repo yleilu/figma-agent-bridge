@@ -303,6 +303,100 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     )
   })
 
+  // 3d-bis — B27, the ROUND TRIP: write `stroke([0,0,1,0])`, read back
+  // `stroke([0,0,1,0])`. The old writer collapsed the tuple to the top side,
+  // which turned the commonest divider in table/list design into a weight-0,
+  // invisible stroke.
+  //
+  // The assertion is deliberately on a LATER READ, not on the reply's echoed
+  // spec: an echo proves only that the server sent the four sides, and a plugin
+  // that applied none of them would echo exactly the same thing. The mock lands
+  // the sides in its node state (applyStrokeState) and `get_node` reads them
+  // back off it.
+  it('a per-side stroke written by update_node reads back as the same tuple', async () => {
+    const written = await handleUpdateNode(
+      {
+        nodeId: '1:42',
+        patch: {
+          strokes: ['#111827'],
+          stroke: 'stroke([0,0,1,0])',
+        },
+      },
+      scoped,
+    )
+    expect(written.content[0].text).not.toContain('Error:')
+    expect(
+      (
+        JSON.parse(written.content[0].text) as {
+          warnings?: string[]
+        }
+      ).warnings ?? [],
+    ).toHaveLength(0)
+
+    const read = await handleGetNode(
+      { nodeId: '1:42', depth: 0 },
+      scoped,
+    )
+    const spec = YAML.parse(read.content[0].text) as Record<
+      string,
+      unknown
+    >
+    // `{align=INSIDE}` is the fixture node's own alignment, untouched by this
+    // write — more evidence the read comes off the node rather than the patch.
+    expect(spec.stroke).toBe(
+      'stroke([0,0,1,0]){align=INSIDE}',
+    )
+  })
+
+  // The other half of the same claim: a UNIFORM write reads back as the plain
+  // number, so the tuple above is the reader describing the file rather than
+  // the reader always emitting a tuple.
+  it('a uniform stroke written by update_node reads back as the plain number', async () => {
+    await handleUpdateNode(
+      {
+        nodeId: '1:42',
+        patch: {
+          strokes: ['#111827'],
+          stroke: 'stroke(2)',
+        },
+      },
+      scoped,
+    )
+    const read = await handleGetNode(
+      { nodeId: '1:42', depth: 0 },
+      scoped,
+    )
+    const spec = YAML.parse(read.content[0].text) as Record<
+      string,
+      unknown
+    >
+    expect(spec.stroke).toBe('stroke(2){align=INSIDE}')
+  })
+
+  // 3d-ter — and the T7 half: a node type WITHOUT per-side support still
+  // degrades to a warning, now raised where the node type is known.
+  it('update_node warns when per-side stroke weights hit a node that cannot carry them', async () => {
+    const result = await handleUpdateNode(
+      {
+        nodeId: 'incompat:1',
+        patch: { stroke: 'stroke([0,0,1,0])' },
+      },
+      scoped,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const reply = JSON.parse(result.content[0].text) as {
+      type: string
+      warnings: string[]
+    }
+    const strokeWarning = reply.warnings.find(w =>
+      w.includes('per-side stroke weights'),
+    )
+    expect(strokeWarning).toBeDefined()
+    expect(strokeWarning).toContain(
+      'not supported on a ' + reply.type + ' node',
+    )
+  })
+
   // 3e — B6 (T7 honesty): update_node on the DOCUMENT node with a name patch
   // must warn-and-skip (not silently no-op). The document node's .name is
   // read-only in the plugin API; the setter silently does nothing, so the

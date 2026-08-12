@@ -272,8 +272,8 @@ describe('handleBatch', () => {
   })
 
   // D3/T7: a batched update_node emits the SAME server-side writer warnings a
-  // direct update_node would (e.g. per-side stroke collapse). Each entry gains
-  // an optional warnings[] surfacing them.
+  // direct update_node would (e.g. GRID-only layout keys on a non-GRID mode).
+  // Each entry gains an optional warnings[] surfacing them.
   it('surfaces per-op server-side writer warnings on a batched update_node entry', async () => {
     const result = await handleBatch(
       {
@@ -281,7 +281,7 @@ describe('handleBatch', () => {
           {
             op: 'update_node',
             nodeId: '1:1',
-            patch: { stroke: 'stroke([1,2,3,4])' },
+            patch: { layout: { mode: 'V', rows: 2 } },
           },
         ],
       },
@@ -295,7 +295,9 @@ describe('handleBatch', () => {
     expect(out.results[0].ok).toBe(true)
     expect(
       (out.results[0].warnings ?? []).some(w =>
-        w.includes('collapsed to a single strokeWeight'),
+        w.includes(
+          'rows/cols/rowGap/colGap keys are GRID-only',
+        ),
       ),
     ).toBe(true)
   })

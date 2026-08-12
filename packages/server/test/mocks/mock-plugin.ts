@@ -253,6 +253,61 @@ export const createMockPlugin = (
   // `description` (+ optional `context`) so the read surfacing is exercised e2e.
   const sharedContext = new Map<string, string>()
 
+  // APPLIED NODE STATE — the fields a write LANDS, so a later read returns what
+  // the write changed rather than what the request said. Same shape and
+  // lifetime as `sharedContext` above (keyed by node id, per-plugin-instance).
+  //
+  // Echoing the request payload back into the reply proves only that the server
+  // sent it: a plugin that applied nothing at all would look identical. So the
+  // fields whose whole point is surviving to the next read are modelled here
+  // and merged onto the fixture by `get_node`.
+  const appliedState = new Map<
+    string,
+    Record<string, unknown>
+  >()
+
+  /**
+   * Model the plugin's stroke apply (B27), including what the EXPORT then
+   * reports back.
+   *
+   * `strokeWeights` lands on IndividualStrokesMixin's four sides; the node's
+   * own `strokeWeight` is `figma.mixed` once they differ, which is exactly when
+   * the plugin's enrichment patches the four flat Plugin-API keys onto the
+   * exported node (and only then — equal sides are the uniform field).
+   */
+  const applyStrokeState = (
+    id: string,
+    spec: Record<string, unknown>,
+  ): void => {
+    const state = appliedState.get(id) ?? {}
+    if (Array.isArray(spec.strokes)) {
+      state.strokes = spec.strokes
+    }
+    if (typeof spec.strokeWeight === 'number') {
+      state.strokeWeight = spec.strokeWeight
+      delete state.strokeTopWeight
+      delete state.strokeRightWeight
+      delete state.strokeBottomWeight
+      delete state.strokeLeftWeight
+    }
+    if (Array.isArray(spec.strokeWeights)) {
+      const [top, right, bottom, left] =
+        spec.strokeWeights as number[]
+      if (right === top && bottom === top && left === top) {
+        state.strokeWeight = top
+      } else {
+        delete state.strokeWeight
+        state.strokeTopWeight = top
+        state.strokeRightWeight = right
+        state.strokeBottomWeight = bottom
+        state.strokeLeftWeight = left
+      }
+    }
+    if (Object.keys(state).length > 0) {
+      appliedState.set(id, state)
+    }
+  }
+
   // L5 timing knobs — TEST INFRASTRUCTURE for the L6 watchdog tests only.
   // `silent` withholds every reply (incl. ping); `delayedCommands` maps a
   // command string to a reply-delay in ms (ping is never delayed). Both
@@ -417,6 +472,10 @@ export const createMockPlugin = (
         } else {
           result = {
             ...cardFixture,
+            // What earlier writes actually landed on this node — merged AFTER
+            // the fixture so a read reflects the file, not the fixture's
+            // starting state.
+            ...(appliedState.get(cardFixture.id) ?? {}),
             ...(sharedContext.get(cardFixture.id)
               ? {
                   context: sharedContext.get(
@@ -941,6 +1000,12 @@ export const createMockPlugin = (
             sharedContext.set(unId, spec.context)
           }
         }
+        // The stroke fields LAND on the node (B27) — see applyStrokeState. A
+        // node that cannot carry them is handled in the incompat branch below,
+        // which warns instead of applying.
+        if (!unId.startsWith('incompat:')) {
+          applyStrokeState(unId, spec)
+        }
         // Mirror the real plugin's warn-on-no-op + degrade behavior on an
         // INCOMPATIBLE target (modeled by an `incompat:` nodeId — a node that
         // lacks layoutMode/fills/etc. capability). 3a: a patched property that
@@ -986,6 +1051,18 @@ export const createMockPlugin = (
                   ' node',
               )
             }
+          }
+          // B27 per-side stroke weights: the real plugin's applyStrokeWeights
+          // feature-detects IndividualStrokesMixin, then the uniform
+          // strokeWeight, and only warns when a node carries neither — which
+          // is exactly a SLICE. A node that DOES carry the four sides applies
+          // them silently, which is why this lives inside the incompat branch.
+          if (spec.strokeWeights !== undefined) {
+            unWarnings.push(
+              'per-side stroke weights ignored — not supported on a ' +
+                unType +
+                ' node',
+            )
           }
           // constraints warn-on-no-op: the real plugin guards on
           // `'constraints' in node` and warns with this exact wording when the
@@ -1273,6 +1350,11 @@ export const createMockPlugin = (
           } else {
             sharedContext.set(createdId, nodeSpec.context)
           }
+        }
+        // …and the same stroke apply the update path models (B27), so a created
+        // node carries the sides it was created with.
+        if (nodeSpec !== undefined && nodeSpec !== null) {
+          applyStrokeState(createdId, nodeSpec)
         }
         // I39: bindings are applied AFTER the literal properties, exactly as
         // buildSingleNode does — an unresolvable name warns and the literal

@@ -23,7 +23,11 @@ import type {
   NodeSpecPatch,
   TextSpec,
 } from '@figma-agent-bridge/shared/node-spec'
-import { tokenize, type Wrapper } from '../grammar'
+import {
+  atomToStroke,
+  tokenize,
+  type Wrapper,
+} from '../grammar'
 
 /**
  * One binding a converted payload asks the plugin to establish after the
@@ -80,6 +84,27 @@ const wrapperOf = (
     return tokenize(atom).wrapper
   } catch {
     return undefined
+  }
+}
+
+/**
+ * Is this stroke atom the per-side form (`stroke([0,0,1,0])`) rather than the
+ * uniform one (`stroke(1)`)?
+ *
+ * Parsed rather than pattern-matched: the tuple sits inside the atom's head
+ * (`stroke([…])`), not at the top of the body the way a radius tuple does, and
+ * `atomToStroke` already knows how to find it through a wrapper.
+ */
+const isPerSideStroke = (
+  atom: string | number | undefined,
+): boolean => {
+  if (typeof atom !== 'string') {
+    return false
+  }
+  try {
+    return atomToStroke(atom).weights !== undefined
+  } catch {
+    return false
   }
 }
 
@@ -169,7 +194,26 @@ export const collectWrapperBindings = (
   spec.strokes?.forEach((atom, i) =>
     add('strokes', wrapperOf(atom), i),
   )
-  add('stroke', wrapperOf(spec.stroke))
+  // stroke binds only in its UNIFORM form, for the same reason radius does
+  // (below): Figma has no per-side stroke-weight variable field —
+  // `setBoundVariable('strokeWeight')` sets ALL FOUR sides at once (it reads
+  // back as four individualStrokeWeights entries aliasing one variable), so
+  // binding a per-side atom would square the tuple it just applied and turn
+  // `stroke([0,0,1,0])` — a bottom rule — into a full box. Geometry wins, and
+  // the loss is announced (T7).
+  const strokeWrapper = wrapperOf(spec.stroke)
+  if (
+    strokeWrapper !== undefined &&
+    isPerSideStroke(spec.stroke)
+  ) {
+    warn(
+      `${strokeWrapper.kind}:${strokeWrapper.name}:stroke`,
+      `${strokeWrapper.kind}(${strokeWrapper.name}) on a per-side stroke: ` +
+        'a single binding cannot express per-side weights — literal applied unbound',
+    )
+  } else {
+    add('stroke', strokeWrapper)
+  }
   // radius binds only in its UNIFORM form. Figma has no single radius field:
   // `setBoundVariable('cornerRadius')` binds all four corners at once
   // (live-verified — it reads back as rectangleCornerRadii ×4), so binding a

@@ -131,10 +131,10 @@ Total: 18 types for Figma Design + 1 asset pipeline.
 | Property | Figma API | Status | Notes |
 |----------|-----------|--------|-------|
 | `strokeWeight` | number | ✅ | Uniform weight |
-| `strokeTopWeight` | number | ⏳ | Per-side stroke weight |
-| `strokeBottomWeight` | number | ⏳ | Per-side stroke weight |
-| `strokeLeftWeight` | number | ⏳ | Per-side stroke weight |
-| `strokeRightWeight` | number | ⏳ | Per-side stroke weight |
+| `strokeTopWeight` | number | ✅ | Per-side stroke weight — `stroke([t,r,b,l])` |
+| `strokeBottomWeight` | number | ✅ | Per-side stroke weight — `stroke([t,r,b,l])` |
+| `strokeLeftWeight` | number | ✅ | Per-side stroke weight — `stroke([t,r,b,l])` |
+| `strokeRightWeight` | number | ✅ | Per-side stroke weight — `stroke([t,r,b,l])` |
 | `strokeAlign` | `'CENTER' \| 'INSIDE' \| 'OUTSIDE'` | 🔧 M3 | Common in input fields |
 | `strokeCap` | StrokeCap | ⏳ | Line endings |
 | `strokeJoin` | StrokeJoin | ⏳ | Corner join style |

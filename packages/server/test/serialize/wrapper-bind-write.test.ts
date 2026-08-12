@@ -101,6 +101,43 @@ describe('write-face wrapper bindings — var()', () => {
     ])
   })
 
+  // A per-side stroke must NOT bind, for the reason a per-corner radius must
+  // not (below): `setBoundVariable('strokeWeight')` sets ALL FOUR sides at once
+  // — it reads back as four individualStrokeWeights entries aliasing one
+  // variable — so the binding would square the tuple the literal just applied
+  // and turn a bottom rule into a full box. Reachable the moment the reader
+  // can emit `var(border/rule)stroke([0,0,1,0])` (B27).
+  it('a var() per-side stroke keeps the four sides and drops the binding, with a warning', () => {
+    const warnings: string[] = []
+    const out = specToFigma(
+      { stroke: 'var(border/rule)stroke([0,0,1,0])' },
+      warnings,
+    )
+    expect(out.strokeWeights).toEqual([0, 0, 1, 0])
+    expect(out.bindings).toBeUndefined()
+    expect(warnings).toEqual([
+      'var(border/rule) on a per-side stroke: a single binding cannot ' +
+        'express per-side weights — literal applied unbound',
+    ])
+  })
+
+  it('the same wrapper on a UNIFORM stroke still binds — only the tuple shape degrades', () => {
+    const warnings: string[] = []
+    const out = specToFigma(
+      { stroke: 'var(border/rule)stroke(1)' },
+      warnings,
+    )
+    expect(out.strokeWeight).toBe(1)
+    expect(out.bindings).toEqual([
+      {
+        kind: 'var',
+        name: 'border/rule',
+        field: 'strokeWeight',
+      },
+    ])
+    expect(warnings).toEqual([])
+  })
+
   it('a var() radius binds cornerRadius and still resolves to its number', () => {
     const out = specToFigma({
       radius: 'var(radius/medium)8',

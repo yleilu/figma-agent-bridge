@@ -88,28 +88,62 @@ describe('specToFigma — stroke geometry', () => {
     })
   })
 
-  it('per-side stroke weights collapse to the top side (strokeWeight)', () => {
-    const result = specToFigma({
-      stroke: 'stroke([2,0,2,0])',
-    })
-    expect(result).toMatchObject({ strokeWeight: 2 })
-  })
-
-  it('per-side stroke with DIFFERING sides pushes a collapse warning onto the sink', () => {
+  // B27: per-side weights are APPLIED, not collapsed. The four sides ride the
+  // payload as `strokeWeights` and the plugin assigns
+  // strokeTopWeight/… (IndividualStrokesMixin). The writer cannot know the
+  // target's node type, so it no longer warns here — the feature detection and
+  // its warning live where the node is (T7).
+  it('per-side stroke weights emit the four sides as strokeWeights', () => {
     const warnings: string[] = []
-    specToFigma({ stroke: 'stroke([2,0,2,0])' }, warnings)
-    expect(warnings).toHaveLength(1)
-    expect(warnings[0]).toContain('Per-side stroke')
-    expect(warnings[0]).toContain('collapsed')
+    const result = specToFigma(
+      { stroke: 'stroke([0,0,1,0])' },
+      warnings,
+    )
+    expect(result).toMatchObject({
+      strokeWeights: [0, 0, 1, 0],
+    })
+    // No uniform weight beside it: one owner for the value, so nothing can
+    // re-collapse the tuple after the fact.
+    expect(result.strokeWeight).toBeUndefined()
+    expect(warnings).toHaveLength(0)
   })
 
-  it('per-side stroke with EQUAL sides is a lossless collapse — no warning', () => {
+  // A five-entry list used to lose its fifth to a destructure and land as a
+  // well-formed four-sided stroke — the caller asked for something this
+  // surface does not have and was told nothing. Degrade WHOLE instead.
+  it.each([
+    ['stroke([1,2,3,4,5])', 5],
+    ['stroke([1,2,3])', 3],
+  ])('a %s tuple degrades whole, with a warning', atom => {
+    const warnings: string[] = []
+    const result = specToFigma({ stroke: atom }, warnings)
+    expect(result.strokeWeights).toBeUndefined()
+    expect(result.strokeWeight).toBeUndefined()
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain(
+      'takes four weights [top,right,bottom,left]',
+    )
+  })
+
+  it('a non-numeric side degrades whole rather than writing NaN', () => {
+    const warnings: string[] = []
+    const result = specToFigma(
+      { stroke: 'stroke([1,x,1,0])' },
+      warnings,
+    )
+    expect(result.strokeWeight).toBeUndefined()
+    expect(result.strokeWeights).toBeUndefined()
+    expect(warnings).toHaveLength(1)
+  })
+
+  it('per-side stroke with EQUAL sides emits the plain uniform weight', () => {
     const warnings: string[] = []
     const result = specToFigma(
       { stroke: 'stroke([2,2,2,2])' },
       warnings,
     )
     expect(result).toMatchObject({ strokeWeight: 2 })
+    expect(result.strokeWeights).toBeUndefined()
     expect(warnings).toHaveLength(0)
   })
 

@@ -97,11 +97,12 @@ const ALLOW_LIST: Record<string, string> = {
   // `vectorPaths` is emitted via atomToPath mapping.
   // No asymmetry.
 
-  // `stroke` is emitted but mapped to multiple flat keys (strokeWeight,
-  // strokeAlign, strokeDash, strokeCap, strokeJoin, strokeMiterLimit) —
-  // the output key name differs from the schema field name.
+  // `stroke` is emitted but mapped to multiple flat keys (strokeWeight or the
+  // per-side strokeWeights tuple, strokeAlign, strokeDash, strokeCap,
+  // strokeJoin, strokeMiterLimit) — the output key name differs from the
+  // schema field name.
   stroke:
-    'stroke atom is expanded to multiple flat keys (strokeWeight/strokeAlign/strokeDash/…); no single "stroke" key in the payload',
+    'stroke atom is expanded to multiple flat keys (strokeWeight/strokeWeights/strokeAlign/strokeDash/…); no single "stroke" key in the payload',
 
   // `blend` is emitted as `blendMode` in the payload (key rename).
   blend:
@@ -194,7 +195,7 @@ const PLUGIN_READ_FIELDS: readonly string[] = [
   'position', // line ~890
   'fills', // line ~900
   'strokes', // line ~905
-  'stroke', // strokeWeight/strokeAlign/strokeDash (line ~910)
+  'stroke', // strokeWeight/strokeWeights/strokeAlign/strokeDash (line ~910)
   'effects', // line ~920
   'radius', // line ~925 (cornerRadius)
   'opacity', // line ~930

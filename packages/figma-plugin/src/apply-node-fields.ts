@@ -1,7 +1,7 @@
-// Pure, side-effect-free field appliers for three flat NodeSpec keys the
-// server writer has emitted for a while but the plugin never read: stroke
-// geometry (strokeCap/strokeJoin/strokeMiterLimit), exportSettings, and
-// node-level layout grids. Same shape as `apply-layout.ts`: each function
+// Field appliers for the flat NodeSpec keys the server writer emits beside the
+// main apply path: stroke geometry (strokeCap/strokeJoin/strokeMiterLimit),
+// per-side stroke weights, exportSettings, and node-level layout grids. Same
+// shape as `apply-layout.ts`: each function
 // declares a minimal structural target so it stays free of the figma runtime
 // and is independently unit-testable with a plain fake node.
 //
@@ -54,6 +54,81 @@ export const applyStrokeGeometry = (
   ) {
     node.strokeMiterLimit = spec.strokeMiterLimit
   }
+}
+
+/**
+ * Structural subset this applier writes to (IndividualStrokesMixin, plus the
+ * uniform `strokeWeight` it falls back to).
+ */
+export type StrokeWeightsTarget = Partial<{
+  type: unknown
+  strokeWeight: unknown
+  strokeTopWeight: unknown
+  strokeRightWeight: unknown
+  strokeBottomWeight: unknown
+  strokeLeftWeight: unknown
+}>
+
+/**
+ * Apply per-side stroke weights `[top, right, bottom, left]` (B27).
+ *
+ * Figma carries the four sides on frame-like and RECTANGLE nodes
+ * (`IndividualStrokesMixin`) and nowhere else, so this is the one applier that
+ * has to SAY something when it cannot do the job: a VECTOR asked for
+ * `stroke([0,0,1,0])` can only take one weight, and silently taking the top
+ * one — 0 — is how a divider became invisible. Feature-detect (T7), and when
+ * the sides cannot survive, collapse to the top side and warn.
+ *
+ * The warning lives here rather than in the server's writer because only here
+ * is the node type known.
+ */
+export const applyStrokeWeights = (
+  node: StrokeWeightsTarget,
+  weights: unknown,
+  warnings?: string[],
+): void => {
+  if (weights === undefined) return
+  const typeName =
+    typeof node.type === 'string' ? node.type : 'unknown'
+  if (
+    !Array.isArray(weights) ||
+    weights.length !== 4 ||
+    weights.some(w => typeof w !== 'number')
+  ) {
+    warnings?.push(
+      'per-side stroke weights ignored — expected ' +
+        '[top,right,bottom,left] numbers on a ' +
+        typeName +
+        ' node',
+    )
+    return
+  }
+  const [top, right, bottom, left] = weights as number[]
+  if ('strokeTopWeight' in node) {
+    node.strokeTopWeight = top
+    node.strokeRightWeight = right
+    node.strokeBottomWeight = bottom
+    node.strokeLeftWeight = left
+    return
+  }
+  if ('strokeWeight' in node) {
+    node.strokeWeight = top
+    warnings?.push(
+      'per-side stroke weights [' +
+        [top, right, bottom, left].join(', ') +
+        '] collapsed to a single strokeWeight (' +
+        top +
+        ') — a ' +
+        typeName +
+        ' node has no per-side stroke weights',
+    )
+    return
+  }
+  warnings?.push(
+    'per-side stroke weights ignored — not supported on a ' +
+      typeName +
+      ' node',
+  )
 }
 
 /** Structural subset this applier writes to (ExportMixin). */
