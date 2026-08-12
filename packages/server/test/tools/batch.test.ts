@@ -531,6 +531,39 @@ describe('batch delete_styles — index-tagged like the standalone handler', () 
   })
 })
 
+// B30: a batched update_component must convert its slot specs on the SAME
+// write face the standalone handler uses — an unconverted atom string would
+// otherwise be assigned to the slot raw.
+describe('batch update_component — slot specs are converted', () => {
+  it('parses a slot entry fill atom and passes a bare name through', async () => {
+    const sent: Sent[] = []
+    await handleBatch(
+      {
+        op: 'update_component',
+        ops: [
+          {
+            componentId: 'c:1',
+            slots: [
+              'Header',
+              { name: 'Content', fills: ['#141B2E'] },
+            ],
+          },
+        ],
+      } as unknown as Parameters<typeof handleBatch>[0],
+      stubClient({ sent }),
+    )
+    const forwarded = sent[0].params?.ops as SentOp[]
+    const slots = forwarded[0].params.slots as unknown[]
+    expect(slots[0]).toBe('Header')
+    const specced = slots[1] as {
+      name: string
+      fills: { type: string }[]
+    }
+    expect(specced.name).toBe('Content')
+    expect(specced.fills[0].type).toBe('SOLID')
+  })
+})
+
 // The coverage guard. Entry validation is only as good as its op map: an op
 // added to batchOpSchema without a schema here would silently rejoin the
 // unvalidated path that produced the raw.trim TypeError. The Record<BatchOp,…>

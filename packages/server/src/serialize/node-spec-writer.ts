@@ -61,6 +61,7 @@ import type {
   NodeSpec,
   NodeSpecPatch,
   LayoutSpec,
+  SlotEntry,
 } from '@figma-agent-bridge/shared/node-spec'
 import { NODE_SPEC_PATCH_KEYS } from '@figma-agent-bridge/shared/node-spec-schema'
 import {
@@ -531,3 +532,40 @@ export const specToFigmaForCreate = (
   type: spec.type,
   name: spec.name ?? spec.type,
 })
+
+// ─── slot entries ─────────────────────────────────────────────────────────────
+
+/**
+ * Convert one `update_component` slot entry (B30).
+ *
+ * A bare string is a name and nothing else — it crosses the wire UNCHANGED, so
+ * an older plugin build reads exactly what it always read (back-compat). The
+ * object form goes through the SAME `specToFigma` write face as
+ * `create_node`/`update_node`, which is the whole point: atoms are parsed here
+ * once, and an inline `var()`/`style()` wrapper rides along in `bindings[]`
+ * with no parallel path to maintain.
+ *
+ * Every warning raised while converting is ATTRIBUTED to the slot by name —
+ * one call can carry several slots, and an unattributed "layout: …" note would
+ * leave the agent guessing which one it belongs to.
+ */
+export const slotEntryToFigma = (
+  entry: SlotEntry,
+  warnings?: string[],
+): string | FigmaWritePayload => {
+  if (typeof entry === 'string') {
+    return entry
+  }
+  const { name, ...rest } = entry
+  const local: string[] = []
+  const converted = specToFigma(
+    rest as NodeSpecPatch,
+    local,
+  )
+  const payload: FigmaWritePayload = { ...converted, name }
+  // `payload` (not `converted`) so the "nothing was changed" tail never fires:
+  // the name always lands, whatever else the entry got wrong.
+  local.push(...unknownPatchKeyWarnings(rest, payload))
+  warnings?.push(...local.map(w => `slot "${name}": ${w}`))
+  return payload
+}

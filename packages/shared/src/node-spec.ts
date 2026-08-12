@@ -279,6 +279,26 @@ export type NodeSpecPatch = Omit<
 > & { text?: Partial<TextSpec> }
 
 /**
+ * One `update_component` slot entry (B30).
+ *
+ * `component.createSlot()` takes no argument, so a fresh slot is born 100×100
+ * FIXED with an opaque #FFFFFF fill and no auto-layout. The spec is applied to
+ * it through the SAME write face `update_node`'s patch goes through — hence
+ * literally a `NodeSpecPatch` with `name` required — so one call yields a
+ * usable slot instead of a create plus two `update_node` follow-ups.
+ *
+ * The index signature is the passthrough half of the schema: an unknown key
+ * SURVIVES validation so the handler can report it (T7), and is never applied.
+ */
+export type SlotSpec = NodeSpecPatch & {
+  name: string
+  [key: string]: unknown
+}
+
+/** A slot entry: a bare name, or a name plus the spec applied to the slot. */
+export type SlotEntry = string | SlotSpec
+
+/**
  * The create_tree node shape: a NodeSpec with recursive children, a
  * ref-pool reuse (`{ ref }`), or a clone-by-id (`{ id }`).
  *

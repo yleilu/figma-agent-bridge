@@ -20,6 +20,7 @@ import {
   it,
 } from 'bun:test'
 import type { Server } from 'bun'
+import YAML from 'yaml'
 import {
   startRelay,
   stopRelay,
@@ -36,6 +37,7 @@ import {
   handleSwapComponent,
   handleSetInstance,
 } from '@figma-agent-bridge/server/tools/components'
+import { handleGetNode } from '@figma-agent-bridge/server/tools/read'
 import { createMockPlugin } from '../mocks/mock-plugin'
 
 const TEST_PORT = 3104
@@ -465,6 +467,323 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
     const warnings = data.warnings as string[]
     expect(warnings.some(w => w.includes('unbound'))).toBe(
       false,
+    )
+  })
+
+  // ── B30: a slot entry carries a spec ───────────────────────────────────────
+  //
+  // Every assertion below is on a LATER READ of the slot, never on the reply's
+  // echo: an echo proves only that the server sent the spec, and a plugin that
+  // applied none of it would echo exactly the same thing. The mock creates the
+  // slot node (born 100×100 FIXED, opaque white, no auto-layout — as Figma
+  // does), applies the converted payload to it, and `get_node` serves the
+  // result.
+
+  it('B30: an object slot entry lands its layout, size and sizing on the created slot', async () => {
+    const written = await handleUpdateComponent(
+      {
+        componentId: 'c:1',
+        slots: [
+          {
+            name: 'Content',
+            layout: {
+              mode: 'V',
+              gap: 8,
+              pad: [16, 16, 16, 16],
+            },
+            size: [320, 200],
+            sizing: ['FILL', 'HUG'],
+          },
+        ],
+      },
+      scoped,
+    )
+    expect(written.content[0].text).not.toContain('Error:')
+    const reply = JSON.parse(
+      written.content[0].text,
+    ) as Record<string, unknown>
+    expect(reply.slotsCreated).toEqual(['Content'])
+    expect(reply.warnings).toEqual([])
+
+    const read = await handleGetNode(
+      { nodeId: 'slot:Content', depth: 0 },
+      scoped,
+    )
+    const spec = YAML.parse(read.content[0].text) as Record<
+      string,
+      unknown
+    >
+    expect(spec.name).toBe('Content')
+    expect(spec.type).toBe('SLOT')
+    expect(spec.layout).toEqual({
+      mode: 'V',
+      gap: 8,
+      pad: [16, 16, 16, 16],
+    })
+    expect(spec.size).toEqual([320, 200])
+    expect(spec.sizing).toEqual(['FILL', 'HUG'])
+  })
+
+  it('B30: `fills: []` clears the white fill a fresh slot is born with', async () => {
+    // The reason the object form exists: a created slot is opaque #FFFFFF, so
+    // without this an agent needs a second call just to make it see-through.
+    await handleUpdateComponent(
+      {
+        componentId: 'c:1',
+        slots: [{ name: 'Clear', fills: [] }],
+      },
+      scoped,
+    )
+    const read = await handleGetNode(
+      { nodeId: 'slot:Clear', depth: 0 },
+      scoped,
+    )
+    const spec = YAML.parse(read.content[0].text) as Record<
+      string,
+      unknown
+    >
+    expect(spec.fills).toBeUndefined()
+  })
+
+  it('B30: the white fill is what a bare-string slot keeps (the counter-case)', async () => {
+    // Same read, opposite write — proof the case above reflects the file and
+    // not a reader that never emits fills for a SLOT.
+    await handleUpdateComponent(
+      { componentId: 'c:1', slots: ['Plain'] },
+      scoped,
+    )
+    const read = await handleGetNode(
+      { nodeId: 'slot:Plain', depth: 0 },
+      scoped,
+    )
+    const spec = YAML.parse(read.content[0].text) as Record<
+      string,
+      unknown
+    >
+    expect(spec.fills).toEqual(['#FFFFFF'])
+    // …and a bare string is still exactly a name: no layout, born FIXED.
+    expect(spec.layout).toBeUndefined()
+    expect(spec.sizing).toEqual(['FIXED', 'FIXED'])
+  })
+
+  it('B30: a slot fill atom is parsed server-side and lands as a paint', async () => {
+    await handleUpdateComponent(
+      {
+        componentId: 'c:1',
+        slots: [{ name: 'Tinted', fills: ['#141B2E'] }],
+      },
+      scoped,
+    )
+    const read = await handleGetNode(
+      { nodeId: 'slot:Tinted', depth: 0 },
+      scoped,
+    )
+    const spec = YAML.parse(read.content[0].text) as Record<
+      string,
+      unknown
+    >
+    expect(spec.fills).toEqual(['#141B2E'])
+  })
+
+  it('B30 (T7): a failing field warns while the slot is still created and named', async () => {
+    // `noautolayout:` models a component that is not an auto-layout frame:
+    // Figma refuses FILL on its direct child. The slot must survive that —
+    // created, named, and carrying every field that DID apply.
+    const result = await handleUpdateComponent(
+      {
+        componentId: 'noautolayout:c:2',
+        slots: [
+          {
+            name: 'Degraded',
+            layout: { mode: 'H', gap: 4 },
+            sizing: ['FILL', 'FILL'],
+          },
+        ],
+      },
+      scoped,
+    )
+    const reply = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    // Not `not.toContain('Error:')` here: the degrade warning QUOTES Figma's
+    // own thrown Error, so the reply legitimately carries that substring. The
+    // envelope is what must not be an error.
+    expect(reply.error).toBeUndefined()
+    expect(reply.slotsCreated).toEqual(['Degraded'])
+    expect(reply.slotsSkipped).toEqual([])
+    const warnings = reply.warnings as string[]
+    expect(warnings.some(w => w.includes('sizing'))).toBe(
+      true,
+    )
+
+    const read = await handleGetNode(
+      { nodeId: 'slot:Degraded', depth: 0 },
+      scoped,
+    )
+    const spec = YAML.parse(read.content[0].text) as Record<
+      string,
+      unknown
+    >
+    expect(spec.name).toBe('Degraded')
+    // The field that failed kept the born value; the ones that worked landed.
+    expect(spec.sizing).toEqual(['FIXED', 'FIXED'])
+    expect(spec.layout).toEqual({ mode: 'H', gap: 4 })
+  })
+
+  it('B30 (T7): each degrade names ITS slot — two failing the same way are told apart', async () => {
+    // Unattributed, these are two byte-identical strings and the agent cannot
+    // tell which slot to fix. The spec promises attribution by name; this is
+    // what holds the plugin to it.
+    const result = await handleUpdateComponent(
+      {
+        componentId: 'noautolayout:c:2',
+        slots: [
+          { name: 'Header', sizing: ['FILL', 'HUG'] },
+          { name: 'Footer', sizing: ['FILL', 'HUG'] },
+        ],
+      },
+      scoped,
+    )
+    const reply = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(reply.error).toBeUndefined()
+    expect(reply.slotsCreated).toEqual(['Header', 'Footer'])
+    const warnings = reply.warnings as string[]
+    expect(warnings).toHaveLength(2)
+    expect(warnings[0]).toContain('slot "Header"')
+    expect(warnings[1]).toContain('slot "Footer"')
+    expect(new Set(warnings).size).toBe(2)
+  })
+
+  it('B30 (T7): a field the SLOT cannot carry warns instead of silently no-opping', async () => {
+    // `text` converts and crosses the wire — it is a real NodeSpec field — but
+    // applyTextProperties only runs for a TEXT node, so on a slot the whole
+    // struct would vanish without a word. That silence is what hides the
+    // headline feature failing on a node type that cannot take it.
+    const result = await handleUpdateComponent(
+      {
+        componentId: 'c:1',
+        slots: [
+          {
+            name: 'Texty',
+            fills: [],
+            text: {
+              content: 'Hello',
+              font: 'font(Inter,Regular,16)',
+            },
+          },
+        ],
+      },
+      scoped,
+    )
+    const reply = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(reply.error).toBeUndefined()
+    expect(reply.slotsCreated).toEqual(['Texty'])
+    const warnings = reply.warnings as string[]
+    expect(warnings).toEqual([
+      'slot "Texty": text ignored — not supported on a SLOT node',
+    ])
+    // …and the fields that DO apply were unaffected by the one that did not.
+    const read = await handleGetNode(
+      { nodeId: 'slot:Texty', depth: 0 },
+      scoped,
+    )
+    const spec = YAML.parse(read.content[0].text) as Record<
+      string,
+      unknown
+    >
+    expect(spec.fills).toBeUndefined()
+    expect(spec.text).toBeUndefined()
+  })
+
+  it('B30 (I39): an inline var() wrapper on a slot fill binds through the same mechanism', async () => {
+    const result = await handleUpdateComponent(
+      {
+        componentId: 'c:1',
+        slots: [
+          {
+            name: 'Bound',
+            fills: ['var(surface/card-bg)#141B2E'],
+          },
+        ],
+      },
+      scoped,
+    )
+    const reply = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    // A resolvable name binds silently…
+    expect(reply.warnings).toEqual([])
+    const read = await handleGetNode(
+      { nodeId: 'slot:Bound', depth: 0 },
+      scoped,
+    )
+    const spec = YAML.parse(read.content[0].text) as Record<
+      string,
+      unknown
+    >
+    // …and silence is not the evidence: the read emits the WRAPPER back, which
+    // it can only do if the binding actually landed on the paint. The literal
+    // rides along, so a read-modify-write re-binds the same name (I39).
+    expect(spec.fills).toEqual([
+      'var(surface/card-bg)#141B2E',
+    ])
+  })
+
+  it('B30 (I39/T7): an unresolvable var() name degrades to a warning, literal applied', async () => {
+    const result = await handleUpdateComponent(
+      {
+        componentId: 'c:1',
+        slots: [
+          {
+            name: 'Unbound',
+            fills: ['var(nope/missing)#141B2E'],
+          },
+        ],
+      },
+      scoped,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const reply = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    const warnings = reply.warnings as string[]
+    expect(
+      warnings.some(w =>
+        w.includes('no variable with that name'),
+      ),
+    ).toBe(true)
+    expect(reply.slotsCreated).toEqual(['Unbound'])
+    const read = await handleGetNode(
+      { nodeId: 'slot:Unbound', depth: 0 },
+      scoped,
+    )
+    const spec = YAML.parse(read.content[0].text) as Record<
+      string,
+      unknown
+    >
+    expect(spec.fills).toEqual(['#141B2E'])
+  })
+
+  it('B30 (T7): createSlot unavailable still skips every entry, spec or not', async () => {
+    const result = await handleUpdateComponent(
+      {
+        componentId: 'noslot:c:3',
+        slots: ['Bare', { name: 'Specced', fills: [] }],
+      },
+      scoped,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const reply = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(reply.slotsCreated).toEqual([])
+    expect(reply.slotsSkipped).toEqual(['Bare', 'Specced'])
+    expect((reply.warnings as string[])[0]).toContain(
+      'createSlot unavailable',
     )
   })
 

@@ -5,6 +5,7 @@ import {
   applyStrokeWeights,
   applyExportSettings,
   applyGrids,
+  capabilityWarnings,
 } from './apply-node-fields'
 
 // ─── applyStrokeGeometry ───────────────────────────────────────────────────
@@ -219,4 +220,60 @@ test('applyGrids: undefined grids leaves an existing node value untouched (omiss
   }
   applyGrids(node, undefined)
   expect(node.layoutGrids).toBe(existing)
+})
+
+// ─── capabilityWarnings ─────────────────────────────────────────────────────
+
+test('capabilityWarnings: says nothing when the node carries every field asked for', () => {
+  const node = {
+    type: 'FRAME',
+    layoutMode: 'NONE',
+    fills: [],
+    opacity: 1,
+  }
+  expect(
+    capabilityWarnings(node, {
+      layout: { mode: 'V' },
+      fills: [],
+      opacity: 0.5,
+    }),
+  ).toEqual([])
+})
+
+test('capabilityWarnings: names each dropped field and the node type that dropped it', () => {
+  const slot = { type: 'SLOT', fills: [] }
+  expect(
+    capabilityWarnings(slot, {
+      fills: [],
+      layout: { mode: 'V' },
+      text: { content: 'hi' },
+    }),
+  ).toEqual([
+    'layout ignored — not supported on a SLOT node',
+    'text ignored — not supported on a SLOT node',
+  ])
+})
+
+test('capabilityWarnings: a text struct on a non-TEXT node is named, not silently dropped', () => {
+  // applyTextProperties runs only for TEXT, so without this row the whole
+  // struct vanishes with no reply to show for it.
+  expect(
+    capabilityWarnings({ type: 'RECTANGLE' }, {
+      text: { content: 'hi' },
+    }),
+  ).toEqual([
+    'text ignored — not supported on a RECTANGLE node',
+  ])
+  expect(
+    capabilityWarnings(
+      { type: 'TEXT', characters: '' },
+      { text: { content: 'hi' } },
+    ),
+  ).toEqual([])
+})
+
+test('capabilityWarnings: an omitted field is never warned about (omission ≠ request)', () => {
+  expect(capabilityWarnings({ type: 'SLICE' }, {})).toEqual(
+    [],
+  )
 })

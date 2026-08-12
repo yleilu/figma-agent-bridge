@@ -308,6 +308,200 @@ export const createMockPlugin = (
     }
   }
 
+  // SLOT NODES minted by update_component (B30), keyed by id → the raw export a
+  // later get_node serves. Same reasoning as appliedState above: the reply's
+  // echo proves only that the server sent the spec, so the slot's LANDED state
+  // is modelled here and read back through the ordinary read path.
+  const createdSlots = new Map<
+    string,
+    Record<string, unknown>
+  >()
+
+  /**
+   * Model `component.createSlot()` plus the apply pipeline the fresh slot then
+   * runs (B30).
+   *
+   * A created slot is born 100×100 FIXED, opaque #FFFFFF, no auto-layout
+   * (live-verified — docs/reference/figma-plugin-api.md). The CONVERTED payload
+   * is applied on top, in the plugin's own order, and the RESULT is the export
+   * a later `get_node` serves — so an e2e asserts what landed, not what was
+   * asked for.
+   *
+   * `autoLayoutParent: false` models a component that is not an auto-layout
+   * frame: `layoutSizing* = FILL` on its direct child is refused by Figma
+   * ("FILL can only be set on children of auto-layout frames"), which the
+   * plugin degrades to a warning while the slot stays created and named.
+   *
+   * Every note goes into a LOCAL sink and is prefixed with the slot's name on
+   * the way out, exactly as the plugin's loop does — N slots failing the same
+   * way must not emit N identical strings.
+   *
+   * The id is DETERMINISTIC (`slot:<name>`) — a mock affordance, since the real
+   * plugin's ids come from Figma — so a test can address the node the write
+   * created without a mock-only echo in the reply.
+   */
+  const createSlotNode = (
+    name: string,
+    spec: Record<string, unknown> | undefined,
+    warnings: string[],
+    autoLayoutParent: boolean,
+  ): string => {
+    const node: Record<string, unknown> = {
+      id: `slot:${name}`,
+      name: name === '' ? 'Slot' : name,
+      type: 'SLOT',
+      absoluteBoundingBox: {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 100,
+      },
+      fills: [
+        {
+          type: 'SOLID',
+          visible: true,
+          opacity: 1,
+          blendMode: 'NORMAL',
+          color: { r: 1, g: 1, b: 1, a: 1 },
+        },
+      ],
+      strokes: [],
+      strokeWeight: 0,
+      strokeAlign: 'INSIDE',
+      layoutMode: 'NONE',
+      layoutSizingHorizontal: 'FIXED',
+      layoutSizingVertical: 'FIXED',
+      children: [],
+    }
+    const slotId = node.id as string
+    if (spec === undefined) {
+      createdSlots.set(slotId, node)
+      return slotId
+    }
+    // applyCommonProperties' share: name, size, fills.
+    if (typeof spec.name === 'string') {
+      node.name = spec.name
+    }
+    if (Array.isArray(spec.size)) {
+      const [w, h] = spec.size as number[]
+      node.absoluteBoundingBox = {
+        x: 0,
+        y: 0,
+        width: w,
+        height: h,
+      }
+    }
+    if (Array.isArray(spec.fills)) {
+      node.fills = spec.fills
+    }
+    // …and the layout, in the export vocabulary a read consumes.
+    const layout = spec.layout as
+      | {
+          mode?: string
+          spacing?: number
+          padding?: number[]
+          align?: string[]
+          wrap?: boolean
+        }
+      | undefined
+    if (layout !== undefined) {
+      node.layoutMode =
+        layout.mode === 'H'
+          ? 'HORIZONTAL'
+          : layout.mode === 'V'
+            ? 'VERTICAL'
+            : layout.mode === 'GRID'
+              ? 'GRID'
+              : 'NONE'
+      if (typeof layout.spacing === 'number') {
+        node.itemSpacing = layout.spacing
+      }
+      if (Array.isArray(layout.padding)) {
+        const [pt, pr, pb, pl] = layout.padding
+        node.paddingTop = pt
+        node.paddingRight = pr
+        node.paddingBottom = pb
+        node.paddingLeft = pl
+      }
+      if (Array.isArray(layout.align)) {
+        const [primary, counter] = layout.align
+        node.primaryAxisAlignItems = primary
+        node.counterAxisAlignItems = counter
+      }
+      if (layout.wrap === true) {
+        node.layoutWrap = 'WRAP'
+      }
+    }
+    // applyPostAppendProperties' share: sizing, which is exactly the field a
+    // non-auto-layout parent refuses (T7 degrade, warn and continue).
+    const slotWarnings: string[] = []
+    if (Array.isArray(spec.sizing)) {
+      if (autoLayoutParent) {
+        const [h, v] = spec.sizing as string[]
+        node.layoutSizingHorizontal = h
+        node.layoutSizingVertical = v
+      } else {
+        slotWarnings.push(
+          'sizing not applicable on this node (SLOT): Error: FILL can only be set on children of auto-layout frames',
+        )
+      }
+    }
+    // …then the bindings, literal first exactly as the plugin orders them. An
+    // APPLIED var() binding is modelled the way the file reports one — the
+    // paint carries boundVariables and the node carries the id → name map the
+    // plugin's enrichment adds — so the read emits the wrapper back and the
+    // test can tell a landed binding from a merely-unwarned one.
+    const applied = mockApplyWrapperBindings(spec.bindings)
+    slotWarnings.push(...applied.warnings)
+    const boundNames: Record<string, string> = {}
+    for (const binding of applied.applied) {
+      if (binding.kind !== 'var') {
+        continue
+      }
+      const paints = node[binding.field] as
+        | Record<string, unknown>[]
+        | undefined
+      if (!Array.isArray(paints)) {
+        continue
+      }
+      const varId = `var:mock:${binding.name}`
+      for (const [i, paint] of paints.entries()) {
+        if (
+          binding.index === undefined ||
+          binding.index === i
+        ) {
+          paint.boundVariables = {
+            color: { id: varId, type: 'VARIABLE_ALIAS' },
+          }
+          boundNames[varId] = binding.name
+        }
+      }
+    }
+    if (Object.keys(boundNames).length > 0) {
+      node.bindingNames = { variables: boundNames }
+    }
+    // warn-on-no-op (T7), mirroring the plugin's capabilityWarnings over a
+    // SLOT: SlotNode extends DefaultFrameMixin, so it carries layout / fills /
+    // strokes / effects / opacity / radius / clipsContent and NOT these four.
+    for (const key of [
+      'pointCount',
+      'innerRadius',
+      'sectionContentsHidden',
+      'text',
+    ]) {
+      if (spec[key] !== undefined) {
+        slotWarnings.push(
+          key + ' ignored — not supported on a SLOT node',
+        )
+      }
+    }
+    warnings.push(
+      ...slotWarnings.map(w => `slot "${name}": ${w}`),
+    )
+    createdSlots.set(slotId, node)
+    return slotId
+  }
+
   // L5 timing knobs — TEST INFRASTRUCTURE for the L6 watchdog tests only.
   // `silent` withholds every reply (incl. ping); `delayedCommands` maps a
   // command string to a reply-delay in ms (ping is never delayed). Both
@@ -452,7 +646,15 @@ export const createMockPlugin = (
         const gnNodeId = cmd.params?.nodeId as
           | string
           | undefined
-        if (gnNodeId === 'remote-inst:1') {
+        // B30: a slot minted by update_component reads back as itself — the
+        // whole point of modelling the apply rather than echoing the payload.
+        const gnSlot =
+          gnNodeId === undefined
+            ? undefined
+            : createdSlots.get(gnNodeId)
+        if (gnSlot !== undefined) {
+          result = { ...gnSlot }
+        } else if (gnNodeId === 'remote-inst:1') {
           result = {
             id: 'remote-inst:1',
             name: 'LibraryButton',
@@ -1041,6 +1243,10 @@ export const createMockPlugin = (
             ['opacity', 'opacity'],
             ['cornerRadius', 'radius'],
             ['clipsContent', 'clipsContent'],
+            // A SLICE has no `characters`, and applyTextProperties runs only
+            // for a TEXT node, so a text patch here is a silent no-op unless
+            // named — the row capabilityWarnings gained with B30.
+            ['characters', 'text'],
           ]
           for (const [, label] of capChecks) {
             if (spec[label] !== undefined) {
@@ -1702,7 +1908,9 @@ export const createMockPlugin = (
       // warnings}. `properties` is the catalogue ARRAY of
       // {id,name,type,defaultValue,variantOptions?}. An `expose` list degrades
       // (warn, never error) — exposeNestedInstances is gated. A `slots` list
-      // also degrades (createSlot is runtime-only; mock echoes slotsSkipped).
+      // CREATES slot nodes (createSlotNode above) and applies each entry's
+      // spec, so a later get_node reads what landed (B30); the componentId
+      // prefixes below model the two slot degrade paths.
       // addComponentProperty returns a CANONICAL id (`<name>#<suffix>`)
       // that agents need for later setProperties, so the mock mirrors the real
       // plugin by carrying it inside each `properties` entry's `id` field.
@@ -1710,6 +1918,12 @@ export const createMockPlugin = (
       //  - componentId `err:` → {error:'Component not found: …'} (not-found).
       //  - componentId `notcomp:` → {error:'Node is not a component …'} (the
       //    node resolves but is the wrong type).
+      // Slot-path conventions (degrades, never errors):
+      //  - componentId `noslot:` → createSlot unavailable in this Figma
+      //    version: every name lands in slotsSkipped with the T7 warning.
+      //  - componentId `noautolayout:` → the component is not an auto-layout
+      //    frame, so a slot `sizing` is refused (warn + continue) while the
+      //    slot is still created, named, and given its other fields.
       case 'update_component': {
         const ucId = cmd.params?.componentId as string
         if (ucId.startsWith('err:')) {
@@ -1736,7 +1950,7 @@ export const createMockPlugin = (
           | string[]
           | undefined
         const ucSlots = cmd.params?.slots as
-          | string[]
+          | (string | Record<string, unknown>)[]
           | undefined
         const ucWarnings: string[] = []
         const properties: {
@@ -1773,18 +1987,46 @@ export const createMockPlugin = (
             'exposeNestedInstances unavailable in this Figma version; expose skipped',
           )
         }
-        // slots: mock degrades (T7) — createSlot is runtime-only and unavailable
-        // in the headless mock. Echo slotsCreated:[] / slotsSkipped:[...names] with
-        // the degrade warning, matching the real plugin's T7 degrade path.
+        // slots: a bare string is a name and nothing else (back-compat); an
+        // object entry carries the CONVERTED spec, which createSlotNode applies
+        // to the fresh slot. `noslot:` models the T7 unavailable-createSlot
+        // degrade the real plugin feature-detects.
         const slotsCreated: string[] = []
         const slotsSkipped: string[] = []
         if (ucSlots && ucSlots.length > 0) {
-          for (const name of ucSlots) {
-            slotsSkipped.push(name)
-          }
-          ucWarnings.push(
-            'createSlot unavailable in this Figma version; slot(s) not created',
+          // Read each entry once, the way the plugin's readSlotEntry does: a
+          // bare string is a name with no spec; an object carries both.
+          const ucSlotEntries = ucSlots.map(entry =>
+            typeof entry === 'string'
+              ? { name: entry, spec: undefined }
+              : {
+                  name:
+                    typeof entry.name === 'string'
+                      ? entry.name
+                      : '',
+                  spec: entry,
+                },
           )
+          if (ucId.startsWith('noslot:')) {
+            slotsSkipped.push(
+              ...ucSlotEntries.map(e => e.name),
+            )
+            ucWarnings.push(
+              'createSlot unavailable in this Figma version; slot(s) not created',
+            )
+          } else {
+            const ucAutoLayout =
+              !ucId.startsWith('noautolayout:')
+            for (const { name, spec } of ucSlotEntries) {
+              createSlotNode(
+                name,
+                spec,
+                ucWarnings,
+                ucAutoLayout,
+              )
+              slotsCreated.push(name)
+            }
+          }
         }
         result = {
           id: ucId,

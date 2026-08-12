@@ -26,6 +26,7 @@ import { FEEDBACK_CATEGORIES } from './feedback'
 import {
   nodeSpecSchema,
   partialNodeSpecSchema,
+  slotEntrySchema,
   treeNodeSpecSchema,
 } from './node-spec-schema'
 import {
@@ -1311,10 +1312,10 @@ export const updateComponentParamsSchema = z.object({
       'Nested instance node IDs to expose (T7-gated: degrades with a warning if unsupported).',
     ),
   slots: z
-    .array(z.string())
+    .array(slotEntrySchema)
     .optional()
     .describe(
-      'Names of slots to CREATE inside this component. Each becomes a new empty SLOT node (named accordingly) that instances fill per-screen. T7-gated: degrades with a warning if createSlot is unavailable.',
+      "Slots to CREATE inside this component. Each entry becomes a new empty SLOT node (named accordingly) that instances fill per-screen. An entry is either a bare NAME, or `{name, ...spec}` where the spec is update_node's own patch with `name` required — every field it accepts is accepted here, in the same atom grammar (inline var()/style() wrappers included), and applied to the fresh slot. `layout`, `fills`, `sizing` and `size` are the ones that make a slot usable in one call, since a created slot is born 100×100 FIXED with an opaque #FFFFFF fill and no auto-layout — but `radius`, `opacity`, `strokes`, `effects` and the rest land too. T7-gated: degrades with a warning if createSlot is unavailable; a field the SLOT cannot take is named in warnings[] (attributed to the slot) while the slot is still created, named, and given its other fields.",
     ),
 })
 

@@ -28,7 +28,10 @@
 
 import { z } from 'zod'
 import { COMMANDS } from '@figma-agent-bridge/shared'
-import type { NodeSpecPatch } from '@figma-agent-bridge/shared/node-spec'
+import type {
+  NodeSpecPatch,
+  SlotEntry,
+} from '@figma-agent-bridge/shared/node-spec'
 import {
   applyStyleParamsSchema,
   batchOpSchema,
@@ -64,6 +67,7 @@ import {
 } from '@figma-agent-bridge/shared/tool-params'
 import type { ScopedFigmaClient } from '../figma-client'
 import {
+  slotEntryToFigma,
   specToFigma,
   unknownPatchKeyWarnings,
 } from '../serialize/node-spec-writer'
@@ -313,6 +317,25 @@ const convertUpdateNode = (
   return { nodeId, spec }
 }
 
+const convertUpdateComponent = (
+  params: Record<string, unknown>,
+  warnings?: string[],
+): Record<string, unknown> => {
+  // B30: a slot entry may carry a spec, and a batched update_component must
+  // convert it on the SAME write face the standalone handler uses — otherwise
+  // atom strings would reach the plugin as-is and be assigned raw.
+  const { slots } = params as { slots?: SlotEntry[] }
+  if (slots === undefined) {
+    return params
+  }
+  return {
+    ...params,
+    slots: slots.map(entry =>
+      slotEntryToFigma(entry, warnings),
+    ),
+  }
+}
+
 const convertCreateStyles = (
   params: Record<string, unknown>,
 ): Record<string, unknown> => {
@@ -496,6 +519,7 @@ const CONVERTERS: Record<
   ) => Record<string, unknown>
 > = {
   [COMMANDS.UPDATE_NODE]: convertUpdateNode,
+  [COMMANDS.UPDATE_COMPONENT]: convertUpdateComponent,
   [COMMANDS.CREATE_STYLES]: convertCreateStyles,
   [COMMANDS.UPDATE_STYLES]: convertUpdateStyles,
   [COMMANDS.DELETE_STYLES]: convertDeleteStyles,

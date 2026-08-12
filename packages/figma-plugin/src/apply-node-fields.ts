@@ -195,3 +195,54 @@ export const applyGrids = (
     node.layoutGrids = grids
   }
 }
+
+// ─── warn-on-no-op (T7) ───────────────────────────────────────────────────────
+
+/**
+ * capability key → spec key. A field the target node type does not carry is
+ * dropped by the appliers' `'x' in node` guards, which is the right silence on
+ * a create (the same spec chose the type) and the wrong silence wherever the
+ * target is arbitrary: `update_node` patching a SLICE, or a slot spec landing
+ * on whatever `createSlot()` returned.
+ */
+const CAPABILITY_CHECKS: [string, string][] = [
+  ['layoutMode', 'layout'],
+  ['fills', 'fills'],
+  ['strokes', 'strokes'],
+  ['effects', 'effects'],
+  ['opacity', 'opacity'],
+  ['cornerRadius', 'radius'],
+  ['clipsContent', 'clipsContent'],
+  ['pointCount', 'pointCount'],
+  ['innerRadius', 'innerRadius'],
+  ['sectionContentsHidden', 'sectionContentsHidden'],
+  // `text` is applied by applyTextProperties, which runs only for a TEXT node —
+  // so anywhere else the whole struct is a silent no-op unless named here.
+  ['characters', 'text'],
+]
+
+/**
+ * Name every spec field the target node cannot carry.
+ *
+ * One message per dropped field, interpolating the node's ACTUAL type so the
+ * agent knows what it hit. Empty when everything asked for is supported — the
+ * ordinary case, and the reason this RETURNS rather than pushes: the caller
+ * decides which sink (and which attribution prefix) the notes belong to.
+ */
+export const capabilityWarnings = (
+  node: { type: string },
+  spec: Record<string, unknown>,
+): string[] => {
+  const out: string[] = []
+  for (const [capability, key] of CAPABILITY_CHECKS) {
+    if (spec[key] !== undefined && !(capability in node)) {
+      out.push(
+        key +
+          ' ignored — not supported on a ' +
+          node.type +
+          ' node',
+      )
+    }
+  }
+  return out
+}

@@ -1085,3 +1085,128 @@ describe('updateComponentParamsSchema (B3 add binding)', () => {
     expect(parsed.add![0].targetNodeId).toBeUndefined()
   })
 })
+
+// ---------------------------------------------------------------------------
+// B30: a slot entry is `string | {name, …spec}` — the bare string stays valid
+// (back-compat), the object form carries the spec that makes the slot usable.
+// ---------------------------------------------------------------------------
+describe('updateComponentParamsSchema (B30 slot entries)', () => {
+  it('accepts bare-string slot names (back-compat)', () => {
+    const parsed = updateComponentParamsSchema.parse({
+      fileKey: 'fk',
+      componentId: 'c:1',
+      slots: ['Content', 'Footer'],
+    })
+    expect(parsed.slots).toEqual(['Content', 'Footer'])
+  })
+
+  it('accepts an object slot entry carrying layout/fills/sizing/size', () => {
+    const parsed = updateComponentParamsSchema.parse({
+      fileKey: 'fk',
+      componentId: 'c:1',
+      slots: [
+        {
+          name: 'Content',
+          layout: {
+            mode: 'V',
+            gap: 8,
+            pad: [16, 16, 16, 16],
+          },
+          fills: ['var(surface/2)#141B2E'],
+          sizing: ['FILL', 'HUG'],
+          size: [320, 200],
+        },
+      ],
+    })
+    const slot = parsed.slots![0] as {
+      name: string
+      layout: { mode: string; gap: number }
+      fills: string[]
+      sizing: [string, string]
+      size: [number, number]
+    }
+    expect(slot.name).toBe('Content')
+    expect(slot.layout.mode).toBe('V')
+    expect(slot.layout.gap).toBe(8)
+    expect(slot.fills).toEqual(['var(surface/2)#141B2E'])
+    expect(slot.sizing).toEqual(['FILL', 'HUG'])
+    expect(slot.size).toEqual([320, 200])
+  })
+
+  it('accepts BOTH forms in one list', () => {
+    const parsed = updateComponentParamsSchema.parse({
+      fileKey: 'fk',
+      componentId: 'c:1',
+      slots: ['Header', { name: 'Content', fills: [] }],
+    })
+    expect(parsed.slots).toHaveLength(2)
+    expect(parsed.slots![0]).toBe('Header')
+    expect(
+      (parsed.slots![1] as { name: string }).name,
+    ).toBe('Content')
+  })
+
+  it('rejects an object slot entry with no name (a slot is named or it is nothing)', () => {
+    expect(() =>
+      updateComponentParamsSchema.parse({
+        fileKey: 'fk',
+        componentId: 'c:1',
+        slots: [{ fills: ['#FFFFFF'] }],
+      }),
+    ).toThrow()
+  })
+
+  it('KEEPS an unknown key so the handler can report it (T7) rather than stripping it silently', () => {
+    const parsed = updateComponentParamsSchema.parse({
+      fileKey: 'fk',
+      componentId: 'c:1',
+      slots: [{ name: 'Content', width: 320 }],
+    })
+    expect(
+      (parsed.slots![0] as Record<string, unknown>).width,
+    ).toBe(320)
+  })
+
+  // A slot spec IS update_node's patch with `name` required, so a KNOWN field
+  // given the wrong type is rejected HERE — at the param boundary, as
+  // INVALID_PARAM — instead of surviving validation and dying inside the
+  // converter as an opaque server-side TypeError blamed on the plugin.
+  it('rejects a known field with the wrong type (strokes must be atoms, not a number)', () => {
+    expect(() =>
+      updateComponentParamsSchema.parse({
+        fileKey: 'fk',
+        componentId: 'c:1',
+        slots: [{ name: 'Content', strokes: 5 }],
+      }),
+    ).toThrow()
+  })
+
+  it('rejects a non-numeric opacity before it can reach the wire', () => {
+    expect(() =>
+      updateComponentParamsSchema.parse({
+        fileKey: 'fk',
+        componentId: 'c:1',
+        slots: [{ name: 'Content', opacity: 'yes' }],
+      }),
+    ).toThrow()
+  })
+
+  it('accepts any other field the write face knows (one face, not a subset of it)', () => {
+    const parsed = updateComponentParamsSchema.parse({
+      fileKey: 'fk',
+      componentId: 'c:1',
+      slots: [
+        {
+          name: 'Content',
+          radius: '8',
+          opacity: 0.5,
+          strokes: ['#111827'],
+        },
+      ],
+    })
+    const slot = parsed.slots![0] as Record<string, unknown>
+    expect(slot.radius).toBe('8')
+    expect(slot.opacity).toBe(0.5)
+    expect(slot.strokes).toEqual(['#111827'])
+  })
+})

@@ -16,6 +16,7 @@ import {
   applyStrokeWeights,
   applyExportSettings,
   applyGrids,
+  capabilityWarnings,
 } from './apply-node-fields'
 import {
   applyStyleField,
@@ -28,6 +29,10 @@ import {
   type StyleCategory,
   type StyleField,
 } from './bind-wrappers'
+import {
+  readSlotEntry,
+  type SlotEntry,
+} from './slot-entries'
 import {
   fontsToLoad,
   runsToRangeOps,
@@ -3420,10 +3425,22 @@ const handleCommand = async (
       // the returned node's .name. No pre-existing child needed.
       // createSlot is absent from typings ≤1.123.0 — cast + feature-detect.
       // Guard: createSlot is per-component; skip + warn if comp is a COMPONENT_SET.
-      const slotNames = params.slots as string[] | undefined
+      //
+      // B30: an entry may also carry a SPEC (already converted server-side).
+      // The fresh slot is born 100×100 FIXED with an opaque #FFFFFF fill and no
+      // auto-layout, so a usable slot otherwise costs two update_node
+      // follow-ups. Applying it here runs the SAME pipeline every other write
+      // runs — literal fields, then post-append fields, then the bindings an
+      // inline var()/style() wrapper asked for.
+      const slotEntries = params.slots as
+        | SlotEntry[]
+        | undefined
       const slotsCreated: string[] = []
       const slotsSkipped: string[] = []
-      if (slotNames && slotNames.length > 0) {
+      if (slotEntries && slotEntries.length > 0) {
+        const slotNames = slotEntries.map(
+          e => readSlotEntry(e).name,
+        )
         if (comp.type === 'COMPONENT_SET') {
           for (const name of slotNames) {
             slotsSkipped.push(name)
@@ -3444,20 +3461,16 @@ const handleCommand = async (
               'createSlot unavailable in this Figma version; slot(s) not created',
             )
           } else {
-            for (const name of slotNames) {
+            for (const entry of slotEntries) {
+              const { name, spec } = readSlotEntry(entry)
+              // ONLY createSlot itself decides created-vs-skipped. Once it has
+              // returned, the SLOT is in the document — naming it, claiming it
+              // or applying its spec can all fail without un-creating it, and
+              // reporting it as skipped would send the agent looking for a node
+              // that is really there (and really unnamed).
+              let slot: { name: string } | undefined
               try {
-                const slot = compWithSlot.createSlot!()
-                if (slot && name) slot.name = name
-                // createSlot() returns a node already inside the component;
-                // the local typing is a minimal { name } shape, hence the
-                // cast.
-                if (slot) {
-                  writeScope.claim(
-                    writer,
-                    slot as unknown as BaseNode,
-                  )
-                }
-                slotsCreated.push(name)
+                slot = compWithSlot.createSlot!()
               } catch (e) {
                 slotsSkipped.push(name)
                 ucWarnings.push(
@@ -3465,6 +3478,74 @@ const handleCommand = async (
                     name +
                     '": ' +
                     String(e),
+                )
+                continue
+              }
+              slotsCreated.push(name)
+              if (!slot) {
+                continue
+              }
+              // Every note this slot produces goes to a LOCAL sink and is
+              // prefixed with the slot's name before joining the reply: N slots
+              // failing the same way would otherwise emit N identical strings
+              // and the agent could not tell which one to fix.
+              const slotWarnings: string[] = []
+              try {
+                if (name) slot.name = name
+                // createSlot() returns a node already inside the component;
+                // the local typing is a minimal { name } shape, hence the
+                // cast.
+                writeScope.claim(
+                  writer,
+                  slot as unknown as BaseNode,
+                )
+              } catch (e) {
+                slotWarnings.push(
+                  'created, but could not be named: ' +
+                    String(e),
+                )
+              }
+              if (spec) {
+                const slotNode =
+                  slot as unknown as SceneNode
+                try {
+                  await applyCommonProperties(
+                    slotNode,
+                    spec,
+                    comp as ParentNode,
+                    slotWarnings,
+                  )
+                  applyPostAppendProperties(
+                    slotNode,
+                    spec,
+                    slotWarnings,
+                  )
+                  // Same order as every other write path: literal first,
+                  // binding second.
+                  await applyWrapperBindings(
+                    slotNode as unknown as BindTargetNode,
+                    spec.bindings,
+                    wrapperBindDeps(),
+                    slotWarnings,
+                  )
+                } catch (e) {
+                  slotWarnings.push(
+                    'created, but its spec could not be fully applied: ' +
+                      String(e),
+                  )
+                }
+                // warn-on-no-op (T7), the same list update_node runs: a field
+                // this node type cannot carry was dropped by the appliers'
+                // capability guards, and on a slot that silence would hide the
+                // headline feature failing (a SLOT without layoutMode would
+                // take the layout nowhere and say nothing).
+                slotWarnings.push(
+                  ...capabilityWarnings(slotNode, spec),
+                )
+              }
+              for (const w of slotWarnings) {
+                ucWarnings.push(
+                  'slot "' + name + '": ' + w,
                 )
               }
             }
@@ -3825,30 +3906,10 @@ const handleCommand = async (
 
       // warn-on-no-op (T7): a patched property that the target node type does
       // not support is dropped by applyCommonProperties' `'X' in node` guards.
-      // On update_node the target is arbitrary, so name the dropped field rather
-      // than skipping silently. (capability key → spec key)
-      const capabilityChecks: [string, string][] = [
-        ['layoutMode', 'layout'],
-        ['fills', 'fills'],
-        ['strokes', 'strokes'],
-        ['effects', 'effects'],
-        ['opacity', 'opacity'],
-        ['cornerRadius', 'radius'],
-        ['clipsContent', 'clipsContent'],
-        ['pointCount', 'pointCount'],
-        ['innerRadius', 'innerRadius'],
-        ['sectionContentsHidden', 'sectionContentsHidden'],
-      ]
-      for (const [cap, key] of capabilityChecks) {
-        if (spec[key] !== undefined && !(cap in node)) {
-          warnings.push(
-            key +
-              ' ignored — not supported on a ' +
-              node.type +
-              ' node',
-          )
-        }
-      }
+      // On update_node the target is arbitrary, so name the dropped field
+      // rather than skipping silently. The list is SHARED with the
+      // update_component slot loop — the same silence, the same wording.
+      warnings.push(...capabilityWarnings(node, spec))
 
       // warn-on-no-op (T7, B6): the document/root node's .name is read-only in
       // the plugin API — the setter silently no-ops. Renaming the file is

@@ -56,3 +56,69 @@ describe('apply-node-fields wiring', () => {
     ).toEqual([])
   })
 })
+
+// B30 — the same blind spot, one level in: the slot loop can lose its apply
+// calls and stay green everywhere (the server would still convert the spec,
+// the mock would still model the apply, and only a live slot would come back
+// white and 100×100). So scan the loop ITSELF, not just the file.
+const slotLoop = ((): string => {
+  const from = callers.indexOf('compWithSlot.createSlot!()')
+  const to = callers.indexOf(
+    'case COMMANDS.COMBINE_VARIANTS',
+  )
+  return from === -1 || to === -1
+    ? ''
+    : callers.slice(from, to)
+})()
+
+describe('UPDATE_COMPONENT slot-spec wiring', () => {
+  it('actually found the slot loop (liveness)', () => {
+    expect(slotLoop.length).toBeGreaterThan(200)
+    expect(slotLoop.length).toBeLessThan(callers.length)
+    expect(slotLoop).toContain('slotsCreated')
+  })
+
+  it('applies a slot entry spec through the standard pipeline', () => {
+    for (const applier of [
+      'applyCommonProperties(',
+      'applyPostAppendProperties(',
+      'applyWrapperBindings(',
+      // T7: and names what the slot could not carry, as update_node does.
+      'capabilityWarnings(',
+    ]) {
+      expect(slotLoop).toContain(applier)
+    }
+  })
+
+  it('runs the capability check on BOTH targets that can be any node type', () => {
+    // update_node and the slot loop. `capabilityWarnings` returns rather than
+    // pushes, so a dropped call site loses the warnings with nothing failing.
+    const calls =
+      callers.split('capabilityWarnings(').length - 1
+    expect(calls).toBe(2)
+  })
+
+  it('counts the slot created BEFORE anything that can fail without un-creating it', () => {
+    // createSlot() alone decides created-vs-skipped: naming, claiming and the
+    // spec apply all run after it on a node that already exists, so reporting
+    // one of those failures as SKIPPED would send the agent looking for a node
+    // that is really there. Runtime-only ordering — nothing else pins it.
+    expect(slotLoop.indexOf('slotsCreated.push')).toBeLessThan(
+      slotLoop.indexOf('slot.name = name'),
+    )
+  })
+
+  it('hands the appliers a LOCAL sink, so each degrade can name its slot', () => {
+    // Pushing straight into the reply's `ucWarnings` would emit N identical
+    // strings for N slots failing the same way — the spec promises the slot's
+    // name on every note, and only the call site knows it.
+    const applyBlock = slotLoop.slice(
+      slotLoop.indexOf('applyCommonProperties('),
+      slotLoop.indexOf('capabilityWarnings('),
+    )
+    expect(applyBlock.length).toBeGreaterThan(100)
+    expect(applyBlock).toContain('slotWarnings')
+    expect(applyBlock).not.toContain('ucWarnings')
+    expect(slotLoop).toContain('\'slot "\' + name')
+  })
+})
