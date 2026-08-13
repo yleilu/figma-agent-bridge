@@ -33,18 +33,19 @@ error model:
 
 ## Start-of-work guard — is there a design system?
 
-Design-system-first is a **decision**, not a mandate. Before building, detect whether
-the file already uses one — local variables (design tokens), shared styles, or
-components already in use signal systematic design.
+Design-system-first is a **decision**, not a mandate. Detect one before building:
+`get_variables` (local collections), `get_styles`, `get_components` — any of them
+non-empty is the signal, and absence means ask.
 
 - **Found one → adopt it by default.** Reuse and extend its tokens / styles /
   components (single source of truth). Never duplicate what already exists.
 - **None found → the user's call.** Offer to establish one, but don't impose it.
   For a quick one-off or mockup, direct values are fine. **Ask when it's unclear**
   which the user wants.
-
-Detection tools: `get_variables` (local variable collections), `get_styles`,
-`get_components`. Presence of any is a signal; absence means ask.
+- **Committed to a system with no color tokens → establish them first.** `get_variables`
+  coming back with no `COLOR` variable is a **build-blocking precondition**, not a to-do:
+  create the palette before the first styled node. Values emitted to be bound later never
+  get bound, and a raw hex reads back exactly like a token value that has since drifted.
 
 ---
 
@@ -88,25 +89,27 @@ Rules for running the surface smoothly and cheaply:
   don't assume.
 - **Mind token usage** — batch calls where the API allows; prefer scoped reads over
   whole-document scans; don't re-scan the document when you already have the ids.
-- **Verify after build** — use `export` (PNG) + `get_node`/`inspect` read-back to
-  confirm the result. Read-back proves `var(…)` / `style(…)` bindings and `INSTANCE`
-  types; a visual-only check misses binding state. You don't have to wait for it to
-  learn a token name was wrong: a wrapper that resolved to nothing is reported in the
-  write's own reply.
+- **Verify after build** — `export` (PNG) + `get_node`/`inspect` read-back, every time: a
+  visual-only check misses binding state. Full procedure in **Verification discipline**.
 
 ---
 
 ## Read the turn-start presence block
 
 Every turn opens with an injected `figma_bridge:` YAML block (see
-`docs/specs/plugin-presence.md` in the repo, not shipped) — passive awareness, not something you
-fetch. Its per-file
-`pending_edits` / `pending_edits_state` fields say what the **user** changed since your last
-drain. What to do about them:
+`docs/specs/plugin-presence.md` in the repo, not shipped) — passive awareness, not something
+you fetch. Its per-file `pending_edits` / `pending_edits_state` fields say what the **user**
+changed since your last drain. What to do about them:
 
 - **`pending_edits > 0`** → call `pull_changes({fileKey})` **before acting on that file's
   existing nodes**. The user edited them since your last read, and acting blind risks
   clobbering their change.
+- **`pending_edits` near or above the drain's own limit, or a drain that comes back
+  `truncated: true`** → re-evaluate, don't replay. One call returns at most `limit` entries
+  (default 100), and a truncated one carries a `remaining` map —
+  `{total, frames: [{fr, n, …}], other}` — that already names where the rest are: re-read
+  those frames instead of consuming the list a hundred at a time. Concentration decides —
+  100 changes in one frame is one cheap re-read; 100 across twenty frames is a drain.
 - **`pending_edits_state: gap`** → the feed lost part of the history. Drain, then **re-read
   what you already hold** — what came back can't be assumed to be everything that happened.
 - **`pending_edits_state: no_baseline`** on a file you haven't read yet obliges nothing:
@@ -136,19 +139,14 @@ nothing reaches GitHub; don't borrow `figma-feedback`'s record-don't-send etique
   call — you post at the step boundary, and each call then shows that wordless skeleton until
   your next line. Never fall silent or skip a step's line: a new step always gets a new line.
 - **Say the intent, not the mechanics** — present-tense, one line, what a watching human
-  would say. Never tool names, node ids, or param dumps.
+  would say: `Wiring the 4 stat cards`, never `calling set_instance ×4`. No tool names,
+  node ids, or param dumps.
 - **`level: 'normal'` by default; `'error'` only for a genuine failure a human should
   notice** — `Font missing — used a fallback`, `Couldn't bind the token — hardcoded instead`.
   Never for expected/handled errors, validation rejections, or normal completion (the dot
   settles green on Stop). Busy is automatic — never set it.
 - **Usually omit `label`** — `agentType` / "Agent" is fine. Set one friendly name only when
   `agentType` is unhelpful or absent, so the row isn't a generic "Agent".
-
-| Say this (intent)          | Not this (mechanics)            |
-| -------------------------- | ------------------------------- |
-| `Drawing the header bar`   | `create_node RECTANGLE 56:12`   |
-| `Wiring the 4 stat cards`  | `calling set_instance ×4`       |
-| `Scanning existing tokens` | `get_variables then get_styles` |
 
 ```
 report_status({ fileKey, text: 'Wiring the 4 stat cards' })
@@ -194,6 +192,22 @@ The concrete page set and grid spacing, if any, come from `figma-bridge-prefs`.
 
 ---
 
+## Data coherence
+
+A rendered number is a claim. These are correctness, not taste — they hold with or
+without a design system:
+
+- **One dataset drives related and repeated content.** One price table, one precision per
+  asset: the same record shows the same number everywhere it appears. A figure invented
+  per card renders perfectly and is still wrong.
+- **Chart chrome derives from the series it frames.** Gridlines, axis ticks, and legend
+  come from the same extent and scale as the data — an axis whose top sits below the
+  tallest bar is a broken chart that looks fine.
+- **A spark or mini-chart's shape derives from the metric it decorates.** A negative delta
+  never gets a rising spark: the sign and the shape are one fact drawn twice.
+
+---
+
 ## Context — the hidden note
 
 `context` is a round-trippable markdown note stored on a node: the non-derivable _why_ a
@@ -202,7 +216,7 @@ structural read can't give — purpose, role, status, constraints, links. Write 
 / `get_nodes`, or as a compact `contextSummary` (the frontmatter slice) on `inspect` /
 `search` / `get_components`.
 
-**Author it in this shape** — frontmatter scalars, then fixed body sections:
+**Author it in this shape** — frontmatter scalars, then fixed body sections (one shown):
 
 ```markdown
 ---
@@ -215,14 +229,6 @@ updated: agent · 2026-07-08
 ## Constraints
 
 Token-bound (do not restyle) · text localized · width fluid
-
-## Links
-
-linear:ENG-1234 · pr:#456
-
-## Notes
-
-Visually dominant by design; only one primary per screen.
 ```
 
 - **Frontmatter** — `purpose` (required by convention: what it is and what it's _for_),
@@ -285,15 +291,39 @@ After any build or edit:
    - every outward effect — shadow, glow, `align=OUTSIDE` stroke, blur — is on the node
      **and** visible in the PNG: a clipping ancestor cuts the render, never the data
      (`references/mechanics.md`, **Clipped effects**).
+3. **Sweep before calling it done.** Scope a sweep to what you built —
+   `search({fileKey, scope: 'node', nodeId})` bounds the _scan_ (`limit` bounds only the
+   page of results handed back; the plugin scans the whole scope either way). The one
+   deliberate exception is the usage query below.
+   - **Orphans** — a result carries `size` unless you narrow it away, so `[0, 0]`
+     leftovers surface in the sweep itself. Hidden ones don't: `match` has no visibility
+     predicate and the scan never emits `visible`, which appears only as `visible: false`
+     in an **unprojected** read-back (any narrowing `profile` drops it). Promote,
+     instance, or delete what's left — a raw shape repeating a master's anatomy is the
+     same finding.
+   - **Inventory** — reconcile what this build made against what uses it.
+     `get_components` (local only; leave `includeRemote` off — it walks every instance in
+     the document), then, for the few masters and tokens you actually doubt,
+     `search({fileKey, match: {instancesOf: '<exact master name>'}, limit: 1})` and
+     `search({fileKey, match: {variableId: '<id>'}, limit: 1})`. Those two run at
+     **document scope on purpose** — a build-scoped zero only means "this screen doesn't
+     use it" — which is why they are spent on a handful and never on the library, and each
+     costs the plugin a per-candidate lookup besides. **Unused is not prunable:** delete
+     only what this build created and nothing else references, and _flag_ anything older
+     for the human — a delete breaks every binding that pointed at it and nothing warns
+     you (**Limits**). Promote what the build hand-rolled twice.
+   - **Structure** — collapse a single-child wrapper that decorates nothing, give siblings
+     distinct names, keep an instance named for what it instances. Redundant nesting and
+     orphan / hidden nodes are mechanical checks in the `figma-reviewer` skill (its
+     `references/checks.md`) — build so they find nothing.
 
 A binding that didn't land is announced twice: first by the write's own reply
 (`var(surface/2): no variable with that name — literal applied unbound`), then by the
 missing wrapper in the read-back. The literal landed either way — it looks right on the
 PNG and is bound to nothing.
 
-If a field reads back differently from what was written, that's a signal to check
-whether the tool call succeeded silently with a wrong result — file a bug via the
-`figma-feedback` skill.
+A field that reads back differently from what was written is a signal the call succeeded
+silently with a wrong result — file a bug via the `figma-feedback` skill.
 
 ---
 

@@ -2,8 +2,8 @@
 name: figma-bridge-prefs/house-style
 description: >-
   Load when building or editing — this user's strict design-system-first /
-  component-first level and concrete tokens, scale, ramp, naming, and file
-  organization.
+  component-first level and concrete tokens, scale, ramp, naming, file
+  organization, accessibility affordances, and data-display conventions.
 ---
 
 # House style
@@ -35,6 +35,19 @@ floor.
 - **Corner radius:** 4, 8, 12, 9999 (pill).
 - **Token starter set (colour roles):** `bg`, `surface`, `text`, `text-muted`,
   `primary`, `primary-contrast`, `border`.
+
+## Accessibility
+
+- **Status and sentiment carry a non-colour affordance** — a sign, an arrow, an icon, or a
+  shape alongside the hue, never hue alone. Up-green / down-red says nothing in greyscale
+  and nothing to a red-green-blind reader.
+- Contrast ratios are not set here: `references/review-standards.md` carries them (WCAG AA
+  by default).
+
+## Data display
+
+- **A zero or neutral delta renders muted** — no arrow, no `+`. Keep the sentiment colours
+  and the arrow for real movement, so a flat number reads as flat at a glance.
 
 ## Naming convention
 

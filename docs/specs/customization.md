@@ -116,7 +116,8 @@ skill loads only the concern it consumes):
 - `SKILL.md` — thin: the precedence declaration (§7) + pointers to the references below.
 - `references/house-style.md` — the strict levels of design-system-first / component-first, plus
   concrete values (tokens, spacing scale, type ramp, naming, file organization — the page scheme
-  and where masters sit). Consumed by `figma-design`.
+  and where masters sit — and data display, how a delta or a status renders). Consumed by
+  `figma-design`.
 - `references/review-standards.md` — the house scale / token set / type ramp the reviewer checks
   against (§9). Consumed by `figma-reviewer`.
 
