@@ -74,7 +74,8 @@ These apply once a design system is in play:
 > design-system-first and component-first — adopt a system if one exists, reuse before
 > create, bind an existing token. A user's `figma-bridge-prefs` may raise these to a
 > strict/proactive level and supply concrete values (tokens, spacing scale, type ramp,
-> naming). See `docs/specs/customization.md` in the repo (not shipped) (P1).
+> naming, file organization, data display). See `docs/specs/customization.md` in the repo
+> (not shipped) (P1).
 
 ---
 

@@ -181,8 +181,9 @@ On approval, apply the requested fixes using `figma-design` mechanics:
 - **Layout fixes:** `update_node` with `layout` (`{mode, gap, pad, align, wrap}`), `sizing`
   (`[horizontal, vertical]`), or `layoutPositioning` on the offending node. Mode, spacing
   and padding all live inside `layout` — there are no top-level `layoutMode` / `padding` /
-  `gap` fields, and an unknown key is stripped before the write, so a misnamed patch
-  reports success and changes nothing.
+  `gap` fields, and an unknown key is ignored rather than applied, but never silently:
+  the reply's `warnings[]` names it (``key `layoutMode` is not a NodeSpec field and was ignored``),
+  so read the warnings instead of trusting a bare success.
 - **Nesting cleanup:** `reparent_node` to flatten redundant wrappers; `delete_node` to
   remove orphan / hidden nodes (confirm with user before deleting).
 - **Accessibility fixes:** `update_node` on text color (`fills` → token binding) or size;
