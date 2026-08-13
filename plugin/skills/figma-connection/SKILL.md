@@ -7,7 +7,7 @@ description: >-
   tools time out / say disconnected. Carries the fileKey addressing doctrine and guides the
   fix: refresh the Figma plugin (re-run figma-setup), or update a stale server, and how to
   confirm it.
-version: 0.1.0
+version: 0.2.0
 ---
 
 # figma-connection skill

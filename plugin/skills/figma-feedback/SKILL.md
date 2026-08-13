@@ -8,7 +8,7 @@ description: >-
   it recorded feedback). Teaches when and how to record a bug or proposal via record_feedback
   (standardized formats), and how the end-of-work review (a three-way Report / Defer / Discard
   gate) files or drops the backlog.
-version: 0.1.0
+version: 0.2.0
 ---
 
 # figma-feedback

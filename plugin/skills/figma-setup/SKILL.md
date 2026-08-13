@@ -10,7 +10,7 @@ description: >-
   file organization, data display, review standards — that figma-agent-bridge
   should follow; that job creates/updates the figma-bridge-prefs skill. Do NOT
   use for building or reviewing a design (that is figma-design / figma-reviewer).
-version: 0.1.0
+version: 0.2.0
 ---
 
 # figma-setup
