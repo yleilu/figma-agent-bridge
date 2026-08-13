@@ -6,7 +6,7 @@ description: >-
   design-system adherence, consistency, accessibility, layout hygiene, fidelity to
   intent, and naming & context legibility; emits a standardized report and then offers to
   fix (never auto-mutates).
-version: 0.1.0
+version: 0.2.0
 ---
 
 # figma-reviewer skill
@@ -77,12 +77,15 @@ When a design system exists, check for:
   but a matching `var(…)` token exists in the local variable collection.
 - **Text off a style** — `font(…)` without a `style(…)` wrapper where a matching
   text style is defined (`get_styles` to enumerate).
-- **Duplicated element that should be a component** — identical subtrees (same
-  structure + content) that do not share a master. Instances should be `INSTANCE`
-  nodes pointing at one `COMPONENT`.
-- **Detached instance** — a node whose `type` is `FRAME` or `GROUP` but whose
-  shape exactly matches a known component (check `get_components`). Indicates a
-  past Detach-from-Component action that broke the link.
+- **Duplicated element that should be a component** — sibling nodes sharing a
+  signature (child count + child types) plus a corroborating name, size, or leaf
+  style, with no master behind them. They should be one `COMPONENT` and N
+  `INSTANCE`s.
+- **Detached instance** — any node that is not an `INSTANCE` whose signature
+  matches a master's, corroborated the same way. A set's variants count as
+  masters, and a one-child frame counts as a candidate. Run the mechanical
+  procedure in `references/checks.md` (inventory → match → corroborate) on every
+  review; it is the authority for what flags and what is skipped.
 
 ### 2. Consistency
 
@@ -140,6 +143,12 @@ ABSOLUTE` inside an auto-layout frame, where the positioning could be expressed 
   no value and should be flattened.
 - **Orphan / hidden nodes** — `visible: false` nodes that are not part of a variant or
   interaction; nodes with zero size; nodes clipped entirely outside the frame bounds.
+- **Effect clipped by an ancestor** — a shadow, glow, `align=OUTSIDE` stroke, or blur
+  whose reach past an edge of its node exceeds the slack on that edge inside a clipping
+  ancestor (frames clip by default). The effect reads back intact while the render loses
+  it, so a data-only pass never sees it. Compute reach vs slack **per side** per
+  `references/checks.md` — arithmetic, not judgement — on an **unprojected** read, and
+  flag as `warning`, worded "may be clipped" unless the numbers say fully clipped.
 
 ### 5. Fidelity to intent
 
@@ -241,8 +250,9 @@ On approval:
 ### Routing tool-limit findings
 
 If a finding cannot be fixed with the available tools (e.g. the required Figma API is
-not exposed, or the fix would need a `delete_styles` / `delete_variables` call that
-doesn't exist), do **not** invent a workaround that breaks the design. Instead:
+not exposed, or the fix would need a detached instance re-linked to its component —
+`swap_component` only re-points a node that is still an `INSTANCE`), do **not** invent
+a workaround that breaks the design. Instead:
 
 1. Note in the report: `Fix: (tool limitation — see figma-feedback)`.
 2. After the report, file a `record_feedback` entry under the `proposals` category

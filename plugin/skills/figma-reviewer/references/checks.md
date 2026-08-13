@@ -32,6 +32,16 @@ To decide whether to flag it:
    `nit`: hardcoded value that could become a token.
 4. One-off, decorative, or intentionally bespoke → skip.
 
+An **exact** match is the highest-confidence hardcode there is — `warning`, never `nit`:
+the palette was right and the binding was skipped. An inline `var(Name)#RRGGBB` write
+binds as it lands, so a bare value equal to a token is a skipped binding, not a tool
+limit.
+
+**Measure the rate, don't just list offenders.** When more than 25% of the target's
+token-valued paints carry no wrapper, add **one** summary finding stating the measured
+binding rate (`N of M token-valued paints are bound`) alongside the per-node findings —
+a scatter of individual warnings understates a systematic miss.
+
 ### Style matching
 
 A text node is **on-style** when `inspect` shows `style(Style/Name)font(…)`. A bare
@@ -46,12 +56,68 @@ To decide:
 
 ### Component detection
 
-Check for duplicate subtrees:
+Duplicate detection is **mechanical** — run this on every review, not on suspicion.
 
-- Two or more sibling frames/groups with the same `name` prefix and same child count
-  and same layout mode → `warning`: consider making one a component and the others instances.
-- A node of `type: FRAME` or `GROUP` whose structure exactly mirrors a known component
-  in `get_components` but is not `type: INSTANCE` → `warning`: detached instance.
+A node's **signature** is its child count plus the types of its first-level children,
+sorted: `1 · [TEXT]`, `3 · [FRAME, TEXT, TEXT]`. A leaf's signature is `0 · []`.
+
+**1. Inventory the real masters (two reads).** `get_components` enumerates components and
+sets but **never a set's variant children** — and it is bounded (`limit` defaults to 100),
+so page it with the returned `cursor` while `truncated` is true, or say in the report that
+you checked the first N. Collect every `COMPONENT` and `COMPONENT_SET` id, then read them
+all in one batch:
+
+```json
+{
+  "nodeIds": ["<componentId>", "<componentSetId>", "…"],
+  "depth": 2,
+  "fields": ["id", "name", "type", "size", "children"]
+}
+```
+
+`depth: 2` is what makes a variant set legible: a set's children _are_ its variants, so
+depth 1 would hand you `[COMPONENT, COMPONENT]` — an anatomy of nothing. At depth 2 each
+variant's own children come back, and since the projection applies to the top-level node
+only, those children arrive with their `fills` and `text` intact — which is what step 3
+needs. A **set contributes one inventory entry per variant child** (the variants are the
+real masters); each entry is `{name, signature, size, first-level child descriptors}`,
+using the set's name for a variant.
+
+**2. Signature-match the target.** For every node in the target that is not an `INSTANCE`
+and not a descendant of one, compute its signature and look it up. **No type filter and no
+child-count floor**: a one-child `FRAME` duplicating a `Button` master, and a bare `TEXT`
+duplicating a `Chip` master, are exactly the cases this check exists for.
+
+**3. Corroborate before flagging.** A signature alone never flags — `2 · [TEXT, TEXT]` is
+every card header in the file. Flag only when the signature matches **and at least one** of
+these holds:
+
+- **Name affinity** — the candidate's name, or its parent's, shares a ≥ 4-character
+  case-insensitive stem with the master's name (compare the segment before `/` or `=`).
+- **Size affinity** — both dimensions within ±10% of the master's (or ±4 px, whichever is
+  larger).
+- **Leaf affinity** — child for child, in order, the candidate's first-level children match
+  the master's on type _and_ on the atom that carries their look: `text.font` for a TEXT
+  child, the first `fills` entry otherwise.
+
+All three come out of reads you already have, and each one fails independently of the
+signature: a copy inherits the master's wording, its geometry, or its paint — a coincidence
+of shape inherits none of them.
+
+**Ambiguity guard.** A signature that matches **≥ 3 different masters** is generic; skip
+that candidate whatever the corroborators say.
+
+Findings:
+
+- Signature + ≥ 1 corroborator on a non-`INSTANCE` node → `warning`: detached or duplicated
+  element — **name the master it matches and the corroborator that fired**.
+- ≥ 2 siblings sharing a signature and a corroborator with **no** master matching →
+  `warning`: component candidate.
+
+**Skip what the design says is deliberate:** a candidate whose `context` (`purpose` /
+`role`) or whose name declares a different role from the master's is a look-alike, not a
+copy. Signature + corroborator is strong evidence, never proof — report what matched and
+let the human judge.
 
 ---
 
@@ -210,6 +276,72 @@ Severity: `nit`.
 | Node with `size: [0, 0]` (zero-area)                         | `nit`    |
 | Node positioned entirely outside the frame's clipping bounds | `nit`    |
 
+### Clipped effects — reach vs slack
+
+Frames clip by default, so an outward effect can be perfectly present in the data and
+absent from the render: the read-back returns the `effects` that were written, and an
+ancestor swallows them. This check is **arithmetic — compute it, don't judge it.**
+
+**Read the target unprojected.** `clipsContent` survives no narrowing profile at all, and
+`effects` survives only `profile: 'style'` — which carries neither `clipsContent` nor
+`size` / `position`, so no one narrowed read holds the fields this check needs, and
+`inspect` applies its profile to _every_ node in the tree. Under a narrowed read the walk
+finds no clipping ancestors and silently reports nothing. Read with no `fields` /
+`profile`, or `profile: 'full'`.
+
+Run it on every node carrying a `shadow(…)`, a `blur(…)`, or a
+`stroke(…, {align=OUTSIDE})`. `inner-shadow(…)` and `bg-blur(…)` render inside the
+node's own area — skip both. **Skip anything rotated** — a rotated node's `size` is its
+own unrotated width and height while its `position` is its bounding box's origin, so the
+two describe different rectangles and slack computed from them is fiction. A non-zero
+`rotation` on the node or on any ancestor in the walk means: no finding, and one line in
+the report saying the clip check was skipped there and the PNG is the only judge.
+
+**1. Reach, per side** — how far the paint extends past each edge of the node's box.
+The offset decides which edges pay:
+
+```
+shadow(x,y,r){spread=s}   →  left   max(0, −x + r + s)
+                             right  max(0,  x + r + s)
+                             top    max(0, −y + r + s)
+                             bottom max(0,  y + r + s)
+blur(r)                   →  r on all four sides
+stroke(w,{align=OUTSIDE}) →  w on all four sides
+
+reach[side] = the largest of those present on the node, side by side
+```
+
+**2. Slack, per side** — for each ancestor that clips (reads emit `clipsContent` only
+when it is `true`, so an absent field means that ancestor does not clip), express the
+node's box in that ancestor's coordinates by summing the parent-relative `position`
+values on the way up, then:
+
+```
+slack = [ left: x, top: y, right: W − (x + w), bottom: H − (y + h) ]
+```
+
+`[w,h]` is the node's `size`, `[W,H]` the ancestor's. Walk every clipping ancestor inside
+the reviewed target. **The read's root node carries an absolute canvas position**, not a
+parent-relative one — start the sum below it (or subtract it), or every node in the tree
+comes out flush and the check reports a tree-wide fiction.
+
+**3. Compare, side by side.** Any side where `slack[side] < reach[side]` → `warning`.
+Anchor the finding on **the node that carries the effect** — its name / id fills the
+finding header — and put the clipping ancestor, the side(s), and both numbers per side in
+`Issue:`. `Fix:` is "give `<ancestor>` ≥ `<reach>` px of slack on `<side(s)>`", or "set
+`clipsContent: false` on `<ancestor>`" when that ancestor exists only to group its
+children.
+
+Two words the report has to keep honest:
+
+- **"may be clipped", not "is invisible".** `reach` is an **upper bound** — a shadow
+  fades across its blur radius, so the last pixels it loses can be imperceptible. Report
+  the arithmetic as a suspicion; the export PNG is the proof.
+- **"fully clipped" is the stronger claim** and needs the stronger test: `slack[side] ≤ 0`
+  on **every** side the effect reaches (`reach[side] > 0`) — the node is flush with or
+  outside its ancestor all the way round, so nothing of the effect has anywhere to land.
+  One flush side is a trimmed edge, not an invisible effect.
+
 ---
 
 ## Dimension 5 — Fidelity to intent
@@ -295,6 +427,6 @@ Always `nit` / advisory — never a hard fail, since either field could be the s
 | DS adherence     | —                                                                                                                                          | Hardcoded color/text with matching token/style; detached instance | Near-match token candidate                                       |
 | Consistency      | —                                                                                                                                          | Off-scale spacing ≥ 4 px; > 4 type sizes; misaligned block        | Off-scale ≤ 3 px; radius rounding; type size ±2 px               |
 | Accessibility    | contrast / touch-target / text-size / colour-alone — severity per the user's `figma-bridge-prefs` thresholds (**unchecked** when no prefs) | —                                                                 | —                                                                |
-| Layout hygiene   | —                                                                                                                                          | Pile-up at [0,0]                                                  | Redundant nesting; hidden nodes; default constraints             |
+| Layout hygiene   | —                                                                                                                                          | Pile-up at [0,0]; effect may be clipped (reach > slack on a side) | Redundant nesting; hidden nodes; default constraints             |
 | Fidelity         | Missing named section or feature                                                                                                           | Count mismatch; placeholder content                               | Extra elements not asked for                                     |
 | Naming & context | —                                                                                                                                          | Blank/default-named frames/components; unclosed/over-cap context  | Default-named leaves; missing `purpose`; name↔role contradiction |

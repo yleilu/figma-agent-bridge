@@ -87,14 +87,17 @@ Notes:
 ## Typography — `font`
 
 ```
-font(Inter, SemiBold, 18)
-font(Inter, SemiBold, 18, {lh=24, ls=0.5})
+font(Inter, Semi Bold, 18)
+font(Inter, Semi Bold, 18, {lh=24, ls=0.5})
 style(Heading/H1)font(Inter, Bold, 32)
 ```
 
 - Positional: `Family, Style, Size` (px).
 - `Style` is Figma's `fontStyle` field (e.g. `Regular`, `Medium`, `SemiBold`, `Bold`,
   `Italic`, `Bold Italic`).
+- The `Style` value must match the family's **registered** style name exactly — some
+  families space it (Inter registers `Semi Bold`, not `SemiBold`); `list_fonts` returns the
+  registered names.
 - `{…}` keys: `lh=` (line height — `24` px or `150%`), `ls=` (letter spacing, px).
 - `style(Name)` wrapper + resolved `font(...)` following — the resolved value always
   trails the wrapper.
@@ -131,8 +134,10 @@ The `var()` wrapper applies uniformly: `var(radius/medium)8`.
 
 ## Scalars & enums
 
-Bare literals: `opacity` `0.5` · `rotation` `45` · `blendMode` `MULTIPLY` ·
+Bare literals: `opacity` `0.5` · `rotation` `45` · `blend` `MULTIPLY` ·
 `visible` `true` · `clipsContent` `false`. All wrappable: `var(token/x)0.5`.
+(The node-level field is `blend`; `blendMode` is Figma's own name for it and is
+what a paint or effect entry carries internally.)
 
 ---
 

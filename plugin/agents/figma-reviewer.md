@@ -169,22 +169,30 @@ After the report, offer:
 
 On approval, apply the requested fixes using `figma-design` mechanics:
 
-- **Token binding:** `bind_variable` on fills / effects; `apply_style` on text nodes.
-  Apply on masters so instances inherit.
+- **Token binding:** re-write the offending field with its wrapper — an `update_node`
+  patch of `fills: ["var(Name)#RRGGBB"]` or `text: {font: "style(Name)font(…)"}` applies
+  the literal and binds it in the same call. `bind_variable` (variables) / `apply_style`
+  (styles; `field`: fill | stroke | text | effect | grid) are the retrofit route for a
+  field you aren't otherwise writing. Apply on masters so instances inherit.
 - **Renaming:** `update_node` with a `name` patch — rename default-named nodes to
   semantic names, and — only when `figma-bridge-prefs` `review-standards` opts into it — add a
   `/` taxonomy path to untaxonomied components. Batch multiple
   renames through `batch`.
-- **Layout fixes:** `update_node` to set `layoutMode`, `layoutSizing`, `padding`, `gap`,
-  or `layoutPositioning` on the offending node.
+- **Layout fixes:** `update_node` with `layout` (`{mode, gap, pad, align, wrap}`), `sizing`
+  (`[horizontal, vertical]`), or `layoutPositioning` on the offending node. Mode, spacing
+  and padding all live inside `layout` — there are no top-level `layoutMode` / `padding` /
+  `gap` fields, and an unknown key is ignored rather than applied, but never silently:
+  the reply's `warnings[]` names it (``key `layoutMode` is not a NodeSpec field and was ignored``),
+  so read the warnings instead of trusting a bare success.
 - **Nesting cleanup:** `reparent_node` to flatten redundant wrappers; `delete_node` to
   remove orphan / hidden nodes (confirm with user before deleting).
 - **Accessibility fixes:** `update_node` on text color (`fills` → token binding) or size;
   `update_node` on container size for touch-target issues.
 - **Component restoration:** `create_node` + `reparent_node` to approximate a detached
-  instance. Full component re-linking (swap_component) is not in this agent's tool set —
-  surface the manual Figma step ("right-click → Reset all overrides" or re-insert the
-  component) and file a tool-limit finding via `figma-feedback` if the gap is blocking.
+  instance. `swap_component` will not restore it — it re-points a node that is still an
+  `INSTANCE`, and a detached one is a plain frame — so surface the manual Figma step
+  (re-insert the component) and file a tool-limit finding via `figma-feedback` if the
+  gap is blocking.
 
 After applying each fix:
 
@@ -196,8 +204,8 @@ After applying each fix:
 
 ### Routing tool-limit findings
 
-If a finding **cannot be fixed** with the available tools (e.g. requires `delete_styles`,
-`delete_variables`, or a Figma API not yet exposed):
+If a finding **cannot be fixed** with the available tools (e.g. requires a detached
+instance re-linked to its component, or a Figma API the bridge does not expose):
 
 1. Mark the finding in the report: `Fix: (tool limitation — see figma-feedback)`.
 2. After the report, file a `record_feedback` entry using the **`figma-feedback` skill**:
