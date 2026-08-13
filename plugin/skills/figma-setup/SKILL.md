@@ -7,9 +7,9 @@ description: >-
   Also use when the user wants to set up, edit, or update their personal or
   team Figma house style and preferences — design-system-first /
   component-first strictness, spacing scale, tokens, type ramp, naming,
-  review standards — that figma-agent-bridge should follow; that job
-  creates/updates the figma-bridge-prefs skill. Do NOT use for building or
-  reviewing a design (that is figma-design / figma-reviewer).
+  file organization, review standards — that figma-agent-bridge should
+  follow; that job creates/updates the figma-bridge-prefs skill. Do NOT use
+  for building or reviewing a design (that is figma-design / figma-reviewer).
 version: 0.1.0
 ---
 
@@ -165,7 +165,7 @@ A lightweight, Figma-specific skill-creator. On the user's explicit request it
 instantiates — or updates — a **user-authored** skill named exactly
 `figma-bridge-prefs`: the sanctioned home for one user's or team's house style
 (strict design-system-first / component-first levels, concrete tokens and
-scales, naming, review standards). Full design:
+scales, naming, file organization, review standards). Full design:
 `docs/specs/customization.md` §5 in the repo (not shipped).
 
 ### What this produces
@@ -230,10 +230,10 @@ whichever scope was chosen.
    Only the renamed copy — sitting under the user's own skills directory —
    becomes the real, loadable `figma-bridge-prefs` skill.
 4. **Tailor by interview.** Ask the user for concrete values — spacing
-   scale, token set, type ramp, naming conventions, how strict
-   design-system-first / component-first should be, review standards — and
-   edit the copied `references/*.md`
-   files to match. **Preserve the floor-preserving header** in every file you
+   scale, token set, type ramp, naming conventions, file organization (the
+   page scheme and where masters sit), how strict design-system-first /
+   component-first should be, review standards — and edit the copied
+   `references/*.md` files to match. **Preserve the floor-preserving header** in every file you
    touch: a tailoring edit may only _tighten_ (add a scale, a stricter rule);
    it must never relax verification discipline or destructive-op safety.
    Accessibility thresholds are a preference you set here (the template ships

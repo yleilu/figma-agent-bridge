@@ -2,7 +2,8 @@
 name: figma-bridge-prefs/house-style
 description: >-
   Load when building or editing — this user's strict design-system-first /
-  component-first level and concrete tokens, scale, ramp, and naming.
+  component-first level and concrete tokens, scale, ramp, naming, and file
+  organization.
 ---
 
 # House style
@@ -40,3 +41,14 @@ floor.
 - Descriptive PascalCase / Title-Case names.
 - Component `/` taxonomy (e.g. `Button/Primary`).
 - Semantic names for structural text nodes.
+
+## File organization
+
+- **Design-system page:** `🧩 Design System` — every **shared** master, style, and token demo.
+  A master exactly one screen consumes stays beside that screen (the skill's scope rule), not
+  here.
+- **One page per screen or flow**, named for the screen (`Dashboard`, `Checkout`), with the
+  blocks that screen alone consumes sitting beside it.
+- **Master grid:** masters laid out left to right with 100 px gutters, grouped by family (all
+  `Button/*` on one row, all `Card/*` on the next).
+- Page names follow the naming convention above; no page keeps a Figma default.

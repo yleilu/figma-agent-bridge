@@ -161,18 +161,36 @@ report_status({ fileKey, text: 'Font "Inter Tight" missing — used Inter', leve
 
 ## Naming discipline
 
-Every node ships with a meaningful `name` — the layer panel is the design's first read,
-for both agents and humans. This is discipline, not tooling: the tools accept `name` on
-every create, and nothing enforces it server-side. Never leave the Figma defaults
-(`Frame 12`, `Rectangle 3`).
+Every node ships with a meaningful `name` — the layer panel is the design's first read, for
+both agents and humans. Name each node for what it _is_ or _does_; never leave a Figma default
+(`Frame 12`, `Rectangle 3`). This is discipline, not tooling: every create accepts `name` and
+nothing enforces it server-side. The _concrete_ convention — descriptive PascalCase /
+Title-Case, the mandatory component `/` taxonomy (`Button/Primary`) — is a **user preference**
+in `figma-bridge-prefs` `references/house-style.md`; this skill ships only the floor. See
+`docs/specs/customization.md` §11 in the repo (not shipped) (P1).
 
-- **Meaningful, non-default names (floor).** Name every node for what it _is_ or _does_;
-  never leave a Figma default (`Frame 12`, `Rectangle 3`). The _concrete_ convention —
-  descriptive PascalCase / Title-Case and the mandatory component `/` taxonomy
-  (`Button/Primary`) — is a **user preference**, relocated to `figma-bridge-prefs`
-  `references/house-style.md`; this skill ships only the floor (a meaningful,
-  self-describing name on every node). See
-  `docs/specs/customization.md` §11 in the repo (not shipped) (P1).
+---
+
+## Organize the file
+
+Placement is documentation: where a thing sits tells the next reader whether editing it is
+safe — a master beside one screen reads as local and editable, the same master on a
+design-system page reads as shared and load-bearing. `references/components.md` §2 says _what_
+becomes a component; this says _where_ it lives.
+
+- **Pages by scope.** Site-wide parts — buttons, chips, inputs, cards, table rows — belong on
+  a dedicated design-system page: shared vocabulary, edit with care. A block exactly one
+  screen consumes stays on that screen's page, beside its only consumer. Interleaved on one
+  canvas, the two are indistinguishable.
+- **Name every page.** `create_page` takes a `name`; rename one that earned its purpose later
+  with `update_node` on the **page's own id** (from `list_pages`), `patch: {name}` — a PAGE is
+  a valid `update_node` target, and only the file/document node refuses a rename. Never leave
+  a `Page 1` standing.
+- **Masters get a deliberate home.** `position` the anatomy you componentize — a spaced grid
+  on its page, never the `[0,0]` that every unpositioned page-root create lands on. Piled
+  masters read as unplaced, and enough of them is a review finding.
+
+The concrete page set and grid spacing, if any, come from `figma-bridge-prefs`.
 
 ---
 
