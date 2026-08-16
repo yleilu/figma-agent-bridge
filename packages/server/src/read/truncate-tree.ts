@@ -27,14 +27,46 @@ export const isStub = (n: NodeSpecOrStub): n is IdStub =>
 /**
  * Convert a full NodeSpec to an IdStub for collapse at a depth boundary.
  * Records the direct child count so the agent knows how many nodes are hidden.
+ *
+ * `size` is carried, never invented: a node with none (a PAGE) keeps none, and
+ * the `[0, 0]` this used to pad with was a dimension the file does not hold
+ * (B26/B51).
  */
 export const toStub = (n: NodeSpec): IdStub => ({
   id: n.id ?? '',
   name: n.name ?? '',
   type: n.type,
-  size: n.size ?? [0, 0],
+  ...(n.size !== undefined ? { size: n.size } : {}),
   childCount: n.children?.length ?? 0,
 })
+
+/**
+ * Record a node this pass COLLAPSED to a stub.
+ *
+ * The receipt names what was CUT and never what was RETURNED (tool-surface.md —
+ * "names exactly which subtrees were cut and how big, so 'continue' = 'drill
+ * into id X'"). A collapse returns the node and cuts its SUBTREE, so a
+ * collapsed leaf cut nothing: the stub is in the view, drilling into it yields
+ * no further level, and an entry for it is loss that did not happen. A depth-1
+ * frame read used to list every instance sublayer it had already inlined, each
+ * with `childCount: 0`.
+ *
+ * `childCount` is the discriminator HERE only because a collapse is the one
+ * case where the node comes back and its subtree does not. A node that is
+ * DROPPED from the view is cut outright, and the budget pass names that one
+ * whatever its childCount (read/budget.ts).
+ */
+const recordCut = (
+  truncated: TruncationReceipt,
+  stub: IdStub,
+): void => {
+  if (stub.childCount > 0) {
+    truncated.push({
+      id: stub.id,
+      childCount: stub.childCount,
+    })
+  }
+}
 
 /**
  * Truncate a tree by depth.
@@ -65,16 +97,16 @@ const truncateByDepth = (
       if (node.children && node.children.length > 0) {
         const stubbedChildren: NodeSpecOrStub[] =
           node.children.map(child => {
-            if (isStub(child)) {
-              // Already a stub — keep, do NOT re-add to receipt
-              return child
-            }
-            // child is NodeSpec after isStub narrows the union
-            const stub = toStub(child)
-            truncated.push({
-              id: stub.id,
-              childCount: stub.childCount,
-            })
+            // Already a stub — the PLUGIN drew this boundary (a page read at
+            // depth 0 does not serialize its children's subtrees). Nothing has
+            // recorded it yet: this is the FIRST pass over the tree, and the
+            // budget pass after it never records a stub it was handed. So the
+            // cut is recorded here, or `truncated: []` claims a completeness
+            // the read does not have (B51).
+            const stub = isStub(child)
+              ? child
+              : toStub(child)
+            recordCut(truncated, stub)
             return stub
           })
         return { ...node, children: stubbedChildren }
@@ -86,7 +118,9 @@ const truncateByDepth = (
     const processedChildren: NodeSpecOrStub[] =
       node.children.map(child => {
         if (isStub(child)) {
-          // Already a stub — keep as is, do not re-add to receipt
+          // A plugin-drawn boundary INSIDE the requested depth: the level was
+          // asked for and not delivered, so it is a cut like any other.
+          recordCut(truncated, child)
           return child
         }
         // child is NodeSpec after isStub narrows the union

@@ -596,6 +596,57 @@ export const createMockPlugin = (
     )
   }
 
+  /**
+   * The id every page-addressed read in this mock uses (list_pages / status
+   * report the same one).
+   */
+  const PAGE_ID = 'page:1'
+
+  /**
+   * The PAGE document a page-rooted read serves — assembled, not exported.
+   *
+   * FAITHFUL to the real plugin (B51): `exportAsync` is a SceneNode call, so a
+   * page has no export of its own and its read is built from its children. The
+   * caller's `depth` is spent on THEM:
+   *   depth 0  — each child is a BOUNDARY ROW: id/name/type, its real size, and
+   *              how many children it hides. No subtree is serialized, so the
+   *              cheap default read stays cheap.
+   *   depth ≠0 — each child is exported whole, exactly as a read entered at
+   *              that child would be, and the SERVER's depth pass decides what
+   *              survives.
+   * The page itself carries NO size: Figma does not maintain one, and the mock
+   * must not hand the reader a number the file does not hold.
+   */
+  const pageDocument = (
+    depth: number,
+  ): Record<string, unknown> => {
+    const card = cardFixture as unknown as Record<
+      string,
+      unknown
+    >
+    const kids = card.children as
+      | Record<string, unknown>[]
+      | undefined
+    return {
+      id: PAGE_ID,
+      name: pageName,
+      type: 'PAGE',
+      children:
+        depth === 0
+          ? [
+              {
+                id: card.id,
+                name: card.name,
+                type: card.type,
+                width: 320,
+                height: 200,
+                childCount: kids?.length ?? 0,
+              },
+            ]
+          : [card],
+    }
+  }
+
   // SLOT NODES minted by update_component (B30), keyed by id → the raw export a
   // later get_node serves. Same reasoning as appliedState above: the reply's
   // echo proves only that the server sent the spec, so the slot's LANDED state
@@ -1012,6 +1063,16 @@ export const createMockPlugin = (
         )
         if (inAlias !== undefined) {
           result = inAlias
+          break
+        }
+        // A PAGE cannot be exported, so the real plugin ASSEMBLES it from its
+        // children — spending the caller's `depth` on them (B51).
+        if (cmd.params?.pageId === PAGE_ID) {
+          result = pageDocument(
+            typeof cmd.params?.depth === 'number'
+              ? cmd.params.depth
+              : 0,
+          )
           break
         }
         if (

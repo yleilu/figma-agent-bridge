@@ -84,7 +84,8 @@ export const idStubSchema = z.object({
   id: z.string(),
   name: z.string(),
   type: z.string(),
-  size: z.tuple([z.number(), z.number()]),
+  // Optional: a PAGE has no size, so a stub for one carries none (B26/B51).
+  size: z.tuple([z.number(), z.number()]).optional(),
   childCount: z.number(),
 })
 

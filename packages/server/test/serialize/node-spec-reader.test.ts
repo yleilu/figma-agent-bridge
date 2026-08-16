@@ -463,6 +463,65 @@ describe('toNodeSpec — depth + IdStubs', () => {
   })
 })
 
+// ─── B51: a size the file does not hold is not invented ───────────────────────
+//
+// A PAGE has no width/height — Figma maintains none — and the reader used to
+// pad `[0, 0]` onto it and onto every child of a page-rooted read. A
+// frame-rooted control returned real sizes, which made the zeros read as a fact
+// about the file. B26's rule: never present a value the engine is not
+// maintaining.
+describe('toNodeSpec — a node with no size (B51)', () => {
+  const page = {
+    id: 'page:1',
+    name: 'Page 1',
+    type: 'PAGE',
+    children: [
+      {
+        id: '1:42',
+        name: 'Card',
+        type: 'FRAME',
+        width: 320,
+        height: 200,
+        childCount: 3,
+      },
+    ],
+  }
+
+  it('omits `size` on the PAGE rather than zeroing it', () => {
+    const spec = toNodeSpec(page, { depth: -1 })
+    expect(spec.type).toBe('PAGE')
+    expect(spec).not.toHaveProperty('size')
+  })
+
+  it('keeps a plugin-drawn boundary a STUB, with its real size and count', () => {
+    // depth -1 is "every level" — but the plugin never sent this child's
+    // subtree, so building it as a childless node would report the level as
+    // empty and let the receipt claim nothing was cut.
+    const spec = toNodeSpec(page, { depth: -1 })
+    const child = (spec.children as IdStub[])[0]
+    expect(child.childCount).toBe(3)
+    expect(child.size).toEqual([320, 200])
+    expect(child).not.toHaveProperty('children')
+  })
+
+  it('still reports a node whose only size is a bbox', () => {
+    const spec = toNodeSpec(
+      {
+        id: '1:1',
+        type: 'RECTANGLE',
+        absoluteBoundingBox: {
+          x: 0,
+          y: 0,
+          width: 12,
+          height: 8,
+        },
+      },
+      { depth: 0 },
+    )
+    expect(spec.size).toEqual([12, 8])
+  })
+})
+
 // ─── lossless round-trip (non-image) ──────────────────────────────────────────
 
 describe('toNodeSpec — lossless round-trip through specToFigma (non-image)', () => {

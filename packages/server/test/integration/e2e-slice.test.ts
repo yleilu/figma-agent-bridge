@@ -154,6 +154,96 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     )
   })
 
+  // 2b — B51: a PAGE-rooted inspect is a read like any other. It used to ignore
+  // `depth` outright (depth:2 returned output byte-identical to depth:1), give
+  // every child `size: [0,0]`, and report `truncated: []` while a whole level
+  // was missing.
+  describe('page-rooted inspect (B51)', () => {
+    type PageView = {
+      view: {
+        type: string
+        size?: [number, number]
+        children: {
+          id: string
+          size?: [number, number]
+          childCount?: number
+          children?: unknown[]
+        }[]
+      }
+      truncated: { id: string; childCount: number }[]
+    }
+    const atDepth = async (
+      depth: number,
+    ): Promise<PageView> => {
+      const result = await handleInspect(
+        { pageId: 'page:1', depth },
+        scoped,
+      )
+      return YAML.parse(result.content[0].text) as PageView
+    }
+
+    it('omits `size` on the PAGE itself — a page has none', async () => {
+      const out = await atDepth(0)
+      expect(out.view.type).toBe('PAGE')
+      expect(out.view.size).toBeUndefined()
+    })
+
+    it('serves the children their REAL size, never [0,0]', async () => {
+      const out = await atDepth(0)
+      expect(out.view.children[0].size).toEqual([320, 200])
+    })
+
+    it('names the level it did not deliver', async () => {
+      const out = await atDepth(0)
+      expect(out.truncated).toEqual([
+        { id: '1:42', childCount: 3 },
+      ])
+    })
+
+    it('honours depth: deeper reads differ', async () => {
+      const one = await atDepth(1)
+      const two = await atDepth(2)
+      expect(JSON.stringify(one)).not.toBe(
+        JSON.stringify(two),
+      )
+      // depth 1 → the frame is full, its children are stubs.
+      const frameAtOne = one.view.children[0]
+      expect(frameAtOne.children).toHaveLength(3)
+      expect(
+        (
+          frameAtOne.children as { childCount?: number }[]
+        )[0].childCount,
+      ).toBe(0)
+      // depth 2 → those children are full nodes, no childCount key.
+      const frameAtTwo = two.view.children[0]
+      expect(
+        (
+          frameAtTwo.children as { childCount?: number }[]
+        )[0].childCount,
+      ).toBeUndefined()
+    })
+
+    // …and the FRAME-rooted receipt errs the other way no more. A depth-0 read
+    // of the card stubs its three leaf children: they are in the view, and
+    // drilling into one yields no further level, so naming them as lost
+    // over-reports a cut that did not happen.
+    it('never receipts a stub that hides nothing', async () => {
+      const result = await handleInspect(
+        { nodeId: '1:42', depth: 0 },
+        scoped,
+      )
+      const out = YAML.parse(result.content[0].text) as {
+        view: { children: { childCount: number }[] }
+        truncated: { id: string; childCount: number }[]
+      }
+      expect(out.view.children).toHaveLength(3)
+      for (const child of out.view.children) {
+        expect(child.childCount).toBe(0)
+      }
+      expect(out.truncated).toEqual([])
+    })
+  })
+
   // 3 — full round-trip: get_node → edit → update_node → mock echoes CONVERTED
   it('round-trips a fill edit through the relay: server parses, plugin assigns', async () => {
     // Read the node as a NodeSpec.

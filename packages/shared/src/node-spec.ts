@@ -114,12 +114,18 @@ export type OverrideEntry = {
   value?: Atom | string
 }
 
-/** Depth-boundary / wide-node collapse — keeps `id` for drill-by-id. */
+/**
+ * Depth-boundary / wide-node collapse — keeps `id` for drill-by-id.
+ *
+ * `size` is OPTIONAL for the same reason it is optional on a NodeSpec: a PAGE
+ * has none, and a stub that padded it to `[0, 0]` stated a dimension the file
+ * does not hold (B26/B51).
+ */
 export type IdStub = {
   id: string
   name: string
   type: string
-  size: [number, number]
+  size?: [number, number]
   childCount: number
 }
 

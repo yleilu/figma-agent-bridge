@@ -309,16 +309,37 @@ const fontLoader = createFontLoader(async font => {
   await figma.loadFontAsync(font)
 })
 
-const summarizeChildren = (
-  node: BaseNode & { children?: readonly BaseNode[] },
-) =>
-  'children' in node && node.children
-    ? node.children.map(child => ({
-        id: child.id,
-        name: child.name,
-        type: child.type,
-      }))
-    : []
+/**
+ * One child of a PAGE / DOCUMENT at the read's own depth boundary — the shape
+ * the server turns straight into an id-stub.
+ *
+ * It carries the two things a stub needs and the old three-key summary did not
+ * (B51): the node's REAL size, and how many children it hides. Without the
+ * size, every child of a page-rooted read came back `size: [0,0]` — a value
+ * the file does not hold (B26: never present a value the engine is not
+ * maintaining). Without `childCount`, the receipt reported the level as
+ * childless, so `truncated` claimed a completeness the read did not have.
+ *
+ * A PAGE under a DOCUMENT has no width/height, so those keys are simply
+ * omitted — a page has no size, and none is invented for it.
+ */
+const childBoundary = (
+  child: BaseNode,
+): Record<string, unknown> => {
+  const kids = (child as Partial<ChildrenMixin>).children
+  return {
+    id: child.id,
+    name: child.name,
+    type: child.type,
+    ...('width' in child
+      ? {
+          width: (child as SceneNode).width,
+          height: (child as SceneNode).height,
+        }
+      : {}),
+    childCount: Array.isArray(kids) ? kids.length : 0,
+  }
+}
 
 // The `BaseNode`-typed face of enrich-nodes' structural reader, so the other
 // context call sites in this file are unchanged.
@@ -445,13 +466,39 @@ const exportNodeDocument = async (
   node: BaseNode,
   depth: number,
 ): Promise<unknown> => {
+  // A PAGE (or the DOCUMENT) cannot be exported: `exportAsync` is a SceneNode
+  // call. So the read is ASSEMBLED from its children instead — and the depth
+  // the caller asked for is spent on THEM (B51). It used to be ignored
+  // entirely: a page-rooted `depth:2` returned byte-identical output to
+  // `depth:1`, three keys per child and a fabricated `size: [0,0]` on each,
+  // while `truncated: []` claimed the read had lost nothing.
   if (node.type === 'DOCUMENT' || node.type === 'PAGE') {
     const ctx = readContext(node)
+    const kids =
+      'children' in node
+        ? (node as BaseNode & ChildrenMixin).children
+        : []
+    // depth 0 wants the page alone, so its children stay boundary rows and no
+    // subtree is serialized — the cheap default read stays cheap. Any deeper
+    // read exports each child at the depth left over, exactly as a read
+    // ENTERED at that child would, so a descendant of a page is as complete as
+    // a descendant of a frame.
+    const children =
+      depth === 0
+        ? kids.map(childBoundary)
+        : await Promise.all(
+            kids.map(child =>
+              exportPageChild(
+                child,
+                depth === -1 ? -1 : depth - 1,
+              ),
+            ),
+          )
     return {
       id: node.id,
       name: node.name,
       type: node.type,
-      children: summarizeChildren(node),
+      children,
       ...(ctx !== undefined ? { context: ctx } : {}),
     }
   }
@@ -477,6 +524,37 @@ const exportNodeDocument = async (
     'exportAsync returned unexpected type: ' +
       typeof exported,
   )
+}
+
+/**
+ * One child of a page, exported — or named as the one node that could not be
+ * (T7, *Reads degrade per node*).
+ *
+ * A page read now touches every child, where the old summary touched none, so
+ * one stale handle would have cost the WHOLE page read. It costs that child:
+ * the row comes back with whatever identity still reads plus a `readError`, and
+ * every sibling is unaffected. The failing row carries NO `childCount` — the
+ * read has no idea how many children it hides, and the server turns a row that
+ * states a count into an id-stub, which has nowhere to put the failure.
+ */
+const exportPageChild = async (
+  child: BaseNode,
+  depth: number,
+): Promise<unknown> => {
+  try {
+    return await exportNodeDocument(child, depth)
+  } catch (err) {
+    const readError =
+      err instanceof Error ? err.message : String(err)
+    try {
+      const { childCount, ...identity } =
+        childBoundary(child)
+      return { ...identity, readError }
+    } catch {
+      // The handle answers nothing at all, its own id included.
+      return { type: '', readError }
+    }
+  }
 }
 
 const bytesToBase64 = (bytes: Uint8Array): string => {

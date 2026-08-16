@@ -329,7 +329,19 @@ const pluginStrokeCap = restVocab({
  */
 const pluginScaleMode = restVocab({ STRETCH: 'CROP' })
 
-const sizeOf = (raw: RawNode): [number, number] => {
+/**
+ * `[width, height]`, or undefined when the node has no size at all.
+ *
+ * A PAGE has none — Figma does not maintain width/height on one — and the
+ * fallback used to invent `[0, 0]` for it, and for every child of a page-rooted
+ * read (B51). B26's rule is the answer: never present a value the engine is not
+ * maintaining. An absent `size` is legible; a fabricated one is not, and a
+ * frame-rooted control returning real sizes made the zeros look like a fact
+ * about the file.
+ */
+const sizeOf = (
+  raw: RawNode,
+): [number, number] | undefined => {
   // Prefer raw.width/height (enriched by plugin — unrotated geometry) over
   // absoluteBoundingBox (axis-aligned bbox, inflated when node is rotated).
   // B7: a rotated node's bbox ≠ its actual dimensions; the plugin enrichment
@@ -342,10 +354,17 @@ const sizeOf = (raw: RawNode): [number, number] => {
   const bbox = raw.absoluteBoundingBox as
     | { width: number; height: number }
     | undefined
-  if (bbox !== undefined && bbox !== null) {
+  if (
+    bbox !== undefined &&
+    bbox !== null &&
+    typeof bbox.width === 'number' &&
+    typeof bbox.height === 'number'
+  ) {
     return [bbox.width, bbox.height]
   }
-  return [w ?? 0, h ?? 0]
+  return w !== undefined || h !== undefined
+    ? [w ?? 0, h ?? 0]
+    : undefined
 }
 
 type RawBBox = { x?: number; y?: number }
@@ -1354,16 +1373,33 @@ const componentMeta = (
 
 // ─── stub ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Is this raw node a boundary the PLUGIN drew — a row that states how many
+ * children it has instead of carrying them?
+ *
+ * A PAGE read at `depth: 0` answers exactly that for each of its children: the
+ * plugin does not serialize their subtrees, because the caller asked for the
+ * page alone. The row is a stub, and the reader keeps it one — building it as a
+ * childless NodeSpec instead would report the level as empty and let the
+ * receipt claim nothing was cut (B51).
+ */
+const isDrawnBoundary = (raw: RawNode): boolean =>
+  !Array.isArray(raw.children) &&
+  num(raw.childCount) !== undefined
+
 const toStub = (raw: RawNode): IdStub => {
   const { children } = raw
+  const size = sizeOf(raw)
   return {
     id: str(raw.id) ?? '',
     name: str(raw.name) ?? '',
     type: str(raw.type) ?? '',
-    size: sizeOf(raw),
+    // Omitted rather than zeroed: a PAGE has no size (B26).
+    ...(size !== undefined ? { size } : {}),
+    // A boundary row states its own count; a serialized node is counted.
     childCount: Array.isArray(children)
       ? children.length
-      : 0,
+      : (num(raw.childCount) ?? 0),
   }
 }
 
@@ -1440,7 +1476,10 @@ const buildNode = (
     }
   }
 
-  out.size = sizeOf(raw)
+  const size = sizeOf(raw)
+  if (size !== undefined) {
+    out.size = size
+  }
 
   // B26 — an invisible child of an auto-layout parent has no live position, so
   // it is emitted with none (see positionIsStale). `visible: false` and the
@@ -1736,12 +1775,16 @@ const buildNode = (
       // ancestor and a descendant the read returns complete keeps the
       // style(...)/var(...) it actually has.
       const built: NodeSpecOrStub[] = kids.map(c =>
-        buildNode(
-          c,
-          next,
-          childParentBBox,
-          childParentLaysOut,
-        ),
+        // A row the plugin drew as a boundary stays a stub however much depth
+        // is left: the subtree was never sent, so there is nothing to build.
+        isDrawnBoundary(c)
+          ? toStub(c)
+          : buildNode(
+              c,
+              next,
+              childParentBBox,
+              childParentLaysOut,
+            ),
       )
       out.children = built
     }
