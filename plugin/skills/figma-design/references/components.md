@@ -164,9 +164,10 @@ When the region already holds an instance and you only need to point it somewher
   `["FIXED","FIXED"]` so the stack cannot hug it away. Opt out with `layout: {mode: 'NONE'}`,
   or state any other layout and own the `sizing` with it. Children of the stack can `FILL`.
 - **The entry carries a full spec.** `slots: [{name, …spec}]` where the spec is `update_node`'s
-  own patch with `name` required: `layout`, `fills`, `size`, `sizing`, `radius`, and inline
-  `var()` / `style()` wrappers all land in the same call. Worth knowing: a fresh slot is born
-  100×100 with an opaque `#FFFFFF` fill, so state `fills: []` unless white is what you meant.
+  own patch with `name` required: `layout`, `fills`, `size`, `sizing`, `radius`, inline `var()`
+  wrappers and a `style(Name)` reference on a whole styleable field all land in the same call.
+  Worth knowing: a fresh slot is born 100×100 with an opaque `#FFFFFF` fill, so state
+  `fills: []` unless white is what you meant.
 
 ```json
 {

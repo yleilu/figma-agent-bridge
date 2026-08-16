@@ -261,7 +261,7 @@ Total: 18 types for Figma Design + 1 asset pipeline.
 | Apply paint style | `node.fillStyleId = id` | 🔧 M3 | Via `style(name)#hex` expression |
 | Apply text style | `node.textStyleId = id` | 🔧 M3 | Via `style(name)Family/Style/Size` |
 | Apply effect style | `node.effectStyleId = id` | 🔧 M3 | Via `style(name)shadow(...)` |
-| Apply grid style | `node.gridStyleId = id` | ⏳ | Grid styles |
+| Apply grid style | `node.gridStyleId = id` | ✅ B47 | Via `apply_style(field:'grid')` and inline: `grids: style(name)` — the fourth styleable array field; read back through the plugin's `gridStyleId` enrichment |
 | Apply stroke style | `node.strokeStyleId = id` | 🔧 M3 | Via `style(name)` expression |
 | Create paint style | `figma.createPaintStyle()` | ⏳ | Style authoring |
 | Create text style | `figma.createTextStyle()` | ⏳ | Style authoring |

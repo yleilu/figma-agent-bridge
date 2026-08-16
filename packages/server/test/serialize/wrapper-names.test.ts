@@ -5,7 +5,8 @@
 // The plugin emits `bindingNames` on every node a read returns COMPLETE:
 // `{ styles?: {[gramField]: styleName}, variables?: {[varId]: varName} }`.
 // This suite asserts the reader consumes it correctly:
-//   - a style binding wins over a variable binding on the same leaf
+//   - a STYLED array field is the scalar reference, not a list of wrapped
+//     leaves: `style(Name)[atom, atom]` (B47 — a styled field is a reference)
 //   - a variable binding renders its NAME, never its id
 //   - non-paint leaves (radius, stroke, effects, font) wrap too
 //   - an unresolvable binding renders the BARE atom — never falls back to id
@@ -20,7 +21,7 @@ import { toNodeSpec } from '@figma-agent-bridge/server/serialize/node-spec-reade
 const FF00AA = { r: 1, g: 0, b: 170 / 255 }
 
 describe('toNodeSpec — wrapper names (style/var render by name)', () => {
-  it('a paint bound to a style renders style(Name)<atom>', () => {
+  it('a fills bound to a style is the SCALAR reference with its resolved list', () => {
     const raw: Record<string, unknown> = {
       id: '1:1',
       name: 'StyleBoundFill',
@@ -30,8 +31,97 @@ describe('toNodeSpec — wrapper names (style/var render by name)', () => {
       bindingNames: { styles: { fill: 'Brand/Primary' } },
     }
     const spec = toNodeSpec(raw, { depth: -1 })
-    expect(spec.fills?.[0]).toBe(
-      'style(Brand/Primary)#FF00AA',
+    expect(spec.fills).toBe('style(Brand/Primary)[#FF00AA]')
+  })
+
+  // The brackets are ALWAYS there, so the form is parsed unconditionally
+  // rather than sniffed — and a style holding two paints emits both, in order,
+  // comma-space separated.
+  it('a two-paint style emits both entries in one bracketed list', () => {
+    const raw: Record<string, unknown> = {
+      id: '1:1b',
+      name: 'TwoPaintStyle',
+      type: 'FRAME',
+      fills: [
+        { type: 'SOLID', color: FF00AA },
+        {
+          type: 'SOLID',
+          color: { r: 0, g: 0, b: 0 },
+          opacity: 0.5,
+        },
+      ],
+      fillStyleId: 'S:abc123',
+      bindingNames: { styles: { fill: 'Glass/Fill' } },
+    }
+    const spec = toNodeSpec(raw, { depth: -1 })
+    expect(spec.fills).toBe(
+      'style(Glass/Fill)[#FF00AA, #00000080]',
+    )
+  })
+
+  it('an UNSTYLED fills is still the array of atoms it has always been', () => {
+    const raw: Record<string, unknown> = {
+      id: '1:1c',
+      name: 'PlainFill',
+      type: 'FRAME',
+      fills: [{ type: 'SOLID', color: FF00AA }],
+    }
+    const spec = toNodeSpec(raw, { depth: -1 })
+    expect(spec.fills).toEqual(['#FF00AA'])
+  })
+
+  it('no entry inside a styled list carries a wrapper of its own', () => {
+    // The paint is ALSO variable-bound. The style owns the field, so it is
+    // named once outside the list and the entries stay bare — otherwise a
+    // read would emit two sources for one value.
+    const raw: Record<string, unknown> = {
+      id: '1:1d',
+      name: 'StyleOverVar',
+      type: 'FRAME',
+      fills: [
+        {
+          type: 'SOLID',
+          color: FF00AA,
+          boundVariables: {
+            color: {
+              id: 'VariableID:9:9',
+              type: 'VARIABLE_ALIAS',
+            },
+          },
+        },
+      ],
+      fillStyleId: 'S:abc123',
+      bindingNames: {
+        styles: { fill: 'Brand/Primary' },
+        variables: { 'VariableID:9:9': 'brand/accent' },
+      },
+    }
+    const spec = toNodeSpec(raw, { depth: -1 })
+    expect(spec.fills).toBe('style(Brand/Primary)[#FF00AA]')
+  })
+
+  it('a grids bound to a style is the scalar reference too (the fourth slot)', () => {
+    const raw: Record<string, unknown> = {
+      id: '1:1e',
+      name: 'GridBound',
+      type: 'FRAME',
+      layoutGrids: [
+        {
+          pattern: 'COLUMNS',
+          alignment: 'STRETCH',
+          count: 12,
+          gutterSize: 24,
+          offset: 0,
+        },
+      ],
+      gridStyleId: 'S:grid1',
+      bindingNames: {
+        styles: { grid: 'Layout/12col' },
+      },
+    }
+    const spec = toNodeSpec(raw, { depth: -1 })
+    expect(spec.grids).toBe(
+      'style(Layout/12col)[columns(12,0,24)]',
     )
   })
 
@@ -59,35 +149,6 @@ describe('toNodeSpec — wrapper names (style/var render by name)', () => {
     const spec = toNodeSpec(raw, { depth: -1 })
     expect(spec.fills?.[0]).toBe('var(brand/accent)#FF00AA')
     expect(spec.fills?.[0]).not.toContain('VariableID')
-  })
-
-  it('a style binding wins over a variable binding on the same leaf', () => {
-    const raw: Record<string, unknown> = {
-      id: '1:2b',
-      name: 'BothBoundFill',
-      type: 'FRAME',
-      fills: [
-        {
-          type: 'SOLID',
-          color: FF00AA,
-          boundVariables: {
-            color: {
-              id: 'VariableID:9:9',
-              type: 'VARIABLE_ALIAS',
-            },
-          },
-        },
-      ],
-      fillStyleId: 'S:abc123',
-      bindingNames: {
-        styles: { fill: 'Brand/Primary' },
-        variables: { 'VariableID:9:9': 'brand/accent' },
-      },
-    }
-    const spec = toNodeSpec(raw, { depth: -1 })
-    expect(spec.fills?.[0]).toBe(
-      'style(Brand/Primary)#FF00AA',
-    )
   })
 
   it('a non-paint field (radius) bound to a variable renders var(Name)<atom>', () => {
@@ -188,7 +249,7 @@ describe('toNodeSpec — wrapper names (style/var render by name)', () => {
     )
   })
 
-  it('a stroke bound to a style renders style(Name)<atom> on each stroke leaf', () => {
+  it('a strokes bound to a style is the scalar reference', () => {
     const raw: Record<string, unknown> = {
       id: '1:4',
       name: 'StrokeBound',
@@ -202,12 +263,12 @@ describe('toNodeSpec — wrapper names (style/var render by name)', () => {
       },
     }
     const spec = toNodeSpec(raw, { depth: -1 })
-    expect(spec.strokes?.[0]).toBe(
-      'style(Border/Default)#000000',
+    expect(spec.strokes).toBe(
+      'style(Border/Default)[#000000]',
     )
   })
 
-  it('an effects array bound to a style wraps every effect leaf', () => {
+  it('an effects bound to a style is the scalar reference — always a list, even for one effect', () => {
     const raw: Record<string, unknown> = {
       id: '1:5',
       name: 'EffectBound',
@@ -224,8 +285,8 @@ describe('toNodeSpec — wrapper names (style/var render by name)', () => {
       bindingNames: { styles: { effect: 'Shadow/Card' } },
     }
     const spec = toNodeSpec(raw, { depth: -1 })
-    expect(spec.effects?.[0]).toMatch(
-      /^style\(Shadow\/Card\)shadow\(/,
+    expect(spec.effects).toBe(
+      'style(Shadow/Card)[shadow(0,2,4,#00000040)]',
     )
   })
 

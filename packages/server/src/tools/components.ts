@@ -39,6 +39,7 @@ import type { SlotEntry } from '@figma-agent-bridge/shared/node-spec'
 import type { ScopedFigmaClient } from '../figma-client'
 import { splitComponentProperties } from '../serialize/node-spec-reader'
 import { slotEntryToFigma } from '../serialize/node-spec-writer'
+import { sendConvertedWrite } from '../serialize/style-refs'
 import {
   type ToolResult,
   formatMutationResult,
@@ -115,7 +116,11 @@ export const handleUpdateComponent = async (
     const convertedSlots = slots?.map(entry =>
       slotEntryToFigma(entry, warnings),
     )
-    const result = (await client.sendCommand(
+    // A slot's spec goes through the same write face, so it leaves by the same
+    // door: a style it names on fills/strokes/effects/grids is resolved on the
+    // same terms (rules 3 and 4).
+    const result = (await sendConvertedWrite(
+      client,
       COMMANDS.UPDATE_COMPONENT,
       {
         componentId,
@@ -126,6 +131,7 @@ export const handleUpdateComponent = async (
         expose,
         slots: convertedSlots,
       },
+      { warnings },
     )) as { error?: string; warnings?: string[] } | null
     const mutation = formatMutationResult(
       result,

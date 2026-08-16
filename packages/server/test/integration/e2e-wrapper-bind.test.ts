@@ -262,11 +262,36 @@ describe('inline wrapper bindings e2e (I39)', () => {
     expect(data.warnings).toEqual([])
   })
 
-  it('update_node: an unresolvable style name degrades with a warning, not an error', async () => {
+  // B47 — the reference and the wrapper-on-a-literal part company exactly
+  // here. A styled ARRAY field IS the reference, so a name that resolves to
+  // nothing leaves nothing to write and is rejected before the plugin is asked;
+  // a scalar slot still carries its literal, so it degrades as it always has.
+  it('update_node: an unresolvable style on a styled ARRAY field is rejected, never written', async () => {
     const result = await handleUpdateNode(
       {
         nodeId: '1:42',
         patch: { fills: ['style(Ghost/Style)#3B82F6'] },
+      },
+      scoped,
+    )
+    const { text } = result.content[0]
+    expect(JSON.parse(text)).toEqual({
+      error:
+        'style(Ghost/Style) matches no paint style in this file, and a reference has no literal half to fall back on — check the name, create the style, or write the fills as literals',
+      code: 'INVALID_PARAM',
+    })
+  })
+
+  it('update_node: an unresolvable style on the SCALAR text.color slot still degrades with a warning', async () => {
+    const result = await handleUpdateNode(
+      {
+        nodeId: '1:42',
+        patch: {
+          text: {
+            content: 'Hi',
+            color: 'style(Ghost/Style)#3B82F6',
+          },
+        },
       },
       scoped,
     )

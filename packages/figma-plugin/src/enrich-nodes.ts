@@ -81,12 +81,19 @@ export type EnrichDeps = {
   ) => Promise<string | undefined>
 }
 
-/** styleId field → the grammar field name the reader wraps. */
+/**
+ * styleId field → the grammar field name the reader wraps.
+ *
+ * All FIVE slots Figma has, because a style owns its whole field and a read
+ * that omits one reports a styled field as a plain list of literals — writable
+ * back, and detaching the style when it is (expression-formats.md).
+ */
 const STYLE_ID_FIELDS = {
   fillStyleId: 'fill',
   strokeStyleId: 'stroke',
   effectStyleId: 'effect',
   textStyleId: 'text',
+  gridStyleId: 'grid',
 } as const
 
 const childrenOf = (

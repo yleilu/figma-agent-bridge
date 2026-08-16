@@ -37,7 +37,9 @@ Three parts, always in this order:
 3. **`{ … }`** *(optional)* — optional/rare fields, comma-separated `key=val`.
    Omitted when empty; always trailing.
 
-A field holding many atoms (e.g. `fills`) is an array of atoms.
+A field holding many atoms (e.g. `fills`) is an array of atoms — **unless a style
+owns it**, and then the whole field is one reference atom (**A styled field is a
+reference, not a list**, below).
 
 **Canonical form (what reads emit):** `{…}` trailing, head args unspaced
 (`font(Inter,SemiBold,18)`), gradient stops spaced (`linear(135, #FF0000@0, #00FF00@100)`).
@@ -68,6 +70,8 @@ Notes:
 - `{…}` keys for any paint: `op=` (paint opacity), `blend=` (blend mode),
   `vis=false` (hidden). Image/video extras: `scale=` (FILL/FIT/CROP/TILE), `rot=`,
   `tile=`, `filter=`.
+- **A paint style owns the whole field**, so a styled `fills` is not an array at all:
+  `fills: style(Glass/Fill)[#141B2E99]` (below).
 
 ---
 
@@ -81,6 +85,9 @@ Notes:
 | background blur | `bg-blur(20)` |
 
 `{…}` keys: `spread=`, `blend=`, `vis=false`, `behind=true` (show behind node).
+
+**An effect style owns the whole field** — `effects: style(AB/Blur)[bg-blur(24)]`,
+never a style beside literal siblings (below).
 
 ---
 
@@ -145,7 +152,10 @@ what a paint or effect entry carries internally.)
 
 - Both wrap **any** atom; the resolved literal **always follows** the wrapper. A
   wrapper with **no value** — `fills: [var(surface/2)]` — is an **error** on both
-  faces: the wrapper names the binding, the literal *is* the value.
+  faces: the wrapper names the binding, the literal *is* the value. The one form that
+  is not this is a bare `style(Name)` standing as the whole content of `fills`,
+  `strokes`, `effects` or `grids`: that is a **reference** to the style that owns the
+  field, and the style supplies the value (next section).
 - **Both name their source** — `style(Brand/Primary)`, `var(radius/medium)`, never
   an opaque id. The name is what you reason with and what you would write back.
 - **A wrapper with a value BINDS on write** — the pair round-trips. Write back the
@@ -159,14 +169,15 @@ what a paint or effect entry carries internally.)
   style → the literal is applied and one `warnings[]` entry says so
   (`var(surface/2): no variable with that name — literal applied unbound`). A
   missing token costs a binding, never the write. Binding is **by name** only; an
-  id inside a wrapper is not accepted.
+  id inside a wrapper is not accepted. (A styled-field **reference** has no literal
+  to keep, so there an unresolvable name is an error instead — next section.)
 - **Where a wrapper binds:** `fills[]`, `strokes[]`, a **uniform** `stroke(…)`
-  weight and a **uniform** `radius` for `var()`; `fills[]`, `strokes[]`,
-  `effects[]`, `text.font` for `style()`; `text.color` for both. Anywhere else the
-  literal still lands and a warning names what could not be bound — including the
-  three the grammar splits finer than Figma's binding surface does: per-range
-  `text.runs[].color`, per-corner `radius` (`[8,8,0,0]`), and per-side stroke
-  weight (`stroke([0,0,1,0])`).
+  weight and a **uniform** `radius` for `var()`; `fills`, `strokes`, `effects`,
+  `grids` (as the whole field) and `text.font` for `style()`; `text.color` for both.
+  Anywhere else the literal still lands and a warning names what could not be bound
+  — including the three the grammar splits finer than Figma's binding surface does:
+  per-range `text.runs[].color`, per-corner `radius` (`[8,8,0,0]`), and per-side
+  stroke weight (`stroke([0,0,1,0])`).
 - `bind_variable` / `apply_style` are still the explicit route — for binding a
   field a write is not otherwise touching, and for `bind_variable`'s
   collection-mode pin.
@@ -174,6 +185,87 @@ what a paint or effect entry carries internally.)
   for and, within `depth`, its descendants. A descendant's `style(Brand/Primary)`
   is not flattened to `#0A84FF`, so you can edit deep in a tree without a second
   read to discover what was bound.
+
+---
+
+## A styled field is a reference, not a list
+
+Figma holds **one style link per field slot**, and a node has five slots — fill,
+stroke, effect, text, grid (the five `apply_style` names). Each has one owner,
+exclusively: a style owns the whole field, or the field is literal, and assigning the
+field directly **detaches** the style (Figma's own behaviour). The slots are
+independent, so a paint style on `fills` and an effect style on `effects` at the same
+time is ordinary. A TEXT node's `text.color` **is** its first fill, so `fills` and
+`text.color` are two spellings of one slot, not two.
+
+The four array fields — `fills`, `strokes`, `effects`, `grids` — have exactly two
+write forms:
+
+```
+effects: style(AB/Blur)                             # a reference — the style IS the field
+effects: [bg-blur(24), shadow(0,8,24,#00000066)]    # a list of literals
+```
+
+A reference may carry the resolved list a read appends to it —
+`effects: style(AB/Blur)[bg-blur(24)]` — and that means exactly what the bare
+reference means: the list rides along and is **never applied as literals**. That is
+what makes a read writable verbatim.
+
+**Write sugar** (write-only — a read always emits the reference). Four array
+spellings state one owner and normalise to the reference, so a spec written against
+the older grammar still lands:
+
+```
+[style(AB/Blur)bg-blur(24)]                                 # the lone atom
+[style(AB/Blur)]                                            # bare, in a one-entry array
+[style(AB/Blur)[bg-blur(24)]]                               # the read form, array-wrapped
+[style(AB/Blur)bg-blur(24), style(AB/Blur)shadow(0,8,24,#00000066)]   # every entry, SAME name
+```
+
+**A ride-along list that differs from the style is named, not obeyed.** The style
+governs, so its own content lands either way and one `warnings[]` entry says what did
+not: `style(AB/Blur) owns effects — it supplies [bg-blur(24)], so the 1 extra effect
+written beside it was not applied; …`. A warning, never a rejection — writing a read
+back verbatim never fires it.
+
+**Four inputs are rejected** — `INVALID_PARAM`, before anything reaches the document:
+
+1. a `style()` entry **beside literal siblings** in one field;
+2. two or more **different** `style()` names in one field (same-name entries are the
+   sugar above) — including the cross-field spelling, a different style on `fills`
+   and on `text.color` of one TEXT node;
+3. a name that resolves to a style of the **wrong type** for the slot — a paint style
+   named on `effects`, an effect style named on `fills`;
+4. a name that resolves to **nothing**.
+
+Rules 1 and 2 are the mix the slot cannot hold, and the error teaches the fix: _a
+style owns the whole effects list — use a style containing every effect you want, or
+write them all as literals (a style cannot be combined with literal siblings)_.
+Rules 3 and 4 are where a reference parts company with the degrade rule above: a
+wrapper on a literal still has that literal, a reference has none, so degrading would
+write nothing at all and call it success.
+
+**A read emits the reference with its resolved list, brackets always:**
+
+```yaml
+fills: style(Glass/Fill)[#141B2E99]
+effects: style(AB/Stack)[bg-blur(24), shadow(0,8,24,#00000066)]
+```
+
+A style holding one effect emits a one-entry list, so the form is read
+unconditionally, never sniffed. **No entry inside the list carries a wrapper of its
+own** — the style is named once, outside, and is the source of all of them, so a bare
+hex in there is a styled value, not a hardcode. An unstyled field is the array of
+atoms it has always been.
+
+**What this does not change.** `text.font` is the text slot and a text style resolves
+to a single font atom, so it keeps the scalar shape it has always had —
+`style(Heading/H1)font(Inter,Bold,32)`, no brackets, and no reference form: the
+resolved atom is required there. `text.color` is the same shape (it is the text
+node's first fill). `var()` is untouched everywhere — a variable binds one paint, so
+it wraps an **entry** and several entries may each carry their own:
+`fills: [var(surface/2)#141B2E, #FFFFFF20]`. A `style()` names the owner of a field;
+a `var()` names the source of an entry.
 
 ---
 
@@ -194,8 +286,7 @@ fills:
 stroke: stroke(1, {align=INSIDE})
 strokes:
   - '#E5E7EB'
-effects:
-  - shadow(0,4,12,#0000001A){spread=0}
+effects: style(Elevation/Card)[shadow(0,4,12,#0000001A)]
 radius: 12
 layout: {mode: V, gap: 8, pad: [16,16,16,16], align: [MIN, MIN]}
 sizing: [FIXED, FIXED]
@@ -214,6 +305,9 @@ children:
       font: font(Inter,Regular,13)
       color: '#6B7280'
 ```
+
+`fills` and `effects` above are the two shapes a styleable field takes: a literal
+array, and the style that owns the field with the list it resolves to.
 
 Key struct fields:
 - **`layout`** — `{mode: H|V|NONE, gap, pad: [t,r,b,l], align: [primary, counter], wrap}`.

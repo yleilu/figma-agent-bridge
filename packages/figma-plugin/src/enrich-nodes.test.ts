@@ -337,6 +337,18 @@ describe('styleIdsOf / variableIdsOf', () => {
     ).toEqual({ fill: 'S:fill', text: 'S:text' })
   })
 
+  // All FIVE slots Figma has (B47). A grid style owns `grids` exactly as a
+  // paint style owns `fills`, and a read that could not see gridStyleId
+  // reported a styled field as a plain list of literals.
+  it('maps gridStyleId — the fifth slot — to the grid field', () => {
+    expect(
+      styleIdsOf({
+        gridStyleId: 'S:grid',
+        effectStyleId: 'S:effect',
+      }),
+    ).toEqual({ grid: 'S:grid', effect: 'S:effect' })
+  })
+
   it('dedupes the ids a node binds, across scalar and array fields', () => {
     expect(
       variableIdsOf({
