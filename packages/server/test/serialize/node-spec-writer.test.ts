@@ -463,6 +463,84 @@ describe('specToFigma — text', () => {
       unit: 'PIXELS',
     })
   })
+
+  // B42 — `case` is a plain enum, not an atom, so the only thing this converter
+  // owes it is passage. It went nowhere for a while, which made "ALL CAPS" a
+  // value the agent could state, could read back as absent, and could not
+  // explain. Both arms are pinned: the CREATE face carries it onto a new node,
+  // and a one-key PATCH carries it onto an existing one.
+  it('carries text.case verbatim on a create', () => {
+    const result = specToFigmaForCreate({
+      type: 'TEXT',
+      text: {
+        content: 'Section',
+        font: 'font(Inter,SemiBold,12)',
+        case: 'UPPER',
+      },
+    })
+    const text = result.text as Record<string, unknown>
+    expect(text.case).toBe('UPPER')
+  })
+
+  it('carries text.case verbatim on a one-key patch', () => {
+    const text = specToFigma({ text: { case: 'TITLE' } })
+      .text as Record<string, unknown>
+    expect(text.case).toBe('TITLE')
+    // …and states nothing else. `case` is the only key the patch named, so a
+    // sibling here would be a value the agent never asked for.
+    expect(Object.keys(text)).toEqual(['case'])
+  })
+
+  it('omits text.case entirely when the patch does not name it', () => {
+    const text = specToFigma({
+      text: { content: 'Untouched' },
+    }).text as Record<string, unknown>
+    expect(text).not.toHaveProperty('case')
+  })
+
+  // B43 — a per-range write must not disturb the node.
+  //
+  // `text.color` binds through the node's FIRST FILL, so a patch that emitted a
+  // node-level colour alongside the runs would overwrite the paint the variable
+  // is bound to and drop the binding with it. The lock is on what the payload
+  // does NOT say: a runs-only patch names runs and nothing else, and asks for
+  // no binding of its own.
+  it('a runs-only patch names runs and NOTHING else — no node-level colour', () => {
+    const result = specToFigma({
+      text: {
+        runs: [{ at: [0, 4], color: '#FF0000' }],
+      },
+    })
+    const text = result.text as Record<string, unknown>
+    expect(Object.keys(text)).toEqual(['runs'])
+    expect(text).not.toHaveProperty('color')
+    expect(result).not.toHaveProperty('fills')
+    // `bindings` is the channel that RE-binds a field after the literal lands.
+    // A patch that names no wrapper must not open it — an empty or invented
+    // entry here rebinds (or unbinds) a field the caller never mentioned.
+    expect(result).not.toHaveProperty('bindings')
+  })
+
+  it('a runs-only patch keeps each run inside the range it stated', () => {
+    const result = specToFigma({
+      text: {
+        runs: [
+          { at: [0, 4], color: '#FF0000' },
+          { at: [9, 14], font: 'font(Inter,Bold,16)' },
+        ],
+      },
+    })
+    const runs = (result.text as Record<string, unknown>)
+      .runs as Record<string, unknown>[]
+    expect(runs.map(r => r.at)).toEqual([
+      [0, 4],
+      [9, 14],
+    ])
+    expect(runs[0].color).toMatchObject({ type: 'SOLID' })
+    // The gap between the two ranges is stated by no run, so nothing in this
+    // payload reaches it.
+    expect(runs).toHaveLength(2)
+  })
 })
 
 describe('specToFigma — grids', () => {

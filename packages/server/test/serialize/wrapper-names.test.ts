@@ -436,4 +436,87 @@ describe('toNodeSpec — wrapper names (style/var render by name)', () => {
     const child = spec.children?.[0] as { fills?: string[] }
     expect(child.fills?.[0]).toBe('#FF00AA')
   })
+
+  // B23 at a BOUNDED depth, which is the depth agents actually read at. The two
+  // tests above ask for `depth: -1`, and "every level" is the one setting that
+  // cannot tell a complete descendant from a lucky one. A `depth: 2` read has a
+  // boundary, and the node that matters sits one level ABOVE it: an instance
+  // sublayer, addressed by the compound id an instance mints, carrying both a
+  // var() wrapper and a field JSON_REST_V1 has no column for. Both must be
+  // there, and the level below must still be a stub — enrichment that reached
+  // past the boundary would be paid for and thrown away.
+  it('a depth-2 read serves its DEEPEST full node complete — wrapper and all', () => {
+    const raw: Record<string, unknown> = {
+      id: '1:100',
+      name: 'Screen',
+      type: 'FRAME',
+      children: [
+        {
+          id: '1:200',
+          name: 'Card',
+          type: 'INSTANCE',
+          children: [
+            {
+              // An instance sublayer: the id Figma composes for it, not a
+              // plain scene-node id.
+              id: 'I1:200;1:300',
+              name: 'Icon',
+              type: 'VECTOR',
+              bindingNames: {
+                variables: {
+                  'VariableID:9:9': 'brand/accent',
+                },
+              },
+              fills: [
+                {
+                  type: 'SOLID',
+                  color: FF00AA,
+                  boundVariables: {
+                    color: {
+                      id: 'VariableID:9:9',
+                      type: 'VARIABLE_ALIAS',
+                    },
+                  },
+                },
+              ],
+              // REST serializes no vector geometry; the plugin patches it back
+              // on. A descendant that got no patch reads as an empty shape.
+              vectorPaths: [
+                { windingRule: 'NONZERO', data: 'M 0 0' },
+              ],
+              children: [
+                {
+                  id: 'I1:200;1:400',
+                  name: 'Glyph',
+                  type: 'VECTOR',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+    const spec = toNodeSpec(raw, { depth: 2 })
+    const sublayer = spec.children?.[0]?.children?.[0] as {
+      id?: string
+      fills?: string[]
+      vectorPaths?: unknown[]
+      children?: { childCount?: number }[]
+    }
+    expect(sublayer.id).toBe('I1:200;1:300')
+    // The wrapper — the channel REST cannot carry at all, because only the
+    // plugin resolves a variable id to its name.
+    expect(sublayer.fills?.[0]).toBe(
+      'var(brand/accent)#FF00AA',
+    )
+    // …and the geometry, likewise patched on rather than exported.
+    expect(sublayer.vectorPaths).toHaveLength(1)
+    // The level past the boundary is a stub, not a second full node.
+    expect(sublayer.children?.[0]).toHaveProperty(
+      'childCount',
+    )
+    expect(sublayer.children?.[0]).not.toHaveProperty(
+      'fills',
+    )
+  })
 })

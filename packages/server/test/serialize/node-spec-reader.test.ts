@@ -2703,6 +2703,123 @@ describe('toNodeSpec — text.runs', () => {
       color: { r: 1, g: 0, b: 0 },
     })
   })
+
+  // B43 — a run and a node binding live on the same TEXT at the same time.
+  //
+  // `text.color` IS the node's first fill, so a per-range colour write lands
+  // one layer below a field that is variable-bound. The read after such a write
+  // has to show both: the range that was written carries its literal, and every
+  // other channel still names the token. A reader that dropped the wrapper here
+  // would report the binding as gone on a node that still holds it — and the
+  // agent's next write would be the one that actually destroys it.
+  it('a per-range colour leaves the node-level binding standing', () => {
+    const bound = {
+      type: 'SOLID',
+      color: { r: 0.08, g: 0.11, b: 0.18 },
+      boundVariables: {
+        color: {
+          id: 'VariableID:9:9',
+          type: 'VARIABLE_ALIAS',
+        },
+      },
+    }
+    const spec = toNodeSpec(
+      mixedText({
+        bindingNames: {
+          variables: { 'VariableID:9:9': 'text/primary' },
+        },
+        fills: [bound],
+        runs: [
+          // The range the update wrote: a literal, no wrapper.
+          {
+            at: [0, 5],
+            color: [
+              {
+                type: 'SOLID',
+                color: { r: 1, g: 0, b: 0 },
+              },
+            ],
+          },
+          // The range it did not touch: still the bound paint.
+          { at: [5, 11], color: [bound] },
+        ],
+      }) as never,
+      { depth: 0 },
+    )
+    // The node-level binding, on both channels that carry it.
+    expect(spec.text?.color).toBe(
+      'var(text/primary)#141C2E',
+    )
+    expect(spec.fills?.[0]).toBe('var(text/primary)#141C2E')
+    // The written range: scoped, literal, and only [0,5].
+    expect(spec.text?.runs?.[0]).toEqual({
+      at: [0, 5],
+      color: '#FF0000',
+    })
+    // The untouched range: still bound.
+    expect(spec.text?.runs?.[1].color).toBe(
+      'var(text/primary)#141C2E',
+    )
+  })
+})
+
+// ─── B42: text.case survives the round trip ───────────────────────────────────
+//
+// `case` is how a design system spells SECTION LABELS, and for a while it was a
+// value the agent could write, could not read back, and therefore could not
+// verify. The read is half the fix: `ORIGINAL` is Figma's "nothing to say" and
+// stays unspoken, every other value is reported, and what the reader emits is
+// what the writer sends back.
+
+describe('toNodeSpec — text.case read-back', () => {
+  const cased = (
+    textCase?: string,
+  ): Record<string, unknown> => ({
+    id: '1:1',
+    name: 'Label',
+    type: 'TEXT',
+    characters: 'Section',
+    style: {
+      fontFamily: 'Inter',
+      fontStyle: 'SemiBold',
+      fontSize: 12,
+      ...(textCase !== undefined ? { textCase } : {}),
+    },
+  })
+
+  it('reports the case a node carries', () => {
+    expect(
+      toNodeSpec(cased('UPPER') as never, { depth: 0 }).text
+        ?.case,
+    ).toBe('UPPER')
+    expect(
+      toNodeSpec(cased('TITLE') as never, { depth: 0 }).text
+        ?.case,
+    ).toBe('TITLE')
+    expect(
+      toNodeSpec(cased('SMALL_CAPS') as never, { depth: 0 })
+        .text?.case,
+    ).toBe('SMALL_CAPS')
+  })
+
+  it('says nothing for ORIGINAL — and nothing for a node with no case at all', () => {
+    expect(
+      toNodeSpec(cased('ORIGINAL') as never, { depth: 0 })
+        .text,
+    ).not.toHaveProperty('case')
+    expect(
+      toNodeSpec(cased() as never, { depth: 0 }).text,
+    ).not.toHaveProperty('case')
+  })
+
+  it('round-trips: what the read emits is what the write sends', () => {
+    const spec = toNodeSpec(cased('UPPER') as never, {
+      depth: 0,
+    })
+    const out = specToFigma(spec) as Record<string, unknown>
+    const text = out.text as Record<string, unknown>
+    expect(text.case).toBe('UPPER')
+  })
 })
 
 // ─── B26: the stale position of an invisible auto-layout child ────────────────

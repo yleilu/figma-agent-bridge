@@ -812,6 +812,87 @@ describe('applyPatches / enrichDocument — merge by id', () => {
     expect(asText.runs).toHaveLength(2)
   })
 
+  // B23 two levels down, which is where a real read lives: an agent inspects a
+  // screen and gets the frame, its cards, and the sublayers inside them. The
+  // GRANDCHILD is the node the fix is about — it is served in full, so it owes
+  // the caller both the geometry REST drops and the variable NAME only the live
+  // handle can resolve. The level past `depth` owes nothing: it collapses to a
+  // stub server-side, so a lookup for it is a token spent on a node nobody sees.
+  it('reaches a GRANDCHILD at depth 2 — and stops one level later', async () => {
+    const asked: string[] = []
+    const bound = (id: string, kids: LiveNode[] = []) =>
+      node(
+        {
+          id,
+          type: 'VECTOR',
+          width: 24,
+          height: 24,
+          vectorPaths: [
+            { windingRule: 'NONZERO', data: 'M 0 0' },
+          ],
+          vectorNetwork: { vertices: [] },
+          boundVariables: {
+            fills: [{ id: 'V:9', type: 'VARIABLE_ALIAS' }],
+          },
+        },
+        kids,
+      )
+    const live = node({ id: 'screen', type: 'FRAME' }, [
+      node({ id: 'card', type: 'INSTANCE' }, [
+        bound('I card;icon', [bound('I card;glyph')]),
+      ]),
+    ])
+    const doc: Record<string, unknown> = {
+      id: 'screen',
+      type: 'FRAME',
+      children: [
+        {
+          id: 'card',
+          type: 'INSTANCE',
+          children: [
+            {
+              id: 'I card;icon',
+              type: 'VECTOR',
+              children: [
+                { id: 'I card;glyph', type: 'VECTOR' },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+    await enrichDocument(
+      live,
+      doc,
+      2,
+      deps({
+        getVariableName: async id => {
+          asked.push(id)
+          return 'brand/accent'
+        },
+      }),
+    )
+    const card = (doc.children as Record<string, unknown>[])[0]
+    const icon = (
+      card.children as Record<string, unknown>[]
+    )[0]
+    const glyph = (
+      icon.children as Record<string, unknown>[]
+    )[0]
+    // The grandchild: named binding AND the geometry REST has no column for.
+    expect(icon.bindingNames).toEqual({
+      variables: { 'V:9': 'brand/accent' },
+    })
+    expect(icon.vectorPaths).toEqual([
+      { windingRule: 'NONZERO', data: 'M 0 0' },
+    ])
+    // One level further is past `depth`: not walked, not resolved, not paid for.
+    expect('bindingNames' in glyph).toBe(false)
+    expect('vectorPaths' in glyph).toBe(false)
+    // One distinct id, one lookup — the batching holds across levels.
+    expect(asked).toEqual(['V:9'])
+  })
+
   it('does not grow an ordinary node that has none of this', async () => {
     const doc: Record<string, unknown> = {
       id: 'plain',
