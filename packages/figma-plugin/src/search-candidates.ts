@@ -166,9 +166,28 @@ export type RepairInput = {
 
 export type RepairOutput = {
   results: Candidate[]
-  /** The failures no export covered — the honest remainder. */
+  /** The failures no export covered, and the rows the repair had to trade. */
   warnings: string[]
 }
+
+/**
+ * The candidate keys only a LIVE read can produce.
+ *
+ * `characters` and `variableIds` are not here: the export carries both, so a
+ * row that comes back from the export can still be matched on them. These four
+ * cannot survive the trade, which is why swapping a live row for an export row
+ * has to be SAID rather than done quietly.
+ */
+const LIVE_ONLY_KEYS = [
+  'context',
+  'styleIds',
+  'componentKey',
+  'instancesOf',
+] as const
+
+/** Which of them this row actually carries — i.e. what dropping it costs. */
+const liveOnlyKeysOf = (c: Candidate): string[] =>
+  LIVE_ONLY_KEYS.filter(k => c[k] !== undefined)
 
 /**
  * Turn a degraded scan into a complete one, by exporting the subtrees the live
@@ -184,6 +203,18 @@ export type RepairOutput = {
  *
  * Hosts are repaired outermost-first (the scan is pre-order, so a smaller index
  * is an ancestor), which lets one export absorb the hosts beneath it.
+ *
+ * DROPPING A ROW IS A TRADE, AND IT IS DECLARED. The row a repair supersedes is
+ * usually the alias ROOT of the slot-created subtree — its own handle read, so
+ * the scan had already built it a candidate carrying `context`, `styleIds`,
+ * `componentKey` and `instancesOf`. The export row that replaces it is
+ * addressable where the alias was not, but it cannot carry those four, so a
+ * `match:{instancesOf|componentKey|styleId}` stops finding a node it used to
+ * find. That is a real limit, not a bug this pass can fix — but a search that
+ * reports clean while quietly returning fewer rows is the exact failure this
+ * batch exists to remove, so the trade is named in `warnings`. The warning
+ * fires only when something was genuinely lost: a dropped row carrying none of
+ * the four costs a filter nothing and says nothing.
  */
 export const repairScan = async ({
   scanned,
@@ -197,6 +228,8 @@ export const repairScan = async ({
   const superseded = new Set<number>()
   const rescanned: Candidate[] = []
   const rescannedIds = new Set<string>()
+  /** One line per row the repair traded away with keys on it. */
+  const traded: string[] = []
 
   // The ids that still stand for a row in `results`. An export candidate whose
   // id is already here is the twin of a live candidate we are keeping, and the
@@ -230,6 +263,16 @@ export const repairScan = async ({
       entry.levelsLeft,
       hints,
     )
+    // An export that describes nothing cannot speak for anything. Superseding
+    // on the strength of it would delete the subtree from the results and put
+    // nothing back — and silence the failures too, since `covered` is what
+    // decides that. Leave the scan exactly as it was.
+    if (fromExport.length === 0) continue
+
+    const exportRoot =
+      typeof fromExport[0].id === 'string'
+        ? fromExport[0].id
+        : entry.id
     const exportIds = new Set<string>()
     for (const candidate of fromExport) {
       if (typeof candidate.id === 'string') {
@@ -240,7 +283,8 @@ export const repairScan = async ({
     for (let i = host; i < entry.subtreeEnd; i++) {
       covered.add(i)
       const liveId = scanned[i].id
-      if (candidates[i] === undefined) {
+      const liveRow = candidates[i]
+      if (liveRow === undefined) {
         // Nothing was emitted for this node, so nothing stands in the export's
         // way — and its id must stop blocking the export's twin.
         liveIds.delete(liveId)
@@ -251,6 +295,18 @@ export const repairScan = async ({
         // names the same node properly, a few lines down.
         superseded.add(i)
         liveIds.delete(liveId)
+        const lost = liveOnlyKeysOf(liveRow)
+        if (lost.length > 0) {
+          traded.push(
+            'search: repaired the subtree at ' +
+              exportRoot +
+              ' — the row for ' +
+              liveId +
+              ' now comes from the export and cannot carry ' +
+              lost.join(', ') +
+              '; a match on those keys will not find this node',
+          )
+        }
       }
       // Otherwise the live id IS canonical — a healthy node inside a broken
       // subtree. Keep its row exactly as the scan built it.
@@ -293,6 +349,10 @@ export const repairScan = async ({
     if (!isCovered) {
       warnings.push(failure.message)
     }
+  }
+  // …and what the repair itself cost, after what it could not repair.
+  for (const message of traded) {
+    warnings.push(message)
   }
   return { results, warnings }
 }

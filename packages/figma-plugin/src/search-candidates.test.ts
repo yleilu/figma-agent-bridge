@@ -373,6 +373,91 @@ describe('repairScan — repair without downgrading (C1)', () => {
     expect(warnings).toEqual([])
   })
 
+  // Final-review I-1. The C1 round protected the healthy SIBLINGS. The row the
+  // repair actually trades away is the alias ROOT: its own handle read, so the
+  // scan gave it the four live-only keys, and the export row that replaces it
+  // cannot carry them. The trade is a real limit; doing it in silence is not.
+  it('names the row it traded away, and the keys a filter can no longer see', async () => {
+    const fixture = frameHosted()
+    // The chip read — only its label threw — so it HAS a hinted live row.
+    fixture.candidates[3] = live('298:7519', {
+      name: 'Chip',
+      componentKey: 'k-chip',
+      instancesOf: 'Chip',
+      styleIds: ['S:chip'],
+      context: 'a slot-hosted chip',
+    })
+    fixture.failures = [
+      {
+        at: -1,
+        host: 3,
+        message: 'search: skipped I298:7519;298:7510',
+      },
+    ]
+    const { results, warnings } = await repairScan({
+      ...fixture,
+      exportHost: async () =>
+        (frameDoc().children as RawNode[])[2],
+    })
+    // The limit itself: the row is gone from a match on those keys.
+    expect(
+      results.some(r => r.instancesOf === 'Chip'),
+    ).toBe(false)
+    // …and the reply SAYS so, naming the node and every key it cost.
+    const traded = warnings.filter(w =>
+      w.includes('298:7519'),
+    )
+    expect(traded).toHaveLength(1)
+    expect(traded[0]).toContain(CANON)
+    for (const key of [
+      'context',
+      'styleIds',
+      'componentKey',
+      'instancesOf',
+    ]) {
+      expect(traded[0]).toContain(key)
+    }
+  })
+
+  it('says nothing when the dropped row carried no live-only key', async () => {
+    // A filter cannot miss what the row never had, and a warning per repair
+    // would be the noise B48 spent the batch removing.
+    const fixture = frameHosted()
+    fixture.candidates[3] = live('298:7519', {
+      name: 'Chip',
+    })
+    fixture.failures = [
+      {
+        at: -1,
+        host: 3,
+        message: 'search: skipped I298:7519;298:7510',
+      },
+    ]
+    const { warnings } = await repairScan({
+      ...fixture,
+      exportHost: async () =>
+        (frameDoc().children as RawNode[])[2],
+    })
+    expect(warnings).toEqual([])
+  })
+
+  it('repairs nothing on an export that describes nothing', async () => {
+    // Superseding on the strength of an empty export would delete the subtree
+    // and put nothing back — and silence the failures while doing it.
+    const fixture = frameHosted()
+    const { results, warnings } = await repairScan({
+      ...fixture,
+      // A document the candidate builder can make nothing of (no id).
+      exportHost: async () => ({ name: 'anon' }),
+    })
+    expect(results.map(r => r.id)).toEqual([
+      '2:1',
+      '2:2',
+      '2:3',
+    ])
+    expect(warnings).toEqual([fixture.failures[0].message])
+  })
+
   it('keeps a warning whose failing node sits outside the repaired slice (M3)', async () => {
     // An overlapping-selection scan appends a second, deeper visit's finds
     // AFTER the first visit's range. A host inside that range must not silence

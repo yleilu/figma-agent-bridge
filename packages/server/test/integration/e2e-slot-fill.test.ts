@@ -34,6 +34,7 @@ import { handleGetNode } from '@figma-agent-bridge/server/tools/read'
 import { handleCloneNode } from '@figma-agent-bridge/server/tools/structure'
 import { handleUpdateNode } from '@figma-agent-bridge/server/tools/update'
 import { handleBindVariable } from '@figma-agent-bridge/server/tools/design-system'
+import { handleSearch } from '@figma-agent-bridge/server/tools/search'
 import { createMockPlugin } from '../mocks/mock-plugin'
 
 const TEST_PORT = 3132
@@ -332,6 +333,54 @@ describe('M2b slot-fill e2e (T7 instance-lock wrap)', () => {
     )
     expect(result.content[0].text).not.toContain(
       'internet connection',
+    )
+  })
+
+  // --- final-review I-1: a hinted search over a repaired subtree ---
+  //
+  // The repair trades the alias row for the one the export names. The export
+  // row is addressable where the alias was not, but it cannot carry
+  // componentKey / instancesOf / styleIds / context, so a hinted match returns
+  // one row fewer than 0.5.0 did. That limit is acceptable; discovering it by
+  // counting is not. This asserts the plugin's warning survives the server's
+  // matcher and projection and lands in front of the agent.
+  it('a hinted match over a repaired subtree returns fewer rows AND says why', async () => {
+    const result = await handleSearch(
+      {
+        scope: 'page',
+        pageId: 'repaired:1',
+        match: { instancesOf: 'Chip' },
+      },
+      scoped,
+    )
+    const reply = JSON.parse(result.content[0].text) as {
+      results: unknown[]
+      warnings?: string[]
+    }
+    // The row really is gone — the export twin has no `instancesOf` to match.
+    expect(reply.results).toHaveLength(0)
+    // Control, so the emptiness is the MATCHER and not a broken fixture: the
+    // same page unfiltered still returns the repaired rows.
+    const unfiltered = await handleSearch(
+      { scope: 'page', pageId: 'repaired:1' },
+      scoped,
+    )
+    expect(
+      (
+        JSON.parse(unfiltered.content[0].text) as {
+          results: unknown[]
+        }
+      ).results,
+    ).toHaveLength(2)
+    // …and the reply is NOT clean about it.
+    expect(reply.warnings).toBeDefined()
+    const traded = (reply.warnings ?? []).filter(w =>
+      w.includes('298:7519'),
+    )
+    expect(traded).toHaveLength(1)
+    expect(traded[0]).toContain('instancesOf')
+    expect(traded[0]).toContain(
+      'I298:7517;298:7516;298:7523',
     )
   })
 

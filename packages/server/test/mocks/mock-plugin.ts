@@ -1548,7 +1548,41 @@ export const createMockPlugin = (
           '1:44',
           '1:45',
         ])
-        const knownPages = new Set(['0:1'])
+        const knownPages = new Set(['0:1', 'repaired:1'])
+        // A page whose scan the plugin had to REPAIR (B48 / final-review I-1).
+        // A chip written into a slot answered an alias id, its label threw, and
+        // the repair replaced the chip's row with the one its export names. The
+        // export row is addressable where the alias was not, but it cannot carry
+        // componentKey / instancesOf / styleIds / context — so a hinted match
+        // stops finding a node it used to find, and the plugin SAYS so. This is
+        // the shape `repairScan` now produces; the assertion that matters here
+        // is that the warning survives the server's projection and reaches the
+        // agent beside a result set that is genuinely one row short.
+        if (
+          searchScope === 'page' &&
+          cmd.params?.pageId === 'repaired:1'
+        ) {
+          result = {
+            results: [
+              {
+                id: 'I298:7517;298:7516;298:7523',
+                name: 'Chip',
+                type: 'INSTANCE',
+                size: [96, 28],
+              },
+              {
+                id: 'I298:7517;298:7516;298:7523;298:7510',
+                name: 'Label',
+                type: 'TEXT',
+                size: [80, 16],
+              },
+            ],
+            warnings: [
+              'search: repaired the subtree at I298:7517;298:7516;298:7523 — the row for 298:7519 now comes from the export and cannot carry componentKey, instancesOf; a match on those keys will not find this node',
+            ],
+          }
+          break
+        }
         // The real plugin RESOLVES a not-found as a handler {error} (rides in
         // command-result.result, NOT a WS-level reject), so set result.error.
         if (
