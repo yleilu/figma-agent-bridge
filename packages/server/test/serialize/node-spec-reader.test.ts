@@ -152,6 +152,131 @@ describe('toNodeSpec — atom-grammar leaves', () => {
   })
 })
 
+// ─── B44: a bound LAYOUT scalar reads back with its var() wrapper ─────────────
+//
+// `bind_variable {field:'itemSpacing'}` was REAL — the gap moved to the
+// variable's value and `search match:{variableId}` indexed the node — yet the
+// read answered a bare `gap: 8`. No wrapper, no `boundVariables`, nothing to
+// say a binding existed. So spacing tokens were unauditable and an ordinary
+// read-modify-write destroyed them silently.
+describe('toNodeSpec — bound layout scalars (B44)', () => {
+  const bound = (
+    over: Record<string, unknown>,
+  ): Record<string, unknown> => ({
+    id: '1:1',
+    name: 'Row',
+    type: 'FRAME',
+    layoutMode: 'HORIZONTAL',
+    itemSpacing: 8,
+    bindingNames: {
+      variables: {
+        'V:space8': 'space/8',
+        'V:space16': 'space/16',
+      },
+    },
+    ...over,
+  })
+
+  it('emits the wrapper on `gap`', () => {
+    const spec = toNodeSpec(
+      bound({
+        layoutBoundVariables: { itemSpacing: 'V:space8' },
+      }),
+      { depth: 0 },
+    )
+    expect(spec.layout?.gap).toBe('var(space/8)8')
+  })
+
+  it('binds `pad` PER SIDE, by position', () => {
+    const spec = toNodeSpec(
+      bound({
+        paddingTop: 8,
+        paddingRight: 16,
+        paddingBottom: 8,
+        paddingLeft: 16,
+        layoutBoundVariables: {
+          paddingTop: 'V:space8',
+          paddingBottom: 'V:space8',
+        },
+      }),
+      { depth: 0 },
+    )
+    expect(spec.layout?.pad).toEqual([
+      'var(space/8)8',
+      16,
+      'var(space/8)8',
+      16,
+    ])
+  })
+
+  it('emits an all-zero `pad` when a side is bound', () => {
+    // Dropping it would drop the binding sitting on it.
+    const spec = toNodeSpec(
+      bound({
+        layoutBoundVariables: { paddingLeft: 'V:space8' },
+      }),
+      { depth: 0 },
+    )
+    expect(spec.layout?.pad).toEqual([
+      0,
+      0,
+      0,
+      'var(space/8)0',
+    ])
+  })
+
+  it('emits the wrapper on the GRID gaps', () => {
+    const spec = toNodeSpec(
+      bound({
+        layoutMode: 'GRID',
+        gridRowGap: 8,
+        gridColumnGap: 16,
+        layoutBoundVariables: {
+          gridRowGap: 'V:space8',
+          gridColumnGap: 'V:space16',
+        },
+      }),
+      { depth: 0 },
+    )
+    expect(spec.layout?.rowGap).toBe('var(space/8)8')
+    expect(spec.layout?.colGap).toBe('var(space/16)16')
+  })
+
+  it('also reads a binding the EXPORT carries itself', () => {
+    // A node whose live handle refused to be read still resolves whatever its
+    // export knows (the same rule the paint wrappers follow).
+    const spec = toNodeSpec(
+      bound({
+        boundVariables: {
+          itemSpacing: {
+            id: 'V:space8',
+            type: 'VARIABLE_ALIAS',
+          },
+        },
+      }),
+      { depth: 0 },
+    )
+    expect(spec.layout?.gap).toBe('var(space/8)8')
+  })
+
+  it('stays a bare number when nothing is bound', () => {
+    const spec = toNodeSpec(bound({}), { depth: 0 })
+    expect(spec.layout?.gap).toBe(8)
+    expect(spec.layout?.pad).toBeUndefined()
+  })
+
+  it('never falls back to the id when the name is unknown', () => {
+    const spec = toNodeSpec(
+      bound({
+        bindingNames: { variables: {} },
+        layoutBoundVariables: { itemSpacing: 'V:space8' },
+      }),
+      { depth: 0 },
+    )
+    expect(spec.layout?.gap).toBe(8)
+  })
+})
+
 // ─── GRID layout read-back (M12) ─────────────────────────────────────────────
 
 describe('toNodeSpec — GRID layout read-back', () => {

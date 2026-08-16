@@ -223,6 +223,120 @@ describe('write-face wrapper bindings — var()', () => {
   })
 })
 
+// ─── B44 — the layout spacing scalars bind too ────────────────────────────────
+//
+// The layout half was the residual of B21: `radiusAtom` was fixed and the
+// spacing fields were never covered. Figma binds `itemSpacing`, the two grid
+// gaps and each padding SIDE as independent node fields, so each carries its
+// own wrapper and `pad` binds by POSITION.
+describe('write-face wrapper bindings — layout (B44)', () => {
+  it('a var() gap keeps the literal AND carries the binding', () => {
+    const out = specToFigma({
+      layout: { mode: 'H', gap: 'var(space/8)8' },
+    })
+    expect(out.layout).toEqual({ mode: 'H', spacing: 8 })
+    expect(out.bindings).toEqual([
+      {
+        kind: 'var',
+        name: 'space/8',
+        field: 'itemSpacing',
+      },
+    ])
+  })
+
+  it('pad binds per SIDE, by position; the unbound sides stay literal', () => {
+    const out = specToFigma({
+      layout: {
+        mode: 'V',
+        pad: ['var(space/8)8', 16, 'var(space/8)8', 16],
+      },
+    })
+    expect(
+      (out.layout as { padding: number[] }).padding,
+    ).toEqual([8, 16, 8, 16])
+    expect(out.bindings).toEqual([
+      {
+        kind: 'var',
+        name: 'space/8',
+        field: 'paddingTop',
+      },
+      {
+        kind: 'var',
+        name: 'space/8',
+        field: 'paddingBottom',
+      },
+    ])
+  })
+
+  it('binds the two GRID gaps by their own spellings', () => {
+    const out = specToFigma({
+      layout: {
+        mode: 'GRID',
+        rowGap: 'var(space/8)8',
+        colGap: 'var(space/16)16',
+      },
+    })
+    expect(out.layout).toEqual({
+      mode: 'GRID',
+      rowGap: 8,
+      colGap: 16,
+    })
+    expect(out.bindings).toEqual([
+      {
+        kind: 'var',
+        name: 'space/8',
+        field: 'gridRowGap',
+      },
+      {
+        kind: 'var',
+        name: 'space/16',
+        field: 'gridColumnGap',
+      },
+    ])
+  })
+
+  it('a style() on a gap warns — a style cannot own one', () => {
+    const warnings: string[] = []
+    const out = specToFigma(
+      { layout: { mode: 'H', gap: 'style(Spacing/8)8' } },
+      warnings,
+    )
+    expect(out.layout).toEqual({ mode: 'H', spacing: 8 })
+    expect(out.bindings).toBeUndefined()
+    expect(warnings).toEqual([
+      'style(Spacing/8) on layout.gap: this surface has no binding route for that field — literal applied unbound',
+    ])
+  })
+
+  // A malformed atom has no literal half to fall back on, so it is refused
+  // before the write leaves the server (the atomToStroke precedent, B38).
+  // Passing NaN on crosses the wire as `null` and dies on Figma's validator.
+  it('a gap that states no number is INVALID_PARAM', () => {
+    for (const bad of [
+      { mode: 'H' as const, gap: 'var(space/8)wide' },
+      { mode: 'H' as const, gap: 'wide' },
+      {
+        mode: 'V' as const,
+        pad: [8, 'var(space/8)huge', 8, 8] as [
+          number,
+          string,
+          number,
+          number,
+        ],
+      },
+    ]) {
+      let caught: { code?: string; message?: string } = {}
+      try {
+        specToFigma({ layout: bad })
+      } catch (err) {
+        caught = err as { code?: string; message?: string }
+      }
+      expect(caught.code).toBe('INVALID_PARAM')
+      expect(caught.message).toContain('takes a number')
+    }
+  })
+})
+
 describe('write-face wrapper bindings — style()', () => {
   // A style OWNS its field, so the reference is one binding and NO literal:
   // assigning the field directly is what detaches the style. `owns`/`rideAlong`

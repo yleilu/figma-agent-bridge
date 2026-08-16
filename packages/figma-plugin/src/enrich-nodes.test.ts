@@ -240,6 +240,58 @@ describe('syncPatch — the fields REST cannot carry', () => {
     ).toMatchObject({ isMask: true, maskType: 'LUMINANCE' })
   })
 
+  // B44 — JSON_REST_V1 carries no layout binding, so a live `itemSpacing`
+  // bind read back as a bare number and the token was invisible. Only the ids
+  // travel; the reader turns them into the `var()` names it emits.
+  it('ships which variable each bindable LAYOUT field is bound to', () => {
+    const patch = syncPatch(
+      node({
+        id: 'row',
+        type: 'FRAME',
+        boundVariables: {
+          itemSpacing: {
+            type: 'VARIABLE_ALIAS',
+            id: 'V:space8',
+          },
+          paddingTop: {
+            type: 'VARIABLE_ALIAS',
+            id: 'V:space8',
+          },
+          gridRowGap: {
+            type: 'VARIABLE_ALIAS',
+            id: 'V:space16',
+          },
+          // Not a layout field — it rides the paint wrapper's own channel.
+          fills: [
+            { type: 'VARIABLE_ALIAS', id: 'V:brand' },
+          ],
+        },
+      }),
+      MIXED,
+    )
+    expect(patch.layoutBoundVariables).toEqual({
+      itemSpacing: 'V:space8',
+      paddingTop: 'V:space8',
+      gridRowGap: 'V:space16',
+    })
+  })
+
+  it('omits layoutBoundVariables when no layout field is bound', () => {
+    const patch = syncPatch(
+      node({
+        id: 'row',
+        type: 'FRAME',
+        boundVariables: {
+          fills: [
+            { type: 'VARIABLE_ALIAS', id: 'V:brand' },
+          ],
+        },
+      }),
+      MIXED,
+    )
+    expect('layoutBoundVariables' in patch).toBe(false)
+  })
+
   it('omits an empty explicitVariableModes / componentPropertyReferences', () => {
     const patch = syncPatch(
       node({

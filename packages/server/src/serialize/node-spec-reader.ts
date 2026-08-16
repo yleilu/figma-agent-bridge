@@ -29,6 +29,7 @@ import type {
   NodeSpecOrStub,
   IdStub,
   LayoutSpec,
+  NumberAtom,
   TextSpec,
   TextRun,
   OverrideEntry,
@@ -1016,8 +1017,51 @@ const exportSettingsArray = (
 
 // ─── layout ───────────────────────────────────────────────────────────────────
 
+/**
+ * The variable bound to one LAYOUT field, named — or undefined when the field
+ * carries no binding this read can resolve.
+ *
+ * Two sources, both in the Plugin API's field spelling. `layoutBoundVariables`
+ * is the plugin's own enrichment (enrich-nodes.ts), which exists because
+ * JSON_REST_V1 carries no layout binding at all — a live `itemSpacing` bind
+ * read back as a bare number, so the binding was invisible and an ordinary
+ * read-modify-write destroyed it (B44). The export's flat `boundVariables` is
+ * consulted too, so a node whose live handle refused to be read still resolves
+ * whatever its export knows.
+ */
+const layoutVarName = (
+  raw: RawNode,
+  bindingNames: BindingNames | undefined,
+  field: string,
+): string | undefined => {
+  const shipped = raw.layoutBoundVariables as
+    | Record<string, unknown>
+    | undefined
+  const id =
+    str(shipped?.[field]) ??
+    flatAliasId(nodeBoundVariables(raw), field)
+  return variableNameFor(id, bindingNames)
+}
+
+/**
+ * A layout number as the read emits it: bare, or carrying its `var()` wrapper.
+ *
+ * `gap: "var(space/8)8"` — the same shape a bound uniform `radius` has always
+ * emitted, and the shape a write re-binds from (expression-formats.md →
+ * *Scope*). One binding per field: Figma binds `itemSpacing`, the two grid gaps
+ * and each padding side independently.
+ */
+const layoutNumberLeaf = (
+  value: number,
+  varName: string | undefined,
+): NumberAtom =>
+  varName === undefined
+    ? value
+    : wrapperFor(undefined, varName) + String(value)
+
 const layoutSpec = (
   raw: RawNode,
+  bindingNames: BindingNames | undefined,
 ): LayoutSpec | undefined => {
   const mode = str(raw.layoutMode)
   if (
@@ -1028,13 +1072,27 @@ const layoutSpec = (
     return undefined
   }
 
-  // Padding applies to every auto-layout mode, GRID included.
-  const pt = num(raw.paddingTop) ?? 0
-  const pr = num(raw.paddingRight) ?? 0
-  const pb = num(raw.paddingBottom) ?? 0
-  const pl = num(raw.paddingLeft) ?? 0
-  const pad: LayoutSpec['pad'] | undefined =
-    pt || pr || pb || pl ? [pt, pr, pb, pl] : undefined
+  // Padding applies to every auto-layout mode, GRID included. Each side binds
+  // on its own, so `pad` is emitted whenever ONE side is non-zero OR bound —
+  // dropping an all-zero pad would drop the bindings sitting on it.
+  const sides = [
+    ['paddingTop', num(raw.paddingTop) ?? 0],
+    ['paddingRight', num(raw.paddingRight) ?? 0],
+    ['paddingBottom', num(raw.paddingBottom) ?? 0],
+    ['paddingLeft', num(raw.paddingLeft) ?? 0],
+  ] as const
+  const padNames = sides.map(([field]) =>
+    layoutVarName(raw, bindingNames, field),
+  )
+  const padAtoms = sides.map(([, value], i) =>
+    layoutNumberLeaf(value, padNames[i]),
+  )
+  const padCarries =
+    sides.some(([, value]) => value !== 0) ||
+    padNames.some(name => name !== undefined)
+  const pad: LayoutSpec['pad'] | undefined = padCarries
+    ? (padAtoms as unknown as LayoutSpec['pad'])
+    : undefined
 
   // GRID branch (M12): two independent gaps, separate row/col counts.
   if (mode === 'GRID') {
@@ -1049,11 +1107,17 @@ const layoutSpec = (
     }
     const rowGap = num(raw.gridRowGap)
     if (rowGap !== undefined) {
-      out.rowGap = rowGap
+      out.rowGap = layoutNumberLeaf(
+        rowGap,
+        layoutVarName(raw, bindingNames, 'gridRowGap'),
+      )
     }
     const colGap = num(raw.gridColumnGap)
     if (colGap !== undefined) {
-      out.colGap = colGap
+      out.colGap = layoutNumberLeaf(
+        colGap,
+        layoutVarName(raw, bindingNames, 'gridColumnGap'),
+      )
     }
     if (pad !== undefined) {
       out.pad = pad
@@ -1066,7 +1130,10 @@ const layoutSpec = (
   }
   const gap = num(raw.itemSpacing)
   if (gap !== undefined) {
-    out.gap = gap
+    out.gap = layoutNumberLeaf(
+      gap,
+      layoutVarName(raw, bindingNames, 'itemSpacing'),
+    )
   }
   if (pad !== undefined) {
     out.pad = pad
@@ -1503,7 +1570,7 @@ const buildNode = (
       layoutPositioning as NodeSpec['layoutPositioning']
   }
 
-  const layout = layoutSpec(raw)
+  const layout = layoutSpec(raw, bindingNames)
   if (layout !== undefined) {
     out.layout = layout
   }

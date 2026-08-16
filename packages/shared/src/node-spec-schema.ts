@@ -25,19 +25,35 @@ const styledAtomsSchema = z.union([
   z.array(atomSchema),
 ])
 
+// A number leaf a var() wrapper may bind: the bare number, or the number
+// carrying its wrapper ("var(space/8)8"). The SHAPE is validated here; whether
+// the wrapped string parses is the server-side grammar's job.
+const numberAtomSchema = z.union([z.number(), atomSchema])
+
 export const layoutSpecSchema = z.object({
   mode: z.enum(['H', 'V', 'NONE', 'GRID']),
-  gap: z.number().optional(),
+  gap: numberAtomSchema.optional(),
   pad: z
-    .tuple([z.number(), z.number(), z.number(), z.number()])
+    .tuple([
+      numberAtomSchema,
+      numberAtomSchema,
+      numberAtomSchema,
+      numberAtomSchema,
+    ])
     .optional(),
   align: z.tuple([z.string(), z.string()]).optional(),
   wrap: z.boolean().optional(),
   // GRID-mode keys (M12): two independent gaps, separate row/col counts.
   rows: z.number().int().positive().optional(),
   cols: z.number().int().positive().optional(),
-  rowGap: z.number().nonnegative().optional(),
-  colGap: z.number().nonnegative().optional(),
+  // Non-negative on the NUMBER branch, as before; the wrapped spelling is a
+  // string, whose value the server-side grammar validates.
+  rowGap: z
+    .union([z.number().nonnegative(), atomSchema])
+    .optional(),
+  colGap: z
+    .union([z.number().nonnegative(), atomSchema])
+    .optional(),
 })
 
 export const textRunSchema = z.object({

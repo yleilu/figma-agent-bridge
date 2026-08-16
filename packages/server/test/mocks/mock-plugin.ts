@@ -88,10 +88,34 @@ const mockResolveInstanceProps = (
 // Both names this mock document defines: the get_variables collection entry,
 // and the name the card fixture's bound fill reads back as (bindingNames) —
 // which is what makes a read → write round-trip re-bind here.
+// `space/8` is a SPACING token: the layout scalars bind too (B44), and a
+// design system's spacing variables are exactly what an inline `gap:
+// "var(space/8)8"` names.
 const MOCK_VARIABLE_NAMES = [
   'Brand/Primary',
   'surface/card-bg',
+  'space/8',
 ]
+
+/**
+ * The variable ids this mock document defines, by name — what only the PLUGIN
+ * can resolve, and what `bind_variable` is called with.
+ *
+ * An id that is not here answers itself: a mock-only fallback, so a test that
+ * binds an id the document never defined sees that in the read-back rather than
+ * a plausible-looking name.
+ */
+const MOCK_VARIABLE_BY_ID: Record<string, string> = {
+  'var:spacing-8': 'space/8',
+}
+
+const mockVariableNameById = (
+  id: string,
+): string | undefined =>
+  MOCK_VARIABLE_BY_ID[id] ??
+  (id.startsWith('var:mock:')
+    ? id.slice('var:mock:'.length)
+    : undefined)
 
 /**
  * The mock document's LOCAL STYLES — one fixture, read by `get_styles`, by the
@@ -386,6 +410,40 @@ export const createMockPlugin = (
   >()
 
   /**
+   * The card fixture's node with this id — root or any descendant.
+   *
+   * The real plugin resolves EVERY id in the file, not just the roots a test
+   * happens to name, so a multi-id read of `1:43` must answer the Title's own
+   * export rather than the card's. `search`'s field hydration (B50) reads back
+   * exactly the ids the scan reported, which are these four.
+   */
+  const fixtureNodeById = (
+    id: string,
+  ): Record<string, unknown> | undefined => {
+    const walk = (
+      node: Record<string, unknown>,
+    ): Record<string, unknown> | undefined => {
+      if (node.id === id) {
+        return node
+      }
+      const kids = node.children
+      if (!Array.isArray(kids)) {
+        return undefined
+      }
+      for (const kid of kids as Record<string, unknown>[]) {
+        const hit = walk(kid)
+        if (hit !== undefined) {
+          return hit
+        }
+      }
+      return undefined
+    }
+    return walk(
+      cardFixture as unknown as Record<string, unknown>,
+    )
+  }
+
+  /**
    * Model the plugin's stroke apply (B27), including what the EXPORT then
    * reports back.
    *
@@ -426,6 +484,120 @@ export const createMockPlugin = (
       appliedState.set(id, state)
     }
   }
+
+  /**
+   * The layout fields Figma binds a variable to, in the Plugin API's spelling —
+   * the same list the plugin's enrichment ships across (B44).
+   */
+  const MOCK_LAYOUT_BIND_FIELDS = new Set([
+    'itemSpacing',
+    'paddingTop',
+    'paddingRight',
+    'paddingBottom',
+    'paddingLeft',
+    'gridRowGap',
+    'gridColumnGap',
+  ])
+
+  /** The export vocabulary for a layout mode the write face states. */
+  const MOCK_LAYOUT_MODE: Record<string, string> = {
+    H: 'HORIZONTAL',
+    V: 'VERTICAL',
+    GRID: 'GRID',
+    NONE: 'NONE',
+  }
+
+  /**
+   * Model the layout a write LANDED, in the vocabulary a read consumes.
+   *
+   * The reply's echo proves only that the server sent the spec; the round-trip
+   * that matters is `gap: "var(space/8)8"` written back and read back as the
+   * same string, which needs the literal to persist as well as the binding.
+   */
+  const applyLayoutState = (
+    id: string,
+    spec: Record<string, unknown>,
+  ): void => {
+    const layout = spec.layout as
+      | Record<string, unknown>
+      | undefined
+    if (layout === undefined) {
+      return
+    }
+    const state = appliedState.get(id) ?? {}
+    if (typeof layout.mode === 'string') {
+      state.layoutMode =
+        MOCK_LAYOUT_MODE[layout.mode] ?? 'NONE'
+    }
+    if (typeof layout.spacing === 'number') {
+      state.itemSpacing = layout.spacing
+    }
+    if (Array.isArray(layout.padding)) {
+      const [pt, pr, pb, pl] = layout.padding as number[]
+      state.paddingTop = pt
+      state.paddingRight = pr
+      state.paddingBottom = pb
+      state.paddingLeft = pl
+    }
+    if (typeof layout.rowGap === 'number') {
+      state.gridRowGap = layout.rowGap
+    }
+    if (typeof layout.colGap === 'number') {
+      state.gridColumnGap = layout.colGap
+    }
+    appliedState.set(id, state)
+  }
+
+  /**
+   * Model a LANDED layout binding, the way the file then reports one (B44).
+   *
+   * JSON_REST_V1 carries no layout binding, so the real plugin's enrichment
+   * ships `layoutBoundVariables` (field → variable id) plus the id → name map
+   * every wrapper resolves through. Modelling only the reply's
+   * `appliedBindings` would leave a read looking exactly as if nothing had been
+   * bound — which is precisely the bug: `bind_variable` answered `ok,
+   * warnings:[]`, byte-identical to a no-op.
+   */
+  const applyLayoutBindingState = (
+    id: string,
+    bound: { field: string; name: string }[],
+  ): void => {
+    if (bound.length === 0) {
+      return
+    }
+    const state = appliedState.get(id) ?? {}
+    const fixtureNames = (fixtureNodeById(id)
+      ?.bindingNames ?? {}) as {
+      variables?: Record<string, string>
+    }
+    const names = (state.bindingNames ?? fixtureNames) as {
+      variables?: Record<string, string>
+    }
+    const variables = { ...(names.variables ?? {}) }
+    const layoutBound = {
+      ...((state.layoutBoundVariables as
+        | Record<string, string>
+        | undefined) ?? {}),
+    }
+    for (const entry of bound) {
+      const varId = `var:mock:${entry.name}`
+      layoutBound[entry.field] = varId
+      variables[varId] = entry.name
+    }
+    state.layoutBoundVariables = layoutBound
+    state.bindingNames = { ...names, variables }
+    appliedState.set(id, state)
+  }
+
+  /** The layout half of a converted spec's `bindings[]`. */
+  const layoutBindingsOf = (
+    applied: MockBinding[],
+  ): { field: string; name: string }[] =>
+    applied.filter(
+      b =>
+        b.kind === 'var' &&
+        MOCK_LAYOUT_BIND_FIELDS.has(b.field),
+    )
 
   /**
    * Model an APPLIED style, the way the file then reports it (B47).
@@ -560,40 +732,6 @@ export const createMockPlugin = (
     }
     // SLOT_CANONICAL_ID is deliberately absent — see the note above.
     return undefined
-  }
-
-  /**
-   * The card fixture's node with this id — root or any descendant.
-   *
-   * The real plugin resolves EVERY id in the file, not just the roots a test
-   * happens to name, so a multi-id read of `1:43` must answer the Title's own
-   * export rather than the card's. `search`'s field hydration (B50) reads back
-   * exactly the ids the scan reported, which are these four.
-   */
-  const fixtureNodeById = (
-    id: string,
-  ): Record<string, unknown> | undefined => {
-    const walk = (
-      node: Record<string, unknown>,
-    ): Record<string, unknown> | undefined => {
-      if (node.id === id) {
-        return node
-      }
-      const kids = node.children
-      if (!Array.isArray(kids)) {
-        return undefined
-      }
-      for (const kid of kids as Record<string, unknown>[]) {
-        const hit = walk(kid)
-        if (hit !== undefined) {
-          return hit
-        }
-      }
-      return undefined
-    }
-    return walk(
-      cardFixture as unknown as Record<string, unknown>,
-    )
   }
 
   /**
@@ -1653,6 +1791,13 @@ export const createMockPlugin = (
         unWarnings.push(...unBind.warnings)
         if (!unIncompat) {
           applyStyleState(unId, unBind.applied)
+          // Literal first, binding second — the plugin's own order, and the
+          // reason a written-back `gap: "var(space/8)8"` keeps its token.
+          applyLayoutState(unId, spec)
+          applyLayoutBindingState(
+            unId,
+            layoutBindingsOf(unBind.applied),
+          )
         }
         result = {
           id: unId,
@@ -1740,6 +1885,23 @@ export const createMockPlugin = (
                 ? 'setBoundVariableForPaint unavailable in this Figma version; paint binding skipped'
                 : 'setBoundVariable unavailable in this Figma version; binding skipped',
             )
+          } else if (
+            bvField !== undefined &&
+            MOCK_LAYOUT_BIND_FIELDS.has(bvField)
+          ) {
+            // A LAYOUT bind LANDS, and the file then reports it (B44). The
+            // reply is `ok, warnings:[]` either way — byte-identical to a
+            // no-op — so the only thing that can tell a real bind from a
+            // silent one is the next read.
+            const bvNodeId = cmd.params?.nodeId as string
+            applyLayoutBindingState(bvNodeId, [
+              {
+                field: bvField,
+                name:
+                  mockVariableNameById(variableId) ??
+                  variableId,
+              },
+            ])
           }
           // else: happy path, no additional warning
         }

@@ -31,6 +31,7 @@ import { handleCreateNode } from '@figma-agent-bridge/server/tools/create-node'
 import { handleCreateTree } from '@figma-agent-bridge/server/tools/create-tree'
 import { handleUpdateNode } from '@figma-agent-bridge/server/tools/update'
 import { handleGetNode } from '@figma-agent-bridge/server/tools/read'
+import { handleBindVariable } from '@figma-agent-bridge/server/tools/design-system'
 import { createMockPlugin } from '../mocks/mock-plugin'
 
 const TEST_PORT = 3134
@@ -372,5 +373,127 @@ describe('inline wrapper bindings e2e (I39)', () => {
       },
     ])
     expect(data.warnings).toEqual([])
+  })
+
+  // ── B44: the layout spacing scalars round-trip the same way ────────────────
+  //
+  // The bind was REAL and the read denied it: `bind_variable
+  // {field:'itemSpacing'}` answered `ok, warnings:[]` — byte-identical to a
+  // no-op — the gap moved to the variable's value, `search
+  // match:{variableId}` indexed the node, and `get_node` still said `gap: 8`.
+  // So the token was unauditable and the next read-modify-write destroyed it.
+  describe('a bound layout scalar (B44)', () => {
+    type LayoutRead = {
+      layout: {
+        mode: string
+        gap?: number | string
+        pad?: (number | string)[]
+      }
+    }
+    const readLayout = async (): Promise<LayoutRead> => {
+      const read = await handleGetNode(
+        { nodeId: '1:42', profile: 'layout' },
+        scoped,
+      )
+      return YAML.parse(read.content[0].text) as LayoutRead
+    }
+
+    it('bind_variable on itemSpacing becomes a var() the read can SEE', async () => {
+      const before = await readLayout()
+      expect(before.layout.gap).toBe(12)
+
+      await handleBindVariable(
+        {
+          nodeId: '1:42',
+          field: 'itemSpacing',
+          variableId: 'var:spacing-8',
+        },
+        scoped,
+      )
+
+      const after = await readLayout()
+      expect(after.layout.gap).toBe('var(space/8)12')
+    })
+
+    it('writing the read emission back verbatim keeps the binding', async () => {
+      await handleBindVariable(
+        {
+          nodeId: '1:42',
+          field: 'itemSpacing',
+          variableId: 'var:spacing-8',
+        },
+        scoped,
+      )
+      const emitted = await readLayout()
+
+      // The whole struct, exactly as it was read — no editing.
+      const written = await handleUpdateNode(
+        {
+          nodeId: '1:42',
+          patch: { layout: emitted.layout },
+        },
+        scoped,
+      )
+      const data = reply(written.content[0].text)
+      expect(data.warnings).toEqual([])
+      expect(data.appliedBindings).toContainEqual({
+        kind: 'var',
+        name: 'space/8',
+        field: 'itemSpacing',
+      })
+
+      // …and the next read says the same thing the first one did.
+      const again = await readLayout()
+      expect(again.layout).toEqual(emitted.layout)
+    })
+
+    it('binds pad per SIDE and leaves the others literal', async () => {
+      const written = await handleUpdateNode(
+        {
+          nodeId: '1:42',
+          patch: {
+            layout: {
+              mode: 'V',
+              pad: [
+                'var(space/8)8',
+                16,
+                'var(space/8)8',
+                16,
+              ],
+            },
+          },
+        },
+        scoped,
+      )
+      expect(
+        reply(written.content[0].text).warnings,
+      ).toEqual([])
+
+      const after = await readLayout()
+      expect(after.layout.pad).toEqual([
+        'var(space/8)8',
+        16,
+        'var(space/8)8',
+        16,
+      ])
+    })
+
+    it('an unresolvable spacing token degrades — the gap lands, one warning', async () => {
+      const written = await handleUpdateNode(
+        {
+          nodeId: '1:42',
+          patch: {
+            layout: { mode: 'H', gap: 'var(space/nope)24' },
+          },
+        },
+        scoped,
+      )
+      const data = reply(written.content[0].text)
+      expect(data.warnings).toEqual([
+        'var(space/nope): no variable with that name — literal applied unbound',
+      ])
+      const after = await readLayout()
+      expect(after.layout.gap).toBe(24)
+    })
   })
 })

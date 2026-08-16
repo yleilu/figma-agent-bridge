@@ -63,6 +63,7 @@ import type {
   NodeSpec,
   NodeSpecPatch,
   LayoutSpec,
+  NumberAtom,
   SlotEntry,
 } from '@figma-agent-bridge/shared/node-spec'
 import { NODE_SPEC_PATCH_KEYS } from '@figma-agent-bridge/shared/node-spec-schema'
@@ -75,6 +76,7 @@ import {
   atomToPath,
   tokenize,
 } from '../grammar'
+import { ToolError } from '../errors'
 import { collectWrapperBindings } from './wrapper-bindings'
 import { readStyledFields } from './styled-fields'
 
@@ -141,6 +143,46 @@ const parseRadius = (
   return Number(trimmed)
 }
 
+/**
+ * A layout spacing scalar as the plugin takes it — a plain number.
+ *
+ * The leaf may arrive wrapped, because that is what a read of a bound field
+ * emits (`gap: "var(space/8)8"`). The wrapper carries the BINDING, which
+ * `collectWrapperBindings` has already collected into `spec.bindings`; what the
+ * layout itself needs is the literal underneath. Stripping goes through the
+ * shared tokenizer, never a second matcher (T8).
+ *
+ * A leaf that states no number is malformed, and a malformed atom has no
+ * literal half to fall back on — INVALID_PARAM before the write leaves the
+ * server, with the canonical spelling in the message (the `atomToStroke`
+ * precedent, B38). Passing NaN on would cross the wire as `null` and die on
+ * Figma's own validator.
+ */
+const layoutNumber = (
+  value: NumberAtom,
+  field: string,
+): number => {
+  if (typeof value === 'number') {
+    return value
+  }
+  let body = ''
+  try {
+    body = tokenize(value).body.trim()
+  } catch {
+    body = ''
+  }
+  const parsed = Number(body)
+  if (body === '' || !Number.isFinite(parsed)) {
+    throw new ToolError(
+      'INVALID_PARAM',
+      `layout.${field} takes a number, not "${value}". ` +
+        `Write ${field}: 8 for a literal, or ${field}: "var(space/8)8" ` +
+        'to bind the variable space/8 to it.',
+    )
+  }
+  return parsed
+}
+
 /** Map a LayoutSpec to the flat layout object the plugin expects. */
 const convertLayout = (
   layout: LayoutSpec,
@@ -148,10 +190,12 @@ const convertLayout = (
 ): Record<string, unknown> => {
   const out: Record<string, unknown> = { mode: layout.mode }
   if (layout.gap !== undefined) {
-    out.spacing = layout.gap
+    out.spacing = layoutNumber(layout.gap, 'gap')
   }
   if (layout.pad !== undefined) {
-    out.padding = layout.pad
+    out.padding = layout.pad.map((side, i) =>
+      layoutNumber(side, `pad[${i}]`),
+    )
   }
   if (layout.align !== undefined) {
     out.align = layout.align
@@ -179,10 +223,10 @@ const convertLayout = (
     out.cols = layout.cols
   }
   if (layout.rowGap !== undefined) {
-    out.rowGap = layout.rowGap
+    out.rowGap = layoutNumber(layout.rowGap, 'rowGap')
   }
   if (layout.colGap !== undefined) {
-    out.colGap = layout.colGap
+    out.colGap = layoutNumber(layout.colGap, 'colGap')
   }
   return out
 }

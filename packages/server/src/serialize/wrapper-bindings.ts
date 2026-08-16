@@ -64,7 +64,17 @@ export type WrapperBinding = {
   rideAlong?: string[]
 }
 
-/** NodeSpec field → the `bind_variable` field that binds it. */
+/**
+ * NodeSpec field → the `bind_variable` field that binds it.
+ *
+ * The layout entries are the B44 half. Figma binds `itemSpacing`, the two grid
+ * gaps and each padding SIDE as independent node fields, and the plugin's
+ * generic scalar route (`setBoundVariable`) has always been able to write them
+ * — what was missing was any route from a `layout.*` wrapper to that field, so
+ * an inline `gap: "var(space/8)8"` applied the 8 and dropped the token. `pad`
+ * binds by POSITION, exactly as paints bind by index, because the four sides
+ * are four fields.
+ */
 const VAR_ROUTES: Record<string, string> = {
   fills: 'fills',
   strokes: 'strokes',
@@ -72,6 +82,13 @@ const VAR_ROUTES: Record<string, string> = {
   radius: 'cornerRadius',
   // A text node's colour IS its fills — the same paint the `fills` route binds.
   'text.color': 'fills',
+  'layout.gap': 'itemSpacing',
+  'layout.rowGap': 'gridRowGap',
+  'layout.colGap': 'gridColumnGap',
+  'layout.pad[0]': 'paddingTop',
+  'layout.pad[1]': 'paddingRight',
+  'layout.pad[2]': 'paddingBottom',
+  'layout.pad[3]': 'paddingLeft',
 }
 
 /**
@@ -282,6 +299,17 @@ export const collectWrapperBindings = (
   }
   addStyled('effects')
   addStyled('grids')
+  // The layout spacing scalars (B44). Each is its own Figma field, so each
+  // carries its own wrapper and binds on its own; `pad` binds per SIDE, by
+  // position. A `style()` here finds no route and warns, which is right — a
+  // style cannot own a gap.
+  const { layout } = spec
+  add('layout.gap', wrapperOf(layout?.gap))
+  add('layout.rowGap', wrapperOf(layout?.rowGap))
+  add('layout.colGap', wrapperOf(layout?.colGap))
+  layout?.pad?.forEach((side, i) =>
+    add(`layout.pad[${i}]`, wrapperOf(side)),
+  )
   const text: Partial<TextSpec> | undefined = spec.text
   add('text.font', wrapperOf(text?.font))
   // `text.color` IS the text node's first fill — index 0, never the whole

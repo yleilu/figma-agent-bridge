@@ -118,6 +118,29 @@ const STYLE_ID_FIELDS = {
   gridStyleId: 'grid',
 } as const
 
+/**
+ * The LAYOUT fields Figma lets a variable bind, in the Plugin API's own
+ * spelling — `node.setBoundVariable(field, variable)` takes exactly these.
+ *
+ * They are patched across because JSON_REST_V1 does not carry them: a real,
+ * live-verified `itemSpacing` binding (gap 4 → 8, the variable's value, and the
+ * node indexed by `search match:{variableId}`) read back as a bare `gap: 8`,
+ * with no wrapper and nothing to say a binding existed at all (B44). So a
+ * read-modify-write silently destroyed it, and spacing tokens were unauditable.
+ *
+ * `counterAxisSpacing` is bindable in Figma but has no field in the layout
+ * struct (the grammar spells one `gap`), so nothing here could carry it.
+ */
+const LAYOUT_BOUND_FIELDS = [
+  'itemSpacing',
+  'paddingTop',
+  'paddingRight',
+  'paddingBottom',
+  'paddingLeft',
+  'gridRowGap',
+  'gridColumnGap',
+] as const
+
 /** The node's agent-authored `context`, or undefined when it has none. */
 export const readContext = (
   n: LiveNode,
@@ -323,6 +346,25 @@ export const syncPatch = (
     patch.gridColumnCount = node.gridColumnCount
     patch.gridRowGap = node.gridRowGap
     patch.gridColumnGap = node.gridColumnGap
+  }
+
+  // B44 — which VARIABLE each bindable layout field is bound to. Only the ids
+  // travel; the reader turns them into the `var()` names it emits, off the same
+  // `bindingNames` map every other wrapper resolves through.
+  const bound = node.boundVariables as
+    | Record<string, { id?: unknown } | undefined>
+    | undefined
+  if (typeof bound === 'object' && bound !== null) {
+    const layoutBound: Record<string, string> = {}
+    for (const field of LAYOUT_BOUND_FIELDS) {
+      const id = bound[field]?.id
+      if (typeof id === 'string') {
+        layoutBound[field] = id
+      }
+    }
+    if (Object.keys(layoutBound).length > 0) {
+      patch.layoutBoundVariables = layoutBound
+    }
   }
 
   // B3 — componentPropertyReferences: field → canonical component property id,
