@@ -422,3 +422,171 @@ describe('handleSearch (rebuilt — Rule A)', () => {
     ).not.toHaveProperty('warnings')
   })
 })
+
+// ---------------------------------------------------------------------------
+// B50 — search honours the SAME `fields` vocabulary the fidelity readers serve
+// ---------------------------------------------------------------------------
+//
+// The plugin's scan row is cheap by design (id/name/type/size, plus
+// `characters` on request) because it crosses the whole document. Projecting
+// `fills` over that row therefore returned NOTHING — no key, no warning — and
+// a dropped field is indistinguishable from a negative result, so a sweep for
+// white frames came back clean on frames that were white. D2 is one contract
+// on every node-returning read, so the missing fields are FETCHED, over the
+// page that `match` + `limit` have already bounded.
+describe('handleSearch — projection past the scan row (B50)', () => {
+  // Raw JSON_REST_V1 exports, keyed by id, as the GET_NODES reply carries them.
+  const exports: Record<string, Record<string, unknown>> = {
+    '1:1': {
+      id: '1:1',
+      name: 'Card',
+      type: 'FRAME',
+      absoluteBoundingBox: {
+        x: 0,
+        y: 0,
+        width: 320,
+        height: 200,
+      },
+      fills: [
+        {
+          type: 'SOLID',
+          color: { r: 1, g: 0, b: 0, a: 1 },
+        },
+      ],
+      layoutMode: 'VERTICAL',
+      itemSpacing: 8,
+    },
+    '1:2': {
+      id: '1:2',
+      name: 'Title',
+      type: 'TEXT',
+      absoluteBoundingBox: {
+        x: 0,
+        y: 0,
+        width: 200,
+        height: 24,
+      },
+      fills: [
+        {
+          type: 'SOLID',
+          color: { r: 0, g: 0, b: 1, a: 1 },
+        },
+      ],
+    },
+  }
+
+  const scan = [
+    { id: '1:1', name: 'Card', type: 'FRAME' },
+    {
+      id: '1:2',
+      name: 'Title',
+      type: 'TEXT',
+      characters: 'Hello',
+    },
+  ]
+
+  /** Answers SEARCH with the scan rows and GET_NODES with the exports above. */
+  const twoStepClient = (opts: {
+    sent?: Sent[]
+    missing?: string[]
+  }): ScopedFigmaClient => ({
+    fileKey: 'fk-test',
+    sendCommand: async (
+      command: string,
+      params?: Record<string, unknown>,
+    ) => {
+      opts.sent?.push({ command, params })
+      if (command === COMMANDS.GET_NODES) {
+        const ids = (params?.nodeIds as string[]) ?? []
+        return ids.map(id =>
+          opts.missing?.includes(id) === true
+            ? { id, error: 'Node not found' }
+            : exports[id],
+        )
+      }
+      return { results: scan }
+    },
+  })
+
+  it('fetches the node specs and projects `fills`', async () => {
+    const sent: Sent[] = []
+    const result = await handleSearch(
+      { fields: ['id', 'name', 'type', 'fills'] },
+      twoStepClient({ sent }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: {
+        id: string
+        type: string
+        fills?: string[]
+      }[]
+    }
+    expect(sent[1].command).toBe(COMMANDS.GET_NODES)
+    // Bounded: the ids of the page, at the fidelity reader's own depth.
+    expect(sent[1].params?.nodeIds).toEqual(['1:1', '1:2'])
+    expect(sent[1].params?.depth).toBe(0)
+    expect(out.results[0].fills?.[0]).toBe('#FF0000')
+    expect(out.results[1].fills?.[0]).toBe('#0000FF')
+    // …and the row still answers to the id the scan reported.
+    expect(out.results.map(r => r.id)).toEqual([
+      '1:1',
+      '1:2',
+    ])
+  })
+
+  it('projects a `profile` preset the same way', async () => {
+    const result = await handleSearch(
+      { profile: 'layout' },
+      twoStepClient({}),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { layout?: { mode: string; gap?: number } }[]
+    }
+    expect(out.results[0].layout?.mode).toBe('V')
+    expect(out.results[0].layout?.gap).toBe(8)
+  })
+
+  it('does NOT fetch when the scan row already answers', async () => {
+    for (const params of [
+      {},
+      { fields: ['id', 'name', 'type', 'size'] },
+      { fields: ['id', 'characters'] },
+      { profile: 'minimal' as const },
+    ]) {
+      const sent: Sent[] = []
+      await handleSearch(params, twoStepClient({ sent }))
+      expect(sent).toHaveLength(1)
+      expect(sent[0].command).toBe(COMMANDS.SEARCH)
+    }
+  })
+
+  // The allow-list stays EXACT — no silent base-merge. A caller who wants `id`
+  // lists `id`, so an id-less text inventory is the contract, not a defect.
+  it('keeps the allow-list exact (no base fields merged in)', async () => {
+    const result = await handleSearch(
+      { fields: ['characters'] },
+      twoStepClient({}),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: Record<string, unknown>[]
+    }
+    expect(out.results[1]).toEqual({ characters: 'Hello' })
+    expect(out.results[0]).not.toHaveProperty('id')
+  })
+
+  // T7 — a row whose spec could not be read is thin, and SAYS it is thin.
+  it('names a result whose fields could not be read back', async () => {
+    const result = await handleSearch(
+      { fields: ['id', 'fills'] },
+      twoStepClient({ missing: ['1:2'] }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { id: string; fills?: string[] }[]
+      warnings?: string[]
+    }
+    expect(out.results[0].fills).toBeDefined()
+    expect(out.results[1].fills).toBeUndefined()
+    expect(out.results[1].id).toBe('1:2')
+    expect(out.warnings?.[0]).toContain('1:2')
+  })
+})

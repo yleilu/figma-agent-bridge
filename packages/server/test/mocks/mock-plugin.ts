@@ -562,6 +562,40 @@ export const createMockPlugin = (
     return undefined
   }
 
+  /**
+   * The card fixture's node with this id — root or any descendant.
+   *
+   * The real plugin resolves EVERY id in the file, not just the roots a test
+   * happens to name, so a multi-id read of `1:43` must answer the Title's own
+   * export rather than the card's. `search`'s field hydration (B50) reads back
+   * exactly the ids the scan reported, which are these four.
+   */
+  const fixtureNodeById = (
+    id: string,
+  ): Record<string, unknown> | undefined => {
+    const walk = (
+      node: Record<string, unknown>,
+    ): Record<string, unknown> | undefined => {
+      if (node.id === id) {
+        return node
+      }
+      const kids = node.children
+      if (!Array.isArray(kids)) {
+        return undefined
+      }
+      for (const kid of kids as Record<string, unknown>[]) {
+        const hit = walk(kid)
+        if (hit !== undefined) {
+          return hit
+        }
+      }
+      return undefined
+    }
+    return walk(
+      cardFixture as unknown as Record<string, unknown>,
+    )
+  }
+
   // SLOT NODES minted by update_component (B30), keyed by id → the raw export a
   // later get_node serves. Same reasoning as appliedState above: the reply's
   // echo proves only that the server sent the spec, so the slot's LANDED state
@@ -1007,20 +1041,39 @@ export const createMockPlugin = (
         break
       }
 
-      case 'get_nodes':
-        result = [
-          {
-            ...cardFixture,
-            ...(sharedContext.get(cardFixture.id)
-              ? {
-                  context: sharedContext.get(
-                    cardFixture.id,
-                  ),
-                }
+      // get_nodes: ONE entry per requested id, in order — a raw export, or
+      // {id, error} for a miss. The real plugin resolves each id on its own,
+      // so a mock that answered the card fixture whatever it was asked could
+      // not model a partial read at all — and `search`'s field hydration (B50)
+      // is exactly a multi-id read of ids the scan just reported.
+      case 'get_nodes': {
+        const wanted =
+          (cmd.params?.nodeIds as string[]) ?? []
+        result = wanted.map(id => {
+          const slot = createdSlots.get(id)
+          if (slot !== undefined) {
+            return { ...slot }
+          }
+          const alias = slotExportFor(id)
+          if (alias !== undefined) {
+            return alias
+          }
+          const inTree = fixtureNodeById(id)
+          if (inTree === undefined) {
+            return { id, error: 'Node not found' }
+          }
+          return {
+            ...inTree,
+            ...(id === cardFixture.id
+              ? (appliedState.get(cardFixture.id) ?? {})
               : {}),
-          },
-        ]
+            ...(sharedContext.get(id)
+              ? { context: sharedContext.get(id) }
+              : {}),
+          }
+        })
         break
+      }
 
       // list_pages: Rule A document + page enumeration ({docName, results}).
       case 'list_pages':

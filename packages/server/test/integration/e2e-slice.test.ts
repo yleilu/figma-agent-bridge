@@ -853,6 +853,66 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(card?.characters).toBeUndefined()
   })
 
+  // 11f — B50: `search` honours the SAME `fields` vocabulary the fidelity
+  // readers serve (D2). `fills` used to come back on no result at all, with no
+  // warning, because the projection ran over the scan's cheap candidate row —
+  // and a dropped field is indistinguishable from a negative result, so a
+  // white-frame sweep came back clean on frames that were white.
+  it('search projects fills / component across the relay (B50)', async () => {
+    const byFill = await handleSearch(
+      {
+        fields: ['id', 'name', 'type', 'fills'],
+        match: { type: ['FRAME'] },
+      },
+      scoped,
+    )
+    const outFill = YAML.parse(byFill.content[0].text) as {
+      results: { id: string; fills?: string[] }[]
+    }
+    const card = outFill.results.find(r => r.id === '1:42')
+    expect(card?.fills).toBeDefined()
+    expect(typeof card?.fills?.[0]).toBe('string')
+
+    // …and `component`, the field the dashboard fixture's id-join reads.
+    const byComponent = await handleSearch(
+      {
+        fields: ['id', 'component'],
+        match: { type: ['INSTANCE'] },
+      },
+      scoped,
+    )
+    const outComponent = YAML.parse(
+      byComponent.content[0].text,
+    ) as {
+      results: { id: string; component?: { id?: string } }[]
+    }
+    const button = outComponent.results.find(
+      r => r.id === '1:45',
+    )
+    expect(button?.component?.id).toBe('C:abc123')
+  })
+
+  // 11g — B50: `profile` is a field SET, so it projects like a `fields` list.
+  it('search honours a profile preset across the relay (B50)', async () => {
+    const result = await handleSearch(
+      { profile: 'style', match: { type: ['FRAME'] } },
+      scoped,
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: {
+        id: string
+        fills?: string[]
+        radius?: unknown
+        layout?: unknown
+      }[]
+    }
+    const card = out.results.find(r => r.id === '1:42')
+    expect(card?.fills).toBeDefined()
+    expect(card?.radius).toBeDefined()
+    // …and only that concern: `layout` is not in the style preset.
+    expect(card?.layout).toBeUndefined()
+  })
+
   // 12 — get_nodes multi-id read → { results, errors } over the relay.
   it('get_nodes returns NodeSpec results over the relay', async () => {
     const result = await handleGetNodes(
