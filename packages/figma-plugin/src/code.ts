@@ -19,6 +19,8 @@ import {
   applyExportSettings,
   applyGrids,
   capabilityWarnings,
+  discardedPositionsWarning,
+  type Placement,
 } from './apply-node-fields'
 import {
   applyStyleField,
@@ -1438,6 +1440,10 @@ const buildSingleNode = async (
   writer: string,
   track: <T extends SceneNode>(node: T) => T,
   warnings?: string[],
+  // B35's sink. The NODE goes in, not a snapshot of its x/y, so the caller
+  // reads the position this child ended the level with rather than the one it
+  // held before its siblings arrived.
+  placed?: Placement[],
 ): Promise<SceneNode> => {
   const type = spec.type as string
   let node: SceneNode
@@ -1704,6 +1710,16 @@ const buildSingleNode = async (
   // notice. A build then ships a node sized differently than it asked for.
   applyPostAppendProperties(node, spec, warnings)
 
+  // warn-on-no-op (T7, B35): the append just handed this node's x/y to the
+  // parent's auto-layout, and the creation default (B29) is what put that
+  // layout on a frame the caller said nothing about. Recorded rather than
+  // warned, because the caller holds the SIBLINGS: fifty children of one frame
+  // are one warning, not fifty (T4). Recorded HERE, after
+  // applyPostAppendProperties, because `layoutPositioning:'ABSOLUTE'` is the
+  // escape hatch and it is set there — a node that escaped kept its position
+  // and has nothing to report.
+  placed?.push({ position: spec.position, node })
+
   // Bindings LAST: `var(surface/2)#141B2E` sets the paint above and binds the
   // token here, so the binding always lands on a node that already looks
   // right — and on a TEXT node, after applyTextProperties has set the font a
@@ -1739,6 +1755,7 @@ const createSingleNode = async (
   parent: ParentNode,
   writer: string,
   warnings?: string[],
+  placed?: Placement[],
 ): Promise<SceneNode> => {
   let held: SceneNode | undefined
   const track = <T extends SceneNode>(node: T): T => {
@@ -1752,6 +1769,7 @@ const createSingleNode = async (
       writer,
       track,
       warnings,
+      placed,
     )
   } catch (err) {
     // `removed` guard: a node can already be gone (a throw from Figma's own
@@ -1786,6 +1804,11 @@ const createTreeNode = async (
   // e.g. `sizing:['FILL',…]` on a child of a SLOT, which Figma rejects — is
   // silently discarded (T7 violation).
   warnings?: string[],
+  // B35's sink for THIS node, owned by the caller that appended it (its own
+  // children get a fresh one below). Threaded through the `{ ref }` expansion
+  // so a ref-built child records the position its POOL spec stated — the
+  // wrapper never carries one.
+  placed?: Placement[],
 ): Promise<SceneNode> => {
   const type = spec.type as string
 
@@ -1813,6 +1836,7 @@ const createTreeNode = async (
       [...refStack, refKey],
       created,
       warnings,
+      placed,
     )
   }
 
@@ -1901,6 +1925,7 @@ const createTreeNode = async (
     parent,
     writer,
     warnings,
+    placed,
   )
   // Pushed BEFORE the children recurse, so the order is root-first depth-first.
   created?.push(node.id)
@@ -1914,6 +1939,11 @@ const createTreeNode = async (
     children.length > 0 &&
     'appendChild' in node
   ) {
+    // B35 + T4: this level's children collect here and are reported ONCE, by
+    // the parent that placed them. Read after the loop, so the x/y each child
+    // is judged on is the one it ended the level with — an auto-layout that
+    // centres or space-betweens moves every earlier child as later ones arrive.
+    const childPlacements: Placement[] = []
     for (const childSpec of children) {
       await createTreeNode(
         childSpec,
@@ -1923,7 +1953,15 @@ const createTreeNode = async (
         refStack,
         created,
         warnings,
+        childPlacements,
       )
+    }
+    const discarded = discardedPositionsWarning(
+      node,
+      childPlacements,
+    )
+    if (discarded !== undefined) {
+      warnings?.push(discarded)
     }
   }
 
@@ -3201,12 +3239,23 @@ const handleCommand = async (
         )
       }
       try {
+        // B35: one node, so the sink can only ever hold one entry — and
+        // `discardedPositionsWarning` renders that as the singular sentence.
+        const placed: Placement[] = []
         const created = await createSingleNode(
           spec,
           parent,
           writer,
           warnings,
+          placed,
         )
+        const discarded = discardedPositionsWarning(
+          parent,
+          placed,
+        )
+        if (discarded !== undefined) {
+          warnings.push(discarded)
+        }
         return {
           id: created.id,
           name: created.name,
@@ -3268,6 +3317,10 @@ const handleCommand = async (
       // build's envelope stays clean.
       const treeWarnings: string[] = []
       try {
+        // B35: the ROOT's own placement. Every deeper level is reported by the
+        // parent that placed it, inside createTreeNode — this sink covers the
+        // one node no parent in the recursion owns.
+        const rootPlaced: Placement[] = []
         const treeResult = await createTreeNode(
           treeSpec,
           treeParent,
@@ -3276,7 +3329,15 @@ const handleCommand = async (
           [],
           createdIds,
           treeWarnings,
+          rootPlaced,
         )
+        const rootDiscarded = discardedPositionsWarning(
+          treeParent,
+          rootPlaced,
+        )
+        if (rootDiscarded !== undefined) {
+          treeWarnings.push(rootDiscarded)
+        }
         return {
           id: treeResult.id,
           name: treeResult.name,

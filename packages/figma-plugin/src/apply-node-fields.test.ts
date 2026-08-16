@@ -8,6 +8,8 @@ import {
   applyExportSettings,
   applyGrids,
   capabilityWarnings,
+  discardedPositionsWarning,
+  statedPositionWarning,
 } from './apply-node-fields'
 
 // ─── applyStrokeGeometry ───────────────────────────────────────────────────
@@ -550,4 +552,123 @@ test('applySizeVerified: a pre-existing FILL axis still gets the pin advice', ()
     'Pin it with sizing:["FIXED","FIXED"]',
   )
   expect(warnings[0]).not.toContain('This patch set')
+})
+
+// ─── statedPositionWarning (B35) ────────────────────────────────────────────
+
+const stacked = { layoutMode: 'VERTICAL' }
+
+test('statedPositionWarning: B35 — a position an auto-layout parent restacked is named, with where it landed', () => {
+  const warning = statedPositionWarning(
+    [150, 90],
+    { name: 'Card', x: 0, y: 0 },
+    stacked,
+  )
+  expect(warning).toContain('position [150, 90] ignored')
+  expect(warning).toContain('"Card"')
+  expect(warning).toContain('layoutPositioning:ABSOLUTE')
+  expect(warning).toContain('It landed at [0, 0].')
+})
+
+test('discardedPositionsWarning: B35 — the sweep repro is ONE warning naming both children', () => {
+  // Two children at [150,90] and [10,10] restacked to [0,0] and [0,20]. A third
+  // child whose flow slot IS where it asked to be has nothing to report and is
+  // not counted.
+  const warning = discardedPositionsWarning(stacked, [
+    { position: [150, 90], node: { name: 'A', x: 0, y: 0 } },
+    { position: [10, 10], node: { name: 'B', x: 0, y: 20 } },
+    { position: [0, 40], node: { name: 'C', x: 0, y: 40 } },
+  ])
+  expect(warning).toContain('2 stated positions ignored')
+  expect(warning).toContain('"A" [150, 90] → [0, 0]')
+  expect(warning).toContain('"B" [10, 10] → [0, 20]')
+  expect(warning).not.toContain('"C"')
+  expect(warning).toContain('layoutPositioning:ABSOLUTE')
+})
+
+test('discardedPositionsWarning: T4 — fifty children cost one line and a count, not fifty lines', () => {
+  const children = Array.from({ length: 50 }, (_, i) => ({
+    position: [100, 100] as unknown,
+    node: { name: 'Row ' + String(i), x: 0, y: i * 20 },
+  }))
+  const warning = discardedPositionsWarning(
+    stacked,
+    children,
+  )
+  expect(warning).toContain('50 stated positions ignored')
+  expect(warning).toContain('"Row 0"')
+  expect(warning).toContain('"Row 2"')
+  expect(warning).not.toContain('"Row 3"')
+  expect(warning).toContain('and 47 more')
+  // The whole point: one modest line, not fifty near-identical ones.
+  expect((warning ?? '').length).toBeLessThan(300)
+})
+
+test('discardedPositionsWarning: one affected child still reads as the singular sentence', () => {
+  const warning = discardedPositionsWarning(stacked, [
+    { position: [150, 90], node: { name: 'A', x: 0, y: 0 } },
+    { position: [0, 40], node: { name: 'C', x: 0, y: 40 } },
+  ])
+  expect(warning).toBe(
+    statedPositionWarning(
+      [150, 90],
+      { name: 'A', x: 0, y: 0 },
+      stacked,
+    ),
+  )
+})
+
+test('discardedPositionsWarning: a level that lost nothing says nothing', () => {
+  expect(
+    discardedPositionsWarning(stacked, [
+      { position: [0, 0], node: { name: 'A', x: 0, y: 0 } },
+      { position: undefined, node: { name: 'B', x: 9, y: 9 } },
+    ]),
+  ).toBeUndefined()
+  expect(
+    discardedPositionsWarning(stacked, []),
+  ).toBeUndefined()
+})
+
+test('statedPositionWarning: layoutPositioning ABSOLUTE is the escape hatch and warns nothing', () => {
+  expect(
+    statedPositionWarning(
+      [150, 90],
+      {
+        name: 'Card',
+        x: 150,
+        y: 90,
+        layoutPositioning: 'ABSOLUTE',
+      },
+      stacked,
+    ),
+  ).toBeUndefined()
+})
+
+test('statedPositionWarning: a parent that arranges nothing keeps the position, and the silence', () => {
+  expect(
+    statedPositionWarning(
+      [150, 90],
+      { name: 'Card', x: 150, y: 90 },
+      { layoutMode: 'NONE' },
+    ),
+  ).toBeUndefined()
+  // A page has no layoutMode at all.
+  expect(
+    statedPositionWarning(
+      [150, 90],
+      { name: 'Card', x: 150, y: 90 },
+      {},
+    ),
+  ).toBeUndefined()
+})
+
+test('statedPositionWarning: a spec that stated no position is not accused of losing one', () => {
+  expect(
+    statedPositionWarning(
+      undefined,
+      { name: 'Card', x: 0, y: 0 },
+      stacked,
+    ),
+  ).toBeUndefined()
 })
