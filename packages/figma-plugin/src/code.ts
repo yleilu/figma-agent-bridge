@@ -43,7 +43,10 @@ import {
   readContext as readNodeContext,
   type LiveNode,
 } from './enrich-nodes'
-import { candidatesFromExport } from './search-candidates'
+import {
+  repairScan,
+  type ScanFailure,
+} from './search-candidates'
 import { projectComponentDefs } from './project-component-defs'
 import { rollbackCreated } from './rollback'
 import { resolveInstanceProps } from './resolve-instance-props'
@@ -2844,16 +2847,10 @@ const handleCommand = async (
         }
       }
 
-      // A failure the export may be able to repair. `host` is the scanned node
-      // whose export would cover it — the node the failure was reached
-      // THROUGH, or the node itself when it is its children that are
-      // unreachable. -1 means no host: a scan ROOT is not in `scanned`, so a
-      // failure directly under one stays a warning.
-      type Failure = {
-        host: number
-        message: string
-      }
-      const failures: Failure[] = []
+      // What the export may be able to repair — see repairScan for the shape.
+      // A -1 host means nothing covers it: a scan ROOT is not in `scanned`, so
+      // a failure directly under one stays a warning.
+      const failures: ScanFailure[] = []
 
       // Depth-bounded DFS collector. `levelsLeft < 0` is treated as unlimited
       // (the -1 / scan-all default); each descent decrements it.
@@ -2871,6 +2868,7 @@ const handleCommand = async (
           id = node.id
         } catch (err) {
           failures.push({
+            at: -1,
             host: parentIndex,
             message:
               'search: skipped ' +
@@ -2907,6 +2905,7 @@ const handleCommand = async (
             // subtree cannot be reached through it — but THIS node reads, so
             // its own export can still describe what is under it.
             failures.push({
+              at: index,
               host: index,
               message:
                 'search: skipped the children of ' +
@@ -3076,6 +3075,7 @@ const handleCommand = async (
           // `idOf`, not `fn.id`: the scan read this id once, but the node can
           // go stale between the walk and the enrichment.
           failures.push({
+            at: index,
             host: scanned[index].parentIndex,
             message:
               'search: skipped ' +
@@ -3090,104 +3090,48 @@ const handleCommand = async (
       // reached a node whose address was composed from a stale id (see
       // canonical-ids.ts). The node it was reached THROUGH still reads, and its
       // export names every node under it canonically — so export that host once
-      // and let it speak for its whole subtree. The host's own live candidate
-      // goes too: it is the node carrying the alias id search used to emit.
-      const superseded = new Set<number>()
-      const rescanned: Record<string, unknown>[] = []
-      const rescannedIds = new Set<string>()
-      const hostSet = new Set<number>()
-      for (const failure of failures) {
-        if (failure.host >= 0) {
-          hostSet.add(failure.host)
-        }
-      }
-      const hosts = [...hostSet]
-      // Ascending = outermost first (the walk is pre-order), so an ancestor's
-      // export absorbs its descendants' hosts instead of exporting twice.
-      hosts.sort((a, b) => a - b)
-      // T10, the same reasoning as the get_components scan budget: each repair
-      // serializes a subtree, and a document with many broken subtrees must not
-      // spend the 30 s command timeout on them. Past the cap the remaining
-      // failures degrade the way they did before — named in warnings[].
-      const MAX_REPAIRS = 50
-      let repairs = 0
-      for (const host of hosts) {
-        const entry = scanned[host]
-        // A host inside another host's subtree is already covered.
-        if (superseded.has(host)) continue
-        if (repairs >= MAX_REPAIRS) break
-        repairs++
-        let doc: Record<string, unknown> | undefined
-        try {
-          const raw = await entry.node.exportAsync({
-            format: 'JSON_REST_V1',
-          })
-          const document = (
-            raw as unknown as Record<string, unknown>
-          ).document
-          if (
-            typeof document === 'object' &&
-            document !== null
-          ) {
-            doc = document as Record<string, unknown>
+      // and let it speak for the subtree the walk could not reach. The decision
+      // of what to KEEP from the live scan is repairScan's, and it is
+      // deliberately conservative: only a row the export does not name at all
+      // is dropped. This call is the only thing this switch case owns — how to
+      // ask Figma for one host's export.
+      const repaired = await repairScan({
+        scanned,
+        candidates,
+        failures,
+        hints: {
+          characters: collectCharacters,
+          variableIds: collectVariableId,
+        },
+        exportHost: async index => {
+          try {
+            const raw = await scanned[
+              index
+            ].node.exportAsync({
+              format: 'JSON_REST_V1',
+            })
+            const document = (
+              raw as unknown as Record<string, unknown>
+            ).document
+            return typeof document === 'object' &&
+              document !== null
+              ? (document as Record<string, unknown>)
+              : undefined
+          } catch {
+            // The host cannot describe itself either — the failures it would
+            // have covered stay warnings.
+            return undefined
           }
-        } catch {
-          // The host cannot describe itself either — the warnings below stay.
-          doc = undefined
-        }
-        if (doc === undefined) continue
-        for (let i = host; i < entry.subtreeEnd; i++) {
-          superseded.add(i)
-          // The export speaks for these nodes now, so their live ids stop
-          // standing for a surviving candidate — a host whose live id happened
-          // to be canonical would otherwise dedupe ITSELF out of the results.
-          seen.delete(scanned[i].id)
-        }
-        for (const candidate of candidatesFromExport(
-          doc,
-          entry.levelsLeft,
-          {
-            characters: collectCharacters,
-            variableIds: collectVariableId,
-          },
-        )) {
-          const id = candidate.id
-          if (typeof id === 'string') {
-            if (seen.has(id) || rescannedIds.has(id)) {
-              continue
-            }
-            rescannedIds.add(id)
-          }
-          rescanned.push(candidate)
-        }
-      }
-
-      const results: Record<string, unknown>[] = []
-      for (let i = 0; i < candidates.length; i++) {
-        const candidate = candidates[i]
-        if (candidate !== undefined && !superseded.has(i)) {
-          results.push(candidate)
-        }
-      }
-      for (const candidate of rescanned) {
-        results.push(candidate)
-      }
-      // A failure the export covered is no longer a loss, so it is no longer a
-      // warning — the whole point of B48 is that a sweep must not report clean
-      // while missing a third of the nodes, and must not cry loss when nothing
-      // was lost either. `superseded` holding the host is exactly "some export
-      // now speaks for that subtree".
-      for (const failure of failures) {
-        if (superseded.has(failure.host)) continue
-        skipped.push(failure.message)
-      }
+        },
+      })
+      skipped.push(...repaired.warnings)
 
       // warnings[] rides on the SUCCESS reply and is omitted when empty — the
       // same shape every other degrading read answers with.
       const searchReply: {
         results: Record<string, unknown>[]
         warnings?: string[]
-      } = { results }
+      } = { results: repaired.results }
       if (skipped.length > 0) {
         searchReply.warnings = skipped
       }

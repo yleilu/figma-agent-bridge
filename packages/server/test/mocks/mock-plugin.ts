@@ -487,7 +487,15 @@ export const createMockPlugin = (
   // `badparent:` above). What the plugin then owes the read is the whole point
   // of the fix: `bindingNames` reaching the DESCENDANT, keyed by the canonical
   // ids the export uses. A CLONE of the same content is minted canonically —
-  // the control the sweep used to isolate provenance.
+  // the control the sweep used to isolate provenance, and its compound id is
+  // reachable by id (live-observed on the sweep's clone).
+  //
+  // What this deliberately does NOT model: reading the slot content back by the
+  // CANONICAL id it reports. Nothing has observed that resolving live. The
+  // node answers its alias id to every walk, so the compound-id traversal has
+  // no id to match on, and inventing a resolution here would let a test go
+  // green on behaviour the real plugin may not have. It is a live question —
+  // see probe 2 in the task report.
   const SLOT_ALIAS_ID = 'slot-alias:1'
   const SLOT_CANONICAL_ID = 'I298:7517;298:7516;298:7523'
   const SLOT_CLONE_ID = 'I298:7517;298:7516;298:7530'
@@ -543,13 +551,14 @@ export const createMockPlugin = (
   const slotExportFor = (
     id: string | undefined,
   ): Record<string, unknown> | undefined => {
-    if (id === SLOT_ALIAS_ID || id === SLOT_CANONICAL_ID) {
+    if (id === SLOT_ALIAS_ID) {
       // The alias resolves — to the node under its CANONICAL name.
       return slotChipExport(SLOT_CANONICAL_ID)
     }
     if (id === SLOT_CLONE_ID) {
       return slotChipExport(SLOT_CLONE_ID)
     }
+    // SLOT_CANONICAL_ID is deliberately absent — see the note above.
     return undefined
   }
 

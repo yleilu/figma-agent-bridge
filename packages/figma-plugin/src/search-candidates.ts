@@ -16,9 +16,17 @@
 //   - `context`         — getSharedPluginData is a live-only read
 //   - `styleIds`        — JSON_REST_V1 carries no style reference
 //   - `componentKey` / `instancesOf` — needs the instance's main, resolved live
-// A `match` on one of those still misses these nodes. `characters` and
-// `variableIds` DO come through, which is what the copy-inventory and
-// design-system sweeps run on.
+// `characters` and `variableIds` DO come through, which is what the
+// copy-inventory and design-system sweeps run on.
+//
+// That gap is why `repairScan` REPLACES as little as it can. A healthy node
+// inside a broken subtree read fine and its live id is already canonical, so
+// its live candidate is kept exactly as the scan built it, with the four
+// export-less fields intact. Only a row the export does not name at all is
+// dropped — an id the file does not use is a pre-append id by construction.
+// Downgrading a whole subtree because one node in it went stale would make
+// `match:{instancesOf}` return FEWER results than before the repair existed,
+// which is the same silent under-count B48 is about.
 
 import {
   exportedWithin,
@@ -112,4 +120,179 @@ export const candidatesFromExport = (
     }
   }
   return out
+}
+
+// ─── the repair pass ──────────────────────────────────────────────────────────
+
+/**
+ * What the live scan recorded about one node it walked.
+ *
+ * `subtreeEnd` closes the node's own range in the scan (`[index, subtreeEnd)`),
+ * which is what makes "the subtree below this node" a slice rather than a
+ * second traversal. `levelsLeft` is how much further the scan was allowed to
+ * descend from here, so an export of this node is read to the same bound.
+ */
+export type ScanEntry = {
+  id: string
+  levelsLeft: number
+  subtreeEnd: number
+}
+
+/**
+ * One thing the scan could not read.
+ *
+ * `at` is the index of the node that failed, or -1 when it never got an entry
+ * (its id would not even read). `host` is the index of the node it was reached
+ * THROUGH — the one whose export can describe it — or -1 for a failure directly
+ * under a scan root, which nothing covers.
+ */
+export type ScanFailure = {
+  at: number
+  host: number
+  message: string
+}
+
+export type RepairInput = {
+  scanned: ScanEntry[]
+  /** One slot per `scanned` entry; undefined where the candidate build threw. */
+  candidates: (Candidate | undefined)[]
+  failures: ScanFailure[]
+  hints?: CandidateHints
+  /** The host's exported subtree, or undefined when it cannot describe itself. */
+  exportHost: (index: number) => Promise<RawNode | undefined>
+  /** Cap on how many subtrees may be serialized in one scan (T10). */
+  maxRepairs?: number
+}
+
+export type RepairOutput = {
+  results: Candidate[]
+  /** The failures no export covered — the honest remainder. */
+  warnings: string[]
+}
+
+/**
+ * Turn a degraded scan into a complete one, by exporting the subtrees the live
+ * walk could not read.
+ *
+ * Three sets do the work, and keeping them SEPARATE is the point:
+ *   - `covered`     — an export now speaks for this index. Stops a nested host
+ *                     being exported twice, and silences the failures under it.
+ *   - `superseded`  — this live row is dropped. ONLY rows the export does not
+ *                     name: a pre-append id, which is the alias the scan used
+ *                     to emit. A healthy row keeps its live candidate.
+ *   - `rescanned`   — the rows only the export knows about.
+ *
+ * Hosts are repaired outermost-first (the scan is pre-order, so a smaller index
+ * is an ancestor), which lets one export absorb the hosts beneath it.
+ */
+export const repairScan = async ({
+  scanned,
+  candidates,
+  failures,
+  hints = {},
+  exportHost,
+  maxRepairs = 50,
+}: RepairInput): Promise<RepairOutput> => {
+  const covered = new Set<number>()
+  const superseded = new Set<number>()
+  const rescanned: Candidate[] = []
+  const rescannedIds = new Set<string>()
+
+  // The ids that still stand for a row in `results`. An export candidate whose
+  // id is already here is the twin of a live candidate we are keeping, and the
+  // live one wins — it carries context / styleIds / componentKey / instancesOf.
+  const liveIds = new Set<string>()
+  for (let i = 0; i < scanned.length; i++) {
+    if (candidates[i] !== undefined) {
+      liveIds.add(scanned[i].id)
+    }
+  }
+
+  const hostSet = new Set<number>()
+  for (const failure of failures) {
+    if (failure.host >= 0) {
+      hostSet.add(failure.host)
+    }
+  }
+  const hosts = [...hostSet].sort((a, b) => a - b)
+
+  let repairs = 0
+  for (const host of hosts) {
+    if (covered.has(host)) continue
+    if (repairs >= maxRepairs) break
+    repairs++
+    const doc = await exportHost(host)
+    if (doc === undefined) continue
+
+    const entry = scanned[host]
+    const fromExport = candidatesFromExport(
+      doc,
+      entry.levelsLeft,
+      hints,
+    )
+    const exportIds = new Set<string>()
+    for (const candidate of fromExport) {
+      if (typeof candidate.id === 'string') {
+        exportIds.add(candidate.id)
+      }
+    }
+
+    for (let i = host; i < entry.subtreeEnd; i++) {
+      covered.add(i)
+      const liveId = scanned[i].id
+      if (candidates[i] === undefined) {
+        // Nothing was emitted for this node, so nothing stands in the export's
+        // way — and its id must stop blocking the export's twin.
+        liveIds.delete(liveId)
+        continue
+      }
+      if (!exportIds.has(liveId)) {
+        // The file does not use this id. That is the alias case: the export
+        // names the same node properly, a few lines down.
+        superseded.add(i)
+        liveIds.delete(liveId)
+      }
+      // Otherwise the live id IS canonical — a healthy node inside a broken
+      // subtree. Keep its row exactly as the scan built it.
+    }
+
+    for (const candidate of fromExport) {
+      const id = candidate.id
+      if (typeof id === 'string') {
+        if (liveIds.has(id) || rescannedIds.has(id)) {
+          continue
+        }
+        rescannedIds.add(id)
+      }
+      rescanned.push(candidate)
+    }
+  }
+
+  const results: Candidate[] = []
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i]
+    if (candidate !== undefined && !superseded.has(i)) {
+      results.push(candidate)
+    }
+  }
+  for (const candidate of rescanned) {
+    results.push(candidate)
+  }
+
+  // A failure an export covered is no longer a loss, so it is no longer a
+  // warning; one it did not reach still is. Judged on the node that FAILED
+  // where the scan got far enough to index it — a host's export bounds the
+  // subtree it was read at, and a failure outside that slice is not covered by
+  // it however close the two look.
+  const warnings: string[] = []
+  for (const failure of failures) {
+    const isCovered =
+      failure.at >= 0
+        ? covered.has(failure.at)
+        : failure.host >= 0 && covered.has(failure.host)
+    if (!isCovered) {
+      warnings.push(failure.message)
+    }
+  }
+  return { results, warnings }
 }
