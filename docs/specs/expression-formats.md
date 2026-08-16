@@ -611,22 +611,27 @@ one.
 the read form array-wrapped out of habit,
 `effects: [style(AB/Blur)[bg-blur(24)]]` — is accepted as the reference form, the
 way `image(url)` is accepted for `image(HASH)`, so a spec written against the
-older grammar stays writable. Like `image(url)` it is write-only: a read emits the
-reference.
+older grammar stays writable. The sugar reaches the multi-entry legacy read form
+too: an array whose entries are **all** wrapped by the **same** style name — the
+shape the older reader emitted for a multi-value style — normalises to the
+reference exactly as the lone atom does, its entries riding as the resolved list
+through the differ warning like any other spelling. Like `image(url)` it is
+write-only: a read emits the reference.
 
 **Four inputs are rejected** — `INVALID_PARAM`, raised before the write reaches
 the document:
 
 1. a `style()` entry beside literal siblings in one field;
-2. two or more `style()` entries in one field — including the cross-field
-   spelling of that mistake, a different style named on `fills` and on
-   `text.color` of one TEXT node, which are one slot;
+2. two or more **different** `style()` names in one field (same-name entries are
+   the multi-entry sugar above) — including the cross-field spelling of that
+   mistake, a different style named on `fills` and on `text.color` of one TEXT
+   node, which are one slot;
 3. a reference whose name resolves to a style of the **wrong type** for the slot
    — a paint style named on `effects`, an effect style named on `fills`;
 4. a reference whose name resolves to **nothing**.
 
-Rules 3 and 4 read the reference in either spelling — the scalar and the
-one-entry array sugar are the same input, so neither is the loophole.
+Rules 3 and 4 read the reference in every spelling — the scalar and the array
+sugars are the same input, so no spelling is the loophole.
 
 Rules 1 and 2 are the mix the slot cannot hold: the write states more than one
 owner for a field that has room for one, so landing it would mean choosing which
