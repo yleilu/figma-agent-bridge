@@ -564,6 +564,82 @@ export const specToFigma = (
   return out
 }
 
+// ─── a dropped struct drops its bindings (B36) ───────────────────────────────
+
+/**
+ * The node types that can carry a `text` struct.
+ *
+ * It is applied by the plugin's `applyTextProperties`, which runs for a TEXT
+ * node and nowhere else — so the struct is a no-op on every other type. This
+ * is the ONLY capability this file judges, because a create knows only the
+ * type it DECLARED: the plugin sees the real node and owns every other drop
+ * (`capabilityWarnings`). Among the types `create_node` can build, TEXT is the
+ * only one with `characters`, so this cannot warn about a struct that would
+ * have landed.
+ */
+const TEXT_CARRYING_TYPES: ReadonlySet<string> = new Set([
+  'TEXT',
+])
+
+/**
+ * Drop a struct the DECLARED type cannot carry — and the bindings it carried
+ * with it — naming the loss once.
+ *
+ * Two failures, one cause. A `text` struct on a RECTANGLE is dropped by the
+ * plugin (its text applier runs only for a TEXT node), and the create path
+ * never said so: `capabilityWarnings` runs on `update_node` and the slot loop,
+ * where the target is arbitrary, but not inside the create switch, where the
+ * spec was assumed to have chosen its own type. A spec CAN state a struct its
+ * own type cannot hold, and then the silence is wrong.
+ *
+ * Worse, the struct's binding outlived it. `text.color` binds through the
+ * `fills` route (a TEXT node's colour IS its first fill), so
+ * `text:{color:"var(probe/cyan)#22D3EE"}` on a RECTANGLE dropped the colour
+ * and REBOUND `fills[0]` — the grey the same spec stated was replaced by a
+ * variable the agent never asked to put there, silently (B36).
+ *
+ * Dropping the struct BEFORE the conversion is what makes the two halves one
+ * fix: the bindings are collected from the spec, so a struct that is not there
+ * contributes none. No marker has to survive into the payload for something
+ * downstream to honour.
+ */
+const dropUnsupportedStructs = (
+  type: string,
+  spec: NodeSpecPatch,
+  warnings?: string[],
+): NodeSpecPatch => {
+  if (
+    spec.text === undefined ||
+    TEXT_CARRYING_TYPES.has(type)
+  ) {
+    return spec
+  }
+  // The bindings this struct would have asked for, in the spec's own spelling
+  // and deduped (one wrapper can reach two routes). Collected with no sink: a
+  // struct that is going away has no route problems worth reporting.
+  const orphaned = [
+    ...new Set(
+      collectWrapperBindings({ text: spec.text }).map(
+        b => `${b.kind}(${b.name})`,
+      ),
+    ),
+  ]
+  const many = orphaned.length > 1
+  const lost =
+    orphaned.length === 0
+      ? ''
+      : ` (the ${orphaned.join(' and ')} binding${many ? 's' : ''} it carried ` +
+        `${many ? 'were' : 'was'} dropped with it)`
+  // The sentence the plugin's own capabilityWarnings emits, to the word: one
+  // drop reads the same however the write learned about it.
+  warnings?.push(
+    `text ignored — not supported on a ${type} node${lost}`,
+  )
+  const out = { ...spec }
+  delete out.text
+  return out
+}
+
 // ─── creation defaults ───────────────────────────────────────────────────────
 
 /**
@@ -648,8 +724,15 @@ export const specToFigmaForCreate = (
   spec: NodeSpec,
   warnings?: string[],
 ): FigmaWritePayload => {
+  // A struct the DECLARED type cannot carry goes before the conversion, so the
+  // bindings it carried are never collected (B36).
+  const carried = dropUnsupportedStructs(
+    spec.type,
+    spec,
+    warnings,
+  )
   const out: FigmaWritePayload = {
-    ...specToFigma(spec, warnings),
+    ...specToFigma(carried, warnings),
     type: spec.type,
     name: spec.name ?? spec.type,
   }
@@ -690,10 +773,16 @@ export const slotEntryToFigma = (
   }
   const { name, ...rest } = entry
   const local: string[] = []
-  const converted = specToFigma(
+  // Every entry creates a SLOT, whatever it says — so the struct a SLOT cannot
+  // carry is dropped here on the same terms as a create, with the bindings it
+  // carried (B36). The plugin's own capabilityWarnings would name the drop,
+  // but only after applying the binding the struct left behind.
+  const carried = dropUnsupportedStructs(
+    'SLOT',
     rest as NodeSpecPatch,
     local,
   )
+  const converted = specToFigma(carried, local)
   const payload: FigmaWritePayload = { ...converted, name }
   // The created slot takes the same creation defaults a created FRAME takes,
   // and on the same terms: only when the entry states no layout of its own,

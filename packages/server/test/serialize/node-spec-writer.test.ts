@@ -790,6 +790,111 @@ describe('specToFigmaForCreate — the default never shrinks a sized frame', () 
   })
 })
 
+// ─── B36: a dropped struct drops its bindings ────────────────────────────────
+//
+// Live: create_node RECTANGLE with `fills:["#888888"]` and
+// `text:{content,font,color:"var(probe/cyan)#22D3EE"}`. The text struct was
+// dropped by the plugin (its text applier runs only for a TEXT node) and the
+// create said nothing at all — but the binding the struct emitted routes
+// through `fills`, so the node read back `fills: [var(probe/cyan)#22D3EE]`.
+// The grey the same spec stated was gone, replaced by a variable the agent
+// never asked to put on that field.
+
+describe('specToFigmaForCreate — a struct the type cannot carry', () => {
+  const REPRO = {
+    type: 'RECTANGLE',
+    name: 'Probe',
+    fills: ['#888888'],
+    text: {
+      content: 'Hello',
+      font: 'font(Inter,Regular,16)',
+      color: 'var(probe/cyan)#22D3EE',
+    },
+  } as const
+
+  it('drops the text struct rather than sending it to be ignored', () => {
+    const out = specToFigmaForCreate({ ...REPRO })
+    expect(out.text).toBeUndefined()
+  })
+
+  it('drops the binding the struct carried WITH it', () => {
+    const out = specToFigmaForCreate({ ...REPRO })
+    expect(out.bindings).toBeUndefined()
+  })
+
+  it('leaves the fills the spec actually stated', () => {
+    const out = specToFigmaForCreate({ ...REPRO })
+    expect(out.fills).toEqual([
+      {
+        type: 'SOLID',
+        color: { r: 0.533, g: 0.533, b: 0.533 },
+      },
+    ])
+  })
+
+  it('says so once, naming the struct and the binding that died with it', () => {
+    const warnings: string[] = []
+    specToFigmaForCreate({ ...REPRO }, warnings)
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toBe(
+      'text ignored — not supported on a RECTANGLE node ' +
+        '(the var(probe/cyan) binding it carried was dropped with it)',
+    )
+  })
+
+  it('names the drop even when the struct carried no binding', () => {
+    const warnings: string[] = []
+    const out = specToFigmaForCreate(
+      {
+        type: 'POLYGON',
+        text: { content: 'Hello' },
+      },
+      warnings,
+    )
+    expect(out.text).toBeUndefined()
+    // The plugin's capabilityWarnings sentence, to the word.
+    expect(warnings).toEqual([
+      'text ignored — not supported on a POLYGON node',
+    ])
+  })
+
+  it('a TEXT node keeps its struct and its binding — nothing was dropped', () => {
+    const warnings: string[] = []
+    const out = specToFigmaForCreate(
+      { ...REPRO, type: 'TEXT' },
+      warnings,
+    )
+    expect(out.text).toBeDefined()
+    expect(out.bindings).toEqual([
+      {
+        kind: 'var',
+        name: 'probe/cyan',
+        field: 'fills',
+        index: 0,
+      },
+    ])
+    expect(warnings).toHaveLength(0)
+  })
+
+  it('a binding the spec named on fills ITSELF survives the drop', () => {
+    // Only the struct's own bindings die with it. A wrapper the agent wrote on
+    // `fills` is the field it named, and it lands.
+    const out = specToFigmaForCreate({
+      type: 'RECTANGLE',
+      fills: ['var(surface/2)#888888'],
+      text: { content: 'Hello' },
+    })
+    expect(out.bindings).toEqual([
+      {
+        kind: 'var',
+        name: 'surface/2',
+        field: 'fills',
+        index: 0,
+      },
+    ])
+  })
+})
+
 // ─── slotEntryToFigma ────────────────────────────────────────────────────────
 
 describe('slotEntryToFigma — creation layout default', () => {
@@ -857,6 +962,34 @@ describe('slotEntryToFigma — creation layout default', () => {
 
   it('a bare name states no size, so nothing is pinned', () => {
     expect(slotEntryToFigma('Body').sizing).toBeUndefined()
+  })
+
+  // B36 on the slot path: every entry creates a SLOT, whatever it says, so the
+  // struct a SLOT cannot carry goes here — before the bindings are collected.
+  // The plugin's own capabilityWarnings names the drop, but only AFTER
+  // applying the binding the struct left behind.
+  it('drops a text struct, its binding, and says so — attributed to the slot', () => {
+    const warnings: string[] = []
+    const out = slotEntryToFigma(
+      {
+        name: 'Extra',
+        fills: ['#888888'],
+        text: { color: 'var(probe/cyan)#22D3EE' },
+      },
+      warnings,
+    )
+    expect(out.text).toBeUndefined()
+    expect(out.bindings).toBeUndefined()
+    expect(out.fills).toEqual([
+      {
+        type: 'SOLID',
+        color: { r: 0.533, g: 0.533, b: 0.533 },
+      },
+    ])
+    expect(warnings).toEqual([
+      'slot "Extra": text ignored — not supported on a SLOT node ' +
+        '(the var(probe/cyan) binding it carried was dropped with it)',
+    ])
   })
 })
 

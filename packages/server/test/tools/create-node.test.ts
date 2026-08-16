@@ -294,6 +294,52 @@ describe('handleCreateNode (rebuilt — single NodeSpec)', () => {
     expect(sent).toHaveLength(1)
   })
 
+  // B36 (live, node 298:7544): a RECTANGLE with `fills:["#888888"]` and a
+  // `text` struct whose colour carried `var(probe/cyan)`. The struct was
+  // dropped silently and its binding — which routes through `fills` — landed
+  // on fills[0], so the node read back the cyan variable and the stated grey
+  // was gone.
+  it('drops a text struct on a non-TEXT create, with its binding, and says so', async () => {
+    const sent: Sent[] = []
+    const result = await handleCreateNode(
+      {
+        spec: {
+          type: 'RECTANGLE',
+          name: 'Probe',
+          size: [40, 40],
+          fills: ['#888888'],
+          text: {
+            content: 'Hello',
+            font: 'font(Inter,Regular,16)',
+            color: 'var(probe/cyan)#22D3EE',
+          },
+        },
+      },
+      stubClient({ sent }),
+    )
+    const spec = sent[0].params?.spec as Record<
+      string,
+      unknown
+    >
+    expect(spec.text).toBeUndefined()
+    // Nothing rebinds fills[0]: the binding died with the struct that asked
+    // for it.
+    expect(spec.bindings).toBeUndefined()
+    // The fills the spec stated are the fills that land.
+    expect(spec.fills).toEqual([
+      {
+        type: 'SOLID',
+        color: { r: 0.533, g: 0.533, b: 0.533 },
+      },
+    ])
+    expect(result.content[0].text).toContain(
+      'text ignored — not supported on a RECTANGLE node',
+    )
+    expect(result.content[0].text).toContain(
+      'var(probe/cyan)',
+    )
+  })
+
   // B38 (live): `stroke:"stroke(fat){align=INSIDE}"` converted to
   // `{"strokeWeight":null}` with zero warnings, and the create then failed on
   // Figma's raw engine message. The parameter is the agent's, so the server

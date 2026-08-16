@@ -691,10 +691,16 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
   })
 
   it('B30 (T7): a field the SLOT cannot carry warns instead of silently no-opping', async () => {
-    // `text` converts and crosses the wire — it is a real NodeSpec field — but
-    // applyTextProperties only runs for a TEXT node, so on a slot the whole
-    // struct would vanish without a word. That silence is what hides the
-    // headline feature failing on a node type that cannot take it.
+    // `text` is a real NodeSpec field, but applyTextProperties only runs for a
+    // TEXT node, so on a slot the whole struct would vanish without a word.
+    // That silence is what hides the headline feature failing on a node type
+    // that cannot take it.
+    //
+    // B36 moved the drop to the WRITE FACE, which is why the sentence below is
+    // now the server's rather than the plugin's: the struct has to go before
+    // the bindings are collected, or the binding it carried outlives it and
+    // lands on a field the agent never named. The wording is identical either
+    // way — one drop reads the same however the write learned about it.
     const result = await handleUpdateComponent(
       {
         componentId: 'c:1',
