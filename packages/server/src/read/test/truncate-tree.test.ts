@@ -305,4 +305,45 @@ describe('truncateTree — always-on budget', () => {
         .size,
     ).toBe(1000)
   })
+
+  // N1 — the receipt names each id ONCE, however many passes had reason to.
+  //
+  // The fixture above is all leaves, so the depth pass records none of them and
+  // the double-name cannot appear. Give each child a subtree and both passes
+  // speak: the depth pass collapses it (its subtree was cut), then the budget
+  // drops the stub (the node itself is gone). Two true statements, one node —
+  // and a receipt whose length no longer counts nodes. 1000 cut children came
+  // back as 1228 entries.
+  it('names a child that both passes cut ONCE, not twice', () => {
+    const branches = Array.from({ length: 1000 }, (_, i) =>
+      mk('branch-' + i, 'FRAME', [
+        mk('hidden-' + i, 'TEXT'),
+      ]),
+    )
+    const { view, truncated } = truncateTree(
+      mk('root', 'FRAME', branches),
+      { depth: 0 },
+    )
+    const ids = truncated.map(e => e.id)
+    // No id twice, and the length is the count of nodes the read lost.
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(ids).toHaveLength(1000)
+    // Every branch is named exactly once, for whichever reason applied: the
+    // stubs still in the view cut their subtree, the rest are gone outright.
+    expect(new Set(ids)).toEqual(
+      new Set(branches.map(b => b.id!)),
+    )
+    for (const entry of truncated) {
+      expect(entry.childCount).toBe(1)
+    }
+    // The stubs that survived the budget are in the view AND in the receipt —
+    // one node described from two sides, which is why the dedupe is by id and
+    // not by "was it returned".
+    const kept = (view as NodeSpec).children ?? []
+    expect(kept.length).toBeGreaterThan(0)
+    for (const child of kept) {
+      expect(isStub(child)).toBe(true)
+      expect(ids).toContain((child as IdStub).id)
+    }
+  })
 })

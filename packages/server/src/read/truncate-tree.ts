@@ -165,8 +165,22 @@ export const truncateTree = (
 
   const byDepth = truncateByDepth(root, depth)
   const capped = fillToBudget(byDepth.view, budget)
-  return {
-    view: capped.view,
-    truncated: [...byDepth.truncated, ...capped.truncated],
-  }
+  // ONE ENTRY PER ID. The two passes can name the same node for two different
+  // true reasons — the depth pass collapsed it, then the budget dropped the
+  // stub it left behind — and the receipt is a list of ids to drill into, not a
+  // log of what happened to each. A second entry buys the agent nothing and
+  // costs it the arithmetic: 1000 cut children came back as 1228 entries, so
+  // the length of the receipt stopped meaning the number of nodes lost.
+  const seen = new Set<string>()
+  const truncated = [
+    ...byDepth.truncated,
+    ...capped.truncated,
+  ].filter(entry => {
+    if (seen.has(entry.id)) {
+      return false
+    }
+    seen.add(entry.id)
+    return true
+  })
+  return { view: capped.view, truncated }
 }

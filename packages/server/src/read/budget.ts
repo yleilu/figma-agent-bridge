@@ -130,6 +130,11 @@ export const fillToBudget = (
   // earning a receipt entry: a default `inspect` over 1000 leaf children then
   // returned 803 of them with `truncated: []`, and the 197 missing ids were
   // named nowhere at all.
+  //
+  // A stub that HIDES a subtree is therefore named twice — once by the depth
+  // pass that collapsed it, once here when it is dropped. Both statements are
+  // true and neither pass can see the other, so the receipts are joined and
+  // deduped by id where they meet (truncate-tree.ts).
   const admitExistingStub = (
     stub: NodeSpecOrStub,
     into: NodeSpecOrStub[],
