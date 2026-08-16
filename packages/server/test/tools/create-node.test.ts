@@ -293,4 +293,30 @@ describe('handleCreateNode (rebuilt — single NodeSpec)', () => {
     )
     expect(sent).toHaveLength(1)
   })
+
+  // B45 (live): `vectorPaths:["path(M 12 0 L 24 24 L 0 24 Z)"]` was ACCEPTED —
+  // warnings:[], and the created node read back `vectorPaths: []`. An atom
+  // that does not parse is INVALID_PARAM, raised before the plugin is
+  // contacted (expression-formats.md).
+  it('rejects a fill-rule-less path atom before the plugin is contacted', async () => {
+    const sent: Sent[] = []
+    const result = await handleCreateNode(
+      {
+        spec: {
+          type: 'VECTOR',
+          vectorPaths: ['path(M 12 0 L 24 24 L 0 24 Z)'],
+        },
+      },
+      stubClient({ sent }),
+    )
+    expect(sent).toHaveLength(0)
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INVALID_PARAM')
+    expect(data.error).toContain(
+      'path(NONZERO,"M 0 0 L 24 24")',
+    )
+  })
 })

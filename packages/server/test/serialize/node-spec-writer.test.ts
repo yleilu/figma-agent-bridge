@@ -875,6 +875,25 @@ describe('specToFigma — vectorPaths', () => {
     const result = specToFigma({ type: 'VECTOR' } as never)
     expect(result.vectorPaths).toBeUndefined()
   })
+
+  // B45: the entry that does not parse takes the WHOLE write down, before any
+  // payload exists. It used to convert to an empty data string, which Figma
+  // accepted and drew as nothing.
+  it('rejects a fill-rule-less entry as INVALID_PARAM, converting nothing', () => {
+    try {
+      specToFigma({
+        vectorPaths: [
+          'path(NONZERO,"M0 0 L10 0 Z")',
+          'path(M 12 0 L 24 24 Z)',
+        ],
+      })
+      throw new Error('expected the write to be rejected')
+    } catch (err) {
+      expect((err as { code?: string }).code).toBe(
+        'INVALID_PARAM',
+      )
+    }
+  })
 })
 
 // ─── pointCount / innerRadius / sectionContentsHidden (plain pass-through) ───

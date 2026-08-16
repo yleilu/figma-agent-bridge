@@ -93,16 +93,125 @@ describe('atomToPath — parse atom string', () => {
     })
   })
 
-  it('throws on non-path atom', () => {
-    expect(() => atomToPath('#FF0000')).toThrow(
-      'atomToPath',
+  it('accepts the unquoted data form when the fill rule is there', () => {
+    expect(
+      atomToPath('path(NONZERO,M 12 0 L 24 24 Z)'),
+    ).toEqual({
+      windingRule: 'NONZERO',
+      data: 'M 12 0 L 24 24 Z',
+    })
+  })
+
+  it('accepts data Figma will refuse — an engine refusal is not a parse failure', () => {
+    // `path(NONZERO,"garbage")` PARSES. Figma rejects it, the node lands
+    // without the field, and the plugin reports Figma's own error on
+    // warnings[] (expression-formats.md). The parser must not pre-empt that.
+    expect(atomToPath('path(NONZERO,"garbage")')).toEqual({
+      windingRule: 'NONZERO',
+      data: 'garbage',
+    })
+  })
+})
+
+// ─── B45: an atom that does not parse is rejected, never guessed at ──────────
+//
+// Every form below used to convert SILENTLY to `{windingRule:'NONZERO',
+// data:''}` — Figma drew nothing, the create reported success with an empty
+// warnings[], and the node read back `vectorPaths: []`. The sweep's whole
+// vector matrix is the table (expression-formats.md, the reject/degrade
+// clause).
+describe('atomToPath — malformed atoms are INVALID_PARAM', () => {
+  const teaches = (fn: () => unknown): void => {
+    try {
+      fn()
+      throw new Error('expected the atom to be rejected')
+    } catch (err) {
+      expect((err as { code?: string }).code).toBe(
+        'INVALID_PARAM',
+      )
+      // The canonical form, so the message teaches the fix and not only the
+      // failure.
+      expect((err as Error).message).toContain(
+        'path(NONZERO,"M 0 0 L 24 24")',
+      )
+    }
+  }
+
+  it('rejects the one-argument form — the fill rule is missing (the live B45 repro)', () => {
+    teaches(() =>
+      atomToPath('path(M 12 0 L 24 24 L 0 24 Z)'),
     )
   })
 
-  it('throws on wrong head', () => {
-    expect(() => atomToPath('grid(10)')).toThrow(
-      'atomToPath',
-    )
+  it('rejects a one-argument QUOTED form for the same reason', () => {
+    teaches(() => atomToPath('path("M 12 0 L 24 24 Z")'))
+  })
+
+  it('rejects an empty path()', () => {
+    teaches(() => atomToPath('path()'))
+  })
+
+  it('rejects a first argument that is not a fill rule', () => {
+    teaches(() => atomToPath('path(SOLID,"M 0 0 L 24 24")'))
+  })
+
+  it('names the three fill rules when the rule is wrong', () => {
+    expect(() =>
+      atomToPath('path(SOLID,"M 0 0 L 24 24")'),
+    ).toThrow('NONZERO, EVENODD or NONE')
+  })
+
+  it('rejects a bare d-string — it is not a path atom at all', () => {
+    teaches(() => atomToPath('M 0 0 L 24 24 L 0 24 Z'))
+  })
+
+  it('rejects a non-path atom', () => {
+    teaches(() => atomToPath('#FF0000'))
+  })
+
+  it('rejects the wrong head', () => {
+    teaches(() => atomToPath('grid(10)'))
+  })
+
+  it('rejects path data with no geometry in it', () => {
+    teaches(() => atomToPath('path(NONZERO,"")'))
+  })
+
+  it('rejects an unbalanced atom as a parameter fault, not a plugin fault', () => {
+    teaches(() => atomToPath('path(NONZERO,"M 0 0 Z"'))
+  })
+})
+
+// The write face promises that commas in the data are normalized to spaces
+// (expression-formats.md). The tokenizer splits a head's args on every
+// top-level comma, so the SVG-native spelling arrived as four arguments and
+// the parser kept `"M0` as the whole shape — a silent misread of the geometry
+// the agent asked for. Everything after the fill rule is the data.
+describe('atomToPath — comma-separated SVG data', () => {
+  it('rejoins quoted data that the tokenizer split on its commas', () => {
+    expect(
+      atomToPath('path(NONZERO,"M0,0 L10,0 Z")'),
+    ).toEqual({
+      windingRule: 'NONZERO',
+      data: 'M0 0 L10 0 Z',
+    })
+  })
+
+  it('rejoins unquoted comma data the same way', () => {
+    expect(
+      atomToPath('path(EVENODD,M0,0 L10,0 Z)'),
+    ).toEqual({
+      windingRule: 'EVENODD',
+      data: 'M0 0 L10 0 Z',
+    })
+  })
+
+  it('round-trips the rejoined data through the canonical form', () => {
+    expect(
+      pathToAtom(
+        atomToPath('path(NONZERO,"M0,0 L10,0 Z")'),
+      ),
+    ).toBe('path(NONZERO,"M0 0 L10 0 Z")')
   })
 })
 
