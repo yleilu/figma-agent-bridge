@@ -11,6 +11,7 @@
 import type { AtomAST, AtomArg, Attrs } from './types'
 import { parseAtom } from './parse-atom'
 import { renderAtom } from './render-atom'
+import { ToolError } from '../errors'
 
 // --- Figma object shapes (structurally compatible, mutable/plain) ---
 
@@ -1001,6 +1002,27 @@ export const fontToAtom = (f: FigmaFontName): string =>
 
 // --- STROKE GEOMETRY: atom <-> Figma ---
 
+/**
+ * The uniform weight as a number, or undefined when the atom did not state one
+ * this face can write.
+ *
+ * `Number()` alone is not the test. It turns `fat` into NaN — which
+ * JSON.stringify writes as `null`, so the payload carried
+ * `{"strokeWeight": null}` and the whole create died on Figma's own raw
+ * validator ("Expected number, received null") with no warning of ours in
+ * front of it (B38). It also turns `true` into 1, which would invent a weight
+ * nobody asked for.
+ */
+const asStrokeWeight = (
+  v: string | number | boolean,
+): number | undefined => {
+  if (typeof v === 'boolean') {
+    return undefined
+  }
+  const n = typeof v === 'number' ? v : Number(v.trim())
+  return Number.isFinite(n) ? n : undefined
+}
+
 export const atomToStroke = (
   s: string,
 ): FigmaStrokeGeom => {
@@ -1012,7 +1034,21 @@ export const atomToStroke = (
   const out: FigmaStrokeGeom = {}
   const a = args[0]
   if (a?.kind === 'scalar') {
-    out.weight = Number(a.value)
+    // A weight that is not a number is a malformed atom, and a malformed atom
+    // has no literal half to fall back on — INVALID_PARAM, raised before the
+    // write reaches the plugin, with the two canonical forms in the message
+    // (expression-formats.md). The per-side tuple's own degrade sits on the
+    // write face below, where there is a warnings sink for it.
+    const weight = asStrokeWeight(a.value)
+    if (weight === undefined) {
+      throw new ToolError(
+        'INVALID_PARAM',
+        `stroke() takes the weight as a number, not "${String(a.value)}". ` +
+          'Write stroke(1) for one weight on every side, or stroke([0,0,1,0]) ' +
+          'for per-side weights [top,right,bottom,left].',
+      )
+    }
+    out.weight = weight
   } else if (a?.kind === 'tuple') {
     out.weights = a.items.map(Number)
   }

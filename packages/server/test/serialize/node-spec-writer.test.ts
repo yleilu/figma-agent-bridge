@@ -128,6 +128,27 @@ describe('specToFigma — stroke geometry', () => {
     )
   })
 
+  // B38: the UNIFORM arm used to be the silent one. `stroke(fat)` emitted
+  // `strokeWeight: null` (NaN through JSON) with no warning, and Figma killed
+  // the whole write with its own raw validator message. Neither arm is silent
+  // now: a malformed uniform weight is rejected at parse, a per-side tuple the
+  // field cannot hold degrades with the warning below.
+  it('rejects a non-numeric uniform weight instead of emitting null', () => {
+    const warnings: string[] = []
+    try {
+      specToFigma(
+        { stroke: 'stroke(fat){align=INSIDE}' },
+        warnings,
+      )
+      throw new Error('expected the write to be rejected')
+    } catch (err) {
+      expect((err as { code?: string }).code).toBe(
+        'INVALID_PARAM',
+      )
+      expect((err as Error).message).toContain('stroke(1)')
+    }
+  })
+
   it('a non-numeric side degrades whole rather than writing NaN', () => {
     const warnings: string[] = []
     const result = specToFigma(

@@ -294,6 +294,30 @@ describe('handleCreateNode (rebuilt — single NodeSpec)', () => {
     expect(sent).toHaveLength(1)
   })
 
+  // B38 (live): `stroke:"stroke(fat){align=INSIDE}"` converted to
+  // `{"strokeWeight":null}` with zero warnings, and the create then failed on
+  // Figma's raw engine message. The parameter is the agent's, so the server
+  // names it as one — before the plugin is contacted.
+  it('rejects a non-numeric stroke weight before the plugin is contacted', async () => {
+    const sent: Sent[] = []
+    const result = await handleCreateNode(
+      {
+        spec: {
+          type: 'RECTANGLE',
+          stroke: 'stroke(fat){align=INSIDE}',
+        },
+      },
+      stubClient({ sent }),
+    )
+    expect(sent).toHaveLength(0)
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INVALID_PARAM')
+    expect(data.error).toContain('stroke(1)')
+  })
+
   // B45 (live): `vectorPaths:["path(M 12 0 L 24 24 L 0 24 Z)"]` was ACCEPTED —
   // warnings:[], and the created node read back `vectorPaths: []`. An atom
   // that does not parse is INVALID_PARAM, raised before the plugin is
