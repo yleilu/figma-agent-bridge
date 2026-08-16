@@ -99,6 +99,17 @@ list**).
 > sections below mix the spaced inner-arg form for readability; the canonical/round-tripping form
 > is as stated here.)
 
+**An atom that does not parse is rejected, never guessed at.** A string whose head is
+known but whose required pieces are missing or malformed — a one-argument
+`path(M 0 0 L 24 24)` (no fill rule), a `stroke(fat)` (the weight is not a number) — is
+`INVALID_PARAM`, raised before the write reaches the plugin, and the message teaches the
+canonical form, not only the failure. A malformed atom has no literal half to fall back
+on, so a degrade would have nothing to write — the same reasoning that makes an
+unresolvable bare `style()` reference an error rather than a warning. An **engine
+refusal** is the other case, and it degrades: a value that parses but that Figma rejects
+(`path(NONZERO,"not path data")`) lands the node, drops the field, and reports one
+`warnings[]` entry naming the engine's own error (T7).
+
 ## Atom reference
 
 Every variant of every family below is the same `kind(...){…}` shape (or a bare
@@ -254,7 +265,7 @@ Composite types render as YAML maps; their leaves are atoms. The fields a struct
 exposes:
 
 - **node** — `type, name, id, size, position, layoutPositioning, fills[], strokes[], stroke, effects[], radius, opacity, rotation, blend, visible, clipsContent, exportSettings[], layout, sizing, constraints, text, component, componentProperties, variantProperties, overrides, warnings, readError, readErrors, context, children[]` (children are nested node structs).
-- **layout** — `{mode: H|V|NONE|GRID, gap, pad: [t,r,b,l], align: [primary, counter], wrap, rows, cols, rowGap, colGap}`. `mode: NONE` turns auto-layout off — and is the opt-out from the creation default that gives a frame with no stated `layout` a vertical stack (`tool-surface.md`, *Write model → Create / update*). `mode: GRID` enables Figma's CSS-Grid-like layout; the four grid keys (`rows`, `cols`, `rowGap`, `colGap`) are GRID-only — `gap`/`align`/`wrap` are H/V-only. Deferred follow-on: `gridRowSizes`/`gridColumnSizes` (track sizing) and per-child `gridRowSpan`/`gridColumnSpan`/`gridChild*Align` (child placement) — see `docs/deferred-capabilities.md`.
+- **layout** — `{mode: H|V|NONE|GRID, gap, pad: [t,r,b,l], align: [primary, counter], wrap, rows, cols, rowGap, colGap}`. `mode: NONE` turns auto-layout off — and is the opt-out from the creation default that gives a frame with no stated `layout` a vertical stack (`tool-surface.md`, *Write model → Create / update*). `mode: GRID` enables Figma's CSS-Grid-like layout; the four grid keys (`rows`, `cols`, `rowGap`, `colGap`) are GRID-only — `gap`/`align`/`wrap` are H/V-only. Deferred follow-on: `gridRowSizes`/`gridColumnSizes` (track sizing) and per-child `gridRowSpan`/`gridColumnSpan`/`gridChild*Align` (child placement) — see `docs/deferred-capabilities.md`. `gap` (with `rowGap`/`colGap`) and each `pad` entry are number atoms: a bound one carries its `var()` wrapper (`gap: var(space/8)8`), matching the uniform `radius` precedent (*Scope*, below).
 - **text** — `{content, font, color, align, valign, decoration, case, paragraphSpacing, runs}`. `font`/`color` are atoms; `runs` carries per-range overrides (see below). Line height and letter spacing are canonical on the `font(...)` atom (`font(...){lh=24, ls=0.5}`) — there are no separate top-level `lh`/`ls` text keys.
 - **exportSettings** — array of persistent export presets, each `{format: PNG|JPG|SVG|PDF, suffix?, constraint?: [SCALE|WIDTH|HEIGHT, value]}`. Round-trips via `get_node`/`update_node` (the persistent-presets path; the `export` tool itself is one-off render/asset output).
 - **position** — `[x, y]`, parent-relative. **Omitted on an invisible child of an auto-layout parent when the read includes the parent** — Figma does not lay out hidden children, so the stored value is stale (T7: a value the engine is not maintaining is not presented as live). A read entered AT such a node (drill-by-id) cannot see its parent, and returns the stored value. A hidden `ABSOLUTE` child keeps its position, and so does a hidden child of a plain (non-auto-layout) frame: those coordinates are real.
@@ -513,10 +524,15 @@ tool-surface design).
   an error instead of a warning (**A styled field is a reference, not a list**).
 
   **Scope — a wrapper binds on the fields listed here:** `fills[]`, `strokes[]`,
-  a **uniform** `stroke(…)` weight and a **uniform** `radius` for `var()`;
+  a **uniform** `stroke(…)` weight, a **uniform** `radius`, and the layout spacing
+  scalars — `layout.gap` (with its GRID spellings `rowGap`/`colGap`) and each of
+  the four `layout.pad` sides — for `var()`;
   `fills`, `strokes`, `effects`, `grids` and `text.font` for `style()`;
   `text.color` for both (it is the text node's first fill). A `var()` binds per
-  paint, so `fills[]`/`strokes[]` bind by index; a `style()` owns the whole field,
+  paint, so `fills[]`/`strokes[]` bind by index; a `var()` on `pad` binds per
+  side, by position — `pad: [var(space/8)8, 16, var(space/8)8, 16]` binds top and
+  bottom and leaves the sides literal — because Figma binds every padding side
+  independently, exactly as paints bind by index; a `style()` owns the whole field,
   so on the four array fields it replaces the array rather than sitting inside one
   (**A styled field is a reference, not a list**).
 
