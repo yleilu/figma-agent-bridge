@@ -1,12 +1,18 @@
 import { describe, it, expect } from 'bun:test'
+import { z } from 'zod'
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type {
   FigmaClient,
   ScopedFigmaClient,
 } from '@figma-agent-bridge/server/figma-client'
 import { PluginDisconnectedError } from '@figma-agent-bridge/server/figma-client'
 import type { ChannelInfo } from '@figma-agent-bridge/shared'
+import { searchParamsSchema } from '@figma-agent-bridge/shared/tool-params'
 import { textResult } from '@figma-agent-bridge/server/tools/shared'
-import { withFile } from '@figma-agent-bridge/server/tools/with-file'
+import {
+  registerFileTool,
+  withFile,
+} from '@figma-agent-bridge/server/tools/with-file'
 import { sessionIdentity } from '@figma-agent-bridge/server/change-feed/session-identity'
 
 const base = (over: Partial<FigmaClient>): FigmaClient => ({
@@ -162,5 +168,75 @@ describe('withFile', () => {
       caught = err as Error
     }
     expect(caught?.message).toBe('boom')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// registerFileTool — the SCHEMA is registered, not its shape (B52)
+// ---------------------------------------------------------------------------
+//
+// `server.tool(name, shape, cb)` re-wraps the shape in a plain `z.object`,
+// which drops every modifier the tool-params schema carries. On `search` the
+// dropped modifier was `.strict()`, and the strip INVERTED the reply: a
+// mis-nested filter key vanished and the call became a match-all.
+describe('registerFileTool', () => {
+  type Registered = {
+    name: string
+    config: { inputSchema?: unknown }
+  }
+
+  const captureServer = (sink: Registered[]): McpServer =>
+    ({
+      registerTool: (
+        name: string,
+        config: { inputSchema?: unknown },
+      ) => {
+        sink.push({ name, config })
+      },
+    }) as unknown as McpServer
+
+  const registerSearch = (sink: Registered[]): void => {
+    registerFileTool(
+      captureServer(sink),
+      base({ channelFor: () => 'ch-a' }),
+      'search',
+      searchParamsSchema,
+      async () => textResult('ran'),
+    )
+  }
+
+  it('hands the MCP server the schema object itself', () => {
+    const sink: Registered[] = []
+    registerSearch(sink)
+    expect(sink[0].name).toBe('search')
+    expect(sink[0].config.inputSchema).toBe(
+      searchParamsSchema,
+    )
+  })
+
+  it('so a strict schema still rejects an unknown key at the MCP boundary', () => {
+    const sink: Registered[] = []
+    registerSearch(sink)
+    const registered = sink[0].config
+      .inputSchema as typeof searchParamsSchema
+    const misNested = {
+      fileKey: 'fk',
+      scope: 'node' as const,
+      nodeId: '298:7508',
+      name: 'Label',
+    }
+    expect(registered.safeParse(misNested).success).toBe(
+      false,
+    )
+    // …and the shape the old registration passed would have stripped it,
+    // handing the handler a match-all it never asked for.
+    const stripped = z
+      .object(searchParamsSchema.shape)
+      .safeParse(misNested)
+    expect(stripped.success).toBe(true)
+    expect(
+      (stripped.data as Record<string, unknown> | undefined)
+        ?.name,
+    ).toBeUndefined()
   })
 })
