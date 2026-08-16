@@ -745,6 +745,27 @@ export const specToFigmaForCreate = (
 // ─── slot entries ─────────────────────────────────────────────────────────────
 
 /**
+ * Patch keys the write face KNOWS and the slot path cannot honour (B37).
+ *
+ * Neither is an unknown key, so `unknownPatchKeyWarnings` passes both: they are
+ * real `partialNodeSpecSchema` fields, accepted by the parameter schema the
+ * slot entry inherits. And neither reaches the converter, which emits no
+ * `children` and no `type` at all. Between the two, `slots:[{name:'Extra',
+ * type:'FRAME', children:[…]}]` reported `slotsCreated:['Extra']` with
+ * `warnings: []` — a clean success for a slot that got neither the type nor the
+ * contents it was asked for.
+ *
+ * The spec is explicit that this is the slot path's own job: a field the slot
+ * cannot take warns and continues, attributed to the slot by name
+ * (tool-surface.md, `update_component`).
+ */
+const SLOT_INERT_KEYS: Record<string, string> = {
+  children:
+    'children ignored — a new slot is created empty. Build its contents with create_node or create_tree, parented to the slot.',
+  type: 'type ignored — an update_component slot entry always creates a SLOT node.',
+}
+
+/**
  * Convert one `update_component` slot entry (B30).
  *
  * The object form goes through the SAME `specToFigma` write face as
@@ -788,6 +809,17 @@ export const slotEntryToFigma = (
   // and on the same terms: only when the entry states no layout of its own,
   // and the size it stated is pinned so the layout cannot hug it away.
   applyCreationDefaults(rest as NodeSpecPatch, payload)
+  // A known key this path cannot honour, before the unknown-key note: the two
+  // read as one list of what the entry asked for and did not get.
+  for (const [key, note] of Object.entries(
+    SLOT_INERT_KEYS,
+  )) {
+    if (
+      (rest as Record<string, unknown>)[key] !== undefined
+    ) {
+      local.push(note)
+    }
+  }
   // `payload` (not `converted`) so the "nothing was changed" tail never fires:
   // the name always lands, whatever else the entry got wrong.
   local.push(...unknownPatchKeyWarnings(rest, payload))

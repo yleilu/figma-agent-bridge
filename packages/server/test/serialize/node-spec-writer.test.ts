@@ -964,6 +964,49 @@ describe('slotEntryToFigma — creation layout default', () => {
     expect(slotEntryToFigma('Body').sizing).toBeUndefined()
   })
 
+  // B37 (live): `slots:[{name:'Extra', type:'FRAME', layout:{…},
+  // children:[…]}]` created the slot WITH its layout and reported
+  // `slotsCreated:['Extra']`, `warnings: []`. The type and the children were
+  // dropped without a word — they are real patch keys, so the unknown-key
+  // guard passes them, and the converter emits neither.
+  it('names the two keys a slot entry can state and the slot path cannot honour', () => {
+    const warnings: string[] = []
+    const out = slotEntryToFigma(
+      {
+        name: 'Extra',
+        type: 'FRAME',
+        layout: { mode: 'H', gap: 8 },
+        children: [
+          { type: 'TEXT', text: { content: 'Hi' } },
+        ],
+      } as never,
+      warnings,
+    )
+    // The layout the entry stated still lands — one entry, several fields, and
+    // only the two that cannot be honoured are reported.
+    expect(out.layout).toEqual({ mode: 'H', spacing: 8 })
+    expect(out.children).toBeUndefined()
+    expect(out.type).toBeUndefined()
+    expect(warnings).toHaveLength(2)
+    expect(warnings[0]).toBe(
+      'slot "Extra": children ignored — a new slot is created empty. ' +
+        'Build its contents with create_node or create_tree, parented to the slot.',
+    )
+    expect(warnings[1]).toBe(
+      'slot "Extra": type ignored — an update_component slot entry ' +
+        'always creates a SLOT node.',
+    )
+  })
+
+  it('says nothing about a key the entry did not state', () => {
+    const warnings: string[] = []
+    slotEntryToFigma(
+      { name: 'Body', fills: ['#FFF'] },
+      warnings,
+    )
+    expect(warnings).toHaveLength(0)
+  })
+
   // B36 on the slot path: every entry creates a SLOT, whatever it says, so the
   // struct a SLOT cannot carry goes here — before the bindings are collected.
   // The plugin's own capabilityWarnings names the drop, but only AFTER
