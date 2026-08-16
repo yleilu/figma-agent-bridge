@@ -1377,6 +1377,51 @@ const applyVectorPointDetail = async (
   }
 }
 
+/**
+ * Write a vector's geometry: the paths, then the per-point detail they carry.
+ *
+ * ONE function for create and update (B45). It used to be inline in the VECTOR
+ * arm of the create switch, so `update_node` — which never enters that switch —
+ * accepted `vectorPaths`, changed nothing, and answered `warnings: []` while a
+ * sibling field in the same patch landed. The canonical atom a read emits has
+ * to be writable back (T2), and it is only writable back where the write path
+ * is shared.
+ *
+ * The server hands each path over as `{windingRule, data, corners?}`. Only the
+ * first two are Figma's shape — the radii, caps and joins live on the network,
+ * and are written after, because assigning `vectorPaths` rebuilds it.
+ */
+const applyVectorPaths = async (
+  vector: VectorNode,
+  raw: unknown,
+  warnings?: string[],
+): Promise<void> => {
+  const paths = raw as (VectorPath & {
+    corners?: Record<number, number>
+    caps?: Record<number, string>
+    joins?: Record<number, string>
+  })[]
+  try {
+    vector.vectorPaths = paths.map(
+      ({ windingRule, data }) => ({
+        windingRule,
+        data,
+      }),
+    )
+  } catch (e) {
+    // Figma's own message, not a guess at the cause. On a create the data is
+    // the only thing that can be wrong, but update_node reaches nodes whose
+    // path is read-only, and calling that "invalid path data" would send the
+    // agent to fix a string that is already correct.
+    warnings?.push(
+      'vectorPaths rejected by Figma: ' + String(e),
+    )
+    // The network was not rebuilt, so per-point detail has nothing to land on.
+    return
+  }
+  await applyVectorPointDetail(vector, paths, warnings)
+}
+
 // The builder proper: create the node by type, configure it, append it. On a
 // throw it leaves the half-built node wherever it got to — which is why nothing
 // calls it directly. `createSingleNode` below wraps it with the rollback that
@@ -1443,30 +1488,9 @@ const buildSingleNode = async (
         'vectorPaths' in vector &&
         spec.vectorPaths !== undefined
       ) {
-        // The server hands each path over as {windingRule, data, corners?}.
-        // Only the first two are Figma's shape; the radii live on the network
-        // and are written after, because assigning vectorPaths rebuilds it.
-        const paths = spec.vectorPaths as (VectorPath & {
-          corners?: Record<number, number>
-          caps?: Record<number, string>
-          joins?: Record<number, string>
-        })[]
-        try {
-          vector.vectorPaths = paths.map(
-            ({ windingRule, data }) => ({
-              windingRule,
-              data,
-            }),
-          )
-        } catch (e) {
-          warnings?.push(
-            'vectorPaths rejected by Figma (invalid path data): ' +
-              String(e),
-          )
-        }
-        await applyVectorPointDetail(
+        await applyVectorPaths(
           vector,
-          paths,
+          spec.vectorPaths,
           warnings,
         )
       }
@@ -4055,6 +4079,22 @@ const handleCommand = async (
           'name ignored — the file/document node cannot be renamed via the Figma plugin API',
         )
         delete spec.name
+      }
+
+      // Geometry FIRST, and before applyCommonProperties (B45). Assigning
+      // vectorPaths rebuilds the network and resizes the node to the new path
+      // bounds, so a `size` stated in the same patch has to be applied after it
+      // — the order the create path has always used. A node type that has no
+      // vectorPaths at all is named by capabilityWarnings above.
+      if (
+        spec.vectorPaths !== undefined &&
+        'vectorPaths' in node
+      ) {
+        await applyVectorPaths(
+          node as VectorNode,
+          spec.vectorPaths,
+          warnings,
+        )
       }
 
       await applyCommonProperties(

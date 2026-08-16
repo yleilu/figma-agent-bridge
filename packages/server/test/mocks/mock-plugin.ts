@@ -1480,6 +1480,9 @@ export const createMockPlugin = (
             // for a TEXT node, so a text patch here is a silent no-op unless
             // named — the row capabilityWarnings gained with B30.
             ['characters', 'text'],
+            // Only a vector-like node carries path data, so path geometry
+            // patched onto anything else has nowhere to go (B45).
+            ['vectorPaths', 'vectorPaths'],
           ]
           for (const [, label] of capChecks) {
             if (spec[label] !== undefined) {

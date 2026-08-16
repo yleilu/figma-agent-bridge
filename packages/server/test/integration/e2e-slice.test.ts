@@ -230,6 +230,32 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     ).toBe(true)
   })
 
+  // 3a-bis (B45) — update_node now APPLIES vectorPaths, so the node types that
+  // carry no path data need the same warn-on-no-op every other patched field
+  // gets. Without the row, geometry aimed at a SLICE would land nowhere and
+  // report `warnings: []` — the silence B45 was filed for, moved one node type
+  // sideways.
+  it('update_node warns when path geometry is patched onto a node that carries none', async () => {
+    const result = await handleUpdateNode(
+      {
+        nodeId: 'incompat:1',
+        patch: {
+          vectorPaths: [
+            'path(NONZERO,"M 12 0 L 24 24 L 0 24 Z")',
+          ],
+        },
+      },
+      scoped,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const reply = JSON.parse(result.content[0].text) as {
+      warnings: string[]
+    }
+    expect(
+      reply.warnings.some(w => w.includes('vectorPaths')),
+    ).toBe(true)
+  })
+
   // 3b — degrade consistency (T7): sizing/layoutPositioning on an incompatible
   // node must warn-and-continue (success), NOT throw → {error}. The mock keys
   // the incompatible target off the same `incompat:` prefix.

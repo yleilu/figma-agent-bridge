@@ -274,6 +274,28 @@ test('capabilityWarnings: a text struct on a non-TEXT node is named, not silentl
   ).toEqual([])
 })
 
+test('capabilityWarnings: B45 — path data patched onto a node that carries none is named', () => {
+  // update_node's vectorPaths arm applies only where the node HAS the field.
+  // Everywhere else the geometry has nowhere to go, and the drop is this row.
+  expect(
+    capabilityWarnings({ type: 'RECTANGLE' }, {
+      vectorPaths: [{ windingRule: 'NONZERO', data: 'M0 0' }],
+    }),
+  ).toEqual([
+    'vectorPaths ignored — not supported on a RECTANGLE node',
+  ])
+  expect(
+    capabilityWarnings(
+      { type: 'VECTOR', vectorPaths: [] },
+      {
+        vectorPaths: [
+          { windingRule: 'NONZERO', data: 'M0 0' },
+        ],
+      },
+    ),
+  ).toEqual([])
+})
+
 test('capabilityWarnings: an omitted field is never warned about (omission ≠ request)', () => {
   expect(capabilityWarnings({ type: 'SLICE' }, {})).toEqual(
     [],

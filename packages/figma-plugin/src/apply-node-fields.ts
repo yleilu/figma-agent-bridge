@@ -220,6 +220,9 @@ const CAPABILITY_CHECKS: [string, string][] = [
   // `text` is applied by applyTextProperties, which runs only for a TEXT node —
   // so anywhere else the whole struct is a silent no-op unless named here.
   ['characters', 'text'],
+  // Only a vector-like node carries path data. Everywhere else the geometry a
+  // patch states has nowhere to go (B45).
+  ['vectorPaths', 'vectorPaths'],
 ]
 
 /**
