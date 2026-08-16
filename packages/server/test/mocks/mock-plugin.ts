@@ -719,6 +719,39 @@ export const createMockPlugin = (
     ],
   })
 
+  // ── COMPOUND IDS: writing to an instance sublayer ─────────────────────────
+  //
+  // A node under an instance is addressed `I<instance>;<child>`, and that is the
+  // id every read hands back for one. The plugin cannot resolve that shape with
+  // a bare `getNodeByIdAsync` — the call reaches for Figma's network. Live
+  // 2026-08-17 an `update_node` on `I298:7524;298:7511` answered "Unable to
+  // establish connection to Figma after 10 seconds" and then SUCCEEDED on the
+  // retry, so the resolve was a coin flip and every compound-id write was
+  // flaky under an apply-or-warn contract.
+  //
+  // What the mock models is the DOCUMENT, not the resolution algorithm: these
+  // two sublayers exist under the card fixture's instance, and any other
+  // compound id does not. A mutating command therefore APPLIES to a real
+  // sublayer and cleanly refuses an invented one — never intermittently, which
+  // is the property the fix buys. It cannot exercise the plugin's own
+  // traversal (the mock does not run code.ts); the live battery owns that.
+  const MOCK_SUBLAYER_IDS = new Set([
+    'I1:42;1:7',
+    'I1:42;1:8',
+  ])
+
+  /**
+   * Whether a caller-supplied node id names something in this document.
+   *
+   * Plain ids stay permissive — the fixture answers for any of them, as it
+   * always has. A COMPOUND id is checked, because that is the shape whose
+   * resolution was broken.
+   */
+  const resolvesInMockDoc = (id: string): boolean =>
+    !id.startsWith('I') ||
+    !id.includes(';') ||
+    MOCK_SUBLAYER_IDS.has(id)
+
   /** The slot-hosted export a read of `id` serves, or undefined. */
   const slotExportFor = (
     id: string | undefined,
@@ -1674,6 +1707,13 @@ export const createMockPlugin = (
       // only assigned. Mirrors the real plugin's {id,name,type,warnings} reply.
       case 'update_node': {
         const unId = cmd.params?.nodeId as string
+        // A compound id that names nothing is a clean not-found, the same
+        // answer every time — never the intermittent network error the bare
+        // resolve used to give a sublayer that DOES exist.
+        if (!resolvesInMockDoc(unId)) {
+          result = { error: 'Node not found: ' + unId }
+          break
+        }
         const spec = (cmd.params?.spec ?? {}) as Record<
           string,
           unknown
@@ -1829,6 +1869,16 @@ export const createMockPlugin = (
       //   - modeId/modeName without degrade prefix → success (no warning)
       // The mode map is processed independently of variableId/field.
       case 'bind_variable': {
+        const bvNodeId = cmd.params?.nodeId as
+          | string
+          | undefined
+        if (
+          bvNodeId !== undefined &&
+          !resolvesInMockDoc(bvNodeId)
+        ) {
+          result = { error: 'Node not found: ' + bvNodeId }
+          break
+        }
         const bvMode = cmd.params?.mode as
           | Record<
               string,
@@ -1893,8 +1943,7 @@ export const createMockPlugin = (
             // reply is `ok, warnings:[]` either way — byte-identical to a
             // no-op — so the only thing that can tell a real bind from a
             // silent one is the next read.
-            const bvNodeId = cmd.params?.nodeId as string
-            applyLayoutBindingState(bvNodeId, [
+            applyLayoutBindingState(bvNodeId as string, [
               {
                 field: bvField,
                 name:

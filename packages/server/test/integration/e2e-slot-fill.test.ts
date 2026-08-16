@@ -32,6 +32,8 @@ import { handleCreateNode } from '@figma-agent-bridge/server/tools/create-node'
 import { handleCreateTree } from '@figma-agent-bridge/server/tools/create-tree'
 import { handleGetNode } from '@figma-agent-bridge/server/tools/read'
 import { handleCloneNode } from '@figma-agent-bridge/server/tools/structure'
+import { handleUpdateNode } from '@figma-agent-bridge/server/tools/update'
+import { handleBindVariable } from '@figma-agent-bridge/server/tools/design-system'
 import { createMockPlugin } from '../mocks/mock-plugin'
 
 const TEST_PORT = 3132
@@ -267,5 +269,89 @@ describe('M2b slot-fill e2e (T7 instance-lock wrap)', () => {
     expect(spec.children[0].fills[0]).toMatch(
       /^var\(probe\/cyan\)/,
     )
+  })
+
+  // --- WRITING to an instance sublayer, by the compound id a read gave you ---
+  //
+  // `I<instance>;<child>` is what every read hands back for a node under an
+  // instance, so it is what a write gets called with. The plugin resolved it
+  // with a bare `getNodeByIdAsync`, which reaches for Figma's network: live
+  // 2026-08-17 the same `update_node` on `I298:7524;298:7511` failed with
+  // "Unable to establish connection to Figma after 10 seconds" and then
+  // succeeded on retry. Intermittent is the worst answer under apply-or-warn —
+  // the caller cannot tell a refused write from an unreached node.
+  //
+  // Headless, these pin the contract either side of the plugin: the compound id
+  // survives the whole server path unmangled, and the answer is the SAME every
+  // time. The plugin's own traversal needs the live battery.
+
+  const SUBLAYER = 'I1:42;1:7'
+
+  it('update_node applies to a sublayer addressed by its compound id', async () => {
+    // Called twice, because the defect was a coin flip: the second call has to
+    // answer exactly what the first did.
+    const answers: string[] = []
+    for (let i = 0; i < 2; i++) {
+      const result = await handleUpdateNode(
+        { nodeId: SUBLAYER, patch: { fills: ['#FF0000'] } },
+        scoped,
+      )
+      answers.push(result.content[0].text)
+    }
+    expect(new Set(answers).size).toBe(1)
+    const reply = JSON.parse(answers[0]) as Record<
+      string,
+      unknown
+    >
+    expect(reply.error).toBeUndefined()
+    expect(reply.code).toBeUndefined()
+    // The patch reached the plugin as a converted spec — same as a plain id.
+    expect(
+      (
+        reply.spec as {
+          fills: { type: string; color: unknown }[]
+        }
+      ).fills[0],
+    ).toEqual({
+      type: 'SOLID',
+      color: { r: 1, g: 0, b: 0 },
+    })
+  })
+
+  it('bind_variable reaches the same sublayer', async () => {
+    const result = await handleBindVariable(
+      {
+        nodeId: SUBLAYER,
+        variableId: 'VariableID:1:1',
+        field: 'fills',
+      },
+      scoped,
+    )
+    expect(result.content[0].text).not.toContain(
+      'Node not found',
+    )
+    expect(result.content[0].text).not.toContain(
+      'internet connection',
+    )
+  })
+
+  it('a compound id that names nothing is a clean, repeatable refusal', async () => {
+    // Not "sometimes a connection error": a write to an id the document does
+    // not hold must say so, the same way, every time.
+    const answers = new Set<string>()
+    for (let i = 0; i < 3; i++) {
+      const result = await handleUpdateNode(
+        {
+          nodeId: 'I9:99;9:9',
+          patch: { fills: ['#FF0000'] },
+        },
+        scoped,
+      )
+      answers.add(result.content[0].text)
+    }
+    expect(answers.size).toBe(1)
+    const [only] = [...answers]
+    expect(only).toContain('Node not found')
+    expect(only).not.toContain('internet connection')
   })
 })

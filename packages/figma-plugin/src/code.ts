@@ -1920,7 +1920,7 @@ const createTreeNode = async (
 
   // Clone reference: { id } with no type
   if (spec.id !== undefined && spec.type === undefined) {
-    const existing = await figma.getNodeByIdAsync(
+    const existing = await resolveNodeId(
       spec.id as string,
     )
     if (!existing)
@@ -2195,10 +2195,26 @@ const applyVariableMeta = async (
 //
 // Every tool interface stays as it was (T6): the two forms are the same
 // parameter, and which one the caller holds is not something it should have to
-// know. The READ entries route through here for the same reason the create
-// entries always have — get_node, get_nodes, inspect, search and export all
-// take an id the agent got from an earlier read, and an instance sublayer's id
-// is compound whenever it has an instance above it.
+// know. An instance sublayer's id is compound whenever it has an instance above
+// it, and that id is exactly what the previous read handed the agent — so every
+// entry that takes a caller-supplied SCENE-NODE id resolves through here, read
+// and write alike. There is no third rule and no exception list to remember:
+// the entries below that still call getNodeByIdAsync do so because what they
+// hold is NOT a sublayer address, never because the defect was thought unlikely
+// to reach them.
+//
+// The write half was the sharper failure. The bare call does not always fail:
+// live 2026-08-17, `update_node` on `I298:7524;298:7511` answered "Unable to
+// establish connection to Figma after 10 seconds" and then SUCCEEDED on retry.
+// A resolve that depends on the network is a coin flip, and a coin flip under
+// an apply-or-warn contract is worse than a refusal — the caller cannot tell a
+// node that would not take the write from one the plugin never reached.
+//
+// NOT routed, deliberately: page ids (`set_current_page`, `duplicate_page`,
+// search's `pageId`) are never compound; a component/style/variable id is not a
+// node id at all; the rollback resolver only ever sees ids this plugin minted;
+// and the change-feed's `writeScope` already refuses anything but a plain
+// `<n>:<n>` before it resolves (feed/write-scope.ts, PLAIN_NODE_ID).
 const resolveNodeId = async (
   nodeId: string,
 ): Promise<BaseNode | null> => {
@@ -2328,7 +2344,7 @@ const handleCommand = async (
       const skipped: string[] = []
       const offPage: string[] = []
       for (const id of ids) {
-        const n = await figma.getNodeByIdAsync(id)
+        const n = await resolveNodeId(id)
         // Only scene nodes are selectable; `visible` is present on every
         // SceneNode and absent on PAGE/DOCUMENT, so it's a sound guard.
         if (!n || !('visible' in n)) {
@@ -3463,7 +3479,7 @@ const handleCommand = async (
       const ccDescription = params.description as
         | string
         | undefined
-      const found = await figma.getNodeByIdAsync(
+      const found = await resolveNodeId(
         params.nodeId as string,
       )
       if (!found) {
@@ -3491,7 +3507,7 @@ const handleCommand = async (
     // description, and (T7-gated) expose nested instances. Each step is wrapped
     // so a single failure degrades into a warning rather than aborting the rest.
     case COMMANDS.UPDATE_COMPONENT: {
-      const compNode = await figma.getNodeByIdAsync(
+      const compNode = await resolveNodeId(
         params.componentId as string,
       )
       if (!compNode) {
@@ -3545,7 +3561,7 @@ const handleCommand = async (
             )
             if (p.targetNodeId) {
               // Resolve the binding after adding the property.
-              const child = await figma.getNodeByIdAsync(
+              const child = await resolveNodeId(
                 p.targetNodeId,
               )
               if (child === null || child === undefined) {
@@ -3673,7 +3689,7 @@ const handleCommand = async (
         | undefined
       if (exposeIds && exposeIds.length > 0) {
         for (const eid of exposeIds) {
-          const en = await figma.getNodeByIdAsync(eid)
+          const en = await resolveNodeId(eid)
           const exposable = en as
             | (InstanceNode & {
                 isExposedInstance?: boolean
@@ -3873,7 +3889,7 @@ const handleCommand = async (
       const cvDropped: string[] = []
       const cvWarnings: string[] = []
       for (const cid of cvIds) {
-        const n = await figma.getNodeByIdAsync(cid)
+        const n = await resolveNodeId(cid)
         if (n && n.type === 'COMPONENT') {
           cvComps.push(n as ComponentNode)
         } else {
@@ -3896,7 +3912,7 @@ const handleCommand = async (
       }
       const cvParentNode =
         params.parentId !== undefined
-          ? await figma.getNodeByIdAsync(
+          ? await resolveNodeId(
               params.parentId as string,
             )
           : cvComps[0].parent
@@ -3966,7 +3982,7 @@ const handleCommand = async (
     // is feature-detected + T7-degraded (a failed import warns, never throws).
     // The actual swap also degrades into a warning (T7) — never throw.
     case COMMANDS.SWAP_COMPONENT: {
-      const scInst = await figma.getNodeByIdAsync(
+      const scInst = await resolveNodeId(
         params.instanceId as string,
       )
       if (!scInst) {
@@ -3989,7 +4005,7 @@ const handleCommand = async (
       let scMain: ComponentNode | null = null
       if (scMainId !== undefined) {
         // LOCAL path (wins if both given).
-        const found = await figma.getNodeByIdAsync(scMainId)
+        const found = await resolveNodeId(scMainId)
         if (!found || found.type !== 'COMPONENT') {
           return {
             error: 'Main component not found: ' + scMainId,
@@ -4068,7 +4084,7 @@ const handleCommand = async (
     // back; the SERVER splits it into the read-twin { variantProperties?,
     // componentProperties? } shape (C3 / T2).
     case COMMANDS.SET_INSTANCE: {
-      const siInst = await figma.getNodeByIdAsync(
+      const siInst = await resolveNodeId(
         params.instanceId as string,
       )
       if (!siInst) {
@@ -4142,7 +4158,7 @@ const handleCommand = async (
     }
 
     case COMMANDS.CREATE_FROM_SVG: {
-      const svgParent = await figma.getNodeByIdAsync(
+      const svgParent = await resolveNodeId(
         params.parentId as string,
       )
       if (!svgParent || !('appendChild' in svgParent)) {
@@ -4175,7 +4191,7 @@ const handleCommand = async (
     }
 
     case COMMANDS.UPDATE_NODE: {
-      const node = await figma.getNodeByIdAsync(
+      const node = await resolveNodeId(
         params.nodeId as string,
       )
       if (!node) {
@@ -4286,7 +4302,7 @@ const handleCommand = async (
     }
 
     case COMMANDS.BIND_VARIABLE: {
-      const node = await figma.getNodeByIdAsync(
+      const node = await resolveNodeId(
         params.nodeId as string,
       )
       if (!node) {
@@ -4565,7 +4581,7 @@ const handleCommand = async (
     // the node is missing or has no reactions API.
     case COMMANDS.GET_REACTIONS: {
       const nodeId = params.nodeId as string
-      const node = await figma.getNodeByIdAsync(nodeId)
+      const node = await resolveNodeId(nodeId)
       if (!node) {
         return {
           nodeId,
@@ -4592,7 +4608,7 @@ const handleCommand = async (
     // namespace is given. Degrade (NEVER throw) when the node is missing.
     case COMMANDS.GET_PLUGIN_DATA: {
       const nodeId = params.nodeId as string
-      const node = await figma.getNodeByIdAsync(nodeId)
+      const node = await resolveNodeId(nodeId)
       if (!node || !('getPluginDataKeys' in node)) {
         return {
           nodeId,
@@ -4638,7 +4654,7 @@ const handleCommand = async (
         const targets: BaseNode[] = []
         const explicit = params.nodeId !== undefined
         if (explicit) {
-          const node = await figma.getNodeByIdAsync(
+          const node = await resolveNodeId(
             params.nodeId as string,
           )
           // An explicit, unresolvable nodeId is a genuine not-found — surface
@@ -4709,7 +4725,7 @@ const handleCommand = async (
     //     machine-visible in the reply.
     case COMMANDS.DELETE_NODE: {
       const nodeId = params.nodeId as string
-      const node = await figma.getNodeByIdAsync(nodeId)
+      const node = await resolveNodeId(nodeId)
       if (!node) {
         return { error: 'Node not found: ' + nodeId }
       }
@@ -4761,7 +4777,7 @@ const handleCommand = async (
       const nodes: SceneNode[] = []
       const missing: string[] = []
       for (const id of ids) {
-        const n = await figma.getNodeByIdAsync(id)
+        const n = await resolveNodeId(id)
         if (n && 'visible' in n) {
           nodes.push(n as SceneNode)
         } else {
@@ -4795,7 +4811,7 @@ const handleCommand = async (
     // {id,name,type}. Missing source/parent → {error}.
     case COMMANDS.CLONE_NODE: {
       const srcId = params.nodeId as string
-      const source = await figma.getNodeByIdAsync(srcId)
+      const source = await resolveNodeId(srcId)
       if (!source || !('clone' in source)) {
         return {
           error:
@@ -4806,7 +4822,7 @@ const handleCommand = async (
       let dest: ParentNode | null =
         src.parent as ParentNode | null
       if (params.parentId !== undefined) {
-        const p = await figma.getNodeByIdAsync(
+        const p = await resolveNodeId(
           params.parentId as string,
         )
         if (!p || !('appendChild' in p)) {
@@ -4876,11 +4892,11 @@ const handleCommand = async (
     // Missing node/parent → {error}.
     case COMMANDS.REPARENT_NODE: {
       const nodeId = params.nodeId as string
-      const node = await figma.getNodeByIdAsync(nodeId)
+      const node = await resolveNodeId(nodeId)
       if (!node || !('parent' in node)) {
         return { error: 'Node not found: ' + nodeId }
       }
-      const newParent = await figma.getNodeByIdAsync(
+      const newParent = await resolveNodeId(
         params.parentId as string,
       )
       if (!newParent || !('appendChild' in newParent)) {
@@ -4955,7 +4971,7 @@ const handleCommand = async (
     case COMMANDS.REORDER_CHILDREN: {
       const parentId = params.parentId as string
       const parentNode =
-        await figma.getNodeByIdAsync(parentId)
+        await resolveNodeId(parentId)
       if (!parentNode || !('children' in parentNode)) {
         return {
           error:
@@ -5017,7 +5033,7 @@ const handleCommand = async (
       const op = params.op as string
       const nodes: SceneNode[] = []
       for (const id of ids) {
-        const n = await figma.getNodeByIdAsync(id)
+        const n = await resolveNodeId(id)
         if (n && 'type' in n) {
           nodes.push(n as SceneNode)
         }
@@ -5030,7 +5046,7 @@ const handleCommand = async (
       }
       let boolParent: ParentNode | null
       if (params.parentId !== undefined) {
-        const p = await figma.getNodeByIdAsync(
+        const p = await resolveNodeId(
           params.parentId as string,
         )
         if (!p || !('appendChild' in p)) {
@@ -5082,7 +5098,7 @@ const handleCommand = async (
       const ids = (params.nodeIds as string[]) ?? []
       const nodes: SceneNode[] = []
       for (const id of ids) {
-        const n = await figma.getNodeByIdAsync(id)
+        const n = await resolveNodeId(id)
         if (n && 'type' in n) {
           nodes.push(n as SceneNode)
         }
@@ -5095,7 +5111,7 @@ const handleCommand = async (
       }
       let flatParent: ParentNode | null
       if (params.parentId !== undefined) {
-        const p = await figma.getNodeByIdAsync(
+        const p = await resolveNodeId(
           params.parentId as string,
         )
         if (!p || !('appendChild' in p)) {
@@ -5140,7 +5156,7 @@ const handleCommand = async (
       const ids = (params.nodeIds as string[]) ?? []
       const nodes: SceneNode[] = []
       for (const id of ids) {
-        const n = await figma.getNodeByIdAsync(id)
+        const n = await resolveNodeId(id)
         if (n && 'type' in n) {
           nodes.push(n as SceneNode)
         }
@@ -5153,7 +5169,7 @@ const handleCommand = async (
       }
       let groupParent: ParentNode | null
       if (params.parentId !== undefined) {
-        const p = await figma.getNodeByIdAsync(
+        const p = await resolveNodeId(
           params.parentId as string,
         )
         if (!p || !('appendChild' in p)) {
@@ -5207,7 +5223,7 @@ const handleCommand = async (
       const tgIds = (params.nodeIds as string[]) ?? []
       const tgNodes: SceneNode[] = []
       for (const id of tgIds) {
-        const n = await figma.getNodeByIdAsync(id)
+        const n = await resolveNodeId(id)
         if (n && 'type' in n) {
           tgNodes.push(n as SceneNode)
         }
@@ -5220,7 +5236,7 @@ const handleCommand = async (
       }
       let tgParent: ParentNode | null
       if (params.parentId !== undefined) {
-        const p = await figma.getNodeByIdAsync(
+        const p = await resolveNodeId(
           params.parentId as string,
         )
         if (!p || !('appendChild' in p)) {
@@ -5362,7 +5378,7 @@ const handleCommand = async (
     // is given). Missing/incapable node → {error}. Twin of get_plugin_data.
     case COMMANDS.SET_PLUGIN_DATA: {
       const nodeId = params.nodeId as string
-      const node = await figma.getNodeByIdAsync(nodeId)
+      const node = await resolveNodeId(nodeId)
       if (!node || !('setPluginData' in node)) {
         return { error: 'Node not found: ' + nodeId }
       }
@@ -5385,7 +5401,7 @@ const handleCommand = async (
     // missing API or a failed assignment; only a missing node yields {error}.
     case COMMANDS.SET_REACTIONS: {
       const nodeId = params.nodeId as string
-      const node = await figma.getNodeByIdAsync(nodeId)
+      const node = await resolveNodeId(nodeId)
       if (!node) {
         return { error: 'Node not found: ' + nodeId }
       }
@@ -5422,7 +5438,7 @@ const handleCommand = async (
     // (NEVER {error}/throw) when absent; only a missing node yields {error}.
     case COMMANDS.SET_ANNOTATIONS: {
       const nodeId = params.nodeId as string
-      const node = await figma.getNodeByIdAsync(nodeId)
+      const node = await resolveNodeId(nodeId)
       if (!node) {
         return { error: 'Node not found: ' + nodeId }
       }
@@ -6361,7 +6377,7 @@ const handleCommand = async (
     //    feature-unavailability rejection.
     case COMMANDS.APPLY_STYLE: {
       const nodeId = params.nodeId as string
-      const node = await figma.getNodeByIdAsync(nodeId)
+      const node = await resolveNodeId(nodeId)
       if (!node) {
         return { error: 'Node not found: ' + nodeId }
       }
