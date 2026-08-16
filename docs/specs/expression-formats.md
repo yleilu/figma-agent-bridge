@@ -412,7 +412,7 @@ size: [320, 180]
 fills: [solid(#FFFFFF), linear(135, #3B82F6@0, #1D4ED8@100){op=0.08}]
 stroke: stroke(1, {align=INSIDE})
 strokes: [#E5E7EB]
-effects: style(Elevation/Card)[shadow(0,4,12,#0000001A){spread=0}]
+effects: style(Elevation/Card)[shadow(0,4,12,#0000001A)]
 radius: 12
 layout: {mode: V, gap: 8, pad: [16,16,16,16], align: [MIN, MIN]}
 children:
@@ -599,12 +599,15 @@ an agent composed itself — the "team blur **plus** my shadow" the rejections
 catch in array spelling — and on a list that has gone stale because the style
 moved on since the read, which is worth hearing too. The comparison is of
 canonical atom strings, order included, against the style that rules 3 and 4
-already resolved. It is a **warning, never a rejection**: a style edited between
+already resolved. A list that differs without carrying extras — reordered, or
+shorter than what the style supplies — earns the same single warning, phrased for
+what it is: the style's content is named and the written list is called out as
+not what landed. It is a **warning, never a rejection**: a style edited between
 the read and the write must not turn a correct write-back into an error. The
 warning reads the ride-along in every spelling the write face accepts — the
-bracketed list, the legacy lone atom beside the style, and the array-wrapped read
-form — exactly as rules 3 and 4 read the reference, so no spelling is the quiet
-one.
+bracketed list, the legacy lone atom beside the style, the array-wrapped read
+form, and the same-name multi-entry array — exactly as rules 3 and 4 read the
+reference, so no spelling is the quiet one.
 
 **Write sugar:** a one-entry array whose only entry is a style —
 `effects: [style(AB/Blur)bg-blur(24)]`, the bare `effects: [style(AB/Blur)]`, or
