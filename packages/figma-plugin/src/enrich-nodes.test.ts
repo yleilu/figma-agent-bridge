@@ -11,7 +11,6 @@ import {
   applyPatches,
   collectPatches,
   enrichDocument,
-  nodesWithin,
   styleIdsOf,
   syncPatch,
   variableIdsOf,
@@ -89,41 +88,6 @@ const mixedText = (id: string): LiveNode =>
       },
     ],
   })
-
-describe('nodesWithin — the depth bound', () => {
-  const tree = node({ id: 'a', type: 'FRAME' }, [
-    node({ id: 'b', type: 'FRAME' }, [
-      node({ id: 'c', type: 'RECTANGLE' }),
-    ]),
-  ])
-
-  it('depth 0 is the root alone', () => {
-    expect(nodesWithin(tree, 0).map(n => n.id)).toEqual([
-      'a',
-    ])
-  })
-
-  it('depth 1 is the root plus one level', () => {
-    expect(nodesWithin(tree, 1).map(n => n.id)).toEqual([
-      'a',
-      'b',
-    ])
-  })
-
-  it('depth -1 is every level', () => {
-    expect(nodesWithin(tree, -1).map(n => n.id)).toEqual([
-      'a',
-      'b',
-      'c',
-    ])
-  })
-
-  it('a childless node ends the walk', () => {
-    expect(
-      nodesWithin(node({ id: 'x', type: 'STAR' }), -1),
-    ).toHaveLength(1)
-  })
-})
 
 describe('syncPatch — the fields REST cannot carry', () => {
   it('carries pointCount / innerRadius / size for a STAR', () => {
@@ -409,6 +373,7 @@ describe('collectPatches — the async halves, batched', () => {
     )
     const patches = await collectPatches(
       root,
+      undefined,
       -1,
       deps({
         getVariableName: async id => {
@@ -437,6 +402,7 @@ describe('collectPatches — the async halves, batched', () => {
     ])
     const patches = await collectPatches(
       root,
+      undefined,
       1,
       deps({ getStyleName: async () => 'Brand/Primary' }),
     )
@@ -457,7 +423,12 @@ describe('collectPatches — the async halves, batched', () => {
         }),
       }),
     ])
-    const patches = await collectPatches(root, 1, deps())
+    const patches = await collectPatches(
+      root,
+      undefined,
+      1,
+      deps(),
+    )
     expect(patches.get('kid')).toMatchObject({
       componentKey: 'abc123',
       componentRemote: true,
@@ -473,6 +444,7 @@ describe('collectPatches — the async halves, batched', () => {
     })
     const patches = await collectPatches(
       root,
+      undefined,
       0,
       deps({
         getStyleName: async () => {
@@ -495,6 +467,7 @@ describe('collectPatches — the async halves, batched', () => {
         type: 'RECTANGLE',
         fillStyleId: 'S:abc',
       }),
+      undefined,
       0,
       deps(),
     )
@@ -514,6 +487,7 @@ describe('collectPatches — the async halves, batched', () => {
     ])
     const patches = await collectPatches(
       root,
+      undefined,
       1,
       deps({
         getStyleName: async () => {
@@ -551,7 +525,12 @@ describe('collectPatches — one bad node costs one node (B31)', () => {
       star('good-after'),
     ])
 
-    const patches = await collectPatches(root, -1, deps())
+    const patches = await collectPatches(
+      root,
+      undefined,
+      -1,
+      deps(),
+    )
 
     expect(patches.get('gone')?.readError).toContain(STALE)
     for (const id of ['good-before', 'good-after']) {
@@ -584,7 +563,12 @@ describe('collectPatches — one bad node costs one node (B31)', () => {
       }),
     ])
 
-    const patches = await collectPatches(root, -1, deps())
+    const patches = await collectPatches(
+      root,
+      undefined,
+      -1,
+      deps(),
+    )
 
     expect(
       patches.get('stale-instance')?.readError,
@@ -615,7 +599,12 @@ describe('collectPatches — one bad node costs one node (B31)', () => {
       star('sibling'),
     ])
 
-    const patches = await collectPatches(root, -1, deps())
+    const patches = await collectPatches(
+      root,
+      undefined,
+      -1,
+      deps(),
+    )
 
     expect(patches.get('no-children')).toMatchObject({
       width: 10,
@@ -634,6 +623,7 @@ describe('collectPatches — one bad node costs one node (B31)', () => {
         fillStyleId: 'S:gone',
         pointCount: 5,
       }),
+      undefined,
       0,
       deps({
         getStyleName: (() => {
@@ -786,5 +776,118 @@ describe('applyPatches / enrichDocument — merge by id', () => {
       deps(),
     )
     expect(JSON.stringify(doc)).toBe(before)
+  })
+})
+
+// B41 — content written into a component SLOT keeps its pre-append id, so the
+// live walk and the export disagree about every id in that subtree. The fix is
+// structural pairing; these pin the three-way the sweep reproduced live.
+describe('enrichDocument — the alias subtree (B41)', () => {
+  const CANON = 'I298:7517;298:7516;298:7523'
+  const VAR = 'VariableID:261:4751'
+
+  /** A live handle whose address names no node: every read throws. */
+  const unreadable = (id: string): LiveNode =>
+    new Proxy({} as LiveNode, {
+      get: (_t, prop) => {
+        if (prop === 'id') return id
+        throw new Error(
+          'in get_' +
+            String(prop) +
+            ': The node (instance sublayer or table cell) with id "' +
+            id +
+            '" does not exist',
+        )
+      },
+      has: () => true,
+    })
+
+  /** The exported chip: canonical ids, and the binding on the label's fill. */
+  const slotDoc = (): Record<string, unknown> => ({
+    id: CANON,
+    type: 'INSTANCE',
+    children: [
+      {
+        id: CANON + ';298:7510',
+        type: 'TEXT',
+        fills: [
+          {
+            type: 'SOLID',
+            color: { r: 0.13, g: 0.83, b: 0.93 },
+            boundVariables: {
+              color: { id: VAR, type: 'VARIABLE_ALIAS' },
+            },
+          },
+        ],
+      },
+    ],
+  })
+
+  const named = deps({
+    getStyleName: async () => 'Glow/Accent',
+    getVariableName: async () => 'probe/cyan',
+  })
+
+  it('lands the ROOT patch on the canonical id, not the alias', async () => {
+    // The chip's own handle reads fine — it is only CALLED something else.
+    const chip = node(
+      {
+        id: '298:7519',
+        type: 'INSTANCE',
+        fillStyleId: 'S:glow',
+        width: 96,
+        height: 28,
+      },
+      [node({ id: 'I298:7519;298:7510', type: 'TEXT' })],
+    )
+    const doc = slotDoc()
+    await enrichDocument(chip, doc, -1, named)
+    expect(doc.bindingNames).toEqual({
+      styles: { fill: 'Glow/Accent' },
+    })
+    expect(doc.width).toBe(96)
+    // The whole point: nothing was reported as unattachable.
+    expect('readErrors' in doc).toBe(false)
+  })
+
+  it('names a DESCENDANT binding off the export when its handle is dead', async () => {
+    const chip = node(
+      { id: '298:7519', type: 'INSTANCE' },
+      [unreadable('I298:7519;298:7510')],
+    )
+    const doc = slotDoc()
+    await enrichDocument(chip, doc, -1, named)
+    const label = (
+      doc.children as Record<string, unknown>[]
+    )[0]
+    // var(probe/cyan) survives — the id was on the export all along.
+    expect(label.bindingNames).toEqual({
+      variables: { [VAR]: 'probe/cyan' },
+    })
+    // …and the loss that IS real is named on the node that suffered it,
+    // instead of on the root as an id the caller cannot find (I48).
+    expect(label.readError).toContain('does not exist')
+    expect('readErrors' in doc).toBe(false)
+  })
+
+  it('control: a clone, whose ids already agree, is unchanged', async () => {
+    const clone = node({ id: CANON, type: 'INSTANCE' }, [
+      node({
+        id: CANON + ';298:7510',
+        type: 'TEXT',
+        boundVariables: {
+          fills: [{ id: VAR, type: 'VARIABLE_ALIAS' }],
+        },
+      }),
+    ])
+    const doc = slotDoc()
+    await enrichDocument(clone, doc, -1, named)
+    const label = (
+      doc.children as Record<string, unknown>[]
+    )[0]
+    expect(label.bindingNames).toEqual({
+      variables: { [VAR]: 'probe/cyan' },
+    })
+    expect('readError' in label).toBe(false)
   })
 })

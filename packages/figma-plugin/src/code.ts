@@ -43,6 +43,7 @@ import {
   readContext as readNodeContext,
   type LiveNode,
 } from './enrich-nodes'
+import { candidatesFromExport } from './search-candidates'
 import { projectComponentDefs } from './project-component-defs'
 import { rollbackCreated } from './rollback'
 import { resolveInstanceProps } from './resolve-instance-props'
@@ -2793,14 +2794,30 @@ const handleCommand = async (
         collectVariableId ||
         collectCharacters
 
-      const seen = new Set<string>()
-      const scanned: SceneNode[] = []
+      // id → its entry in `scanned`, which is also the dedup set.
+      const seen = new Map<string, number>()
+      // One entry per scanned node, in DFS order. `subtreeEnd` closes the
+      // node's own range (`[index, subtreeEnd)`), which is what makes "replace
+      // everything under this node" a slice rather than a second traversal.
+      type Scanned = {
+        node: SceneNode
+        id: string
+        levelsLeft: number
+        /** Index of the node this one was reached THROUGH, -1 for a root. */
+        parentIndex: number
+        subtreeEnd: number
+      }
+      const scanned: Scanned[] = []
 
       // What the scan could not read, named rather than thrown (T7). A node
-      // created inside a component SLOT keeps a stale handle and then throws
-      // on every property read of it — `in get_name: The node … does not
-      // exist` — and one of those in a document-wide scan used to kill the
-      // whole search. The scan now completes and says which ids it lost.
+      // written into a component SLOT keeps its pre-append id, so the handles
+      // below it carry addresses composed from a stale id and throw on every
+      // property read — `in get_name: The node … does not exist`. One of those
+      // in a document-wide scan used to kill the whole search; then it became a
+      // warning, which still LOST the node (B48). Now the failure names the
+      // node it was reached THROUGH, and that node's export supplies the whole
+      // subtree (the repair pass after the candidate loop). A warning is what
+      // is left when even that cannot be done.
       const skipped: string[] = []
       const messageOf = (err: unknown): string =>
         err instanceof Error ? err.message : String(err)
@@ -2815,11 +2832,23 @@ const handleCommand = async (
         }
       }
 
+      // A failure the export may be able to repair. `host` is the scanned node
+      // whose export would cover it — the node the failure was reached
+      // THROUGH, or the node itself when it is its children that are
+      // unreachable. -1 means no host: a scan ROOT is not in `scanned`, so a
+      // failure directly under one stays a warning.
+      type Failure = {
+        host: number
+        message: string
+      }
+      const failures: Failure[] = []
+
       // Depth-bounded DFS collector. `levelsLeft < 0` is treated as unlimited
       // (the -1 / scan-all default); each descent decrements it.
       const collect = (
         node: SceneNode,
         levelsLeft: number,
+        parentIndex: number,
       ): void => {
         // `node.id` is the FIRST touch of the node, so it is inside the guard
         // like every other read — a throw here would lose the whole scan, and
@@ -2829,48 +2858,68 @@ const handleCommand = async (
         try {
           id = node.id
         } catch (err) {
-          skipped.push(
-            'search: skipped ' +
+          failures.push({
+            host: parentIndex,
+            message:
+              'search: skipped ' +
               UNREADABLE +
               ': ' +
               messageOf(err),
-          )
+          })
           return
         }
-        if (!seen.has(id)) {
-          seen.add(id)
-          scanned.push(node)
+        // A node reachable two ways (overlapping selection roots) is listed
+        // ONCE but still descended from the deeper request, exactly as before.
+        const already = seen.get(id)
+        const fresh = already === undefined
+        const index = fresh ? scanned.length : already
+        if (fresh) {
+          seen.set(id, index)
+          scanned.push({
+            node,
+            id,
+            levelsLeft,
+            parentIndex,
+            subtreeEnd: index + 1,
+          })
         }
-        if (levelsLeft === 0) {
-          return
-        }
-        let children: readonly SceneNode[] = []
-        try {
-          if ('children' in node) {
-            children = (node as ChildrenMixin).children
+        if (levelsLeft !== 0) {
+          let children: readonly SceneNode[] = []
+          try {
+            if ('children' in node) {
+              children = (node as ChildrenMixin).children
+            }
+          } catch (err) {
+            // Descending is itself a read of the node, so an unreachable
+            // container throws HERE rather than in the enrichment below. Its
+            // subtree cannot be reached through it — but THIS node reads, so
+            // its own export can still describe what is under it.
+            failures.push({
+              host: index,
+              message:
+                'search: skipped the children of ' +
+                id +
+                ': ' +
+                messageOf(err),
+            })
+            children = []
           }
-        } catch (err) {
-          // Descending is itself a read of the node, so an unreachable
-          // container throws HERE rather than in the enrichment below. Its
-          // subtree cannot be reached through it — report that instead of
-          // returning a short list that looks complete.
-          skipped.push(
-            'search: skipped the children of ' +
-              id +
-              ': ' +
-              messageOf(err),
-          )
-          return
+          for (const child of children) {
+            collect(child, levelsLeft - 1, index)
+          }
         }
-        for (const child of children) {
-          collect(child, levelsLeft - 1)
+        // Only the FIRST visit owns the range. A second, deeper visit appends
+        // its finds after it, and widening the range to swallow them would let
+        // one host supersede nodes that are not under it.
+        if (fresh) {
+          scanned[index].subtreeEnd = scanned.length
         }
       }
 
       if (scope === 'selection') {
         // The selected nodes are level 0; their subtrees descend from there.
         for (const sel of figma.currentPage.selection) {
-          collect(sel, scanDepth)
+          collect(sel, scanDepth, -1)
         }
       } else {
         // For container roots (page / node subtree) the root itself is level 0,
@@ -2885,7 +2934,7 @@ const handleCommand = async (
             if ('children' in root) {
               for (const child of (root as ChildrenMixin)
                 .children) {
-                collect(child, scanDepth)
+                collect(child, scanDepth, -1)
               }
             }
           } catch (err) {
@@ -2906,8 +2955,13 @@ const handleCommand = async (
       // A candidate that cannot be READ is skipped and named (into `skipped`
       // above), never thrown: one broken node costs one candidate, not the
       // scan.
-      const candidates: Record<string, unknown>[] = []
-      for (const fn of scanned) {
+      const candidates: (
+        | Record<string, unknown>
+        | undefined
+      )[] = []
+      for (let index = 0; index < scanned.length; index++) {
+        const fn = scanned[index].node
+        candidates.push(undefined)
         try {
           const candidate = toCandidate(fn)
 
@@ -3005,17 +3059,115 @@ const handleCommand = async (
             }
           }
 
-          candidates.push(candidate)
+          candidates[index] = candidate
         } catch (err) {
           // `idOf`, not `fn.id`: the scan read this id once, but the node can
           // go stale between the walk and the enrichment.
-          skipped.push(
-            'search: skipped ' +
+          failures.push({
+            host: scanned[index].parentIndex,
+            message:
+              'search: skipped ' +
               idOf(fn) +
               ': ' +
               messageOf(err),
-          )
+          })
         }
+      }
+
+      // B48 — repair, don't just report. A failure above means the live walk
+      // reached a node whose address was composed from a stale id (see
+      // canonical-ids.ts). The node it was reached THROUGH still reads, and its
+      // export names every node under it canonically — so export that host once
+      // and let it speak for its whole subtree. The host's own live candidate
+      // goes too: it is the node carrying the alias id search used to emit.
+      const superseded = new Set<number>()
+      const rescanned: Record<string, unknown>[] = []
+      const rescannedIds = new Set<string>()
+      const hostSet = new Set<number>()
+      for (const failure of failures) {
+        if (failure.host >= 0) {
+          hostSet.add(failure.host)
+        }
+      }
+      const hosts = [...hostSet]
+      // Ascending = outermost first (the walk is pre-order), so an ancestor's
+      // export absorbs its descendants' hosts instead of exporting twice.
+      hosts.sort((a, b) => a - b)
+      // T10, the same reasoning as the get_components scan budget: each repair
+      // serializes a subtree, and a document with many broken subtrees must not
+      // spend the 30 s command timeout on them. Past the cap the remaining
+      // failures degrade the way they did before — named in warnings[].
+      const MAX_REPAIRS = 50
+      let repairs = 0
+      for (const host of hosts) {
+        const entry = scanned[host]
+        // A host inside another host's subtree is already covered.
+        if (superseded.has(host)) continue
+        if (repairs >= MAX_REPAIRS) break
+        repairs++
+        let doc: Record<string, unknown> | undefined
+        try {
+          const raw = await entry.node.exportAsync({
+            format: 'JSON_REST_V1',
+          })
+          const document = (
+            raw as unknown as Record<string, unknown>
+          ).document
+          if (
+            typeof document === 'object' &&
+            document !== null
+          ) {
+            doc = document as Record<string, unknown>
+          }
+        } catch {
+          // The host cannot describe itself either — the warnings below stay.
+          doc = undefined
+        }
+        if (doc === undefined) continue
+        for (let i = host; i < entry.subtreeEnd; i++) {
+          superseded.add(i)
+          // The export speaks for these nodes now, so their live ids stop
+          // standing for a surviving candidate — a host whose live id happened
+          // to be canonical would otherwise dedupe ITSELF out of the results.
+          seen.delete(scanned[i].id)
+        }
+        for (const candidate of candidatesFromExport(
+          doc,
+          entry.levelsLeft,
+          {
+            characters: collectCharacters,
+            variableIds: collectVariableId,
+          },
+        )) {
+          const id = candidate.id
+          if (typeof id === 'string') {
+            if (seen.has(id) || rescannedIds.has(id)) {
+              continue
+            }
+            rescannedIds.add(id)
+          }
+          rescanned.push(candidate)
+        }
+      }
+
+      const results: Record<string, unknown>[] = []
+      for (let i = 0; i < candidates.length; i++) {
+        const candidate = candidates[i]
+        if (candidate !== undefined && !superseded.has(i)) {
+          results.push(candidate)
+        }
+      }
+      for (const candidate of rescanned) {
+        results.push(candidate)
+      }
+      // A failure the export covered is no longer a loss, so it is no longer a
+      // warning — the whole point of B48 is that a sweep must not report clean
+      // while missing a third of the nodes, and must not cry loss when nothing
+      // was lost either. `superseded` holding the host is exactly "some export
+      // now speaks for that subtree".
+      for (const failure of failures) {
+        if (superseded.has(failure.host)) continue
+        skipped.push(failure.message)
       }
 
       // warnings[] rides on the SUCCESS reply and is omitted when empty — the
@@ -3023,7 +3175,7 @@ const handleCommand = async (
       const searchReply: {
         results: Record<string, unknown>[]
         warnings?: string[]
-      } = { results: candidates }
+      } = { results }
       if (skipped.length > 0) {
         searchReply.warnings = skipped
       }

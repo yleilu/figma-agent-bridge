@@ -18,6 +18,7 @@ import {
   it,
 } from 'bun:test'
 import type { Server } from 'bun'
+import YAML from 'yaml'
 import {
   startRelay,
   stopRelay,
@@ -29,6 +30,8 @@ import type {
 } from '@figma-agent-bridge/server/figma-client'
 import { handleCreateNode } from '@figma-agent-bridge/server/tools/create-node'
 import { handleCreateTree } from '@figma-agent-bridge/server/tools/create-tree'
+import { handleGetNode } from '@figma-agent-bridge/server/tools/read'
+import { handleCloneNode } from '@figma-agent-bridge/server/tools/structure'
 import { createMockPlugin } from '../mocks/mock-plugin'
 
 const TEST_PORT = 3132
@@ -188,5 +191,81 @@ describe('M2b slot-fill e2e (T7 instance-lock wrap)', () => {
       'Slot Content',
     )
     expect(data.ids).toHaveLength(1)
+  })
+
+  // --- B41: reading back what a create into a SLOT handed you ---
+  //
+  // Figma does not re-home a node appended into a slot, so `create_node`
+  // answers the PRE-APPEND id while the file addresses the node by its
+  // canonical instance chain. The plugin's enrichment now pairs the live
+  // subtree with the export instead of joining them by id, so the wrappers
+  // reach the descendants either way; these pin the SERVER half of that
+  // contract — a read whose root id is not the id it asked for is a normal
+  // read, and the descendant's wrapper survives to the projection.
+
+  it('create into a slot answers an ALIAS id, and the read resolves it canonically', async () => {
+    const created = await handleCreateNode(
+      {
+        spec: { type: 'FRAME', name: 'Chip' },
+        parentId: 'slotparent:I298:7517;298:7516',
+      },
+      scoped,
+    )
+    const madeId = (
+      JSON.parse(created.content[0].text) as {
+        id: string
+      }
+    ).id
+    expect(madeId).toBe('slot-alias:1')
+
+    const read = await handleGetNode(
+      { nodeId: madeId, depth: 1 },
+      scoped,
+    )
+    const spec = YAML.parse(read.content[0].text) as Record<
+      string,
+      unknown
+    >
+    // The read answers the id the FILE uses, not the one it was handed.
+    expect(spec.id).toBe('I298:7517;298:7516;298:7523')
+    expect(spec.readErrors).toBeUndefined()
+  })
+
+  it('the slot descendant keeps its var() wrapper (B41)', async () => {
+    const read = await handleGetNode(
+      { nodeId: 'slot-alias:1', depth: 1 },
+      scoped,
+    )
+    const spec = YAML.parse(read.content[0].text) as {
+      children: { fills: string[] }[]
+    }
+    // The literal was never wrong; the NAME is what used to vanish.
+    expect(spec.children[0].fills[0]).toMatch(
+      /^var\(probe\/cyan\)/,
+    )
+  })
+
+  it('control: the CLONE of that content reads identically', async () => {
+    const cloned = await handleCloneNode(
+      { nodeId: 'slot-alias:1' },
+      scoped,
+    )
+    const cloneId = (
+      JSON.parse(cloned.content[0].text) as {
+        id: string
+      }[]
+    )[0].id
+    expect(cloneId).toBe('I298:7517;298:7516;298:7530')
+
+    const read = await handleGetNode(
+      { nodeId: cloneId, depth: 1 },
+      scoped,
+    )
+    const spec = YAML.parse(read.content[0].text) as {
+      children: { fills: string[] }[]
+    }
+    expect(spec.children[0].fills[0]).toMatch(
+      /^var\(probe\/cyan\)/,
+    )
   })
 })

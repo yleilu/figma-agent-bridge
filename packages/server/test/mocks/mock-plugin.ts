@@ -475,6 +475,84 @@ export const createMockPlugin = (
     appliedState.set(id, state)
   }
 
+  // ── ALIAS IDS: content written into a component SLOT (B41) ────────────────
+  //
+  // Figma does not re-home a node appended into a slot inside an INSTANCE, so
+  // `create_node` hands back the id the node had BEFORE the append while the
+  // file addresses it by the canonical instance chain. A read of the alias id
+  // therefore answers a document rooted at a DIFFERENT id — the behaviour a
+  // server must survive, and the reason B41's wrappers used to vanish.
+  //
+  // A `parentId` prefixed `slotparent:` models such a slot (same convention as
+  // `badparent:` above). What the plugin then owes the read is the whole point
+  // of the fix: `bindingNames` reaching the DESCENDANT, keyed by the canonical
+  // ids the export uses. A CLONE of the same content is minted canonically —
+  // the control the sweep used to isolate provenance.
+  const SLOT_ALIAS_ID = 'slot-alias:1'
+  const SLOT_CANONICAL_ID = 'I298:7517;298:7516;298:7523'
+  const SLOT_CLONE_ID = 'I298:7517;298:7516;298:7530'
+  const SLOT_VARIABLE_ID = 'VariableID:261:4751'
+
+  /** The chip's raw export, rooted wherever the caller says. */
+  const slotChipExport = (
+    rootId: string,
+  ): Record<string, unknown> => ({
+    id: rootId,
+    name: 'Chip',
+    type: 'INSTANCE',
+    absoluteBoundingBox: {
+      x: 0,
+      y: 0,
+      width: 96,
+      height: 28,
+    },
+    children: [
+      {
+        id: rootId + ';298:7510',
+        name: 'Label',
+        type: 'TEXT',
+        characters: 'PROBE-SLOT-STRING',
+        absoluteBoundingBox: {
+          x: 8,
+          y: 6,
+          width: 80,
+          height: 16,
+        },
+        fills: [
+          {
+            type: 'SOLID',
+            color: { r: 0.13, g: 0.83, b: 0.93, a: 1 },
+            boundVariables: {
+              color: {
+                id: SLOT_VARIABLE_ID,
+                type: 'VARIABLE_ALIAS',
+              },
+            },
+          },
+        ],
+        bindingNames: {
+          variables: {
+            [SLOT_VARIABLE_ID]: 'probe/cyan',
+          },
+        },
+      },
+    ],
+  })
+
+  /** The slot-hosted export a read of `id` serves, or undefined. */
+  const slotExportFor = (
+    id: string | undefined,
+  ): Record<string, unknown> | undefined => {
+    if (id === SLOT_ALIAS_ID || id === SLOT_CANONICAL_ID) {
+      // The alias resolves — to the node under its CANONICAL name.
+      return slotChipExport(SLOT_CANONICAL_ID)
+    }
+    if (id === SLOT_CLONE_ID) {
+      return slotChipExport(SLOT_CLONE_ID)
+    }
+    return undefined
+  }
+
   // SLOT NODES minted by update_component (B30), keyed by id → the raw export a
   // later get_node serves. Same reasoning as appliedState above: the reply's
   // echo proves only that the server sent the spec, so the slot's LANDED state
@@ -833,8 +911,13 @@ export const createMockPlugin = (
           gnNodeId === undefined
             ? undefined
             : createdSlots.get(gnNodeId)
+        const gnAlias = slotExportFor(gnNodeId)
         if (gnSlot !== undefined) {
           result = { ...gnSlot }
+        } else if (gnAlias !== undefined) {
+          // B41: the read answers the CANONICAL id, not the one it was asked
+          // for, and the descendant carries its own bindingNames.
+          result = gnAlias
         } else if (gnNodeId === 'remote-inst:1') {
           result = {
             id: 'remote-inst:1',
@@ -881,6 +964,13 @@ export const createMockPlugin = (
         const targeted =
           cmd.params?.nodeId !== undefined ||
           cmd.params?.pageId !== undefined
+        const inAlias = slotExportFor(
+          cmd.params?.nodeId as string | undefined,
+        )
+        if (inAlias !== undefined) {
+          result = inAlias
+          break
+        }
         if (
           !targeted &&
           selection &&
@@ -1684,7 +1774,13 @@ export const createMockPlugin = (
             cnWarnings.push(...cnResolveWarnings)
           }
         }
-        const createdId = `created:${Math.random().toString(36).slice(2, 8)}`
+        // B41 — a create INTO a slot hands back the PRE-APPEND id; the file
+        // knows the node by its canonical instance chain from here on.
+        const createdId = parentId?.startsWith(
+          'slotparent:',
+        )
+          ? SLOT_ALIAS_ID
+          : `created:${Math.random().toString(36).slice(2, 8)}`
         // Faithful set/getSharedPluginData on the newly created node (see
         // update_node): non-empty persists, empty/whitespace clears.
         if (typeof nodeSpec?.context === 'string') {
@@ -1888,6 +1984,18 @@ export const createMockPlugin = (
           name: string
           type: string
         }[] = []
+        // B41 control: a CLONE of slot-hosted content is minted under the
+        // canonical chain, which is why its wrappers never went missing.
+        if (cmd.params?.nodeId === SLOT_ALIAS_ID) {
+          result = [
+            {
+              id: SLOT_CLONE_ID,
+              name: 'Chip',
+              type: 'INSTANCE',
+            },
+          ]
+          break
+        }
         for (let i = 0; i < cloneCount; i++) {
           cloneArr.push({
             id: `clone:${i}:${Math.random().toString(36).slice(2, 8)}`,
