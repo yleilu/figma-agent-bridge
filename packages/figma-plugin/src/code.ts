@@ -2036,31 +2036,40 @@ const applyVariableMeta = async (
   }
 }
 
-// Resolve a parentId for create_node / create_tree. Plain scene-node ids go
-// through getNodeByIdAsync. A COMPOUND instance-child id ("I<inst>;<child>",
-// e.g. a SLOT inside an instance) is NOT resolvable by getNodeByIdAsync — it
-// hangs (live-verified 2026-07-17). Resolve those by traversing the instance:
-// getNodeByIdAsync the leading instance id, then findOne by the full compound
-// id. Keeps the create_node / create_tree `parentId` interface unchanged (T6).
-const resolveParentNode = async (
-  parentId: string,
+// Resolve ONE node id, for every entry point that takes one. Plain scene-node
+// ids go through getNodeByIdAsync. A COMPOUND instance-child id
+// ("I<inst>;<child>", e.g. a SLOT inside an instance) is NOT resolvable that
+// way — the call reaches for Figma's network and hangs (live-verified
+// 2026-07-17), which offline is a "check your internet connection" error on an
+// id the document already holds (B34). Resolve those by traversing the
+// instance: getNodeByIdAsync the leading instance id, then findOne by the full
+// compound id.
+//
+// Every tool interface stays as it was (T6): the two forms are the same
+// parameter, and which one the caller holds is not something it should have to
+// know. The READ entries route through here for the same reason the create
+// entries always have — get_node, get_nodes, inspect, search and export all
+// take an id the agent got from an earlier read, and an instance sublayer's id
+// is compound whenever it has an instance above it.
+const resolveNodeId = async (
+  nodeId: string,
 ): Promise<BaseNode | null> => {
-  const sep = parentId.indexOf(';')
-  if (parentId.startsWith('I') && sep > 1) {
+  const sep = nodeId.indexOf(';')
+  if (nodeId.startsWith('I') && sep > 1) {
     // "I<instanceId>;<...>" — instance id is between 'I' and the first ';'.
-    const instanceId = parentId.slice(1, sep)
+    const instanceId = nodeId.slice(1, sep)
     const instance =
       await figma.getNodeByIdAsync(instanceId)
     if (instance && 'findOne' in instance) {
       return (
         (instance as InstanceNode).findOne(
-          n => n.id === parentId,
+          n => n.id === nodeId,
         ) ?? null
       )
     }
     return null
   }
-  return figma.getNodeByIdAsync(parentId)
+  return figma.getNodeByIdAsync(nodeId)
 }
 
 // resolveStyle: shared helper for update_styles and delete_styles.
@@ -2219,7 +2228,10 @@ const handleCommand = async (
     }
 
     case COMMANDS.GET_NODE: {
-      const node = await figma.getNodeByIdAsync(
+      // B34 — resolveNodeId, not getNodeByIdAsync: a compound instance-child
+      // id is what the previous read handed the agent, and resolving it the
+      // bare way reaches for the network and times out.
+      const node = await resolveNodeId(
         params.nodeId as string,
       )
       if (!node) {
@@ -2241,11 +2253,11 @@ const handleCommand = async (
     case COMMANDS.INSPECT: {
       let target: BaseNode | null = null
       if (params.nodeId !== undefined) {
-        target = await figma.getNodeByIdAsync(
+        target = await resolveNodeId(
           params.nodeId as string,
         )
       } else if (params.pageId !== undefined) {
-        target = await figma.getNodeByIdAsync(
+        target = await resolveNodeId(
           params.pageId as string,
         )
       } else {
@@ -2285,7 +2297,7 @@ const handleCommand = async (
       const nodeIds = (params.nodeIds as string[]) || []
       return Promise.all(
         nodeIds.map(async nodeId => {
-          const node = await figma.getNodeByIdAsync(nodeId)
+          const node = await resolveNodeId(nodeId)
           if (!node) {
             return { id: nodeId, error: 'Node not found' }
           }
@@ -2312,7 +2324,7 @@ const handleCommand = async (
       }
 
     case COMMANDS.EXPORT: {
-      const exportNode = (await figma.getNodeByIdAsync(
+      const exportNode = (await resolveNodeId(
         params.nodeId as string,
       )) as SceneNode | null
       if (!exportNode) {
@@ -2713,7 +2725,7 @@ const handleCommand = async (
       // builds its candidates directly below — no shared root.)
       const roots: (BaseNode & ChildrenMixin)[] = []
       if (scope === 'node') {
-        const target = await figma.getNodeByIdAsync(
+        const target = await resolveNodeId(
           params.nodeId as string,
         )
         // A typo'd / deleted / non-container nodeId is a genuine not-found,
@@ -3192,7 +3204,7 @@ const handleCommand = async (
     case COMMANDS.CREATE_NODE: {
       const parentNode =
         params.parentId !== undefined
-          ? await resolveParentNode(
+          ? await resolveNodeId(
               params.parentId as string,
             )
           : figma.currentPage
@@ -3251,7 +3263,7 @@ const handleCommand = async (
     case COMMANDS.CREATE_TREE: {
       const treeParentNode =
         params.parentId !== undefined
-          ? await resolveParentNode(
+          ? await resolveNodeId(
               params.parentId as string,
             )
           : figma.currentPage
