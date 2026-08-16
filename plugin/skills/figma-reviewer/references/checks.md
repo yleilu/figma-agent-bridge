@@ -23,6 +23,13 @@ A fill color is **unhardcoded** when `inspect` shows `var(TokenName)#RRGGBB` —
 `var(…)` wrapper is proof the binding exists. A fill showing a bare `#RRGGBB` (no
 wrapper) is a candidate for a token check.
 
+**Read the field before you read the entry.** A styled field is a **reference**, not
+an array: `fills: style(Glass/Fill)[#141B2E99]` is the whole field owned by a paint
+style, and no entry inside those brackets carries a wrapper of its own — the style is
+named once, outside. Those bare hexes are the style's own values, so a paint under
+`style(…)[…]` is **bound**, never a candidate. Only the entries of a genuine array —
+`fills: [#141B2E99, var(surface/2)#141B2E]` — are read entry by entry.
+
 To decide whether to flag it:
 
 1. Call `get_variables` and scan the local color collection for the same hex value.
@@ -49,10 +56,18 @@ A text node is **on-style** when `inspect` shows `style(Style/Name)font(…)`. A
 
 To decide:
 
-1. Call `get_styles` (filter `type: TEXT`).
+1. Call `get_styles` (filter `type: 'text'` — the categories are lowercase:
+   `paint` / `text` / `effect` / `grid`).
 2. Compare the node's `font(Family, Weight, Size){lh=…}` against each style's font
    atom. If a match exists (same family + weight + size, lh within 2 px) → `warning`.
 3. Near-match (same family, different weight or ±2 px size) → `nit`.
+
+**The other four slots are on-style at the field, not the entry.** `fills`,
+`strokes`, `effects` and `grids` each read as the scalar reference when a style owns
+them — `effects: style(AB/Blur)[bg-blur(24)]` — and as a plain array when nothing
+does. So the detection is the shape of the field: a `style(…)` head means on-style,
+an array means a candidate. Compare a candidate array against `get_styles` of the
+matching category (`paint` / `effect` / `grid`) the same way.
 
 ### Component detection
 
@@ -98,7 +113,9 @@ these holds:
   larger).
 - **Leaf affinity** — child for child, in order, the candidate's first-level children match
   the master's on type _and_ on the atom that carries their look: `text.font` for a TEXT
-  child, the first `fills` entry otherwise.
+  child, the first `fills` entry otherwise — or, when a paint style owns `fills`, the
+  reference the whole field is (`fills: style(Glass/Fill)[…]`), which is the stronger
+  match of the two.
 
 All three come out of reads you already have, and each one fails independently of the
 signature: a copy inherits the master's wording, its geometry, or its paint — a coincidence
@@ -195,7 +212,8 @@ assert a threshold or fabricate a shipped minimum (there is none).
 ### What to look at
 
 - **Text contrast** — compute the contrast ratio (formula below) of text against its nearest
-  background, then flag against the user's contrast thresholds.
+  background (when a style owns that field, the colour is inside `style(…)[…]` — read the
+  atoms in the brackets), then flag against the user's contrast thresholds.
 - **Minimum text size** — read each text node's size, then flag against the user's minimum-text-size
   standard.
 - **Touch-target size** — measure the bounding box of interactive nodes, then flag against the
@@ -291,11 +309,22 @@ finds no clipping ancestors and silently reports nothing. Read with no `fields` 
 
 Run it on every node carrying a `shadow(…)`, a `blur(…)`, or a
 `stroke(…, {align=OUTSIDE})`. `inner-shadow(…)` and `bg-blur(…)` render inside the
-node's own area — skip both. **Skip anything rotated** — a rotated node's `size` is its
-own unrotated width and height while its `position` is its bounding box's origin, so the
-two describe different rectangles and slack computed from them is fiction. A non-zero
-`rotation` on the node or on any ancestor in the walk means: no finding, and one line in
-the report saying the clip check was skipped there and the PNG is the only judge.
+node's own area — skip both.
+
+**`effects` has two read forms, and reach is computed from both.** Unstyled, it is the
+array of atoms — `effects: [shadow(0,8,24,#00000059), blur(4)]`. Styled, an effect
+style owns the field and it is one scalar reference carrying the list it resolves to —
+`effects: style(Elevation/Card)[shadow(0,4,12,#0000001A)]`. **Parse the
+brackets and read the atoms inside**: a style's shadow paints exactly as far as a
+literal one, so skipping the scalar form under-reports the check to zero on every
+design-system node. `strokes`/`fills` take the same two forms; the `stroke(…)`
+geometry atom is not styleable and always reads as itself.
+
+**Skip anything rotated** — a rotated node's `size` is its own unrotated width and
+height while its `position` is its bounding box's origin, so the two describe different
+rectangles and slack computed from them is fiction. A non-zero `rotation` on the node or
+on any ancestor in the walk means: no finding, and one line in the report saying the clip
+check was skipped there and the PNG is the only judge.
 
 **1. Reach, per side** — how far the paint extends past each edge of the node's box.
 The offset decides which edges pay:

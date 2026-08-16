@@ -6,7 +6,7 @@ description: >-
   "Figma". Teaches the design-system-first workflow, the value grammar, and the exact
   tool mechanics (bind_variable, apply_style, instance overrides, sizing) that make
   output correct, not just valid. Invoke before building or editing in Figma.
-version: 0.2.0
+version: 0.3.0
 ---
 
 # figma-design skill
@@ -62,7 +62,10 @@ These apply once a design system is in play:
 3. **Bind by writing the wrapper** — the default way to use a token _is_ the write:
    `fills: ["var(surface/2)#141B2E"]`, `text.font: "style(Heading/H2)font(Inter,SemiBold,20)"`.
    An inline `var()` / `style()` wrapper binds as it lands (grammar:
-   `references/grammar.md`). Never emit a bare value that merely equals a token — the
+   `references/grammar.md`). A `style()` on `fills` / `strokes` / `effects` / `grids`
+   is different in kind: it owns the **whole** field — `effects: "style(AB/Blur)"`, a
+   reference and not an entry, so a style beside literal siblings is rejected rather
+   than written. Never emit a bare value that merely equals a token — the
    read-back can't tell it from a hardcode that has drifted. `bind_variable` /
    `apply_style` are the retrofit route: a node you aren't otherwise writing, and
    `bind_variable`'s collection-mode pin. The three splits the grammar cuts finer than
@@ -286,7 +289,10 @@ After any build or edit:
 1. `export` the frame (PNG) to get a rendered snapshot.
 2. `get_node` or `inspect` to read the data back — confirm:
    - every token-valued fill / font carries its `var(…)` / `style(…)` wrapper. A bare
-     hex where a token holds that value is an _unbound_ value, not a bound one.
+     hex where a token holds that value is an _unbound_ value, not a bound one. A
+     styled field carries the wrapper once, on the field itself
+     (`fills: style(Glass/Fill)[#141B2E99]`), so a bare hex inside those brackets is
+     the style's own value, not a miss.
    - instances show `type: INSTANCE` and correct `component` references.
    - layout mode, sizing, and padding match intent.
    - every outward effect — shadow, glow, `align=OUTSIDE` stroke, blur — is on the node

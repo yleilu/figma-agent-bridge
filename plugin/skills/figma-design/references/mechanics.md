@@ -230,6 +230,46 @@ binding, not the write: the literal lands and the reply says which token was mis
 `warnings[]` entry or a trailing `Warning:` line). Which fields a wrapper binds is in
 `grammar.md` — **`var()` and `style()` rules**; read it before assuming a field binds.
 
+**A style owns the whole field.** Figma holds one style link per slot, and writing the
+field directly is what detaches it — so `fills`, `strokes`, `effects` and `grids` are
+**either** a style reference **or** a list of literals, never both:
+
+```json
+{
+  "nodeId": "<cardId>",
+  "patch": {
+    "effects": "style(AB/Blur)",
+    "fills": ["var(surface/2)#141B2E"]
+  }
+}
+```
+
+The mistake worth naming is the mix — the team's blur **plus** your own shadow:
+
+```json
+{
+  "nodeId": "<cardId>",
+  "patch": {
+    "effects": [
+      "style(AB/Blur)bg-blur(24)",
+      "shadow(0,8,24,#00000066)"
+    ]
+  }
+}
+```
+
+That is `INVALID_PARAM`, raised before anything is written, and the message is the
+fix: _a style owns the whole effects list — use a style containing every effect you
+want, or write them all as literals (a style cannot be combined with literal
+siblings)_. So put the shadow in the style, or drop the reference and write both —
+`"effects": ["bg-blur(24)", "shadow(0,8,24,#00000066)"]`.
+
+A read hands the reference back with the list it resolves to
+(`effects: style(AB/Blur)[bg-blur(24)]`), which is writable verbatim: the list rides
+along and is never applied as literals. Write a list that isn't what the style
+supplies and the style still wins, with one `warnings[]` entry naming what didn't
+land. Full contract: `grammar.md` — **A styled field is a reference, not a list**.
+
 **On masters, not instances.** Bind variables and apply styles on the **master
 component** — instances inherit automatically. Binding on an instance is overridden
 on the next master edit.
