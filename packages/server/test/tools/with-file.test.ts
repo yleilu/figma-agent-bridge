@@ -7,7 +7,18 @@ import type {
 } from '@figma-agent-bridge/server/figma-client'
 import { PluginDisconnectedError } from '@figma-agent-bridge/server/figma-client'
 import type { ChannelInfo } from '@figma-agent-bridge/shared'
-import { searchParamsSchema } from '@figma-agent-bridge/shared/tool-params'
+import {
+  discardFeedbackParamsSchema,
+  githubAuthPollParamsSchema,
+  githubAuthStartParamsSchema,
+  listFeedbackParamsSchema,
+  pullChangesParamsSchema,
+  recordFeedbackParamsSchema,
+  searchParamsSchema,
+  sendFeedbackParamsSchema,
+  statusParamsSchema,
+} from '@figma-agent-bridge/shared/tool-params'
+import { connectParamsSchema } from '@figma-agent-bridge/shared'
 import { textResult } from '@figma-agent-bridge/server/tools/shared'
 import {
   registerFileTool,
@@ -238,5 +249,41 @@ describe('registerFileTool', () => {
       (stripped.data as Record<string, unknown> | undefined)
         ?.name,
     ).toBeUndefined()
+  })
+
+  // The two OTHER registration wrappers still hand the SDK a `.shape`, which
+  // re-wraps it in a plain `z.object` and silently discards every modifier the
+  // schema carries. Nothing is discarded today — every one of these nine is a
+  // plain strip object — but the discard is silent, so the day somebody writes
+  // `.strict()` on one of them the schema would read correct and the wire would
+  // not enforce it. This test is the gate that makes that failure loud.
+  it('no shape-registered tool carries a modifier the SDK would drop', () => {
+    const shapeRegistered = {
+      // registerSessionTool
+      connect: connectParamsSchema,
+      status: statusParamsSchema,
+      record_feedback: recordFeedbackParamsSchema,
+      list_feedback: listFeedbackParamsSchema,
+      send_feedback: sendFeedbackParamsSchema,
+      discard_feedback: discardFeedbackParamsSchema,
+      github_auth_start: githubAuthStartParamsSchema,
+      github_auth_poll: githubAuthPollParamsSchema,
+      // registerBufferTool
+      pull_changes: pullChangesParamsSchema,
+    }
+    const unknownKeysOf = (schema: {
+      _def: unknown
+    }): string | undefined =>
+      (schema._def as { unknownKeys?: string }).unknownKeys
+    // Control: the probe CAN see a modifier — `search` carries one, and it is
+    // registered through the wrapper that honours it.
+    expect(unknownKeysOf(searchParamsSchema)).toBe('strict')
+    for (const [name, schema] of Object.entries(
+      shapeRegistered,
+    )) {
+      expect(`${name}:${unknownKeysOf(schema)}`).toBe(
+        `${name}:strip`,
+      )
+    }
   })
 })
