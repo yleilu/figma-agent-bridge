@@ -45,6 +45,23 @@ reference, not a list**, below).
 (`font(Inter,SemiBold,18)`), gradient stops spaced (`linear(135, #FF0000@0, #00FF00@100)`).
 The parser also accepts inner-arg form and arbitrary whitespace.
 
+**`path()` and `stroke()` refuse an atom they cannot read.** A missing fill rule
+(`path(M 0 0 L 24 24)`) or a weight that is not a number (`stroke(fat)`) is
+`INVALID_PARAM`, raised before the write reaches the document, with the canonical form in
+the message. Neither head has a literal half to fall back on — the whole shape lives in
+the data string, and a weight that is not a number is no weight — so a degrade would write
+nothing and call it success.
+
+**Everywhere else, state every positional arg the family section names.** `font(Inter)` is
+not `font(Inter,Regular,16)` with the blanks filled in, and `linear(135)` is not a gradient
+with default stops: a short atom is written as it stands and the missing piece lands empty.
+Take the canonical form from the family section below, or from a read of a node that
+already carries the value you want — a read emits the canonical form.
+
+**An engine refusal is the other case and it degrades:** a value that parses but that
+Figma rejects lands the node, drops that one field, and reports Figma's own error on
+`warnings[]`.
+
 ---
 
 ## Paints — `fills[]`, `strokes[]`
@@ -127,6 +144,49 @@ stroke([2,0,2,0])        # per-side weights [top, right, bottom, left]
 
 ---
 
+## Vector geometry — `vectorPaths[]`
+
+SVG path data for a VECTOR node. **Both arguments are required, fill rule first:**
+
+```
+path(NONZERO,"M 0 0 L 24 24 L 0 24 Z")
+path(EVENODD,"M0 0 L100 0 L100 100 Z"){corners=[0:12,2:4]}
+```
+
+- Fill rule: `NONZERO` | `EVENODD` | `NONE`.
+- Data: the SVG path string, in double quotes. A comma inside it is a separator like a
+  space and is normalized to one on write, so data copied straight out of an SVG file
+  lands as written.
+- The field is an array — `vectorPaths: [path(…), path(…)]` — and both `create_node` and
+  `update_node` write it, so the `vectorPaths` a read emits is writable back verbatim.
+  On an update the assignment rebuilds the node's network **and resizes the node to the
+  new path bounds**, so a `size` in the same patch is applied after the geometry.
+
+**Per-point detail rides in the `{…}` channel, sparsely** — three index-keyed lists
+naming only the points that differ from the node's own value:
+
+| Key | What it sets | Values |
+|---|---|---|
+| `corners=` | per-point corner radius | a number — `corners=[0:12,2:4]` |
+| `caps=` | per-point `strokeCap` | NONE / ROUND / SQUARE / ARROW_LINES / ARROW_EQUILATERAL |
+| `joins=` | per-point `strokeJoin` | MITER / BEVEL / ROUND |
+
+The index is zero-based into the path's own points, in the order the data string visits
+them. Each key has a node-level twin on `stroke(…)`, and exactly one of the two is
+authoritative: when the points disagree, `stroke(…)` omits that key and the per-point
+list carries the whole truth. The keys are read and written only while `vectorPaths`
+holds a **single** entry — with several entries the index cannot name a point, so the
+read drops them with a warning and a write is declined the same way.
+
+**Forget the fill rule and the atom is rejected.** `path(M 12 0 L 24 24 Z)` is
+`INVALID_PARAM`, and the message carries the canonical spelling. The whole shape lives in
+the data string, so there is nothing to fall back on. Data that parses but that Figma
+refuses — `path(NONZERO,"not path data")` — is the engine refusal instead: the node
+lands, `vectorPaths` drops, and `warnings[]` names Figma's own error. A node type that
+carries no path data warns as well, rather than swallowing the geometry.
+
+---
+
 ## Geometry — corner radius, sizing, constraints
 
 | Field | Form |
@@ -172,12 +232,24 @@ what a paint or effect entry carries internally.)
   id inside a wrapper is not accepted. (A styled-field **reference** has no literal
   to keep, so there an unresolvable name is an error instead — next section.)
 - **Where a wrapper binds:** `fills[]`, `strokes[]`, a **uniform** `stroke(…)`
-  weight and a **uniform** `radius` for `var()`; `fills`, `strokes`, `effects`,
+  weight, a **uniform** `radius`, and the layout spacing scalars — `layout.gap` (with
+  its GRID spellings `rowGap` / `colGap`) and each of the four `layout.pad` sides —
+  for `var()`; `fills`, `strokes`, `effects`,
   `grids` (as the whole field) and `text.font` for `style()`; `text.color` for both.
   Anywhere else the literal still lands and a warning names what could not be bound
   — including the three the grammar splits finer than Figma's binding surface does:
   per-range `text.runs[].color`, per-corner `radius` (`[8,8,0,0]`), and per-side
   stroke weight (`stroke([0,0,1,0])`).
+- **Spacing binds per slot, the way paints bind per entry.** A `var()` on `gap` wraps
+  the number — `layout: {gap: var(space/8)8}` — and `pad` binds **per side, by
+  position**, because Figma holds each padding side as its own field:
+  `pad: [var(space/8)8, 16, var(space/8)8, 16]` binds top and bottom and leaves left
+  and right literal. A read emits every wrapper it finds, an all-zero `pad` included
+  when a side is bound (dropping it would drop the binding sitting on it), and writing
+  that struct back applies the number **and** re-establishes the binding. A `style()`
+  on a spacing scalar finds no route and warns — a style cannot own one — and a
+  spacing leaf that states no number is `INVALID_PARAM`, canonical spelling in the
+  message.
 - `bind_variable` / `apply_style` are still the explicit route — for binding a
   field a write is not otherwise touching, and for `bind_variable`'s
   collection-mode pin.
@@ -310,7 +382,10 @@ children:
 array, and the style that owns the field with the list it resolves to.
 
 Key struct fields:
-- **`layout`** — `{mode: H|V|NONE, gap, pad: [t,r,b,l], align: [primary, counter], wrap}`.
+- **`layout`** — `{mode: H|V|NONE|GRID, gap, pad: [t,r,b,l], align: [primary, counter],
+  wrap, rows, cols, rowGap, colGap}`. `gap` / `align` / `wrap` are H/V-only; the four
+  grid keys are GRID-only. `gap`, `rowGap`, `colGap` and each `pad` entry are number
+  atoms, so a bound one carries its `var()` wrapper: `gap: var(space/8)8`.
 - **`text`** — `{content, font, color, align, valign, decoration, case, runs}`.
   Line height + letter spacing are on the `font(...)` atom (`{lh=, ls=}`), not
   separate top-level keys.
@@ -328,10 +403,13 @@ Key struct fields:
 ## Tree reading model
 
 Tree reads use **depth + budget + truncation receipt**:
-- At the depth boundary a node becomes a stub `{id, name, type, size, childCount}`.
+- At the depth boundary a node becomes a stub `{id, name, type, size?, childCount}`.
+  `size` is carried, never invented: a node the file holds no measured size for (a PAGE)
+  omits it rather than padding `[0, 0]`.
 - A budget cap prevents wide nodes from overflowing context.
-- `truncated: [{id, childCount}]` tells you exactly which subtrees were cut — drill
-  into those ids, don't re-scan.
+- `truncated: [{id, childCount}]` names what was **cut**: a node dropped from the view
+  outright, whatever it held, and a node returned as a stub whose subtree was cut. A
+  collapsed leaf cut nothing and earns no entry. Drill into those ids, don't re-scan.
 
 Flat list reads (`get_styles`, `get_variables`, search results) use an **opaque cursor**
 for pagination, not depth/budget.

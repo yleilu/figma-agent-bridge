@@ -6,7 +6,7 @@ description: >-
   "Figma". Teaches the design-system-first workflow, the value grammar, and the exact
   tool mechanics (bind_variable, apply_style, instance overrides, sizing) that make
   output correct, not just valid. Invoke before building or editing in Figma.
-version: 0.3.0
+version: 0.4.0
 ---
 
 # figma-design skill
