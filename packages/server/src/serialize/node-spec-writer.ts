@@ -76,6 +76,7 @@ import {
   tokenize,
 } from '../grammar'
 import { collectWrapperBindings } from './wrapper-bindings'
+import { readStyledFields } from './styled-fields'
 
 export type FigmaWritePayload = Record<string, unknown>
 
@@ -300,6 +301,13 @@ export const specToFigma = (
 ): FigmaWritePayload => {
   const out: FigmaWritePayload = {}
 
+  // ── styled fields, FIRST ─────────────────────────────────────────────────
+  // `fills`/`strokes`/`effects`/`grids` are each EITHER a style reference or a
+  // list of literals, and the mixes a slot cannot hold are rejected here —
+  // before any atom is converted, so a rejected write has done nothing at all
+  // (expression-formats.md, "A styled field is a reference, not a list").
+  const styled = readStyledFields(spec)
+
   // ── identity / pass-through ──────────────────────────────────────────────
   if (spec.name !== undefined) {
     out.name = spec.name
@@ -343,11 +351,15 @@ export const specToFigma = (
   }
 
   // ── visual atoms ─────────────────────────────────────────────────────────
-  if (spec.fills !== undefined) {
-    out.fills = spec.fills.map(atomToPaint)
+  // A REFERENCE emits no literals at all: the style is the field's whole
+  // content, the resolved list riding with it is not a second instruction, and
+  // assigning the field directly is what DETACHES the style. Only the
+  // `bindings[]` entry below carries it.
+  if (styled.fills?.kind === 'literals') {
+    out.fills = styled.fills.atoms.map(atomToPaint)
   }
-  if (spec.strokes !== undefined) {
-    out.strokes = spec.strokes.map(atomToPaint)
+  if (styled.strokes?.kind === 'literals') {
+    out.strokes = styled.strokes.atoms.map(atomToPaint)
   }
   if (spec.stroke !== undefined) {
     const geom = atomToStroke(spec.stroke)
@@ -418,8 +430,8 @@ export const specToFigma = (
       out.strokeMiterLimit = geom.miter
     }
   }
-  if (spec.effects !== undefined) {
-    out.effects = spec.effects.map(atomToEffect)
+  if (styled.effects?.kind === 'literals') {
+    out.effects = styled.effects.atoms.map(atomToEffect)
   }
   if (spec.radius !== undefined) {
     out.radius = parseRadius(spec.radius)
@@ -439,8 +451,8 @@ export const specToFigma = (
   if (spec.clipsContent !== undefined) {
     out.clipsContent = spec.clipsContent
   }
-  if (spec.grids !== undefined) {
-    out.grids = spec.grids.map(atomToGrid)
+  if (styled.grids?.kind === 'literals') {
+    out.grids = styled.grids.atoms.map(atomToGrid)
   }
   if (spec.vectorPaths !== undefined) {
     out.vectorPaths = spec.vectorPaths.map(atomToPath)

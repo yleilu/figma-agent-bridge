@@ -28,6 +28,11 @@ import {
   tokenize,
   type Wrapper,
 } from '../grammar'
+import {
+  FIELD_SLOT,
+  readStyledFields,
+  type StyledField,
+} from './styled-fields'
 
 /**
  * One binding a converted payload asks the plugin to establish after the
@@ -42,6 +47,21 @@ export type WrapperBinding = {
   name: string
   field: string
   index?: number
+  /**
+   * SERVER-SIDE ONLY — true when this style OWNS its field (the reference form
+   * on one of the four styleable array fields), rather than wrapping a literal
+   * on a scalar slot. `style-refs.ts` resolves the reference against the
+   * document's own styles and strips both this and `rideAlong` before the
+   * payload reaches the wire: the plugin applies a style the same way either
+   * way, so nothing it does not use is sent to it.
+   */
+  owns?: boolean
+  /**
+   * SERVER-SIDE ONLY — the resolved list the reference carried, in the spelling
+   * the write used. Never applied as literals; it is what the differ compares
+   * against the style's actual content.
+   */
+  rideAlong?: string[]
 }
 
 /** NodeSpec field → the `bind_variable` field that binds it. */
@@ -54,11 +74,15 @@ const VAR_ROUTES: Record<string, string> = {
   'text.color': 'fills',
 }
 
-/** NodeSpec field → the `apply_style` field that applies it. */
+/**
+ * NodeSpec field → the `apply_style` field that applies it.
+ *
+ * The four styleable ARRAY fields come from FIELD_SLOT — one table, so the
+ * grammar's slot model and the write route cannot drift — plus the two scalar
+ * slots, where a `style()` is an ordinary wrapper on a literal.
+ */
 const STYLE_ROUTES: Record<string, string> = {
-  fills: 'fill',
-  strokes: 'stroke',
-  effects: 'effect',
+  ...FIELD_SLOT,
   'text.font': 'text',
   'text.color': 'fill',
 }
@@ -153,6 +177,8 @@ export const collectWrapperBindings = (
     specField: string,
     wrapper: Wrapper | undefined,
     index?: number,
+    /** The reference form's resolved list — a style that OWNS its field. */
+    rideAlong?: string[],
   ): void => {
     if (wrapper === undefined) {
       return
@@ -185,15 +211,36 @@ export const collectWrapperBindings = (
       name: wrapper.name,
       field: route,
       ...(indexed ? { index } : {}),
+      ...(rideAlong !== undefined
+        ? { owns: true, rideAlong }
+        : {}),
     })
   }
 
-  spec.fills?.forEach((atom, i) =>
-    add('fills', wrapperOf(atom), i),
-  )
-  spec.strokes?.forEach((atom, i) =>
-    add('strokes', wrapperOf(atom), i),
-  )
+  // The four styleable ARRAY fields. A REFERENCE is one binding for the whole
+  // field — the style owns it — and carries the resolved list it was written
+  // with; a list of LITERALS binds per entry, which is what a var() does.
+  const styled = readStyledFields(spec)
+  const addStyled = (field: StyledField): void => {
+    const value = styled[field]
+    if (value === undefined) {
+      return
+    }
+    if (value.kind === 'reference') {
+      add(
+        field,
+        { kind: 'style', name: value.name },
+        undefined,
+        value.rideAlong,
+      )
+      return
+    }
+    value.atoms.forEach((atom, i) =>
+      add(field, wrapperOf(atom), i),
+    )
+  }
+  addStyled('fills')
+  addStyled('strokes')
   // stroke binds only in its UNIFORM form, for the same reason radius does
   // (below): Figma has no per-side stroke-weight variable field —
   // `setBoundVariable('strokeWeight')` sets ALL FOUR sides at once (it reads
@@ -233,12 +280,8 @@ export const collectWrapperBindings = (
   } else {
     add('radius', radiusWrapper)
   }
-  spec.effects?.forEach((atom, i) =>
-    add('effects', wrapperOf(atom), i),
-  )
-  spec.grids?.forEach((atom, i) =>
-    add('grids', wrapperOf(atom), i),
-  )
+  addStyled('effects')
+  addStyled('grids')
   const text: Partial<TextSpec> | undefined = spec.text
   add('text.font', wrapperOf(text?.font))
   // `text.color` IS the text node's first fill — index 0, never the whole

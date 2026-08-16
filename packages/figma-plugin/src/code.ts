@@ -2339,6 +2339,12 @@ const handleCommand = async (
     // get_styles: each entry carries the raw figma VALUE the server renders to
     // a view atom (paint→hex, text→font, effect/grid→head). Uses the ASYNC
     // style getters; the server applies the type/id filters.
+    //
+    // `values` carries the style's WHOLE content — every paint, every effect,
+    // every grid. A style owns its field, so what it supplies is a list, and
+    // `value` (the first entry) cannot answer whether the resolved list a write
+    // carried is the one the style holds. The get_styles READ still renders
+    // `value`; `values` is what the styled-field write face resolves against.
     case COMMANDS.GET_STYLES: {
       const paintStylesRaw =
         await figma.getLocalPaintStylesAsync()
@@ -2346,6 +2352,7 @@ const handleCommand = async (
         id: s.id,
         name: s.name,
         value: s.paints[0],
+        values: [...s.paints],
         ...(s.description
           ? { description: s.description }
           : {}),
@@ -2372,48 +2379,50 @@ const handleCommand = async (
         id: s.id,
         name: s.name,
         value: s.effects[0],
+        values: [...s.effects],
         ...(s.description
           ? { description: s.description }
           : {}),
       }))
+      // One grid → the wire shape, so `value` and every entry of `values`
+      // are shaped by the same function (Infinity has no JSON spelling —
+      // an auto count crosses as the string 'auto').
+      const wireGrid = (g: LayoutGrid) => ({
+        pattern: g.pattern,
+        alignment:
+          'alignment' in g
+            ? (g as RowsColsLayoutGrid).alignment
+            : undefined,
+        count:
+          'count' in g
+            ? (g as RowsColsLayoutGrid).count === Infinity
+              ? 'auto'
+              : (g as RowsColsLayoutGrid).count
+            : undefined,
+        sectionSize:
+          'sectionSize' in g
+            ? (g as RowsColsLayoutGrid).sectionSize
+            : undefined,
+        gutterSize:
+          'gutterSize' in g
+            ? (g as RowsColsLayoutGrid).gutterSize
+            : undefined,
+        offset:
+          'offset' in g
+            ? (g as RowsColsLayoutGrid).offset
+            : undefined,
+        visible: g.visible,
+      })
       const gridStylesRaw =
         await figma.getLocalGridStylesAsync()
       const grid = gridStylesRaw.map(s => {
-        const g = s.layoutGrids?.[0] as
-          | LayoutGrid
-          | undefined
+        const grids = s.layoutGrids ?? []
+        const g = grids[0] as LayoutGrid | undefined
         return {
           id: s.id,
           name: s.name,
-          value: g
-            ? {
-                pattern: g.pattern,
-                alignment:
-                  'alignment' in g
-                    ? (g as RowsColsLayoutGrid).alignment
-                    : undefined,
-                count:
-                  'count' in g
-                    ? (g as RowsColsLayoutGrid).count ===
-                      Infinity
-                      ? 'auto'
-                      : (g as RowsColsLayoutGrid).count
-                    : undefined,
-                sectionSize:
-                  'sectionSize' in g
-                    ? (g as RowsColsLayoutGrid).sectionSize
-                    : undefined,
-                gutterSize:
-                  'gutterSize' in g
-                    ? (g as RowsColsLayoutGrid).gutterSize
-                    : undefined,
-                offset:
-                  'offset' in g
-                    ? (g as RowsColsLayoutGrid).offset
-                    : undefined,
-                visible: g.visible,
-              }
-            : undefined,
+          value: g ? wireGrid(g) : undefined,
+          values: grids.map(wireGrid),
           ...(s.description
             ? { description: s.description }
             : {}),

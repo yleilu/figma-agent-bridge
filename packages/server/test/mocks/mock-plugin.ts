@@ -93,12 +93,132 @@ const MOCK_VARIABLE_NAMES = [
   'surface/card-bg',
 ]
 
-const MOCK_STYLE_NAMES: Record<string, string[]> = {
-  paint: ['Brand/Primary'],
-  text: ['Heading'],
-  effect: ['Card Shadow'],
-  grid: ['Layout/Columns'],
+/**
+ * The mock document's LOCAL STYLES — one fixture, read by `get_styles`, by the
+ * binding resolver above, and by the styled-slot state below, so the mock
+ * cannot disagree with itself about what a style holds.
+ *
+ * `values` is the style's WHOLE content (the real plugin sends every paint /
+ * effect / grid), which is what a styled field resolves to; `get_styles` still
+ * renders the first entry as `value`. `AB/Blur` holds TWO effects so the
+ * always-list read emission and the ride-along differ are exercised against a
+ * style that is genuinely a list.
+ */
+const MOCK_STYLES: Record<
+  string,
+  {
+    id: string
+    name: string
+    description?: string
+    value?: unknown
+    values?: unknown[]
+  }[]
+> = {
+  paint: [
+    {
+      id: 'S:1',
+      name: 'Brand/Primary',
+      // Surface 2: description surfaces read-only on styles (no context).
+      description: 'Brand primary blue',
+      values: [
+        {
+          type: 'SOLID',
+          color: { r: 0.231, g: 0.51, b: 0.965 },
+        },
+      ],
+    },
+    {
+      id: 'S:5',
+      name: 'Glass/Fill',
+      values: [
+        {
+          type: 'SOLID',
+          color: { r: 0.078, g: 0.106, b: 0.18 },
+          opacity: 0.6,
+        },
+      ],
+    },
+  ],
+  text: [
+    {
+      id: 'S:2',
+      name: 'Heading',
+      description: 'Section heading type',
+      value: {
+        family: 'Inter',
+        style: 'Bold',
+        size: 32,
+        lineHeight: { value: 40, unit: 'PIXELS' },
+      },
+    },
+  ],
+  effect: [
+    {
+      id: 'S:3',
+      name: 'Card Shadow',
+      values: [
+        {
+          type: 'DROP_SHADOW',
+          color: { r: 0, g: 0, b: 0, a: 0.1 },
+          offset: { x: 0, y: 4 },
+          radius: 12,
+          spread: 0,
+        },
+      ],
+    },
+    {
+      id: 'S:6',
+      name: 'AB/Blur',
+      values: [
+        { type: 'BACKGROUND_BLUR', radius: 24 },
+        {
+          type: 'DROP_SHADOW',
+          color: { r: 0, g: 0, b: 0, a: 0.4 },
+          offset: { x: 0, y: 8 },
+          radius: 24,
+          spread: 0,
+        },
+      ],
+    },
+  ],
+  grid: [
+    {
+      id: 'S:4',
+      name: 'Layout/Columns',
+      values: [
+        {
+          pattern: 'COLUMNS',
+          count: 12,
+          gutterSize: 16,
+          sectionSize: 64,
+          alignment: 'STRETCH',
+        },
+      ],
+    },
+  ],
 }
+
+/** The `get_styles` reply shape: `value` (the first entry) plus every entry. */
+const mockStyleEntries = (
+  category: string,
+): Record<string, unknown>[] =>
+  MOCK_STYLES[category].map(s => ({
+    id: s.id,
+    name: s.name,
+    value: s.value ?? s.values?.[0],
+    ...(s.values ? { values: s.values } : {}),
+    ...(s.description
+      ? { description: s.description }
+      : {}),
+  }))
+
+const mockStyleByName = (
+  category: string | undefined,
+  name: string,
+): { values?: unknown[] } | undefined =>
+  category === undefined
+    ? undefined
+    : MOCK_STYLES[category].find(s => s.name === name)
 
 const MOCK_STYLE_CATEGORIES: Record<string, string> = {
   fill: 'paint',
@@ -138,8 +258,7 @@ const mockApplyWrapperBindings = (
     }
     const category = MOCK_STYLE_CATEGORIES[binding.field]
     if (
-      category === undefined ||
-      !MOCK_STYLE_NAMES[category].includes(binding.name)
+      mockStyleByName(category, binding.name) === undefined
     ) {
       warnings.push(
         'style(' +
@@ -306,6 +425,54 @@ export const createMockPlugin = (
     if (Object.keys(state).length > 0) {
       appliedState.set(id, state)
     }
+  }
+
+  /**
+   * Model an APPLIED style, the way the file then reports it (B47).
+   *
+   * Figma resolves the style's own content onto the node and records the link,
+   * so a styled slot reads back as the REFERENCE — the style named once, with
+   * the list it supplies. Modelling only the reply's `appliedBindings` would
+   * leave a read looking exactly as if nothing had been applied, which is the
+   * one thing a round-trip test has to be able to tell apart.
+   */
+  const STYLE_SLOT_FIELD: Record<string, string> = {
+    fill: 'fills',
+    stroke: 'strokes',
+    effect: 'effects',
+    grid: 'layoutGrids',
+  }
+
+  const applyStyleState = (
+    id: string,
+    applied: MockBinding[],
+  ): void => {
+    const owning = applied.filter(
+      b =>
+        b.kind === 'style' &&
+        STYLE_SLOT_FIELD[b.field] !== undefined,
+    )
+    if (owning.length === 0) {
+      return
+    }
+    const state = appliedState.get(id) ?? {}
+    const names = (state.bindingNames ?? {}) as {
+      styles?: Record<string, string>
+    }
+    const styles = { ...(names.styles ?? {}) }
+    for (const binding of owning) {
+      styles[binding.field] = binding.name
+      const entry = mockStyleByName(
+        MOCK_STYLE_CATEGORIES[binding.field],
+        binding.name,
+      )
+      if (entry?.values !== undefined) {
+        state[STYLE_SLOT_FIELD[binding.field]] =
+          entry.values
+      }
+    }
+    state.bindingNames = { ...names, styles }
+    appliedState.set(id, state)
   }
 
   // SLOT NODES minted by update_component (B30), keyed by id → the raw export a
@@ -776,57 +943,10 @@ export const createMockPlugin = (
       // effect→head). Real value shapes so the e2e can assert atom rendering.
       case 'get_styles':
         result = {
-          paint: [
-            {
-              id: 'S:1',
-              name: 'Brand/Primary',
-              // Surface 2: description surfaces read-only on styles (no context).
-              description: 'Brand primary blue',
-              value: {
-                type: 'SOLID',
-                color: { r: 0.231, g: 0.51, b: 0.965 },
-              },
-            },
-          ],
-          text: [
-            {
-              id: 'S:2',
-              name: 'Heading',
-              description: 'Section heading type',
-              value: {
-                family: 'Inter',
-                style: 'Bold',
-                size: 32,
-                lineHeight: { value: 40, unit: 'PIXELS' },
-              },
-            },
-          ],
-          effect: [
-            {
-              id: 'S:3',
-              name: 'Card Shadow',
-              value: {
-                type: 'DROP_SHADOW',
-                color: { r: 0, g: 0, b: 0, a: 0.1 },
-                offset: { x: 0, y: 4 },
-                radius: 12,
-                spread: 0,
-              },
-            },
-          ],
-          grid: [
-            {
-              id: 'S:4',
-              name: 'Layout/Columns',
-              value: {
-                pattern: 'COLUMNS',
-                count: 12,
-                gutterSize: 16,
-                sectionSize: 64,
-                alignment: 'STRETCH',
-              },
-            },
-          ],
+          paint: mockStyleEntries('paint'),
+          text: mockStyleEntries('text'),
+          effect: mockStyleEntries('effect'),
+          grid: mockStyleEntries('grid'),
         }
         break
 
@@ -1315,6 +1435,9 @@ export const createMockPlugin = (
           spec.bindings,
         )
         unWarnings.push(...unBind.warnings)
+        if (!unIncompat) {
+          applyStyleState(unId, unBind.applied)
+        }
         result = {
           id: unId,
           name: (spec.name as string) ?? 'Card',

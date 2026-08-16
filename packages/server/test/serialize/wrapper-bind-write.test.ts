@@ -224,46 +224,71 @@ describe('write-face wrapper bindings — var()', () => {
 })
 
 describe('write-face wrapper bindings — style()', () => {
-  it('a style() fill binds the fill style once, not once per paint', () => {
+  // A style OWNS its field, so the reference is one binding and NO literal:
+  // assigning the field directly is what detaches the style. `owns`/`rideAlong`
+  // are the server-side halves style-refs.ts resolves and then strips.
+  it('a scalar fills reference binds the fill style and writes no paints', () => {
     const out = specToFigma({
-      fills: [
-        'style(Brand/Primary)#FF00AA',
-        'style(Brand/Primary)#FF00AA',
-      ],
+      fills: 'style(Brand/Primary)[#FF00AA]',
     })
+    expect('fills' in out).toBe(false)
     expect(out.bindings).toEqual([
       {
         kind: 'style',
         name: 'Brand/Primary',
         field: 'fill',
+        owns: true,
+        rideAlong: ['#FF00AA'],
       },
     ])
   })
 
-  it('a style() stroke paint binds the stroke style', () => {
+  it('a style() stroke reference binds the stroke style and writes no paints', () => {
     const out = specToFigma({
       strokes: ['style(Border/Subtle)#E5E7EB'],
     })
+    expect('strokes' in out).toBe(false)
     expect(out.bindings).toEqual([
       {
         kind: 'style',
         name: 'Border/Subtle',
         field: 'stroke',
+        owns: true,
+        rideAlong: ['#E5E7EB'],
       },
     ])
   })
 
-  it('a style() effect binds the effect style', () => {
+  it('a style() effect reference binds the effect style and writes no effects', () => {
     const out = specToFigma({
       effects: [
         'style(Elevation/1)shadow(0,4,12,#0000001A)',
       ],
     })
+    expect('effects' in out).toBe(false)
     expect(out.bindings).toEqual([
       {
         kind: 'style',
         name: 'Elevation/1',
         field: 'effect',
+        owns: true,
+        rideAlong: ['shadow(0,4,12,#0000001A)'],
+      },
+    ])
+  })
+
+  it('a style() grid reference binds the grid style (the fourth slot)', () => {
+    const out = specToFigma({
+      grids: 'style(Layout/12col)[columns(12,0,24)]',
+    })
+    expect('grids' in out).toBe(false)
+    expect(out.bindings).toEqual([
+      {
+        kind: 'style',
+        name: 'Layout/12col',
+        field: 'grid',
+        owns: true,
+        rideAlong: ['columns(12,0,24)'],
       },
     ])
   })

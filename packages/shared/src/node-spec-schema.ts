@@ -16,6 +16,15 @@ import type {
 // An atom is any string in the expression grammar (validated downstream).
 const atomSchema = z.string()
 
+// A styleable ARRAY field: the scalar `style(Name)[…]` reference OR an array of
+// literal atoms — one slot, one owner (node-spec.ts's StyledAtoms). WHICH of
+// the two a value is is decided by the server-side parser, which also raises
+// the mixes the slot cannot hold; the schema validates only the shape.
+const styledAtomsSchema = z.union([
+  atomSchema,
+  z.array(atomSchema),
+])
+
 export const layoutSpecSchema = z.object({
   mode: z.enum(['H', 'V', 'NONE', 'GRID']),
   gap: z.number().optional(),
@@ -105,17 +114,17 @@ const nodeSpecBase = {
   maxHeight: z.number().nullable().optional(),
 
   // visual — all atoms
-  fills: z.array(atomSchema).optional(),
-  strokes: z.array(atomSchema).optional(),
+  fills: styledAtomsSchema.optional(),
+  strokes: styledAtomsSchema.optional(),
   stroke: atomSchema.optional(),
-  effects: z.array(atomSchema).optional(),
+  effects: styledAtomsSchema.optional(),
   radius: atomSchema.optional(),
   opacity: z.number().optional(),
   rotation: z.number().optional(),
   blend: z.string().optional(),
   visible: z.boolean().optional(),
   clipsContent: z.boolean().optional(),
-  grids: z.array(atomSchema).optional(),
+  grids: styledAtomsSchema.optional(),
   vectorPaths: z.array(atomSchema).optional(),
 
   // node-type-specific shape fields (plain pass-through — no atom grammar)

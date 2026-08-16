@@ -87,7 +87,16 @@ import {
   pluginError,
   errorEnvelope,
 } from './shared'
-import { type ErrorCode, classifyMessage } from '../errors'
+import {
+  type ErrorCode,
+  classify,
+  classifyMessage,
+} from '../errors'
+import {
+  createStyleCatalogue,
+  resolveStyleReferences,
+  sendConvertedWrite,
+} from '../serialize/style-refs'
 
 type BatchEntry = Record<string, unknown> & { op?: string }
 
@@ -609,9 +618,48 @@ export const handleBatch = async (
         ok: false,
         error: errorMessage(err),
       }
+      // A converter that raised a TYPED failure (a styled field written as a
+      // mix, an over-cap context) already knows its code; classifying its
+      // message afterwards would blame Figma for the agent's parameters.
+      preErrorCodes[index] = classify(err)
       converted[index] = null
     }
   })
+
+  // The styled-field references, resolved against ONE read of the file's
+  // styles for the whole batch — before any op reaches the document. Batch runs
+  // the gate PER OP rather than only on the way out, because partial success
+  // needs the failure attributed to its own entry: a reference that resolves to
+  // nothing (or to a style of the wrong type for the slot) fails ITS OWN entry,
+  // exactly as a malformed atom does, and the rest of the batch still runs
+  // (D3). The same catalogue then rides out through sendConvertedWrite below,
+  // where the ops it already cleared are a no-op walk.
+  const catalogue = createStyleCatalogue(client)
+  for (const [index, op] of converted.entries()) {
+    if (op === null) {
+      continue
+    }
+    const opWarnings = op.warnings ?? []
+    try {
+      await resolveStyleReferences(
+        op.params,
+        catalogue,
+        opWarnings,
+      )
+      if (opWarnings.length > 0) {
+        op.warnings = opWarnings
+      }
+    } catch (err) {
+      preErrors[index] = {
+        index,
+        op: effectiveOps[index] ?? null,
+        ok: false,
+        error: errorMessage(err),
+      }
+      preErrorCodes[index] = classify(err)
+      converted[index] = null
+    }
+  }
 
   try {
     // Send ONE command carrying only the validly-converted ops; the plugin loops
@@ -625,7 +673,8 @@ export const handleBatch = async (
           c !== null,
       )
 
-    const pluginReply = (await client.sendCommand(
+    const pluginReply = (await sendConvertedWrite(
+      client,
       COMMANDS.BATCH,
       {
         ops: sendable.map(({ op, params }) => ({
@@ -633,6 +682,7 @@ export const handleBatch = async (
           params,
         })),
       },
+      { catalogue },
     )) as
       | {
           results?: {

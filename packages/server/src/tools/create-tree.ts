@@ -39,6 +39,7 @@ import {
 } from '../serialize/node-spec-writer'
 import { CREATABLE_TYPES } from './create-node'
 import { assertContextWithinCap } from '../serialize/context-cap'
+import { sendConvertedWrite } from '../serialize/style-refs'
 import {
   type ToolResult,
   formatMutationResult,
@@ -205,14 +206,19 @@ export const handleCreateTree = async (
       refs !== undefined
         ? convertRefs(refs, warnings)
         : undefined
-
-    const result = (await client.sendCommand(
+    // sendConvertedWrite walks the WHOLE payload — every node of the tree and
+    // every ref-pool entry — against one style read, so a reference that
+    // resolves to nothing stops the write before the first node is created,
+    // not after forty of them.
+    const result = (await sendConvertedWrite(
+      client,
       COMMANDS.CREATE_TREE,
       {
         tree: convertedTree,
         parentId,
         refs: convertedRefs,
       },
+      { warnings },
     )) as {
       error?: string
       id?: string

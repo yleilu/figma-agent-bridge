@@ -20,6 +20,19 @@
 export type Atom = string
 
 /**
+ * A styleable ARRAY field — `fills`, `strokes`, `effects`, `grids`.
+ *
+ * Figma holds one style link per field slot, exclusively, so such a field is
+ * EITHER a reference (the scalar atom `style(Name)`, optionally carrying the
+ * resolved list a read appends — `style(AB/Blur)[bg-blur(24)]`) OR an array of
+ * literal atoms. A style beside literal siblings is a shape the slot cannot
+ * hold and is rejected on write (expression-formats.md — "A styled field is a
+ * reference, not a list"). A read emits the reference form for a styled slot
+ * and the array for an unstyled one.
+ */
+export type StyledAtoms = Atom | Atom[]
+
+/**
  * Auto-layout configuration. `mode: 'NONE'` turns auto-layout off.
  *
  * GRID mode uses the four independent grid keys (`rows`, `cols`, `rowGap`,
@@ -136,11 +149,14 @@ export type NodeSpec = {
   maxHeight?: number | null
 
   // visual — all atoms
-  fills?: Atom[]
-  strokes?: Atom[]
+  /** Style reference or literal array (see StyledAtoms). */
+  fills?: StyledAtoms
+  /** Style reference or literal array (see StyledAtoms). */
+  strokes?: StyledAtoms
   /** Stroke geometry as one atom (weight/align/dash in the head + {…}). */
   stroke?: Atom
-  effects?: Atom[]
+  /** Style reference or literal array (see StyledAtoms). */
+  effects?: StyledAtoms
   /** Corner radius atom: "8" (uniform) or "[8,8,0,0]" ([TL,TR,BR,BL]). */
   radius?: Atom
   opacity?: number
@@ -148,8 +164,8 @@ export type NodeSpec = {
   blend?: string
   visible?: boolean
   clipsContent?: boolean
-  /** Layout-grid atoms (columns()/rows()). */
-  grids?: Atom[]
+  /** Layout-grid atoms (columns()/rows()) — style reference or literal array. */
+  grids?: StyledAtoms
   /** Vector path atoms (path(windingRule,"data")) — VECTOR nodes only. */
   vectorPaths?: Atom[]
 

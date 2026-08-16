@@ -15,6 +15,7 @@ import {
   unknownPatchKeyWarnings,
 } from '../serialize/node-spec-writer'
 import { assertContextWithinCap } from '../serialize/context-cap'
+import { sendConvertedWrite } from '../serialize/style-refs'
 import {
   type ToolResult,
   formatMutationResult,
@@ -39,9 +40,14 @@ export const handleUpdateNode = async (
     // A key the write face does not know is DROPPED, not applied — say so
     // rather than reporting a success that moved nothing (T7).
     warnings.push(...unknownPatchKeyWarnings(patch, spec))
-    const result = (await client.sendCommand(
+    // sendConvertedWrite, not sendCommand: a style named on
+    // fills/strokes/effects/grids owns that field, and its name is resolved on
+    // the way out, before the patch reaches the document (rules 3 and 4).
+    const result = (await sendConvertedWrite(
+      client,
       COMMANDS.UPDATE_NODE,
       { nodeId, spec },
+      { warnings },
     )) as { error?: string; warnings?: string[] } | null
     const mutation = formatMutationResult(
       result,

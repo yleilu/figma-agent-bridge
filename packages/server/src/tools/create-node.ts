@@ -18,6 +18,7 @@ import type { NodeSpec } from '@figma-agent-bridge/shared/node-spec'
 import type { ScopedFigmaClient } from '../figma-client'
 import { specToFigmaForCreate } from '../serialize/node-spec-writer'
 import { assertContextWithinCap } from '../serialize/context-cap'
+import { sendConvertedWrite } from '../serialize/style-refs'
 import {
   type ToolResult,
   formatMutationResult,
@@ -88,10 +89,16 @@ export const handleCreateNode = async (
     // The writer pushes lossy-conversion notes (e.g. GRID-only layout keys on
     // an H/V mode) onto `warnings`.
     const payload = specToFigmaForCreate(flat, warnings)
-
-    const result = (await client.sendCommand(
+    // sendConvertedWrite, not sendCommand: a style named on
+    // fills/strokes/effects/grids is the field's whole content, and the gate on
+    // the way out resolves it BEFORE the write reaches the document — a name
+    // that matches nothing, or a style of the wrong type for the slot, is an
+    // error rather than a node created with the appearance nobody asked for.
+    const result = (await sendConvertedWrite(
+      client,
       COMMANDS.CREATE_NODE,
       { spec: payload, parentId },
+      { warnings },
     )) as { error?: string } | null
 
     const mutation = formatMutationResult(

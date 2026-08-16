@@ -51,6 +51,7 @@ import {
   type RGBA,
   type Transform,
 } from '../grammar'
+import { renderResolvedList } from './styled-fields'
 
 // ─── raw (JSON_REST_V1) shapes we read from ───────────────────────────────────
 
@@ -95,6 +96,32 @@ const wrapperFor = (
     : varName !== undefined
       ? renderWrapper({ kind: 'var', name: varName })
       : ''
+
+/**
+ * A styleable ARRAY field as the read emits it (expression-formats.md — "A
+ * styled field is a reference, not a list").
+ *
+ * Unstyled, the field is the array of atoms it has always been. Styled, it is
+ * ONE atom: the style named once, then the list it resolves to, bracketed and
+ * comma-space separated. The brackets are ALWAYS there — a style holding one
+ * effect emits a one-entry list — so the form is parsed unconditionally rather
+ * than sniffed, and writing the emission back verbatim is a no-op.
+ */
+const styledField = (
+  styleName: string | undefined,
+  atoms: string[] | undefined,
+): string | string[] | undefined => {
+  if (atoms === undefined || styleName === undefined) {
+    return atoms
+  }
+  // The list is rendered by the SAME function the write face's differ compares
+  // against (T8): two renderings that must agree byte for byte, or a verbatim
+  // write-back starts warning about a difference that is only in the spacing.
+  return (
+    renderWrapper({ kind: 'style', name: styleName }) +
+    renderResolvedList(atoms)
+  )
+}
 
 /** Look up a variable id's resolved name; undefined if unbound/unresolved. */
 const variableNameFor = (
@@ -610,13 +637,18 @@ const paintArray = (
   bindingNames: BindingNames | undefined,
   field: 'fills' | 'strokes',
   warnings: string[],
-): string[] | undefined => {
+): string | string[] | undefined => {
   if (!Array.isArray(raw)) {
     return undefined
   }
+  // When a style owns the field, it is named ONCE outside the list and no
+  // entry inside carries a wrapper of its own — neither the style (which would
+  // repeat it per paint) nor a variable (which the style already governs).
+  const inner =
+    styleName === undefined ? bindingNames : undefined
   const atoms: string[] = []
   for (const p of raw as RawPaint[]) {
-    const atom = paintLeaf(p, styleName, bindingNames)
+    const atom = paintLeaf(p, undefined, inner)
     if (atom === null) {
       warnings.push(
         `${field}: dropped a paint this read cannot render (type ${
@@ -627,7 +659,10 @@ const paintArray = (
     }
     atoms.push(atom)
   }
-  return atoms.length > 0 ? atoms : undefined
+  return styledField(
+    styleName,
+    atoms.length > 0 ? atoms : undefined,
+  )
 }
 
 // ─── effects ──────────────────────────────────────────────────────────────────
@@ -635,11 +670,10 @@ const paintArray = (
 const effectArray = (
   raw: unknown,
   styleName: string | undefined,
-): string[] | undefined => {
+): string | string[] | undefined => {
   if (!Array.isArray(raw)) {
     return undefined
   }
-  const wrapper = wrapperFor(styleName, undefined)
   const atoms = (raw as RawEffect[])
     // No visibility filter: a hidden effect is still ON the node, and the
     // grammar spells it (`{vis=false}`). Dropping it here made a
@@ -672,9 +706,12 @@ const effectArray = (
       if (e.visible === false) {
         figma.visible = false
       }
-      return wrapper + effectToAtom(figma)
+      return effectToAtom(figma)
     })
-  return atoms.length > 0 ? atoms : undefined
+  return styledField(
+    styleName,
+    atoms.length > 0 ? atoms : undefined,
+  )
 }
 
 // ─── stroke geometry ──────────────────────────────────────────────────────────
@@ -907,11 +944,17 @@ const radiusAtom = (
  * `gridToAtom` is the exact inverse of the writer's `atomToGrid`
  * (grammar/heads/grid.ts) — this is the read face of that same head.
  */
-const gridArray = (raw: unknown): string[] | undefined => {
+const gridArray = (
+  raw: unknown,
+  styleName: string | undefined,
+): string | string[] | undefined => {
   if (!Array.isArray(raw) || raw.length === 0) {
     return undefined
   }
-  return (raw as FigmaLayoutGrid[]).map(g => gridToAtom(g))
+  return styledField(
+    styleName,
+    (raw as FigmaLayoutGrid[]).map(g => gridToAtom(g)),
+  )
 }
 
 // ─── export presets ───────────────────────────────────────────────────────────
@@ -1483,7 +1526,12 @@ const buildNode = (
   }
 
   // grids — Figma's own property is layoutGrids; the NodeSpec field is grids.
-  const grids = gridArray(raw.layoutGrids)
+  // The fourth styleable array field: a grid style owns it exactly as a paint
+  // style owns `fills` (the plugin's enrichment resolves `gridStyleId`).
+  const grids = gridArray(
+    raw.layoutGrids,
+    bindingNames?.styles?.grid,
+  )
   if (grids !== undefined) {
     out.grids = grids
   }
