@@ -1,6 +1,8 @@
 import { expect, test } from 'bun:test'
 
 import {
+  applySize,
+  applySizeVerified,
   applyStrokeGeometry,
   applyStrokeWeights,
   applyExportSettings,
@@ -276,4 +278,254 @@ test('capabilityWarnings: an omitted field is never warned about (omission ≠ r
   expect(capabilityWarnings({ type: 'SLICE' }, {})).toEqual(
     [],
   )
+})
+
+// ─── applySize (B46) ────────────────────────────────────────────────────────
+
+/**
+ * A fake node whose `resize` behaves the way one Figma target does. `takes`
+ * decides whether the call lands, so one factory covers the node that resizes,
+ * the node that silently refuses, and the node that throws.
+ */
+const sizeNode = (
+  overrides: Record<string, unknown> = {},
+  takes: 'yes' | 'no' | 'throw' = 'yes',
+): Record<string, unknown> => {
+  const node: Record<string, unknown> = {
+    type: 'RECTANGLE',
+    name: 'Bar',
+    width: 40,
+    height: 20,
+    resize(w: number, h: number) {
+      if (takes === 'throw') {
+        throw new Error('nope')
+      }
+      if (takes === 'yes') {
+        node.width = w
+        node.height = h
+      }
+    },
+    ...overrides,
+  }
+  return node
+}
+
+test('applySize: resizes the node and says nothing when the size lands', () => {
+  const warnings: string[] = []
+  const node = sizeNode()
+  applySizeVerified(node, [60, 30], warnings)
+  expect(node.width).toBe(60)
+  expect(node.height).toBe(30)
+  expect(warnings).toEqual([])
+})
+
+test('applySize: an omitted size is not a request — nothing resized, nothing warned', () => {
+  const warnings: string[] = []
+  const node = sizeNode()
+  applySizeVerified(node, undefined, warnings)
+  expect(node.width).toBe(40)
+  expect(warnings).toEqual([])
+})
+
+test('applySize: a target with no resize method is named, not silently skipped', () => {
+  const warnings: string[] = []
+  applySizeVerified({ type: 'PAGE' }, [60, 30], warnings)
+  expect(warnings).toEqual([
+    'size ignored — a PAGE node cannot be resized',
+  ])
+})
+
+test('applySize: B46 — a size Figma accepts and ignores is reported, not returned as success', () => {
+  const warnings: string[] = []
+  const node = sizeNode({}, 'no')
+  applySizeVerified(node, [60, 30], warnings)
+  expect(node.width).toBe(40)
+  expect(warnings.length).toBe(1)
+  expect(warnings[0]).toContain('size not applied')
+  expect(warnings[0]).toContain('asked [60, 30]')
+  expect(warnings[0]).toContain('reads [40, 20]')
+})
+
+test('applySize: B46 — an instance sublayer names the instance it sits in', () => {
+  const warnings: string[] = []
+  const node = sizeNode(
+    {
+      parent: {
+        type: 'FRAME',
+        name: 'Row',
+        parent: { type: 'INSTANCE', name: 'Card' },
+      },
+    },
+    'no',
+  )
+  applySizeVerified(node, [60, 30], warnings)
+  expect(warnings[0]).toContain(
+    'sublayer of the instance "Card"',
+  )
+  expect(warnings[0]).toContain(
+    'Resize the main component',
+  )
+})
+
+test('applySize: B46 — a flexible auto-layout axis is named with the sizing that owns it', () => {
+  const warnings: string[] = []
+  const node = sizeNode(
+    {
+      layoutSizingHorizontal: 'FILL',
+      layoutSizingVertical: 'FIXED',
+      // An instance ancestor as well: the axis is the actionable cause, so it
+      // is the one reported.
+      parent: { type: 'INSTANCE', name: 'Card' },
+    },
+    'no',
+  )
+  applySizeVerified(node, [60, 30], warnings)
+  expect(warnings[0]).toContain(
+    'Auto-layout owns the width (layoutSizingHorizontal: FILL)',
+  )
+  expect(warnings[0]).not.toContain('sublayer')
+})
+
+test('applySize: B46 — a self-sizing text node names its autoResize', () => {
+  const warnings: string[] = []
+  const node = sizeNode(
+    { type: 'TEXT', textAutoResize: 'HEIGHT' },
+    'no',
+  )
+  applySizeVerified(node, [60, 30], warnings)
+  expect(warnings[0]).toContain('textAutoResize: HEIGHT')
+  // The advice names a field the surface HAS. `text.autoResize` is not one —
+  // the write face emits no such key, so an agent following it would get an
+  // unknown-key warning and no fix.
+  expect(warnings[0]).toContain(
+    'sizing:["FIXED","FIXED"]',
+  )
+})
+
+test('applySize: a refusal that throws degrades to one warning, keeping the rest of the patch', () => {
+  const warnings: string[] = []
+  const node = sizeNode({}, 'throw')
+  expect(() =>
+    applySizeVerified(node, [60, 30], warnings),
+  ).not.toThrow()
+  expect(warnings).toEqual([
+    'size rejected by Figma: Error: nope',
+  ])
+})
+
+test('applySize: resizeWithoutConstraints is the second chance, and a size it lands warns nothing', () => {
+  const warnings: string[] = []
+  const node = sizeNode({}, 'no')
+  node.resizeWithoutConstraints = (
+    w: number,
+    h: number,
+  ): void => {
+    node.width = w
+    node.height = h
+  }
+  applySizeVerified(node, [60, 30], warnings)
+  expect(node.width).toBe(60)
+  expect(warnings).toEqual([])
+})
+
+test('applySize: a second-chance throw still reports the mismatch rather than escaping', () => {
+  const warnings: string[] = []
+  const node = sizeNode({}, 'no')
+  node.resizeWithoutConstraints = (): void => {
+    throw new Error('also nope')
+  }
+  expect(() =>
+    applySizeVerified(node, [60, 30], warnings),
+  ).not.toThrow()
+  expect(warnings.length).toBe(1)
+  expect(warnings[0]).toContain('size not applied')
+})
+
+test('applySize: the create arm is unchanged — no read-back, and a throw still stands', () => {
+  const warnings: string[] = []
+  const ignored = sizeNode({}, 'no')
+  applySize(ignored, [60, 30], warnings)
+  expect(warnings).toEqual([])
+  expect(() =>
+    applySize(sizeNode({}, 'throw'), [60, 30], warnings),
+  ).toThrow('nope')
+})
+
+test('applySizeVerified: a node that exposes no width/height is not accused of refusing', () => {
+  const warnings: string[] = []
+  const node: Record<string, unknown> = {
+    type: 'SLOT',
+    resize() {},
+  }
+  applySizeVerified(node, [60, 30], warnings)
+  expect(warnings).toEqual([])
+})
+
+test('applySizeVerified: a sub-0.01px difference is float noise, not a discard', () => {
+  const warnings: string[] = []
+  const node = sizeNode({}, 'no')
+  applySizeVerified(node, [40.005, 20], warnings)
+  expect(warnings).toEqual([])
+})
+
+// The `sizing` interaction. `applySizeVerified` runs AFTER the patch's `sizing`
+// has landed on the node, so these two model the node as it IS at that moment,
+// which is the whole point of moving the call.
+
+test('applySizeVerified: B46(a) — a size patched together with a FIXED pin lands, and warns nothing', () => {
+  // The node hugged when the patch arrived. `sizing:['FIXED','FIXED']` is
+  // applied first now, so by the time the size is written the node takes it.
+  // Before the reorder this re-emitted the very warning the patch had already
+  // acted on, and still left the size unlanded — three calls for one change.
+  const warnings: string[] = []
+  const node = sizeNode({
+    layoutSizingHorizontal: 'FIXED',
+    layoutSizingVertical: 'FIXED',
+  })
+  applySizeVerified(node, [300, 200], warnings, {
+    statedSizing: ['FIXED', 'FIXED'],
+  })
+  expect(node.width).toBe(300)
+  expect(node.height).toBe(200)
+  expect(warnings).toEqual([])
+})
+
+test('applySizeVerified: B46(b) — a size patched together with FILL is reported, not silently handed back', () => {
+  // The self-contradicting patch. The axis is the caller's own doing, so the
+  // remedy clause must NOT tell them to pin it — they refused that in the same
+  // call. Before the reorder this passed the read-back and returned
+  // `warnings: []` while `sizing` took the width away afterwards.
+  const warnings: string[] = []
+  const node = sizeNode(
+    {
+      layoutSizingHorizontal: 'FILL',
+      layoutSizingVertical: 'FIXED',
+    },
+    'no',
+  )
+  applySizeVerified(node, [60, 30], warnings, {
+    statedSizing: ['FILL', 'FIXED'],
+  })
+  expect(warnings.length).toBe(1)
+  expect(warnings[0]).toContain('size not applied')
+  expect(warnings[0]).toContain(
+    'This patch set the width (layoutSizingHorizontal: FILL) itself',
+  )
+  expect(warnings[0]).toContain('the sizing wins')
+  expect(warnings[0]).not.toContain('Pin it with')
+})
+
+test('applySizeVerified: a pre-existing FILL axis still gets the pin advice', () => {
+  // Same node, but the patch said nothing about sizing — so the advice is
+  // actionable and stays.
+  const warnings: string[] = []
+  const node = sizeNode(
+    { layoutSizingHorizontal: 'FILL' },
+    'no',
+  )
+  applySizeVerified(node, [60, 30], warnings)
+  expect(warnings[0]).toContain(
+    'Pin it with sizing:["FIXED","FIXED"]',
+  )
+  expect(warnings[0]).not.toContain('This patch set')
 })

@@ -12,6 +12,8 @@ import { importComponentByKeyWithDeadline } from './import-by-key'
 import { createFontLoader } from './font-cache'
 import { applyPointDetail } from './vector-points'
 import {
+  applySize,
+  applySizeVerified,
   applyStrokeGeometry,
   applyStrokeWeights,
   applyExportSettings,
@@ -544,18 +546,21 @@ const applyCommonProperties = async (
   spec: Record<string, unknown>,
   _parent: ParentNode,
   warnings?: string[],
+  // `deferSize: true` on the paths whose target is ARBITRARY — update_node and
+  // the update_component slot loop. There the caller writes `size` ITSELF, with
+  // applySizeVerified, after applyPostAppendProperties: `sizing` can overrule a
+  // resize, so on a patch the size has to be written last and proven there
+  // (B46). A create states its own type and takes the size here.
+  opts?: { deferSize?: boolean },
 ): Promise<void> => {
   // Name
   if (spec.name !== undefined) {
     node.name = spec.name as string
   }
 
-  // Size
-  if (spec.size !== undefined) {
-    const [w, h] = spec.size as [number, number]
-    if ('resize' in node) {
-      ;(node as FrameNode).resize(w, h)
-    }
+  // Size (B46)
+  if (opts?.deferSize !== true) {
+    applySize(node, spec.size, warnings)
   }
 
   // Position
@@ -3633,11 +3638,21 @@ const handleCommand = async (
                     spec,
                     comp as ParentNode,
                     slotWarnings,
+                    { deferSize: true },
                   )
                   applyPostAppendProperties(
                     slotNode,
                     spec,
                     slotWarnings,
+                  )
+                  // LAST, and after the sizing above: a slot that states a size
+                  // is pinned FIXED by the creation default, and the pin has to
+                  // be on the node before the resize can hold (B46).
+                  applySizeVerified(
+                    slotNode,
+                    spec.size,
+                    slotWarnings,
+                    { statedSizing: spec.sizing },
                   )
                   // Same order as every other write path: literal first,
                   // binding second.
@@ -4047,6 +4062,7 @@ const handleCommand = async (
         spec,
         parent as ParentNode,
         warnings,
+        { deferSize: true },
       )
       if (node.type === 'TEXT' && spec.text !== undefined) {
         await applyTextProperties(
@@ -4059,6 +4075,20 @@ const handleCommand = async (
         node as SceneNode,
         spec,
         warnings,
+      )
+      // Size LAST of the geometry, and PROVEN (B46). Other fields of the same
+      // patch move it — the text write, and `sizing` in
+      // applyPostAppendProperties — so a resize applied first is not what the
+      // caller ends up with, and a read-back taken first is not the patch's
+      // outcome. Written here, `{size, sizing:['FIXED','FIXED']}` lands in ONE
+      // call, and `{size, sizing:['FILL',…]}` is reported instead of silently
+      // handing the axis back. Bindings run after and are allowed to win —
+      // literal first, binding second — but none of them writes a size.
+      applySizeVerified(
+        node as SceneNode,
+        spec.size,
+        warnings,
+        { statedSizing: spec.sizing },
       )
       // Same order as the create path: literal first, binding second.
       await applyWrapperBindings(

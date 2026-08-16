@@ -1,6 +1,7 @@
 // Field appliers for the flat NodeSpec keys the server writer emits beside the
 // main apply path: stroke geometry (strokeCap/strokeJoin/strokeMiterLimit),
-// per-side stroke weights, exportSettings, and node-level layout grids. Same
+// per-side stroke weights, exportSettings, node-level layout grids, and `size`
+// — the one geometry field Figma can accept and then quietly overrule. Same
 // shape as `apply-layout.ts`: each function
 // declares a minimal structural target so it stays free of the figma runtime
 // and is independently unit-testable with a plain fake node.
@@ -245,4 +246,283 @@ export const capabilityWarnings = (
     }
   }
   return out
+}
+
+// ─── geometry: prove the write (T7) ───────────────────────────────────────────
+//
+// `size` is a field Figma ACCEPTS and then overrules. Nothing throws, nothing
+// is dropped by a capability guard, and the node simply keeps the size it had.
+// Every other applier here can trust its assignment. This one reads the value
+// back.
+
+/** Figma's own resolution floor is 0.01px — a smaller gap is not a discard. */
+const GEOMETRY_EPSILON = 0.01
+
+const near = (a: number, b: number): boolean =>
+  Math.abs(a - b) < GEOMETRY_EPSILON
+
+const typeName = (node: { type?: unknown }): string =>
+  typeof node.type === 'string' ? node.type : 'unknown'
+
+const nodeLabel = (node: { name?: unknown }): string =>
+  typeof node.name === 'string' && node.name !== ''
+    ? '"' + node.name + '"'
+    : 'the node'
+
+/**
+ * Structural subset the size applier reads, writes, and diagnoses against.
+ *
+ * `resize` is a METHOD rather than a `width`/`height` pair because a method is
+ * the only way Figma lets a size be set — and reading `width`/`height` back is
+ * the only way to learn whether the call did anything.
+ */
+export type SizeTarget = Partial<{
+  type: unknown
+  name: unknown
+  width: unknown
+  height: unknown
+  resize: (width: number, height: number) => void
+  resizeWithoutConstraints: (
+    width: number,
+    height: number,
+  ) => void
+  layoutSizingHorizontal: unknown
+  layoutSizingVertical: unknown
+  textAutoResize: unknown
+  parent: unknown
+}>
+
+type Ancestor = Partial<{
+  type: unknown
+  name: unknown
+  parent: unknown
+}>
+
+// BOUNDED walk. A Figma tree is finite, but this reads a structural `parent`
+// a caller could hand a cycle back on, and a hung plugin is a far worse answer
+// than an unattributed warning.
+const enclosingInstance = (
+  node: SizeTarget,
+): Ancestor | undefined => {
+  let current = node.parent as
+    | Ancestor
+    | null
+    | undefined
+  for (let hops = 0; hops < 64; hops += 1) {
+    if (current === null || current === undefined) {
+      return undefined
+    }
+    if (current.type === 'INSTANCE') return current
+    current = current.parent as Ancestor | null | undefined
+  }
+  return undefined
+}
+
+const measured = (
+  node: SizeTarget,
+): [number, number] | undefined =>
+  typeof node.width === 'number' &&
+  typeof node.height === 'number'
+    ? [node.width, node.height]
+    : undefined
+
+const ownedByLayout = (sizing: unknown): boolean =>
+  sizing === 'FILL' || sizing === 'HUG'
+
+/**
+ * Name the likeliest reason a resize did not take, or `''` when nothing on the
+ * node explains it.
+ *
+ * Every branch states what was OBSERVED and what the caller can do next: a
+ * refusal an agent cannot act on is barely better than the silence it replaces.
+ * The three causes are ordered most-specific first, because a text node inside
+ * an auto-layout frame inside an instance matches all three and only the
+ * innermost one is worth acting on.
+ */
+const sizeRefusalReason = (
+  node: SizeTarget,
+  asked: [number, number],
+  actual: [number, number],
+  statedSizing?: unknown,
+): string => {
+  if (
+    node.type === 'TEXT' &&
+    typeof node.textAutoResize === 'string' &&
+    node.textAutoResize !== 'NONE'
+  ) {
+    return (
+      ' This text node sizes itself to its content (textAutoResize: ' +
+      node.textAutoResize +
+      '). Inside an auto-layout parent, sizing:["FIXED","FIXED"] pins it.'
+    )
+  }
+  const stated = Array.isArray(statedSizing)
+    ? (statedSizing as unknown[])
+    : []
+  const held: string[] = []
+  // `selfContradicted` tracks whether the SAME patch is what handed the axis
+  // away. It changes the remedy from "pin it" — advice a caller who wrote
+  // sizing:['FILL',…] has already refused — to naming the contradiction.
+  let selfContradicted = false
+  if (
+    !near(actual[0], asked[0]) &&
+    ownedByLayout(node.layoutSizingHorizontal)
+  ) {
+    held.push(
+      'width (layoutSizingHorizontal: ' +
+        String(node.layoutSizingHorizontal) +
+        ')',
+    )
+    if (ownedByLayout(stated[0])) selfContradicted = true
+  }
+  if (
+    !near(actual[1], asked[1]) &&
+    ownedByLayout(node.layoutSizingVertical)
+  ) {
+    held.push(
+      'height (layoutSizingVertical: ' +
+        String(node.layoutSizingVertical) +
+        ')',
+    )
+    if (ownedByLayout(stated[1])) selfContradicted = true
+  }
+  if (held.length > 0) {
+    return selfContradicted
+      ? ' This patch set the ' +
+          held.join(' and the ') +
+          ' itself. A stated size and a FILL or HUG axis contradict each other, and the sizing wins.'
+      : ' Auto-layout owns the ' +
+          held.join(' and the ') +
+          '. Pin it with sizing:["FIXED","FIXED"].'
+  }
+  const instance = enclosingInstance(node)
+  if (instance !== undefined) {
+    return (
+      ' This node is a sublayer of the instance ' +
+      nodeLabel(instance) +
+      '. Figma can refuse a size change on an instance sublayer. Resize the main component, or detach the instance.'
+    )
+  }
+  return ''
+}
+
+const noResizeWarning = (
+  node: SizeTarget,
+  warnings?: string[],
+): void => {
+  warnings?.push(
+    'size ignored — a ' +
+      typeName(node) +
+      ' node cannot be resized',
+  )
+}
+
+/**
+ * Apply `size` on the CREATE path.
+ *
+ * No read-back and no catch, both deliberate. The spec that named the size also
+ * named the node and its type, so there is no arbitrary target to be surprised
+ * by — and a throw here reaches `createSingleNode`'s rollback, which is the
+ * right answer for a create that cannot be built as asked.
+ */
+export const applySize = (
+  node: SizeTarget,
+  size: unknown,
+  warnings?: string[],
+): void => {
+  if (size === undefined) return
+  const [width, height] = size as [number, number]
+  if (typeof node.resize !== 'function') {
+    noResizeWarning(node, warnings)
+    return
+  }
+  node.resize(width, height)
+}
+
+/**
+ * Apply `size` on an ARBITRARY target, and prove that it landed (B46).
+ *
+ * `size` is the one field on the common apply path Figma can take without
+ * complaint and then ignore: an auto-layout parent owns its child's flexible
+ * axes, a text node sizes itself to its content, and a sublayer of an instance
+ * can have its geometry refused outright. Each of those returned `warnings: []`
+ * on a patch that moved nothing — which is how a chart shipped four identical
+ * bars labelled four different numbers, with every read-back reporting success.
+ *
+ * This is the arm `update_node` and the `update_component` slot loop run — the
+ * same "the target was chosen by an id, not by the spec" distinction
+ * `capabilityWarnings` draws above. It is also the arm that catches a throw:
+ * a raw throw would discard every other field of the patch and report a partial
+ * write as a total failure.
+ *
+ * It runs LAST, after `sizing` and after any text write, because those change
+ * the size too and a read-back taken before them is not the patch's outcome.
+ * That order also makes `{size, sizing:['FIXED','FIXED']}` land in ONE call: the
+ * pin goes on first, and the resize it enables happens here. `statedSizing` is
+ * the same patch's `sizing`, carried only so a self-contradicting patch
+ * (`FILL` and a size on one axis) is told what it did rather than advised to do
+ * what it already refused.
+ */
+export const applySizeVerified = (
+  node: SizeTarget,
+  size: unknown,
+  warnings?: string[],
+  opts?: { statedSizing?: unknown },
+): void => {
+  if (size === undefined) return
+  const [width, height] = size as [number, number]
+  if (typeof node.resize !== 'function') {
+    noResizeWarning(node, warnings)
+    return
+  }
+  try {
+    node.resize(width, height)
+  } catch (e) {
+    warnings?.push('size rejected by Figma: ' + String(e))
+    return
+  }
+  // undefined = nothing to report, either because the size landed or because
+  // this target does not expose a width/height to judge it by. Silence on an
+  // unmeasurable node is deliberate: a warning nobody can verify is noise.
+  const mismatch = (): [number, number] | undefined => {
+    const actual = measured(node)
+    if (actual === undefined) return undefined
+    return near(actual[0], width) && near(actual[1], height)
+      ? undefined
+      : actual
+  }
+  let actual = mismatch()
+  if (actual === undefined) return
+  // Second chance. `resize` applies every child constraint on the way down and
+  // can be refused where the constraint-free form is not, so the size worth
+  // trying twice is tried twice before anything is called a refusal. Reached
+  // only when the first call left at least one axis where it was.
+  if (typeof node.resizeWithoutConstraints === 'function') {
+    try {
+      node.resizeWithoutConstraints(width, height)
+    } catch {
+      // The mismatch below is the report — a second throw adds nothing to it.
+    }
+    actual = mismatch()
+    if (actual === undefined) return
+  }
+  warnings?.push(
+    'size not applied — asked [' +
+      width +
+      ', ' +
+      height +
+      '], ' +
+      nodeLabel(node) +
+      ' reads [' +
+      actual[0] +
+      ', ' +
+      actual[1] +
+      '].' +
+      sizeRefusalReason(
+        node,
+        [width, height],
+        actual,
+        opts?.statedSizing,
+      ),
+  )
 }
