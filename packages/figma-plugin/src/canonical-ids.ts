@@ -217,6 +217,57 @@ export const pairWithExport = (
 }
 
 /**
+ * One paired subtree, keyed the way a CALLER addresses it.
+ *
+ * A read emits the id the EXPORT gives each node, so that is the only id an
+ * agent can hand back. `live` answers "which handle does that id name" and
+ * `exported` answers "what does the file say about it" — the two halves a
+ * direct read of that id needs.
+ *
+ * `exported` holds a node even where `live` does not. Content inside a
+ * slot-hosted INSTANCE has a handle Figma composed from a stale parent id, and
+ * that handle throws on every property read, so a read of such an id can only
+ * be served from the export.
+ */
+export type IdentityIndex = {
+  /** canonical id → the live handle the pairing put opposite it. */
+  live: Map<string, LiveNode>
+  /** canonical id → the exported node. */
+  exported: Map<string, RawNode>
+}
+
+/**
+ * Index a live subtree and its export by the id the export gives each node.
+ *
+ * The FIRST pair wins on a repeated id. `pairWithExport` is pre-order, so that
+ * is the shallowest node, which is the one a caller means.
+ */
+export const indexByCanonicalId = (
+  live: LiveNode | undefined,
+  exported: RawNode | undefined,
+  depth = -1,
+): IdentityIndex => {
+  const index: IdentityIndex = {
+    live: new Map(),
+    exported: new Map(),
+  }
+  for (const pair of pairWithExport(live, exported, depth)) {
+    const { id } = pair
+    if (id === undefined) continue
+    if (pair.live !== undefined && !index.live.has(id)) {
+      index.live.set(id, pair.live)
+    }
+    if (
+      pair.exported !== undefined &&
+      !index.exported.has(id)
+    ) {
+      index.exported.set(id, pair.exported)
+    }
+  }
+  return index
+}
+
+/**
  * Every bound-variable id an EXPORTED node carries.
  *
  * The read face already takes the binding ID off the export
