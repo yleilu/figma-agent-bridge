@@ -885,13 +885,26 @@ describe('atomToStroke — a non-numeric weight is rejected', () => {
     })
   })
 
-  it('leaves the per-side tuple to the write face, which has a warnings sink', () => {
-    // Not a rejection here: the tuple's arity and its non-numeric sides
-    // degrade WITH a warning on the write face (B27), and this parser has
-    // nowhere to put one.
-    expect(
-      atomToStroke('stroke([1,x,1,0])').weights,
-    ).toEqual([1, NaN, 1, 0])
+  it('rejects a SIDE that is not a number, on the same terms as a uniform weight', () => {
+    // One atom, one rule. B27 gave this a warn-and-degrade, which was the
+    // honest answer while the uniform arm wrote `null` silently — the ruling
+    // aligns the two on reject.
+    rejects('stroke([1,x,1,0])')
+  })
+
+  it('names the SIDE that was wrong, not the whole tuple', () => {
+    expect(() => atomToStroke('stroke([1,x,1,0])')).toThrow(
+      'not "x"',
+    )
+  })
+
+  it('leaves ARITY to the write face, which has a warnings sink', () => {
+    // A different failure: every entry IS a number, and it is the FIELD that
+    // has no room for three of them. That degrades with a warning where the
+    // sink is, so the parser reports the list as written.
+    expect(atomToStroke('stroke([1,2,3])').weights).toEqual(
+      [1, 2, 3],
+    )
   })
 
   it('does not reject an attrs-only stroke — an omitted weight is untouched, not malformed', () => {

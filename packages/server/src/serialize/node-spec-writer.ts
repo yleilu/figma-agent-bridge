@@ -429,17 +429,20 @@ export const specToFigma = (
       // the canonical form on the read face too, and it keeps ONE owner of the
       // value in the payload — nothing can re-collapse a tuple after the fact.
       //
-      // A list that is not four finite numbers degrades WHOLE. The parser
-      // reports the positional list as written, so `stroke([1,2,3,4,5])` used
-      // to lose its fifth entry to a destructure and land as a well-formed
-      // four-sided stroke — a silent misread of what the caller asked for. The
-      // stroke's weight is left untouched instead, and the sink is told why
-      // (matching applyStrokeWeights' own malformed-tuple degrade).
+      // A list that is not four sides degrades WHOLE. The parser reports the
+      // positional list as written, so `stroke([1,2,3,4,5])` used to lose its
+      // fifth entry to a destructure and land as a well-formed four-sided
+      // stroke — a silent misread of what the caller asked for. The stroke's
+      // weight is left untouched instead, and the sink is told why (matching
+      // applyStrokeWeights' own malformed-tuple degrade).
+      //
+      // ARITY is all this judges. Every entry is already a number: a side that
+      // is not one is refused by `atomToStroke`, on the same terms as a
+      // uniform `stroke(fat)`, so the write never gets here. What is left is
+      // the one question this face can answer — the field holds four sides,
+      // and the caller named some other number of them.
       const sides = geom.weights
-      if (
-        sides.length !== 4 ||
-        sides.some(w => !Number.isFinite(w))
-      ) {
+      if (sides.length !== 4) {
         warnings?.push(
           `stroke([…]) takes four weights [top,right,bottom,left]; got ` +
             `${sides.length} (${sides.join(', ')}) — the per-side weights ` +

@@ -130,34 +130,29 @@ describe('specToFigma — stroke geometry', () => {
 
   // B38: the UNIFORM arm used to be the silent one. `stroke(fat)` emitted
   // `strokeWeight: null` (NaN through JSON) with no warning, and Figma killed
-  // the whole write with its own raw validator message. Neither arm is silent
-  // now: a malformed uniform weight is rejected at parse, a per-side tuple the
-  // field cannot hold degrades with the warning below.
-  it('rejects a non-numeric uniform weight instead of emitting null', () => {
+  // the whole write with its own raw validator message. A weight that is not a
+  // number is rejected at parse now — in EITHER spelling.
+  it.each([
+    ['stroke(fat){align=INSIDE}', 'the uniform weight'],
+    ['stroke([1,x,1,0])', 'a per-side entry'],
+  ])('rejects %s — %s is not a number', (atom: string) => {
     const warnings: string[] = []
     try {
-      specToFigma(
-        { stroke: 'stroke(fat){align=INSIDE}' },
-        warnings,
-      )
+      specToFigma({ stroke: atom }, warnings)
       throw new Error('expected the write to be rejected')
     } catch (err) {
       expect((err as { code?: string }).code).toBe(
         'INVALID_PARAM',
       )
+      // The same teaching sentence from both arms.
       expect((err as Error).message).toContain('stroke(1)')
+      expect((err as Error).message).toContain(
+        'stroke([0,0,1,0])',
+      )
     }
-  })
-
-  it('a non-numeric side degrades whole rather than writing NaN', () => {
-    const warnings: string[] = []
-    const result = specToFigma(
-      { stroke: 'stroke([1,x,1,0])' },
-      warnings,
-    )
-    expect(result.strokeWeight).toBeUndefined()
-    expect(result.strokeWeights).toBeUndefined()
-    expect(warnings).toHaveLength(1)
+    // Rejected, so nothing was written and nothing was warned about: a
+    // warning would say the write went on without the field.
+    expect(warnings).toHaveLength(0)
   })
 
   it('per-side stroke with EQUAL sides emits the plain uniform weight', () => {
