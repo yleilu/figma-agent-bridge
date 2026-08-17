@@ -63,6 +63,7 @@ import type {
   NodeSpec,
   NodeSpecPatch,
   LayoutSpec,
+  NumberAtom,
   SlotEntry,
 } from '@figma-agent-bridge/shared/node-spec'
 import { NODE_SPEC_PATCH_KEYS } from '@figma-agent-bridge/shared/node-spec-schema'
@@ -75,6 +76,7 @@ import {
   atomToPath,
   tokenize,
 } from '../grammar'
+import { ToolError } from '../errors'
 import { collectWrapperBindings } from './wrapper-bindings'
 import { readStyledFields } from './styled-fields'
 
@@ -141,6 +143,46 @@ const parseRadius = (
   return Number(trimmed)
 }
 
+/**
+ * A layout spacing scalar as the plugin takes it — a plain number.
+ *
+ * The leaf may arrive wrapped, because that is what a read of a bound field
+ * emits (`gap: "var(space/8)8"`). The wrapper carries the BINDING, which
+ * `collectWrapperBindings` has already collected into `spec.bindings`; what the
+ * layout itself needs is the literal underneath. Stripping goes through the
+ * shared tokenizer, never a second matcher (T8).
+ *
+ * A leaf that states no number is malformed, and a malformed atom has no
+ * literal half to fall back on — INVALID_PARAM before the write leaves the
+ * server, with the canonical spelling in the message (the `atomToStroke`
+ * precedent, B38). Passing NaN on would cross the wire as `null` and die on
+ * Figma's own validator.
+ */
+const layoutNumber = (
+  value: NumberAtom,
+  field: string,
+): number => {
+  if (typeof value === 'number') {
+    return value
+  }
+  let body = ''
+  try {
+    body = tokenize(value).body.trim()
+  } catch {
+    body = ''
+  }
+  const parsed = Number(body)
+  if (body === '' || !Number.isFinite(parsed)) {
+    throw new ToolError(
+      'INVALID_PARAM',
+      `layout.${field} takes a number, not "${value}". ` +
+        `Write ${field}: 8 for a literal, or ${field}: "var(space/8)8" ` +
+        'to bind the variable space/8 to it.',
+    )
+  }
+  return parsed
+}
+
 /** Map a LayoutSpec to the flat layout object the plugin expects. */
 const convertLayout = (
   layout: LayoutSpec,
@@ -148,10 +190,12 @@ const convertLayout = (
 ): Record<string, unknown> => {
   const out: Record<string, unknown> = { mode: layout.mode }
   if (layout.gap !== undefined) {
-    out.spacing = layout.gap
+    out.spacing = layoutNumber(layout.gap, 'gap')
   }
   if (layout.pad !== undefined) {
-    out.padding = layout.pad
+    out.padding = layout.pad.map((side, i) =>
+      layoutNumber(side, `pad[${i}]`),
+    )
   }
   if (layout.align !== undefined) {
     out.align = layout.align
@@ -179,10 +223,10 @@ const convertLayout = (
     out.cols = layout.cols
   }
   if (layout.rowGap !== undefined) {
-    out.rowGap = layout.rowGap
+    out.rowGap = layoutNumber(layout.rowGap, 'rowGap')
   }
   if (layout.colGap !== undefined) {
-    out.colGap = layout.colGap
+    out.colGap = layoutNumber(layout.colGap, 'colGap')
   }
   return out
 }
@@ -385,17 +429,20 @@ export const specToFigma = (
       // the canonical form on the read face too, and it keeps ONE owner of the
       // value in the payload — nothing can re-collapse a tuple after the fact.
       //
-      // A list that is not four finite numbers degrades WHOLE. The parser
-      // reports the positional list as written, so `stroke([1,2,3,4,5])` used
-      // to lose its fifth entry to a destructure and land as a well-formed
-      // four-sided stroke — a silent misread of what the caller asked for. The
-      // stroke's weight is left untouched instead, and the sink is told why
-      // (matching applyStrokeWeights' own malformed-tuple degrade).
+      // A list that is not four sides degrades WHOLE. The parser reports the
+      // positional list as written, so `stroke([1,2,3,4,5])` used to lose its
+      // fifth entry to a destructure and land as a well-formed four-sided
+      // stroke — a silent misread of what the caller asked for. The stroke's
+      // weight is left untouched instead, and the sink is told why (matching
+      // applyStrokeWeights' own malformed-tuple degrade).
+      //
+      // ARITY is all this judges. Every entry is already a number: a side that
+      // is not one is refused by `atomToStroke`, on the same terms as a
+      // uniform `stroke(fat)`, so the write never gets here. What is left is
+      // the one question this face can answer — the field holds four sides,
+      // and the caller named some other number of them.
       const sides = geom.weights
-      if (
-        sides.length !== 4 ||
-        sides.some(w => !Number.isFinite(w))
-      ) {
+      if (sides.length !== 4) {
         warnings?.push(
           `stroke([…]) takes four weights [top,right,bottom,left]; got ` +
             `${sides.length} (${sides.join(', ')}) — the per-side weights ` +
@@ -564,6 +611,82 @@ export const specToFigma = (
   return out
 }
 
+// ─── a dropped struct drops its bindings (B36) ───────────────────────────────
+
+/**
+ * The node types that can carry a `text` struct.
+ *
+ * It is applied by the plugin's `applyTextProperties`, which runs for a TEXT
+ * node and nowhere else — so the struct is a no-op on every other type. This
+ * is the ONLY capability this file judges, because a create knows only the
+ * type it DECLARED: the plugin sees the real node and owns every other drop
+ * (`capabilityWarnings`). Among the types `create_node` can build, TEXT is the
+ * only one with `characters`, so this cannot warn about a struct that would
+ * have landed.
+ */
+const TEXT_CARRYING_TYPES: ReadonlySet<string> = new Set([
+  'TEXT',
+])
+
+/**
+ * Drop a struct the DECLARED type cannot carry — and the bindings it carried
+ * with it — naming the loss once.
+ *
+ * Two failures, one cause. A `text` struct on a RECTANGLE is dropped by the
+ * plugin (its text applier runs only for a TEXT node), and the create path
+ * never said so: `capabilityWarnings` runs on `update_node` and the slot loop,
+ * where the target is arbitrary, but not inside the create switch, where the
+ * spec was assumed to have chosen its own type. A spec CAN state a struct its
+ * own type cannot hold, and then the silence is wrong.
+ *
+ * Worse, the struct's binding outlived it. `text.color` binds through the
+ * `fills` route (a TEXT node's colour IS its first fill), so
+ * `text:{color:"var(probe/cyan)#22D3EE"}` on a RECTANGLE dropped the colour
+ * and REBOUND `fills[0]` — the grey the same spec stated was replaced by a
+ * variable the agent never asked to put there, silently (B36).
+ *
+ * Dropping the struct BEFORE the conversion is what makes the two halves one
+ * fix: the bindings are collected from the spec, so a struct that is not there
+ * contributes none. No marker has to survive into the payload for something
+ * downstream to honour.
+ */
+const dropUnsupportedStructs = (
+  type: string,
+  spec: NodeSpecPatch,
+  warnings?: string[],
+): NodeSpecPatch => {
+  if (
+    spec.text === undefined ||
+    TEXT_CARRYING_TYPES.has(type)
+  ) {
+    return spec
+  }
+  // The bindings this struct would have asked for, in the spec's own spelling
+  // and deduped (one wrapper can reach two routes). Collected with no sink: a
+  // struct that is going away has no route problems worth reporting.
+  const orphaned = [
+    ...new Set(
+      collectWrapperBindings({ text: spec.text }).map(
+        b => `${b.kind}(${b.name})`,
+      ),
+    ),
+  ]
+  const many = orphaned.length > 1
+  const lost =
+    orphaned.length === 0
+      ? ''
+      : ` (the ${orphaned.join(' and ')} binding${many ? 's' : ''} it carried ` +
+        `${many ? 'were' : 'was'} dropped with it)`
+  // The sentence the plugin's own capabilityWarnings emits, to the word: one
+  // drop reads the same however the write learned about it.
+  warnings?.push(
+    `text ignored — not supported on a ${type} node${lost}`,
+  )
+  const out = { ...spec }
+  delete out.text
+  return out
+}
+
 // ─── creation defaults ───────────────────────────────────────────────────────
 
 /**
@@ -648,8 +771,15 @@ export const specToFigmaForCreate = (
   spec: NodeSpec,
   warnings?: string[],
 ): FigmaWritePayload => {
+  // A struct the DECLARED type cannot carry goes before the conversion, so the
+  // bindings it carried are never collected (B36).
+  const carried = dropUnsupportedStructs(
+    spec.type,
+    spec,
+    warnings,
+  )
   const out: FigmaWritePayload = {
-    ...specToFigma(spec, warnings),
+    ...specToFigma(carried, warnings),
     type: spec.type,
     name: spec.name ?? spec.type,
   }
@@ -660,6 +790,27 @@ export const specToFigmaForCreate = (
 }
 
 // ─── slot entries ─────────────────────────────────────────────────────────────
+
+/**
+ * Patch keys the write face KNOWS and the slot path cannot honour (B37).
+ *
+ * Neither is an unknown key, so `unknownPatchKeyWarnings` passes both: they are
+ * real `partialNodeSpecSchema` fields, accepted by the parameter schema the
+ * slot entry inherits. And neither reaches the converter, which emits no
+ * `children` and no `type` at all. Between the two, `slots:[{name:'Extra',
+ * type:'FRAME', children:[…]}]` reported `slotsCreated:['Extra']` with
+ * `warnings: []` — a clean success for a slot that got neither the type nor the
+ * contents it was asked for.
+ *
+ * The spec is explicit that this is the slot path's own job: a field the slot
+ * cannot take warns and continues, attributed to the slot by name
+ * (tool-surface.md, `update_component`).
+ */
+const SLOT_INERT_KEYS: Record<string, string> = {
+  children:
+    'children ignored — a new slot is created empty. Build its contents with create_node or create_tree, parented to the slot.',
+  type: 'type ignored — an update_component slot entry always creates a SLOT node.',
+}
 
 /**
  * Convert one `update_component` slot entry (B30).
@@ -690,15 +841,32 @@ export const slotEntryToFigma = (
   }
   const { name, ...rest } = entry
   const local: string[] = []
-  const converted = specToFigma(
+  // Every entry creates a SLOT, whatever it says — so the struct a SLOT cannot
+  // carry is dropped here on the same terms as a create, with the bindings it
+  // carried (B36). The plugin's own capabilityWarnings would name the drop,
+  // but only after applying the binding the struct left behind.
+  const carried = dropUnsupportedStructs(
+    'SLOT',
     rest as NodeSpecPatch,
     local,
   )
+  const converted = specToFigma(carried, local)
   const payload: FigmaWritePayload = { ...converted, name }
   // The created slot takes the same creation defaults a created FRAME takes,
   // and on the same terms: only when the entry states no layout of its own,
   // and the size it stated is pinned so the layout cannot hug it away.
   applyCreationDefaults(rest as NodeSpecPatch, payload)
+  // A known key this path cannot honour, before the unknown-key note: the two
+  // read as one list of what the entry asked for and did not get.
+  for (const [key, note] of Object.entries(
+    SLOT_INERT_KEYS,
+  )) {
+    if (
+      (rest as Record<string, unknown>)[key] !== undefined
+    ) {
+      local.push(note)
+    }
+  }
   // `payload` (not `converted`) so the "nothing was changed" tail never fires:
   // the name always lands, whatever else the entry got wrong.
   local.push(...unknownPatchKeyWarnings(rest, payload))

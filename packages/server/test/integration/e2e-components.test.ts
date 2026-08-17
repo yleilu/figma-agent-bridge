@@ -691,10 +691,16 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
   })
 
   it('B30 (T7): a field the SLOT cannot carry warns instead of silently no-opping', async () => {
-    // `text` converts and crosses the wire — it is a real NodeSpec field — but
-    // applyTextProperties only runs for a TEXT node, so on a slot the whole
-    // struct would vanish without a word. That silence is what hides the
-    // headline feature failing on a node type that cannot take it.
+    // `text` is a real NodeSpec field, but applyTextProperties only runs for a
+    // TEXT node, so on a slot the whole struct would vanish without a word.
+    // That silence is what hides the headline feature failing on a node type
+    // that cannot take it.
+    //
+    // B36 moved the drop to the WRITE FACE, which is why the sentence below is
+    // now the server's rather than the plugin's: the struct has to go before
+    // the bindings are collected, or the binding it carried outlives it and
+    // lands on a field the agent never named. The wording is identical either
+    // way — one drop reads the same however the write learned about it.
     const result = await handleUpdateComponent(
       {
         componentId: 'c:1',
@@ -731,6 +737,53 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
     >
     expect(spec.fills).toBeUndefined()
     expect(spec.text).toBeUndefined()
+  })
+
+  it('B37 (T7): a slot entry that states children or a type is told neither lands', async () => {
+    // Live: this exact entry created the slot WITH its layout and reported
+    // `slotsCreated:['Extra']`, `warnings: []`. Both keys are real patch
+    // fields, so the unknown-key guard passes them, and the converter emits
+    // neither — the two silences met in the middle.
+    const result = await handleUpdateComponent(
+      {
+        componentId: 'c:1',
+        slots: [
+          {
+            name: 'Extra',
+            type: 'FRAME',
+            layout: { mode: 'H', gap: 8 },
+            children: [
+              { type: 'TEXT', text: { content: 'Hi' } },
+            ],
+          },
+        ],
+      } as never,
+      scoped,
+    )
+    const reply = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
+    expect(reply.error).toBeUndefined()
+    expect(reply.slotsCreated).toEqual(['Extra'])
+    const warnings = reply.warnings as string[]
+    expect(warnings).toHaveLength(2)
+    for (const w of warnings) {
+      expect(w).toContain('slot "Extra"')
+    }
+    expect(warnings[0]).toContain('children ignored')
+    expect(warnings[1]).toContain('type ignored')
+    // The field the slot CAN take still landed — a reported loss is not a
+    // failed call.
+    const read = await handleGetNode(
+      { nodeId: 'slot:Extra', depth: 0 },
+      scoped,
+    )
+    const spec = YAML.parse(read.content[0].text) as Record<
+      string,
+      unknown
+    >
+    expect(spec.layout).toMatchObject({ mode: 'H', gap: 8 })
+    expect(spec.children).toBeUndefined()
   })
 
   it('B30 (I39): an inline var() wrapper on a slot fill binds through the same mechanism', async () => {

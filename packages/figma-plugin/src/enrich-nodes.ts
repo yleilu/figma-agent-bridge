@@ -30,17 +30,33 @@
 // would buy nothing. `depth: -1` means every level, which is what the caller
 // asked for.
 //
+// PAIRED WITH THE EXPORT, NOT JOINED BY ID (B41). The live walk and the export
+// do not always agree on what a node is CALLED: content written into a
+// component SLOT keeps its pre-append id, so the walk sees `298:7519` where the
+// export says `I298:7517;298:7516;298:7523`, and the walk's descendants carry
+// ids composed from the stale one that name no node at all. Keying the patch
+// map off the live id and looking it up in the export therefore missed EVERY
+// patch for such a subtree — which is B41: `bindingNames` is the only channel
+// carrying style/variable NAMES, so a missed patch silently deletes every
+// `var()` / `style()` wrapper while the literal value (which rides on the
+// export) stays right. The two sides are paired STRUCTURALLY instead — see
+// canonical-ids.ts — and the patch is keyed by the id the export gives.
+//
 // DEGRADES PER NODE (T7): every step of this walk is a property read on a live
-// node, and a node can refuse — one created inside a component SLOT keeps a
-// stale handle and then throws on EVERY read of it ("The node … with id 'I…;…'
-// does not exist"). Unguarded, one such node inside a subtree took the whole
-// read down: a 978 KB read-back answered 151 bytes of PLUGIN_ERROR. So each
-// node's collection is wrapped on its own — the throw becomes that node's
-// `readError` and every other node comes back whole. Never around the map: a
-// guard that spans the walk loses the read it was added to save. And when the
-// failing node cannot be found again in the exported tree — same stale id, seen
-// from the other side — the failure lands on the ROOT as `readErrors` instead
-// of disappearing (see `applyPatches`).
+// node, and a node can refuse — a handle whose address was composed from a
+// stale id throws on EVERY read of it ("The node … with id 'I…;…' does not
+// exist"). Unguarded, one such node inside a subtree took the whole read down:
+// a 978 KB read-back answered 151 bytes of PLUGIN_ERROR. So each node's
+// collection is wrapped on its own — the throw becomes that node's `readError`
+// and every other node comes back whole. Never around the map: a guard that
+// spans the walk loses the read it was added to save.
+//
+// Such a node is still not empty: its bound-variable IDS come off the EXPORT
+// (`variableIdsInExport`), which is where the read face takes them from anyway,
+// so its `var()` names resolve even though its live handle answers nothing. The
+// fields only the Plugin API carries — `context`, text runs, vector geometry,
+// the unrotated size, `style()` names — stay lost, and the `readError` on that
+// node says so rather than letting the gap pass as a clean read.
 //
 // Nodes are seen STRUCTURALLY (`LiveNode`) rather than as `BaseNode` so this is
 // testable without a Figma runtime — the same reason `omitMixed` takes
@@ -58,9 +74,15 @@ import {
   joinsFromNetwork,
 } from './vector-points'
 import { segmentsToRuns } from './text-runs'
+import {
+  pairWithExport,
+  variableIdsInExport,
+  type LiveNode,
+  type NodePair,
+  type RawNode,
+} from './canonical-ids'
 
-/** A live Figma node, seen structurally so a test can stand one up. */
-export type LiveNode = Record<string, unknown>
+export type { LiveNode, RawNode }
 
 /** The extra keys merged onto one exported node. */
 export type Patch = Record<string, unknown>
@@ -96,57 +118,28 @@ const STYLE_ID_FIELDS = {
   gridStyleId: 'grid',
 } as const
 
-const childrenOf = (
-  n: LiveNode,
-  onError?: (err: unknown) => void,
-): LiveNode[] => {
-  try {
-    if (!('children' in n)) return []
-    const kids = n.children
-    if (kids === null || kids === undefined) return []
-    // `Array.from` rather than a cast: it accepts a real array, an array-like
-    // and an iterable alike, and yields [] for anything else.
-    return Array.from(kids as ArrayLike<LiveNode>)
-  } catch (err) {
-    // The shape `Array.from` was guarding against was never the danger — the
-    // ACCESS is. A node that no longer resolves (the stale handle a slot-child
-    // create hands back) throws on every property read, `children` among them,
-    // and this runs inside the export path, where a throw loses the whole
-    // read. The node stays in the walk and its own patch names the failure, so
-    // the subtree missing from here is reported rather than quietly absent.
-    onError?.(err)
-    return []
-  }
-}
-
 /**
- * Every node from `root` down to `depth`, root first.
+ * The LAYOUT fields Figma lets a variable bind, in the Plugin API's own
+ * spelling — `node.setBoundVariable(field, variable)` takes exactly these.
  *
- * `depth: 0` is the root alone, `N` is the root plus N levels, `-1` is all of
- * them.
+ * They are patched across because JSON_REST_V1 does not carry them: a real,
+ * live-verified `itemSpacing` binding (gap 4 → 8, the variable's value, and the
+ * node indexed by `search match:{variableId}`) read back as a bare `gap: 8`,
+ * with no wrapper and nothing to say a binding existed at all (B44). So a
+ * read-modify-write silently destroyed it, and spacing tokens were unauditable.
  *
- * `onError` is called with the node whose children could not be listed; the
- * walk continues past it either way.
+ * `counterAxisSpacing` is bindable in Figma but has no field in the layout
+ * struct (the grammar spells one `gap`), so nothing here could carry it.
  */
-export const nodesWithin = (
-  root: LiveNode,
-  depth: number,
-  onError?: (node: LiveNode, err: unknown) => void,
-): LiveNode[] => {
-  const out: LiveNode[] = []
-  const walk = (n: LiveNode, remaining: number): void => {
-    out.push(n)
-    if (remaining === 0) return
-    const next = remaining < 0 ? remaining : remaining - 1
-    for (const child of childrenOf(n, err =>
-      onError?.(n, err),
-    )) {
-      walk(child, next)
-    }
-  }
-  walk(root, depth)
-  return out
-}
+const LAYOUT_BOUND_FIELDS = [
+  'itemSpacing',
+  'paddingTop',
+  'paddingRight',
+  'paddingBottom',
+  'paddingLeft',
+  'gridRowGap',
+  'gridColumnGap',
+] as const
 
 /** The node's agent-authored `context`, or undefined when it has none. */
 export const readContext = (
@@ -355,6 +348,25 @@ export const syncPatch = (
     patch.gridColumnGap = node.gridColumnGap
   }
 
+  // B44 — which VARIABLE each bindable layout field is bound to. Only the ids
+  // travel; the reader turns them into the `var()` names it emits, off the same
+  // `bindingNames` map every other wrapper resolves through.
+  const bound = node.boundVariables as
+    | Record<string, { id?: unknown } | undefined>
+    | undefined
+  if (typeof bound === 'object' && bound !== null) {
+    const layoutBound: Record<string, string> = {}
+    for (const field of LAYOUT_BOUND_FIELDS) {
+      const id = bound[field]?.id
+      if (typeof id === 'string') {
+        layoutBound[field] = id
+      }
+    }
+    if (Object.keys(layoutBound).length > 0) {
+      patch.layoutBoundVariables = layoutBound
+    }
+  }
+
   // B3 — componentPropertyReferences: field → canonical component property id,
   // set by update_component's add+targetNodeId binding. Present on component
   // and instance SUBLAYERS, which is precisely where the root-only rule used
@@ -460,20 +472,10 @@ const resolveNames = async (
   return out
 }
 
-/** The node's id, or undefined when it cannot even be identified. */
-const idOf = (n: LiveNode): string | undefined => {
-  try {
-    return typeof n.id === 'string' ? n.id : undefined
-  } catch {
-    // A patch is merged BY id, so there is nothing to attach to a node whose
-    // id is unreadable — it drops out exactly as an id-less node always has.
-    return undefined
-  }
-}
-
 /** One node's collected state, before the async halves land on it. */
 type Pending = {
-  node: LiveNode
+  /** Absent when only the export describes this node — see collectOne. */
+  node: LiveNode | undefined
   id: string
   patch: Patch
   styleIds: Record<string, string>
@@ -488,41 +490,72 @@ type Pending = {
  * that no longer resolves throws on every one of them. Wrapping the whole map
  * would trade a lost read for a lost read; wrapping one node costs one node.
  * The failure becomes a field, so the caller learns WHICH node it lost.
+ *
+ * The bound-variable ids are the UNION of what the live node reports and what
+ * the export carries. The export half is not redundant: it is the only half a
+ * node with an unusable live handle has, and it is where the read face reads
+ * the binding id from anyway — so the names still resolve and the wrapper
+ * survives (B41).
  */
 const collectOne = (
-  node: LiveNode,
+  pair: NodePair,
   id: string,
   mixed: symbol,
-  walkError: string | undefined,
 ): Pending => {
+  const exportedIds =
+    pair.exported === undefined
+      ? []
+      : variableIdsInExport(pair.exported)
+  const node = pair.live
+  if (node === undefined) {
+    return {
+      node: undefined,
+      id,
+      patch: {},
+      styleIds: {},
+      variableIds: exportedIds,
+    }
+  }
   try {
     const patch = syncPatch(node, mixed)
-    if (walkError !== undefined) {
-      patch.readError = walkError
+    if (pair.walkError !== undefined) {
+      patch.readError = pair.walkError
     }
     return {
       node,
       id,
       patch,
       styleIds: styleIdsOf(node),
-      variableIds: variableIdsOf(node),
+      variableIds: [
+        ...new Set([
+          ...variableIdsOf(node),
+          ...exportedIds,
+        ]),
+      ],
     }
   } catch (err) {
-    // `readError` alone: whatever `syncPatch` had gathered before it threw is
-    // not reachable from out here, and half a patch off a node that cannot be
-    // read is worth less than the name of what went wrong.
+    // `readError` plus whatever the EXPORT still says: half a patch off a node
+    // that cannot be read is worth less than the name of what went wrong, but
+    // the export's own bindings are not half — they are complete and correct.
     return {
       node,
       id,
       patch: { readError: String(err) },
       styleIds: {},
-      variableIds: [],
+      variableIds: exportedIds,
     }
   }
 }
 
 /**
- * One patch per node id, for every node within `depth` of `root`.
+ * One patch per node, for every node within `depth` of `root`, keyed by the id
+ * `applyPatches` will look it up under.
+ *
+ * `exported` is the JSON_REST_V1 document the patches are destined for. It is
+ * what makes the key CANONICAL: pairing is structural, so a node whose live
+ * handle answers a stale id is still keyed by the id the export gives it.
+ * Pass `undefined` (or a document that describes something else) and every
+ * node simply keys by its own live id — nothing matches, nothing breaks.
  *
  * The async halves — style/variable NAMES and an instance's main component —
  * are resolved across the WHOLE set at once. Names batch by distinct id
@@ -532,29 +565,17 @@ const collectOne = (
  */
 export const collectPatches = async (
   root: LiveNode,
+  exported: RawNode | undefined,
   depth: number,
   deps: EnrichDeps,
 ): Promise<Map<string, Patch>> => {
-  // A node whose children could not be listed is still a node in the read; the
-  // error is held here and lands on its own patch below, beside whatever of
-  // that node WAS readable.
-  const walkErrors = new Map<LiveNode, string>()
-  const pending = nodesWithin(root, depth, (node, err) => {
-    walkErrors.set(node, String(err))
-  })
-    .map(node => ({ node, id: idOf(node) }))
+  const pending = pairWithExport(root, exported, depth)
+    .map(pair => ({ pair, id: pair.id }))
     .filter(
-      (p): p is { node: LiveNode; id: string } =>
+      (p): p is { pair: NodePair; id: string } =>
         p.id !== undefined,
     )
-    .map(p =>
-      collectOne(
-        p.node,
-        p.id,
-        deps.mixed,
-        walkErrors.get(p.node),
-      ),
-    )
+    .map(p => collectOne(p.pair, p.id, deps.mixed))
 
   const [styleNames, variableNames] = await Promise.all([
     resolveNames(
@@ -569,6 +590,7 @@ export const collectPatches = async (
 
   await Promise.all(
     pending.map(async p => {
+      if (p.node === undefined) return
       try {
         const main = await mainComponentOf(p.node)
         if (main !== null && main !== undefined) {
@@ -636,16 +658,13 @@ export const collectPatches = async (
  * Bounded by the same `depth` the patches were collected at — past it there is
  * nothing to apply, and the exported subtree can be far larger than the read.
  *
- * A FAILURE THAT CANNOT BE MERGED IS STILL REPORTED. The two sides are keyed by
- * id, and the id the live walk reads is not always the id the export carries:
- * the same slot-nested node that throws on every read also answers the STALE
- * form of its id (`I<creationId>;<child>`) while the export names it by the
- * canonical ancestor chain. The patch then matches nothing, and a silently
- * dropped `readError` is exactly the quiet failure this whole module exists to
- * remove — so unattachable failures are collected onto the ROOT as `readErrors`
- * (`"<id the walk saw>: <message>"`). Distinct field, distinct claim:
- * `readError` says THIS node failed, `readErrors` says a node below me failed
- * and I could not tell you which one it is in this tree.
+ * A FAILURE THAT CANNOT BE MERGED IS STILL REPORTED. The collection keys each
+ * patch by the id the EXPORT gives the node, so a patch that finds no home
+ * means the two walks disagreed about the SHAPE of the subtree, not about a
+ * node's name — rare, and no reason to drop a failure on the floor. Those land
+ * on the ROOT as `readErrors` (`"<id the walk saw>: <message>"`). Distinct
+ * field, distinct claim: `readError` says THIS node failed, `readErrors` says a
+ * node below me failed and I could not tell you which one it is in this tree.
  *
  * Only failures get the fallback. A clean patch that finds no home is dropped
  * as it always has been — it carries nothing the caller needs to act on.
@@ -696,7 +715,9 @@ export const applyPatches = (
 /**
  * Collect + apply: the whole enrichment pass for one export.
  *
- * `doc` is mutated in place — it is the object the reply is built from.
+ * `doc` is mutated in place — it is the object the reply is built from, and it
+ * is also what the collection pairs the live subtree against, so the patches
+ * come back keyed by the ids `doc` actually uses.
  */
 export const enrichDocument = async (
   root: LiveNode,
@@ -706,7 +727,7 @@ export const enrichDocument = async (
 ): Promise<void> => {
   applyPatches(
     doc,
-    await collectPatches(root, depth, deps),
+    await collectPatches(root, doc, depth, deps),
     depth,
   )
 }

@@ -12,11 +12,15 @@ import { importComponentByKeyWithDeadline } from './import-by-key'
 import { createFontLoader } from './font-cache'
 import { applyPointDetail } from './vector-points'
 import {
+  applySize,
+  applySizeVerified,
   applyStrokeGeometry,
   applyStrokeWeights,
   applyExportSettings,
   applyGrids,
   capabilityWarnings,
+  discardedPositionsWarning,
+  type Placement,
 } from './apply-node-fields'
 import {
   applyStyleField,
@@ -43,6 +47,10 @@ import {
   readContext as readNodeContext,
   type LiveNode,
 } from './enrich-nodes'
+import {
+  repairScan,
+  type ScanFailure,
+} from './search-candidates'
 import { projectComponentDefs } from './project-component-defs'
 import { rollbackCreated } from './rollback'
 import { resolveInstanceProps } from './resolve-instance-props'
@@ -301,16 +309,37 @@ const fontLoader = createFontLoader(async font => {
   await figma.loadFontAsync(font)
 })
 
-const summarizeChildren = (
-  node: BaseNode & { children?: readonly BaseNode[] },
-) =>
-  'children' in node && node.children
-    ? node.children.map(child => ({
-        id: child.id,
-        name: child.name,
-        type: child.type,
-      }))
-    : []
+/**
+ * One child of a PAGE / DOCUMENT at the read's own depth boundary — the shape
+ * the server turns straight into an id-stub.
+ *
+ * It carries the two things a stub needs and the old three-key summary did not
+ * (B51): the node's REAL size, and how many children it hides. Without the
+ * size, every child of a page-rooted read came back `size: [0,0]` — a value
+ * the file does not hold (B26: never present a value the engine is not
+ * maintaining). Without `childCount`, the receipt reported the level as
+ * childless, so `truncated` claimed a completeness the read did not have.
+ *
+ * A PAGE under a DOCUMENT has no width/height, so those keys are simply
+ * omitted — a page has no size, and none is invented for it.
+ */
+const childBoundary = (
+  child: BaseNode,
+): Record<string, unknown> => {
+  const kids = (child as Partial<ChildrenMixin>).children
+  return {
+    id: child.id,
+    name: child.name,
+    type: child.type,
+    ...('width' in child
+      ? {
+          width: (child as SceneNode).width,
+          height: (child as SceneNode).height,
+        }
+      : {}),
+    childCount: Array.isArray(kids) ? kids.length : 0,
+  }
+}
 
 // The `BaseNode`-typed face of enrich-nodes' structural reader, so the other
 // context call sites in this file are unchanged.
@@ -437,13 +466,39 @@ const exportNodeDocument = async (
   node: BaseNode,
   depth: number,
 ): Promise<unknown> => {
+  // A PAGE (or the DOCUMENT) cannot be exported: `exportAsync` is a SceneNode
+  // call. So the read is ASSEMBLED from its children instead — and the depth
+  // the caller asked for is spent on THEM (B51). It used to be ignored
+  // entirely: a page-rooted `depth:2` returned byte-identical output to
+  // `depth:1`, three keys per child and a fabricated `size: [0,0]` on each,
+  // while `truncated: []` claimed the read had lost nothing.
   if (node.type === 'DOCUMENT' || node.type === 'PAGE') {
     const ctx = readContext(node)
+    const kids =
+      'children' in node
+        ? (node as BaseNode & ChildrenMixin).children
+        : []
+    // depth 0 wants the page alone, so its children stay boundary rows and no
+    // subtree is serialized — the cheap default read stays cheap. Any deeper
+    // read exports each child at the depth left over, exactly as a read
+    // ENTERED at that child would, so a descendant of a page is as complete as
+    // a descendant of a frame.
+    const children =
+      depth === 0
+        ? kids.map(childBoundary)
+        : await Promise.all(
+            kids.map(child =>
+              exportPageChild(
+                child,
+                depth === -1 ? -1 : depth - 1,
+              ),
+            ),
+          )
     return {
       id: node.id,
       name: node.name,
       type: node.type,
-      children: summarizeChildren(node),
+      children,
       ...(ctx !== undefined ? { context: ctx } : {}),
     }
   }
@@ -469,6 +524,37 @@ const exportNodeDocument = async (
     'exportAsync returned unexpected type: ' +
       typeof exported,
   )
+}
+
+/**
+ * One child of a page, exported — or named as the one node that could not be
+ * (T7, *Reads degrade per node*).
+ *
+ * A page read now touches every child, where the old summary touched none, so
+ * one stale handle would have cost the WHOLE page read. It costs that child:
+ * the row comes back with whatever identity still reads plus a `readError`, and
+ * every sibling is unaffected. The failing row carries NO `childCount` — the
+ * read has no idea how many children it hides, and the server turns a row that
+ * states a count into an id-stub, which has nowhere to put the failure.
+ */
+const exportPageChild = async (
+  child: BaseNode,
+  depth: number,
+): Promise<unknown> => {
+  try {
+    return await exportNodeDocument(child, depth)
+  } catch (err) {
+    const readError =
+      err instanceof Error ? err.message : String(err)
+    try {
+      const { childCount, ...identity } =
+        childBoundary(child)
+      return { ...identity, readError }
+    } catch {
+      // The handle answers nothing at all, its own id included.
+      return { type: '', readError }
+    }
+  }
 }
 
 const bytesToBase64 = (bytes: Uint8Array): string => {
@@ -540,18 +626,21 @@ const applyCommonProperties = async (
   spec: Record<string, unknown>,
   _parent: ParentNode,
   warnings?: string[],
+  // `deferSize: true` on the paths whose target is ARBITRARY — update_node and
+  // the update_component slot loop. There the caller writes `size` ITSELF, with
+  // applySizeVerified, after applyPostAppendProperties: `sizing` can overrule a
+  // resize, so on a patch the size has to be written last and proven there
+  // (B46). A create states its own type and takes the size here.
+  opts?: { deferSize?: boolean },
 ): Promise<void> => {
   // Name
   if (spec.name !== undefined) {
     node.name = spec.name as string
   }
 
-  // Size
-  if (spec.size !== undefined) {
-    const [w, h] = spec.size as [number, number]
-    if ('resize' in node) {
-      ;(node as FrameNode).resize(w, h)
-    }
+  // Size (B46)
+  if (opts?.deferSize !== true) {
+    applySize(node, spec.size, warnings)
   }
 
   // Position
@@ -1368,6 +1457,51 @@ const applyVectorPointDetail = async (
   }
 }
 
+/**
+ * Write a vector's geometry: the paths, then the per-point detail they carry.
+ *
+ * ONE function for create and update (B45). It used to be inline in the VECTOR
+ * arm of the create switch, so `update_node` — which never enters that switch —
+ * accepted `vectorPaths`, changed nothing, and answered `warnings: []` while a
+ * sibling field in the same patch landed. The canonical atom a read emits has
+ * to be writable back (T2), and it is only writable back where the write path
+ * is shared.
+ *
+ * The server hands each path over as `{windingRule, data, corners?}`. Only the
+ * first two are Figma's shape — the radii, caps and joins live on the network,
+ * and are written after, because assigning `vectorPaths` rebuilds it.
+ */
+const applyVectorPaths = async (
+  vector: VectorNode,
+  raw: unknown,
+  warnings?: string[],
+): Promise<void> => {
+  const paths = raw as (VectorPath & {
+    corners?: Record<number, number>
+    caps?: Record<number, string>
+    joins?: Record<number, string>
+  })[]
+  try {
+    vector.vectorPaths = paths.map(
+      ({ windingRule, data }) => ({
+        windingRule,
+        data,
+      }),
+    )
+  } catch (e) {
+    // Figma's own message, not a guess at the cause. On a create the data is
+    // the only thing that can be wrong, but update_node reaches nodes whose
+    // path is read-only, and calling that "invalid path data" would send the
+    // agent to fix a string that is already correct.
+    warnings?.push(
+      'vectorPaths rejected by Figma: ' + String(e),
+    )
+    // The network was not rebuilt, so per-point detail has nothing to land on.
+    return
+  }
+  await applyVectorPointDetail(vector, paths, warnings)
+}
+
 // The builder proper: create the node by type, configure it, append it. On a
 // throw it leaves the half-built node wherever it got to — which is why nothing
 // calls it directly. `createSingleNode` below wraps it with the rollback that
@@ -1384,6 +1518,10 @@ const buildSingleNode = async (
   writer: string,
   track: <T extends SceneNode>(node: T) => T,
   warnings?: string[],
+  // B35's sink. The NODE goes in, not a snapshot of its x/y, so the caller
+  // reads the position this child ended the level with rather than the one it
+  // held before its siblings arrived.
+  placed?: Placement[],
 ): Promise<SceneNode> => {
   const type = spec.type as string
   let node: SceneNode
@@ -1434,30 +1572,9 @@ const buildSingleNode = async (
         'vectorPaths' in vector &&
         spec.vectorPaths !== undefined
       ) {
-        // The server hands each path over as {windingRule, data, corners?}.
-        // Only the first two are Figma's shape; the radii live on the network
-        // and are written after, because assigning vectorPaths rebuilds it.
-        const paths = spec.vectorPaths as (VectorPath & {
-          corners?: Record<number, number>
-          caps?: Record<number, string>
-          joins?: Record<number, string>
-        })[]
-        try {
-          vector.vectorPaths = paths.map(
-            ({ windingRule, data }) => ({
-              windingRule,
-              data,
-            }),
-          )
-        } catch (e) {
-          warnings?.push(
-            'vectorPaths rejected by Figma (invalid path data): ' +
-              String(e),
-          )
-        }
-        await applyVectorPointDetail(
+        await applyVectorPaths(
           vector,
-          paths,
+          spec.vectorPaths,
           warnings,
         )
       }
@@ -1671,6 +1788,16 @@ const buildSingleNode = async (
   // notice. A build then ships a node sized differently than it asked for.
   applyPostAppendProperties(node, spec, warnings)
 
+  // warn-on-no-op (T7, B35): the append just handed this node's x/y to the
+  // parent's auto-layout, and the creation default (B29) is what put that
+  // layout on a frame the caller said nothing about. Recorded rather than
+  // warned, because the caller holds the SIBLINGS: fifty children of one frame
+  // are one warning, not fifty (T4). Recorded HERE, after
+  // applyPostAppendProperties, because `layoutPositioning:'ABSOLUTE'` is the
+  // escape hatch and it is set there — a node that escaped kept its position
+  // and has nothing to report.
+  placed?.push({ position: spec.position, node })
+
   // Bindings LAST: `var(surface/2)#141B2E` sets the paint above and binds the
   // token here, so the binding always lands on a node that already looks
   // right — and on a TEXT node, after applyTextProperties has set the font a
@@ -1706,6 +1833,7 @@ const createSingleNode = async (
   parent: ParentNode,
   writer: string,
   warnings?: string[],
+  placed?: Placement[],
 ): Promise<SceneNode> => {
   let held: SceneNode | undefined
   const track = <T extends SceneNode>(node: T): T => {
@@ -1719,6 +1847,7 @@ const createSingleNode = async (
       writer,
       track,
       warnings,
+      placed,
     )
   } catch (err) {
     // `removed` guard: a node can already be gone (a throw from Figma's own
@@ -1753,6 +1882,11 @@ const createTreeNode = async (
   // e.g. `sizing:['FILL',…]` on a child of a SLOT, which Figma rejects — is
   // silently discarded (T7 violation).
   warnings?: string[],
+  // B35's sink for THIS node, owned by the caller that appended it (its own
+  // children get a fresh one below). Threaded through the `{ ref }` expansion
+  // so a ref-built child records the position its POOL spec stated — the
+  // wrapper never carries one.
+  placed?: Placement[],
 ): Promise<SceneNode> => {
   const type = spec.type as string
 
@@ -1780,12 +1914,13 @@ const createTreeNode = async (
       [...refStack, refKey],
       created,
       warnings,
+      placed,
     )
   }
 
   // Clone reference: { id } with no type
   if (spec.id !== undefined && spec.type === undefined) {
-    const existing = await figma.getNodeByIdAsync(
+    const existing = await resolveNodeId(
       spec.id as string,
     )
     if (!existing)
@@ -1868,6 +2003,7 @@ const createTreeNode = async (
     parent,
     writer,
     warnings,
+    placed,
   )
   // Pushed BEFORE the children recurse, so the order is root-first depth-first.
   created?.push(node.id)
@@ -1881,6 +2017,11 @@ const createTreeNode = async (
     children.length > 0 &&
     'appendChild' in node
   ) {
+    // B35 + T4: this level's children collect here and are reported ONCE, by
+    // the parent that placed them. Read after the loop, so the x/y each child
+    // is judged on is the one it ended the level with — an auto-layout that
+    // centres or space-betweens moves every earlier child as later ones arrive.
+    const childPlacements: Placement[] = []
     for (const childSpec of children) {
       await createTreeNode(
         childSpec,
@@ -1890,7 +2031,15 @@ const createTreeNode = async (
         refStack,
         created,
         warnings,
+        childPlacements,
       )
+    }
+    const discarded = discardedPositionsWarning(
+      node,
+      childPlacements,
+    )
+    if (discarded !== undefined) {
+      warnings?.push(discarded)
     }
   }
 
@@ -2035,31 +2184,56 @@ const applyVariableMeta = async (
   }
 }
 
-// Resolve a parentId for create_node / create_tree. Plain scene-node ids go
-// through getNodeByIdAsync. A COMPOUND instance-child id ("I<inst>;<child>",
-// e.g. a SLOT inside an instance) is NOT resolvable by getNodeByIdAsync — it
-// hangs (live-verified 2026-07-17). Resolve those by traversing the instance:
-// getNodeByIdAsync the leading instance id, then findOne by the full compound
-// id. Keeps the create_node / create_tree `parentId` interface unchanged (T6).
-const resolveParentNode = async (
-  parentId: string,
+// Resolve ONE node id, for every entry point that takes one. Plain scene-node
+// ids go through getNodeByIdAsync. A COMPOUND instance-child id
+// ("I<inst>;<child>", e.g. a SLOT inside an instance) is NOT resolvable that
+// way — the call reaches for Figma's network and hangs (live-verified
+// 2026-07-17), which offline is a "check your internet connection" error on an
+// id the document already holds (B34). Resolve those by traversing the
+// instance: getNodeByIdAsync the leading instance id, then findOne by the full
+// compound id.
+//
+// Every tool interface stays as it was (T6): the two forms are the same
+// parameter, and which one the caller holds is not something it should have to
+// know. An instance sublayer's id is compound whenever it has an instance above
+// it, and that id is exactly what the previous read handed the agent — so every
+// entry that takes a caller-supplied SCENE-NODE id resolves through here, read
+// and write alike. There is no third rule and no exception list to remember:
+// the entries below that still call getNodeByIdAsync do so because what they
+// hold is NOT a sublayer address, never because the defect was thought unlikely
+// to reach them.
+//
+// The write half was the sharper failure. The bare call does not always fail:
+// live 2026-08-17, `update_node` on `I298:7524;298:7511` answered "Unable to
+// establish connection to Figma after 10 seconds" and then SUCCEEDED on retry.
+// A resolve that depends on the network is a coin flip, and a coin flip under
+// an apply-or-warn contract is worse than a refusal — the caller cannot tell a
+// node that would not take the write from one the plugin never reached.
+//
+// NOT routed, deliberately: page ids (`set_current_page`, `duplicate_page`,
+// search's `pageId`) are never compound; a component/style/variable id is not a
+// node id at all; the rollback resolver only ever sees ids this plugin minted;
+// and the change-feed's `writeScope` already refuses anything but a plain
+// `<n>:<n>` before it resolves (feed/write-scope.ts, PLAIN_NODE_ID).
+const resolveNodeId = async (
+  nodeId: string,
 ): Promise<BaseNode | null> => {
-  const sep = parentId.indexOf(';')
-  if (parentId.startsWith('I') && sep > 1) {
+  const sep = nodeId.indexOf(';')
+  if (nodeId.startsWith('I') && sep > 1) {
     // "I<instanceId>;<...>" — instance id is between 'I' and the first ';'.
-    const instanceId = parentId.slice(1, sep)
+    const instanceId = nodeId.slice(1, sep)
     const instance =
       await figma.getNodeByIdAsync(instanceId)
     if (instance && 'findOne' in instance) {
       return (
         (instance as InstanceNode).findOne(
-          n => n.id === parentId,
+          n => n.id === nodeId,
         ) ?? null
       )
     }
     return null
   }
-  return figma.getNodeByIdAsync(parentId)
+  return figma.getNodeByIdAsync(nodeId)
 }
 
 // resolveStyle: shared helper for update_styles and delete_styles.
@@ -2170,7 +2344,7 @@ const handleCommand = async (
       const skipped: string[] = []
       const offPage: string[] = []
       for (const id of ids) {
-        const n = await figma.getNodeByIdAsync(id)
+        const n = await resolveNodeId(id)
         // Only scene nodes are selectable; `visible` is present on every
         // SceneNode and absent on PAGE/DOCUMENT, so it's a sound guard.
         if (!n || !('visible' in n)) {
@@ -2218,7 +2392,10 @@ const handleCommand = async (
     }
 
     case COMMANDS.GET_NODE: {
-      const node = await figma.getNodeByIdAsync(
+      // B34 — resolveNodeId, not getNodeByIdAsync: a compound instance-child
+      // id is what the previous read handed the agent, and resolving it the
+      // bare way reaches for the network and times out.
+      const node = await resolveNodeId(
         params.nodeId as string,
       )
       if (!node) {
@@ -2240,11 +2417,11 @@ const handleCommand = async (
     case COMMANDS.INSPECT: {
       let target: BaseNode | null = null
       if (params.nodeId !== undefined) {
-        target = await figma.getNodeByIdAsync(
+        target = await resolveNodeId(
           params.nodeId as string,
         )
       } else if (params.pageId !== undefined) {
-        target = await figma.getNodeByIdAsync(
+        target = await resolveNodeId(
           params.pageId as string,
         )
       } else {
@@ -2284,7 +2461,7 @@ const handleCommand = async (
       const nodeIds = (params.nodeIds as string[]) || []
       return Promise.all(
         nodeIds.map(async nodeId => {
-          const node = await figma.getNodeByIdAsync(nodeId)
+          const node = await resolveNodeId(nodeId)
           if (!node) {
             return { id: nodeId, error: 'Node not found' }
           }
@@ -2311,7 +2488,7 @@ const handleCommand = async (
       }
 
     case COMMANDS.EXPORT: {
-      const exportNode = (await figma.getNodeByIdAsync(
+      const exportNode = (await resolveNodeId(
         params.nodeId as string,
       )) as SceneNode | null
       if (!exportNode) {
@@ -2712,7 +2889,7 @@ const handleCommand = async (
       // builds its candidates directly below — no shared root.)
       const roots: (BaseNode & ChildrenMixin)[] = []
       if (scope === 'node') {
-        const target = await figma.getNodeByIdAsync(
+        const target = await resolveNodeId(
           params.nodeId as string,
         )
         // A typo'd / deleted / non-container nodeId is a genuine not-found,
@@ -2793,14 +2970,30 @@ const handleCommand = async (
         collectVariableId ||
         collectCharacters
 
-      const seen = new Set<string>()
-      const scanned: SceneNode[] = []
+      // id → its entry in `scanned`, which is also the dedup set.
+      const seen = new Map<string, number>()
+      // One entry per scanned node, in DFS order. `subtreeEnd` closes the
+      // node's own range (`[index, subtreeEnd)`), which is what makes "replace
+      // everything under this node" a slice rather than a second traversal.
+      type Scanned = {
+        node: SceneNode
+        id: string
+        levelsLeft: number
+        /** Index of the node this one was reached THROUGH, -1 for a root. */
+        parentIndex: number
+        subtreeEnd: number
+      }
+      const scanned: Scanned[] = []
 
       // What the scan could not read, named rather than thrown (T7). A node
-      // created inside a component SLOT keeps a stale handle and then throws
-      // on every property read of it — `in get_name: The node … does not
-      // exist` — and one of those in a document-wide scan used to kill the
-      // whole search. The scan now completes and says which ids it lost.
+      // written into a component SLOT keeps its pre-append id, so the handles
+      // below it carry addresses composed from a stale id and throw on every
+      // property read — `in get_name: The node … does not exist`. One of those
+      // in a document-wide scan used to kill the whole search; then it became a
+      // warning, which still LOST the node (B48). Now the failure names the
+      // node it was reached THROUGH, and that node's export supplies the whole
+      // subtree (the repair pass after the candidate loop). A warning is what
+      // is left when even that cannot be done.
       const skipped: string[] = []
       const messageOf = (err: unknown): string =>
         err instanceof Error ? err.message : String(err)
@@ -2815,11 +3008,17 @@ const handleCommand = async (
         }
       }
 
+      // What the export may be able to repair — see repairScan for the shape.
+      // A -1 host means nothing covers it: a scan ROOT is not in `scanned`, so
+      // a failure directly under one stays a warning.
+      const failures: ScanFailure[] = []
+
       // Depth-bounded DFS collector. `levelsLeft < 0` is treated as unlimited
       // (the -1 / scan-all default); each descent decrements it.
       const collect = (
         node: SceneNode,
         levelsLeft: number,
+        parentIndex: number,
       ): void => {
         // `node.id` is the FIRST touch of the node, so it is inside the guard
         // like every other read — a throw here would lose the whole scan, and
@@ -2829,48 +3028,70 @@ const handleCommand = async (
         try {
           id = node.id
         } catch (err) {
-          skipped.push(
-            'search: skipped ' +
+          failures.push({
+            at: -1,
+            host: parentIndex,
+            message:
+              'search: skipped ' +
               UNREADABLE +
               ': ' +
               messageOf(err),
-          )
+          })
           return
         }
-        if (!seen.has(id)) {
-          seen.add(id)
-          scanned.push(node)
+        // A node reachable two ways (overlapping selection roots) is listed
+        // ONCE but still descended from the deeper request, exactly as before.
+        const already = seen.get(id)
+        const fresh = already === undefined
+        const index = fresh ? scanned.length : already
+        if (fresh) {
+          seen.set(id, index)
+          scanned.push({
+            node,
+            id,
+            levelsLeft,
+            parentIndex,
+            subtreeEnd: index + 1,
+          })
         }
-        if (levelsLeft === 0) {
-          return
-        }
-        let children: readonly SceneNode[] = []
-        try {
-          if ('children' in node) {
-            children = (node as ChildrenMixin).children
+        if (levelsLeft !== 0) {
+          let children: readonly SceneNode[] = []
+          try {
+            if ('children' in node) {
+              children = (node as ChildrenMixin).children
+            }
+          } catch (err) {
+            // Descending is itself a read of the node, so an unreachable
+            // container throws HERE rather than in the enrichment below. Its
+            // subtree cannot be reached through it — but THIS node reads, so
+            // its own export can still describe what is under it.
+            failures.push({
+              at: index,
+              host: index,
+              message:
+                'search: skipped the children of ' +
+                id +
+                ': ' +
+                messageOf(err),
+            })
+            children = []
           }
-        } catch (err) {
-          // Descending is itself a read of the node, so an unreachable
-          // container throws HERE rather than in the enrichment below. Its
-          // subtree cannot be reached through it — report that instead of
-          // returning a short list that looks complete.
-          skipped.push(
-            'search: skipped the children of ' +
-              id +
-              ': ' +
-              messageOf(err),
-          )
-          return
+          for (const child of children) {
+            collect(child, levelsLeft - 1, index)
+          }
         }
-        for (const child of children) {
-          collect(child, levelsLeft - 1)
+        // Only the FIRST visit owns the range. A second, deeper visit appends
+        // its finds after it, and widening the range to swallow them would let
+        // one host supersede nodes that are not under it.
+        if (fresh) {
+          scanned[index].subtreeEnd = scanned.length
         }
       }
 
       if (scope === 'selection') {
         // The selected nodes are level 0; their subtrees descend from there.
         for (const sel of figma.currentPage.selection) {
-          collect(sel, scanDepth)
+          collect(sel, scanDepth, -1)
         }
       } else {
         // For container roots (page / node subtree) the root itself is level 0,
@@ -2885,7 +3106,7 @@ const handleCommand = async (
             if ('children' in root) {
               for (const child of (root as ChildrenMixin)
                 .children) {
-                collect(child, scanDepth)
+                collect(child, scanDepth, -1)
               }
             }
           } catch (err) {
@@ -2906,8 +3127,13 @@ const handleCommand = async (
       // A candidate that cannot be READ is skipped and named (into `skipped`
       // above), never thrown: one broken node costs one candidate, not the
       // scan.
-      const candidates: Record<string, unknown>[] = []
-      for (const fn of scanned) {
+      const candidates: (
+        | Record<string, unknown>
+        | undefined
+      )[] = []
+      for (let index = 0; index < scanned.length; index++) {
+        const fn = scanned[index].node
+        candidates.push(undefined)
         try {
           const candidate = toCandidate(fn)
 
@@ -3005,25 +3231,68 @@ const handleCommand = async (
             }
           }
 
-          candidates.push(candidate)
+          candidates[index] = candidate
         } catch (err) {
           // `idOf`, not `fn.id`: the scan read this id once, but the node can
           // go stale between the walk and the enrichment.
-          skipped.push(
-            'search: skipped ' +
+          failures.push({
+            at: index,
+            host: scanned[index].parentIndex,
+            message:
+              'search: skipped ' +
               idOf(fn) +
               ': ' +
               messageOf(err),
-          )
+          })
         }
       }
+
+      // B48 — repair, don't just report. A failure above means the live walk
+      // reached a node whose address was composed from a stale id (see
+      // canonical-ids.ts). The node it was reached THROUGH still reads, and its
+      // export names every node under it canonically — so export that host once
+      // and let it speak for the subtree the walk could not reach. The decision
+      // of what to KEEP from the live scan is repairScan's, and it is
+      // deliberately conservative: only a row the export does not name at all
+      // is dropped. This call is the only thing this switch case owns — how to
+      // ask Figma for one host's export.
+      const repaired = await repairScan({
+        scanned,
+        candidates,
+        failures,
+        hints: {
+          characters: collectCharacters,
+          variableIds: collectVariableId,
+        },
+        exportHost: async index => {
+          try {
+            const raw = await scanned[
+              index
+            ].node.exportAsync({
+              format: 'JSON_REST_V1',
+            })
+            const document = (
+              raw as unknown as Record<string, unknown>
+            ).document
+            return typeof document === 'object' &&
+              document !== null
+              ? (document as Record<string, unknown>)
+              : undefined
+          } catch {
+            // The host cannot describe itself either — the failures it would
+            // have covered stay warnings.
+            return undefined
+          }
+        },
+      })
+      skipped.push(...repaired.warnings)
 
       // warnings[] rides on the SUCCESS reply and is omitted when empty — the
       // same shape every other degrading read answers with.
       const searchReply: {
         results: Record<string, unknown>[]
         warnings?: string[]
-      } = { results: candidates }
+      } = { results: repaired.results }
       if (skipped.length > 0) {
         searchReply.warnings = skipped
       }
@@ -3040,7 +3309,7 @@ const handleCommand = async (
     case COMMANDS.CREATE_NODE: {
       const parentNode =
         params.parentId !== undefined
-          ? await resolveParentNode(
+          ? await resolveNodeId(
               params.parentId as string,
             )
           : figma.currentPage
@@ -3064,12 +3333,23 @@ const handleCommand = async (
         )
       }
       try {
+        // B35: one node, so the sink can only ever hold one entry — and
+        // `discardedPositionsWarning` renders that as the singular sentence.
+        const placed: Placement[] = []
         const created = await createSingleNode(
           spec,
           parent,
           writer,
           warnings,
+          placed,
         )
+        const discarded = discardedPositionsWarning(
+          parent,
+          placed,
+        )
+        if (discarded !== undefined) {
+          warnings.push(discarded)
+        }
         return {
           id: created.id,
           name: created.name,
@@ -3099,7 +3379,7 @@ const handleCommand = async (
     case COMMANDS.CREATE_TREE: {
       const treeParentNode =
         params.parentId !== undefined
-          ? await resolveParentNode(
+          ? await resolveNodeId(
               params.parentId as string,
             )
           : figma.currentPage
@@ -3131,6 +3411,10 @@ const handleCommand = async (
       // build's envelope stays clean.
       const treeWarnings: string[] = []
       try {
+        // B35: the ROOT's own placement. Every deeper level is reported by the
+        // parent that placed it, inside createTreeNode — this sink covers the
+        // one node no parent in the recursion owns.
+        const rootPlaced: Placement[] = []
         const treeResult = await createTreeNode(
           treeSpec,
           treeParent,
@@ -3139,7 +3423,15 @@ const handleCommand = async (
           [],
           createdIds,
           treeWarnings,
+          rootPlaced,
         )
+        const rootDiscarded = discardedPositionsWarning(
+          treeParent,
+          rootPlaced,
+        )
+        if (rootDiscarded !== undefined) {
+          treeWarnings.push(rootDiscarded)
+        }
         return {
           id: treeResult.id,
           name: treeResult.name,
@@ -3187,7 +3479,7 @@ const handleCommand = async (
       const ccDescription = params.description as
         | string
         | undefined
-      const found = await figma.getNodeByIdAsync(
+      const found = await resolveNodeId(
         params.nodeId as string,
       )
       if (!found) {
@@ -3215,7 +3507,7 @@ const handleCommand = async (
     // description, and (T7-gated) expose nested instances. Each step is wrapped
     // so a single failure degrades into a warning rather than aborting the rest.
     case COMMANDS.UPDATE_COMPONENT: {
-      const compNode = await figma.getNodeByIdAsync(
+      const compNode = await resolveNodeId(
         params.componentId as string,
       )
       if (!compNode) {
@@ -3269,7 +3561,7 @@ const handleCommand = async (
             )
             if (p.targetNodeId) {
               // Resolve the binding after adding the property.
-              const child = await figma.getNodeByIdAsync(
+              const child = await resolveNodeId(
                 p.targetNodeId,
               )
               if (child === null || child === undefined) {
@@ -3397,7 +3689,7 @@ const handleCommand = async (
         | undefined
       if (exposeIds && exposeIds.length > 0) {
         for (const eid of exposeIds) {
-          const en = await figma.getNodeByIdAsync(eid)
+          const en = await resolveNodeId(eid)
           const exposable = en as
             | (InstanceNode & {
                 isExposedInstance?: boolean
@@ -3525,11 +3817,21 @@ const handleCommand = async (
                     spec,
                     comp as ParentNode,
                     slotWarnings,
+                    { deferSize: true },
                   )
                   applyPostAppendProperties(
                     slotNode,
                     spec,
                     slotWarnings,
+                  )
+                  // LAST, and after the sizing above: a slot that states a size
+                  // is pinned FIXED by the creation default, and the pin has to
+                  // be on the node before the resize can hold (B46).
+                  applySizeVerified(
+                    slotNode,
+                    spec.size,
+                    slotWarnings,
+                    { statedSizing: spec.sizing },
                   )
                   // Same order as every other write path: literal first,
                   // binding second.
@@ -3587,7 +3889,7 @@ const handleCommand = async (
       const cvDropped: string[] = []
       const cvWarnings: string[] = []
       for (const cid of cvIds) {
-        const n = await figma.getNodeByIdAsync(cid)
+        const n = await resolveNodeId(cid)
         if (n && n.type === 'COMPONENT') {
           cvComps.push(n as ComponentNode)
         } else {
@@ -3610,7 +3912,7 @@ const handleCommand = async (
       }
       const cvParentNode =
         params.parentId !== undefined
-          ? await figma.getNodeByIdAsync(
+          ? await resolveNodeId(
               params.parentId as string,
             )
           : cvComps[0].parent
@@ -3680,7 +3982,7 @@ const handleCommand = async (
     // is feature-detected + T7-degraded (a failed import warns, never throws).
     // The actual swap also degrades into a warning (T7) — never throw.
     case COMMANDS.SWAP_COMPONENT: {
-      const scInst = await figma.getNodeByIdAsync(
+      const scInst = await resolveNodeId(
         params.instanceId as string,
       )
       if (!scInst) {
@@ -3703,7 +4005,7 @@ const handleCommand = async (
       let scMain: ComponentNode | null = null
       if (scMainId !== undefined) {
         // LOCAL path (wins if both given).
-        const found = await figma.getNodeByIdAsync(scMainId)
+        const found = await resolveNodeId(scMainId)
         if (!found || found.type !== 'COMPONENT') {
           return {
             error: 'Main component not found: ' + scMainId,
@@ -3782,7 +4084,7 @@ const handleCommand = async (
     // back; the SERVER splits it into the read-twin { variantProperties?,
     // componentProperties? } shape (C3 / T2).
     case COMMANDS.SET_INSTANCE: {
-      const siInst = await figma.getNodeByIdAsync(
+      const siInst = await resolveNodeId(
         params.instanceId as string,
       )
       if (!siInst) {
@@ -3856,7 +4158,7 @@ const handleCommand = async (
     }
 
     case COMMANDS.CREATE_FROM_SVG: {
-      const svgParent = await figma.getNodeByIdAsync(
+      const svgParent = await resolveNodeId(
         params.parentId as string,
       )
       if (!svgParent || !('appendChild' in svgParent)) {
@@ -3889,7 +4191,7 @@ const handleCommand = async (
     }
 
     case COMMANDS.UPDATE_NODE: {
-      const node = await figma.getNodeByIdAsync(
+      const node = await resolveNodeId(
         params.nodeId as string,
       )
       if (!node) {
@@ -3934,11 +4236,28 @@ const handleCommand = async (
         delete spec.name
       }
 
+      // Geometry FIRST, and before applyCommonProperties (B45). Assigning
+      // vectorPaths rebuilds the network and resizes the node to the new path
+      // bounds, so a `size` stated in the same patch has to be applied after it
+      // — the order the create path has always used. A node type that has no
+      // vectorPaths at all is named by capabilityWarnings above.
+      if (
+        spec.vectorPaths !== undefined &&
+        'vectorPaths' in node
+      ) {
+        await applyVectorPaths(
+          node as VectorNode,
+          spec.vectorPaths,
+          warnings,
+        )
+      }
+
       await applyCommonProperties(
         node as SceneNode,
         spec,
         parent as ParentNode,
         warnings,
+        { deferSize: true },
       )
       if (node.type === 'TEXT' && spec.text !== undefined) {
         await applyTextProperties(
@@ -3951,6 +4270,20 @@ const handleCommand = async (
         node as SceneNode,
         spec,
         warnings,
+      )
+      // Size LAST of the geometry, and PROVEN (B46). Other fields of the same
+      // patch move it — the text write, and `sizing` in
+      // applyPostAppendProperties — so a resize applied first is not what the
+      // caller ends up with, and a read-back taken first is not the patch's
+      // outcome. Written here, `{size, sizing:['FIXED','FIXED']}` lands in ONE
+      // call, and `{size, sizing:['FILL',…]}` is reported instead of silently
+      // handing the axis back. Bindings run after and are allowed to win —
+      // literal first, binding second — but none of them writes a size.
+      applySizeVerified(
+        node as SceneNode,
+        spec.size,
+        warnings,
+        { statedSizing: spec.sizing },
       )
       // Same order as the create path: literal first, binding second.
       await applyWrapperBindings(
@@ -3969,7 +4302,7 @@ const handleCommand = async (
     }
 
     case COMMANDS.BIND_VARIABLE: {
-      const node = await figma.getNodeByIdAsync(
+      const node = await resolveNodeId(
         params.nodeId as string,
       )
       if (!node) {
@@ -4248,7 +4581,7 @@ const handleCommand = async (
     // the node is missing or has no reactions API.
     case COMMANDS.GET_REACTIONS: {
       const nodeId = params.nodeId as string
-      const node = await figma.getNodeByIdAsync(nodeId)
+      const node = await resolveNodeId(nodeId)
       if (!node) {
         return {
           nodeId,
@@ -4275,7 +4608,7 @@ const handleCommand = async (
     // namespace is given. Degrade (NEVER throw) when the node is missing.
     case COMMANDS.GET_PLUGIN_DATA: {
       const nodeId = params.nodeId as string
-      const node = await figma.getNodeByIdAsync(nodeId)
+      const node = await resolveNodeId(nodeId)
       if (!node || !('getPluginDataKeys' in node)) {
         return {
           nodeId,
@@ -4321,7 +4654,7 @@ const handleCommand = async (
         const targets: BaseNode[] = []
         const explicit = params.nodeId !== undefined
         if (explicit) {
-          const node = await figma.getNodeByIdAsync(
+          const node = await resolveNodeId(
             params.nodeId as string,
           )
           // An explicit, unresolvable nodeId is a genuine not-found — surface
@@ -4392,7 +4725,7 @@ const handleCommand = async (
     //     machine-visible in the reply.
     case COMMANDS.DELETE_NODE: {
       const nodeId = params.nodeId as string
-      const node = await figma.getNodeByIdAsync(nodeId)
+      const node = await resolveNodeId(nodeId)
       if (!node) {
         return { error: 'Node not found: ' + nodeId }
       }
@@ -4444,7 +4777,7 @@ const handleCommand = async (
       const nodes: SceneNode[] = []
       const missing: string[] = []
       for (const id of ids) {
-        const n = await figma.getNodeByIdAsync(id)
+        const n = await resolveNodeId(id)
         if (n && 'visible' in n) {
           nodes.push(n as SceneNode)
         } else {
@@ -4478,7 +4811,7 @@ const handleCommand = async (
     // {id,name,type}. Missing source/parent → {error}.
     case COMMANDS.CLONE_NODE: {
       const srcId = params.nodeId as string
-      const source = await figma.getNodeByIdAsync(srcId)
+      const source = await resolveNodeId(srcId)
       if (!source || !('clone' in source)) {
         return {
           error:
@@ -4489,7 +4822,7 @@ const handleCommand = async (
       let dest: ParentNode | null =
         src.parent as ParentNode | null
       if (params.parentId !== undefined) {
-        const p = await figma.getNodeByIdAsync(
+        const p = await resolveNodeId(
           params.parentId as string,
         )
         if (!p || !('appendChild' in p)) {
@@ -4559,11 +4892,11 @@ const handleCommand = async (
     // Missing node/parent → {error}.
     case COMMANDS.REPARENT_NODE: {
       const nodeId = params.nodeId as string
-      const node = await figma.getNodeByIdAsync(nodeId)
+      const node = await resolveNodeId(nodeId)
       if (!node || !('parent' in node)) {
         return { error: 'Node not found: ' + nodeId }
       }
-      const newParent = await figma.getNodeByIdAsync(
+      const newParent = await resolveNodeId(
         params.parentId as string,
       )
       if (!newParent || !('appendChild' in newParent)) {
@@ -4638,7 +4971,7 @@ const handleCommand = async (
     case COMMANDS.REORDER_CHILDREN: {
       const parentId = params.parentId as string
       const parentNode =
-        await figma.getNodeByIdAsync(parentId)
+        await resolveNodeId(parentId)
       if (!parentNode || !('children' in parentNode)) {
         return {
           error:
@@ -4700,7 +5033,7 @@ const handleCommand = async (
       const op = params.op as string
       const nodes: SceneNode[] = []
       for (const id of ids) {
-        const n = await figma.getNodeByIdAsync(id)
+        const n = await resolveNodeId(id)
         if (n && 'type' in n) {
           nodes.push(n as SceneNode)
         }
@@ -4713,7 +5046,7 @@ const handleCommand = async (
       }
       let boolParent: ParentNode | null
       if (params.parentId !== undefined) {
-        const p = await figma.getNodeByIdAsync(
+        const p = await resolveNodeId(
           params.parentId as string,
         )
         if (!p || !('appendChild' in p)) {
@@ -4765,7 +5098,7 @@ const handleCommand = async (
       const ids = (params.nodeIds as string[]) ?? []
       const nodes: SceneNode[] = []
       for (const id of ids) {
-        const n = await figma.getNodeByIdAsync(id)
+        const n = await resolveNodeId(id)
         if (n && 'type' in n) {
           nodes.push(n as SceneNode)
         }
@@ -4778,7 +5111,7 @@ const handleCommand = async (
       }
       let flatParent: ParentNode | null
       if (params.parentId !== undefined) {
-        const p = await figma.getNodeByIdAsync(
+        const p = await resolveNodeId(
           params.parentId as string,
         )
         if (!p || !('appendChild' in p)) {
@@ -4823,7 +5156,7 @@ const handleCommand = async (
       const ids = (params.nodeIds as string[]) ?? []
       const nodes: SceneNode[] = []
       for (const id of ids) {
-        const n = await figma.getNodeByIdAsync(id)
+        const n = await resolveNodeId(id)
         if (n && 'type' in n) {
           nodes.push(n as SceneNode)
         }
@@ -4836,7 +5169,7 @@ const handleCommand = async (
       }
       let groupParent: ParentNode | null
       if (params.parentId !== undefined) {
-        const p = await figma.getNodeByIdAsync(
+        const p = await resolveNodeId(
           params.parentId as string,
         )
         if (!p || !('appendChild' in p)) {
@@ -4890,7 +5223,7 @@ const handleCommand = async (
       const tgIds = (params.nodeIds as string[]) ?? []
       const tgNodes: SceneNode[] = []
       for (const id of tgIds) {
-        const n = await figma.getNodeByIdAsync(id)
+        const n = await resolveNodeId(id)
         if (n && 'type' in n) {
           tgNodes.push(n as SceneNode)
         }
@@ -4903,7 +5236,7 @@ const handleCommand = async (
       }
       let tgParent: ParentNode | null
       if (params.parentId !== undefined) {
-        const p = await figma.getNodeByIdAsync(
+        const p = await resolveNodeId(
           params.parentId as string,
         )
         if (!p || !('appendChild' in p)) {
@@ -5045,7 +5378,7 @@ const handleCommand = async (
     // is given). Missing/incapable node → {error}. Twin of get_plugin_data.
     case COMMANDS.SET_PLUGIN_DATA: {
       const nodeId = params.nodeId as string
-      const node = await figma.getNodeByIdAsync(nodeId)
+      const node = await resolveNodeId(nodeId)
       if (!node || !('setPluginData' in node)) {
         return { error: 'Node not found: ' + nodeId }
       }
@@ -5068,7 +5401,7 @@ const handleCommand = async (
     // missing API or a failed assignment; only a missing node yields {error}.
     case COMMANDS.SET_REACTIONS: {
       const nodeId = params.nodeId as string
-      const node = await figma.getNodeByIdAsync(nodeId)
+      const node = await resolveNodeId(nodeId)
       if (!node) {
         return { error: 'Node not found: ' + nodeId }
       }
@@ -5105,7 +5438,7 @@ const handleCommand = async (
     // (NEVER {error}/throw) when absent; only a missing node yields {error}.
     case COMMANDS.SET_ANNOTATIONS: {
       const nodeId = params.nodeId as string
-      const node = await figma.getNodeByIdAsync(nodeId)
+      const node = await resolveNodeId(nodeId)
       if (!node) {
         return { error: 'Node not found: ' + nodeId }
       }
@@ -6044,7 +6377,7 @@ const handleCommand = async (
     //    feature-unavailability rejection.
     case COMMANDS.APPLY_STYLE: {
       const nodeId = params.nodeId as string
-      const node = await figma.getNodeByIdAsync(nodeId)
+      const node = await resolveNodeId(nodeId)
       if (!node) {
         return { error: 'Node not found: ' + nodeId }
       }

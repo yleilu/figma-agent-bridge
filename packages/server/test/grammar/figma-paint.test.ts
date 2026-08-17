@@ -830,6 +830,90 @@ describe('stroke: atomToStroke(strokeToAtom(g)) deep-equals g', () => {
   }
 })
 
+// --- B38: a weight that is not a number is INVALID_PARAM ---
+//
+// `stroke(fat){align=INSIDE}` used to convert to `{"strokeWeight": null}` with
+// zero warnings — Number('fat') is NaN and JSON.stringify writes NaN as null —
+// and the whole create then died on Figma's raw validator ("in
+// set_strokeWeight: Property failed validation: Expected number, received
+// null"). The atom is malformed, so it is rejected here, before the write
+// leaves the server (expression-formats.md).
+describe('atomToStroke — a non-numeric weight is rejected', () => {
+  const rejects = (atom: string): void => {
+    try {
+      atomToStroke(atom)
+      throw new Error('expected the atom to be rejected')
+    } catch (err) {
+      expect((err as { code?: string }).code).toBe(
+        'INVALID_PARAM',
+      )
+      // Both canonical forms, so the message teaches the fix.
+      expect((err as Error).message).toContain('stroke(1)')
+      expect((err as Error).message).toContain(
+        'stroke([0,0,1,0])',
+      )
+    }
+  }
+
+  it('rejects stroke(fat){align=INSIDE} — the live B38 repro', () => {
+    rejects('stroke(fat){align=INSIDE}')
+  })
+
+  it('rejects a bare non-numeric weight', () => {
+    rejects('stroke(fat)')
+  })
+
+  it('rejects a CSS-flavoured weight', () => {
+    rejects('stroke(2px)')
+  })
+
+  it('rejects a boolean, which Number() would have turned into 1', () => {
+    rejects('stroke(true)')
+  })
+
+  it('names the weight it was given', () => {
+    expect(() => atomToStroke('stroke(fat)')).toThrow('fat')
+  })
+
+  it('accepts zero — a real weight, and the one a falsy test would drop', () => {
+    expect(atomToStroke('stroke(0)')).toEqual({ weight: 0 })
+  })
+
+  it('accepts a fractional weight', () => {
+    expect(atomToStroke('stroke(1.5)')).toEqual({
+      weight: 1.5,
+    })
+  })
+
+  it('rejects a SIDE that is not a number, on the same terms as a uniform weight', () => {
+    // One atom, one rule. B27 gave this a warn-and-degrade, which was the
+    // honest answer while the uniform arm wrote `null` silently — the ruling
+    // aligns the two on reject.
+    rejects('stroke([1,x,1,0])')
+  })
+
+  it('names the SIDE that was wrong, not the whole tuple', () => {
+    expect(() => atomToStroke('stroke([1,x,1,0])')).toThrow(
+      'not "x"',
+    )
+  })
+
+  it('leaves ARITY to the write face, which has a warnings sink', () => {
+    // A different failure: every entry IS a number, and it is the FIELD that
+    // has no room for three of them. That degrades with a warning where the
+    // sink is, so the parser reports the list as written.
+    expect(atomToStroke('stroke([1,2,3])').weights).toEqual(
+      [1, 2, 3],
+    )
+  })
+
+  it('does not reject an attrs-only stroke — an omitted weight is untouched, not malformed', () => {
+    expect(atomToStroke('stroke(){align=INSIDE}')).toEqual({
+      align: 'INSIDE',
+    })
+  })
+})
+
 // --- lossy-view defaults are dropped on render (T4) ---
 // The string round-trip law holds because a default is dropped on BOTH
 // faces; these lock the drop *direction* so a future change that starts

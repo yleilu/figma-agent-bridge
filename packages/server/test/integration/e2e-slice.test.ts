@@ -154,6 +154,96 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     )
   })
 
+  // 2b — B51: a PAGE-rooted inspect is a read like any other. It used to ignore
+  // `depth` outright (depth:2 returned output byte-identical to depth:1), give
+  // every child `size: [0,0]`, and report `truncated: []` while a whole level
+  // was missing.
+  describe('page-rooted inspect (B51)', () => {
+    type PageView = {
+      view: {
+        type: string
+        size?: [number, number]
+        children: {
+          id: string
+          size?: [number, number]
+          childCount?: number
+          children?: unknown[]
+        }[]
+      }
+      truncated: { id: string; childCount: number }[]
+    }
+    const atDepth = async (
+      depth: number,
+    ): Promise<PageView> => {
+      const result = await handleInspect(
+        { pageId: 'page:1', depth },
+        scoped,
+      )
+      return YAML.parse(result.content[0].text) as PageView
+    }
+
+    it('omits `size` on the PAGE itself — a page has none', async () => {
+      const out = await atDepth(0)
+      expect(out.view.type).toBe('PAGE')
+      expect(out.view.size).toBeUndefined()
+    })
+
+    it('serves the children their REAL size, never [0,0]', async () => {
+      const out = await atDepth(0)
+      expect(out.view.children[0].size).toEqual([320, 200])
+    })
+
+    it('names the level it did not deliver', async () => {
+      const out = await atDepth(0)
+      expect(out.truncated).toEqual([
+        { id: '1:42', childCount: 3 },
+      ])
+    })
+
+    it('honours depth: deeper reads differ', async () => {
+      const one = await atDepth(1)
+      const two = await atDepth(2)
+      expect(JSON.stringify(one)).not.toBe(
+        JSON.stringify(two),
+      )
+      // depth 1 → the frame is full, its children are stubs.
+      const frameAtOne = one.view.children[0]
+      expect(frameAtOne.children).toHaveLength(3)
+      expect(
+        (
+          frameAtOne.children as { childCount?: number }[]
+        )[0].childCount,
+      ).toBe(0)
+      // depth 2 → those children are full nodes, no childCount key.
+      const frameAtTwo = two.view.children[0]
+      expect(
+        (
+          frameAtTwo.children as { childCount?: number }[]
+        )[0].childCount,
+      ).toBeUndefined()
+    })
+
+    // …and the FRAME-rooted receipt errs the other way no more. A depth-0 read
+    // of the card stubs its three leaf children: they are in the view, and
+    // drilling into one yields no further level, so naming them as lost
+    // over-reports a cut that did not happen.
+    it('never receipts a stub that hides nothing', async () => {
+      const result = await handleInspect(
+        { nodeId: '1:42', depth: 0 },
+        scoped,
+      )
+      const out = YAML.parse(result.content[0].text) as {
+        view: { children: { childCount: number }[] }
+        truncated: { id: string; childCount: number }[]
+      }
+      expect(out.view.children).toHaveLength(3)
+      for (const child of out.view.children) {
+        expect(child.childCount).toBe(0)
+      }
+      expect(out.truncated).toEqual([])
+    })
+  })
+
   // 3 — full round-trip: get_node → edit → update_node → mock echoes CONVERTED
   it('round-trips a fill edit through the relay: server parses, plugin assigns', async () => {
     // Read the node as a NodeSpec.
@@ -227,6 +317,32 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     }
     expect(
       reply.warnings.some(w => w.includes('layout')),
+    ).toBe(true)
+  })
+
+  // 3a-bis (B45) — update_node now APPLIES vectorPaths, so the node types that
+  // carry no path data need the same warn-on-no-op every other patched field
+  // gets. Without the row, geometry aimed at a SLICE would land nowhere and
+  // report `warnings: []` — the silence B45 was filed for, moved one node type
+  // sideways.
+  it('update_node warns when path geometry is patched onto a node that carries none', async () => {
+    const result = await handleUpdateNode(
+      {
+        nodeId: 'incompat:1',
+        patch: {
+          vectorPaths: [
+            'path(NONZERO,"M 12 0 L 24 24 L 0 24 Z")',
+          ],
+        },
+      },
+      scoped,
+    )
+    expect(result.content[0].text).not.toContain('Error:')
+    const reply = JSON.parse(result.content[0].text) as {
+      warnings: string[]
+    }
+    expect(
+      reply.warnings.some(w => w.includes('vectorPaths')),
     ).toBe(true)
   })
 
@@ -825,6 +941,66 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     // The FRAME has no characters projected.
     expect(card).toBeDefined()
     expect(card?.characters).toBeUndefined()
+  })
+
+  // 11f — B50: `search` honours the SAME `fields` vocabulary the fidelity
+  // readers serve (D2). `fills` used to come back on no result at all, with no
+  // warning, because the projection ran over the scan's cheap candidate row —
+  // and a dropped field is indistinguishable from a negative result, so a
+  // white-frame sweep came back clean on frames that were white.
+  it('search projects fills / component across the relay (B50)', async () => {
+    const byFill = await handleSearch(
+      {
+        fields: ['id', 'name', 'type', 'fills'],
+        match: { type: ['FRAME'] },
+      },
+      scoped,
+    )
+    const outFill = YAML.parse(byFill.content[0].text) as {
+      results: { id: string; fills?: string[] }[]
+    }
+    const card = outFill.results.find(r => r.id === '1:42')
+    expect(card?.fills).toBeDefined()
+    expect(typeof card?.fills?.[0]).toBe('string')
+
+    // …and `component`, the field the dashboard fixture's id-join reads.
+    const byComponent = await handleSearch(
+      {
+        fields: ['id', 'component'],
+        match: { type: ['INSTANCE'] },
+      },
+      scoped,
+    )
+    const outComponent = YAML.parse(
+      byComponent.content[0].text,
+    ) as {
+      results: { id: string; component?: { id?: string } }[]
+    }
+    const button = outComponent.results.find(
+      r => r.id === '1:45',
+    )
+    expect(button?.component?.id).toBe('C:abc123')
+  })
+
+  // 11g — B50: `profile` is a field SET, so it projects like a `fields` list.
+  it('search honours a profile preset across the relay (B50)', async () => {
+    const result = await handleSearch(
+      { profile: 'style', match: { type: ['FRAME'] } },
+      scoped,
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: {
+        id: string
+        fills?: string[]
+        radius?: unknown
+        layout?: unknown
+      }[]
+    }
+    const card = out.results.find(r => r.id === '1:42')
+    expect(card?.fills).toBeDefined()
+    expect(card?.radius).toBeDefined()
+    // …and only that concern: `layout` is not in the style preset.
+    expect(card?.layout).toBeUndefined()
   })
 
   // 12 — get_nodes multi-id read → { results, errors } over the relay.

@@ -88,10 +88,34 @@ const mockResolveInstanceProps = (
 // Both names this mock document defines: the get_variables collection entry,
 // and the name the card fixture's bound fill reads back as (bindingNames) —
 // which is what makes a read → write round-trip re-bind here.
+// `space/8` is a SPACING token: the layout scalars bind too (B44), and a
+// design system's spacing variables are exactly what an inline `gap:
+// "var(space/8)8"` names.
 const MOCK_VARIABLE_NAMES = [
   'Brand/Primary',
   'surface/card-bg',
+  'space/8',
 ]
+
+/**
+ * The variable ids this mock document defines, by name — what only the PLUGIN
+ * can resolve, and what `bind_variable` is called with.
+ *
+ * An id that is not here answers itself: a mock-only fallback, so a test that
+ * binds an id the document never defined sees that in the read-back rather than
+ * a plausible-looking name.
+ */
+const MOCK_VARIABLE_BY_ID: Record<string, string> = {
+  'var:spacing-8': 'space/8',
+}
+
+const mockVariableNameById = (
+  id: string,
+): string | undefined =>
+  MOCK_VARIABLE_BY_ID[id] ??
+  (id.startsWith('var:mock:')
+    ? id.slice('var:mock:'.length)
+    : undefined)
 
 /**
  * The mock document's LOCAL STYLES — one fixture, read by `get_styles`, by the
@@ -386,6 +410,40 @@ export const createMockPlugin = (
   >()
 
   /**
+   * The card fixture's node with this id — root or any descendant.
+   *
+   * The real plugin resolves EVERY id in the file, not just the roots a test
+   * happens to name, so a multi-id read of `1:43` must answer the Title's own
+   * export rather than the card's. `search`'s field hydration (B50) reads back
+   * exactly the ids the scan reported, which are these four.
+   */
+  const fixtureNodeById = (
+    id: string,
+  ): Record<string, unknown> | undefined => {
+    const walk = (
+      node: Record<string, unknown>,
+    ): Record<string, unknown> | undefined => {
+      if (node.id === id) {
+        return node
+      }
+      const kids = node.children
+      if (!Array.isArray(kids)) {
+        return undefined
+      }
+      for (const kid of kids as Record<string, unknown>[]) {
+        const hit = walk(kid)
+        if (hit !== undefined) {
+          return hit
+        }
+      }
+      return undefined
+    }
+    return walk(
+      cardFixture as unknown as Record<string, unknown>,
+    )
+  }
+
+  /**
    * Model the plugin's stroke apply (B27), including what the EXPORT then
    * reports back.
    *
@@ -426,6 +484,120 @@ export const createMockPlugin = (
       appliedState.set(id, state)
     }
   }
+
+  /**
+   * The layout fields Figma binds a variable to, in the Plugin API's spelling —
+   * the same list the plugin's enrichment ships across (B44).
+   */
+  const MOCK_LAYOUT_BIND_FIELDS = new Set([
+    'itemSpacing',
+    'paddingTop',
+    'paddingRight',
+    'paddingBottom',
+    'paddingLeft',
+    'gridRowGap',
+    'gridColumnGap',
+  ])
+
+  /** The export vocabulary for a layout mode the write face states. */
+  const MOCK_LAYOUT_MODE: Record<string, string> = {
+    H: 'HORIZONTAL',
+    V: 'VERTICAL',
+    GRID: 'GRID',
+    NONE: 'NONE',
+  }
+
+  /**
+   * Model the layout a write LANDED, in the vocabulary a read consumes.
+   *
+   * The reply's echo proves only that the server sent the spec; the round-trip
+   * that matters is `gap: "var(space/8)8"` written back and read back as the
+   * same string, which needs the literal to persist as well as the binding.
+   */
+  const applyLayoutState = (
+    id: string,
+    spec: Record<string, unknown>,
+  ): void => {
+    const layout = spec.layout as
+      | Record<string, unknown>
+      | undefined
+    if (layout === undefined) {
+      return
+    }
+    const state = appliedState.get(id) ?? {}
+    if (typeof layout.mode === 'string') {
+      state.layoutMode =
+        MOCK_LAYOUT_MODE[layout.mode] ?? 'NONE'
+    }
+    if (typeof layout.spacing === 'number') {
+      state.itemSpacing = layout.spacing
+    }
+    if (Array.isArray(layout.padding)) {
+      const [pt, pr, pb, pl] = layout.padding as number[]
+      state.paddingTop = pt
+      state.paddingRight = pr
+      state.paddingBottom = pb
+      state.paddingLeft = pl
+    }
+    if (typeof layout.rowGap === 'number') {
+      state.gridRowGap = layout.rowGap
+    }
+    if (typeof layout.colGap === 'number') {
+      state.gridColumnGap = layout.colGap
+    }
+    appliedState.set(id, state)
+  }
+
+  /**
+   * Model a LANDED layout binding, the way the file then reports one (B44).
+   *
+   * JSON_REST_V1 carries no layout binding, so the real plugin's enrichment
+   * ships `layoutBoundVariables` (field → variable id) plus the id → name map
+   * every wrapper resolves through. Modelling only the reply's
+   * `appliedBindings` would leave a read looking exactly as if nothing had been
+   * bound — which is precisely the bug: `bind_variable` answered `ok,
+   * warnings:[]`, byte-identical to a no-op.
+   */
+  const applyLayoutBindingState = (
+    id: string,
+    bound: { field: string; name: string }[],
+  ): void => {
+    if (bound.length === 0) {
+      return
+    }
+    const state = appliedState.get(id) ?? {}
+    const fixtureNames = (fixtureNodeById(id)
+      ?.bindingNames ?? {}) as {
+      variables?: Record<string, string>
+    }
+    const names = (state.bindingNames ?? fixtureNames) as {
+      variables?: Record<string, string>
+    }
+    const variables = { ...(names.variables ?? {}) }
+    const layoutBound = {
+      ...((state.layoutBoundVariables as
+        | Record<string, string>
+        | undefined) ?? {}),
+    }
+    for (const entry of bound) {
+      const varId = `var:mock:${entry.name}`
+      layoutBound[entry.field] = varId
+      variables[varId] = entry.name
+    }
+    state.layoutBoundVariables = layoutBound
+    state.bindingNames = { ...names, variables }
+    appliedState.set(id, state)
+  }
+
+  /** The layout half of a converted spec's `bindings[]`. */
+  const layoutBindingsOf = (
+    applied: MockBinding[],
+  ): { field: string; name: string }[] =>
+    applied.filter(
+      b =>
+        b.kind === 'var' &&
+        MOCK_LAYOUT_BIND_FIELDS.has(b.field),
+    )
 
   /**
    * Model an APPLIED style, the way the file then reports it (B47).
@@ -473,6 +645,177 @@ export const createMockPlugin = (
     }
     state.bindingNames = { ...names, styles }
     appliedState.set(id, state)
+  }
+
+  // ── ALIAS IDS: content written into a component SLOT (B41) ────────────────
+  //
+  // Figma does not re-home a node appended into a slot inside an INSTANCE, so
+  // `create_node` hands back the id the node had BEFORE the append while the
+  // file addresses it by the canonical instance chain. A read of the alias id
+  // therefore answers a document rooted at a DIFFERENT id — the behaviour a
+  // server must survive, and the reason B41's wrappers used to vanish.
+  //
+  // A `parentId` prefixed `slotparent:` models such a slot (same convention as
+  // `badparent:` above). What the plugin then owes the read is the whole point
+  // of the fix: `bindingNames` reaching the DESCENDANT, keyed by the canonical
+  // ids the export uses. A CLONE of the same content is minted canonically —
+  // the control the sweep used to isolate provenance, and its compound id is
+  // reachable by id (live-observed on the sweep's clone).
+  //
+  // What this deliberately does NOT model: reading the slot content back by the
+  // CANONICAL id it reports. Nothing has observed that resolving live. The
+  // node answers its alias id to every walk, so the compound-id traversal has
+  // no id to match on, and inventing a resolution here would let a test go
+  // green on behaviour the real plugin may not have. It is a live question —
+  // see probe 2 in the task report.
+  const SLOT_ALIAS_ID = 'slot-alias:1'
+  const SLOT_CANONICAL_ID = 'I298:7517;298:7516;298:7523'
+  const SLOT_CLONE_ID = 'I298:7517;298:7516;298:7530'
+  const SLOT_VARIABLE_ID = 'VariableID:261:4751'
+
+  /** The chip's raw export, rooted wherever the caller says. */
+  const slotChipExport = (
+    rootId: string,
+  ): Record<string, unknown> => ({
+    id: rootId,
+    name: 'Chip',
+    type: 'INSTANCE',
+    absoluteBoundingBox: {
+      x: 0,
+      y: 0,
+      width: 96,
+      height: 28,
+    },
+    children: [
+      {
+        id: rootId + ';298:7510',
+        name: 'Label',
+        type: 'TEXT',
+        characters: 'PROBE-SLOT-STRING',
+        absoluteBoundingBox: {
+          x: 8,
+          y: 6,
+          width: 80,
+          height: 16,
+        },
+        fills: [
+          {
+            type: 'SOLID',
+            color: { r: 0.13, g: 0.83, b: 0.93, a: 1 },
+            boundVariables: {
+              color: {
+                id: SLOT_VARIABLE_ID,
+                type: 'VARIABLE_ALIAS',
+              },
+            },
+          },
+        ],
+        bindingNames: {
+          variables: {
+            [SLOT_VARIABLE_ID]: 'probe/cyan',
+          },
+        },
+      },
+    ],
+  })
+
+  // ── COMPOUND IDS: writing to an instance sublayer ─────────────────────────
+  //
+  // A node under an instance is addressed `I<instance>;<child>`, and that is the
+  // id every read hands back for one. The plugin cannot resolve that shape with
+  // a bare `getNodeByIdAsync` — the call reaches for Figma's network. Live
+  // 2026-08-17 an `update_node` on `I298:7524;298:7511` answered "Unable to
+  // establish connection to Figma after 10 seconds" and then SUCCEEDED on the
+  // retry, so the resolve was a coin flip and every compound-id write was
+  // flaky under an apply-or-warn contract.
+  //
+  // What the mock models is the DOCUMENT, not the resolution algorithm: these
+  // two sublayers exist under the card fixture's instance, and any other
+  // compound id does not. A mutating command therefore APPLIES to a real
+  // sublayer and cleanly refuses an invented one — never intermittently, which
+  // is the property the fix buys. It cannot exercise the plugin's own
+  // traversal (the mock does not run code.ts); the live battery owns that.
+  const MOCK_SUBLAYER_IDS = new Set([
+    'I1:42;1:7',
+    'I1:42;1:8',
+  ])
+
+  /**
+   * Whether a caller-supplied node id names something in this document.
+   *
+   * Plain ids stay permissive — the fixture answers for any of them, as it
+   * always has. A COMPOUND id is checked, because that is the shape whose
+   * resolution was broken.
+   */
+  const resolvesInMockDoc = (id: string): boolean =>
+    !id.startsWith('I') ||
+    !id.includes(';') ||
+    MOCK_SUBLAYER_IDS.has(id)
+
+  /** The slot-hosted export a read of `id` serves, or undefined. */
+  const slotExportFor = (
+    id: string | undefined,
+  ): Record<string, unknown> | undefined => {
+    if (id === SLOT_ALIAS_ID) {
+      // The alias resolves — to the node under its CANONICAL name.
+      return slotChipExport(SLOT_CANONICAL_ID)
+    }
+    if (id === SLOT_CLONE_ID) {
+      return slotChipExport(SLOT_CLONE_ID)
+    }
+    // SLOT_CANONICAL_ID is deliberately absent — see the note above.
+    return undefined
+  }
+
+  /**
+   * The id every page-addressed read in this mock uses (list_pages / status
+   * report the same one).
+   */
+  const PAGE_ID = 'page:1'
+
+  /**
+   * The PAGE document a page-rooted read serves — assembled, not exported.
+   *
+   * FAITHFUL to the real plugin (B51): `exportAsync` is a SceneNode call, so a
+   * page has no export of its own and its read is built from its children. The
+   * caller's `depth` is spent on THEM:
+   *   depth 0  — each child is a BOUNDARY ROW: id/name/type, its real size, and
+   *              how many children it hides. No subtree is serialized, so the
+   *              cheap default read stays cheap.
+   *   depth ≠0 — each child is exported whole, exactly as a read entered at
+   *              that child would be, and the SERVER's depth pass decides what
+   *              survives.
+   * The page itself carries NO size: Figma does not maintain one, and the mock
+   * must not hand the reader a number the file does not hold.
+   */
+  const pageDocument = (
+    depth: number,
+  ): Record<string, unknown> => {
+    const card = cardFixture as unknown as Record<
+      string,
+      unknown
+    >
+    const kids = card.children as
+      | Record<string, unknown>[]
+      | undefined
+    return {
+      id: PAGE_ID,
+      name: pageName,
+      type: 'PAGE',
+      children:
+        depth === 0
+          ? [
+              {
+                id: card.id,
+                name: card.name,
+                type: card.type,
+                width: 320,
+                height: 200,
+                childCount: kids?.length ?? 0,
+              },
+            ]
+          : [card],
+    }
   }
 
   // SLOT NODES minted by update_component (B30), keyed by id → the raw export a
@@ -833,8 +1176,13 @@ export const createMockPlugin = (
           gnNodeId === undefined
             ? undefined
             : createdSlots.get(gnNodeId)
+        const gnAlias = slotExportFor(gnNodeId)
         if (gnSlot !== undefined) {
           result = { ...gnSlot }
+        } else if (gnAlias !== undefined) {
+          // B41: the read answers the CANONICAL id, not the one it was asked
+          // for, and the descendant carries its own bindingNames.
+          result = gnAlias
         } else if (gnNodeId === 'remote-inst:1') {
           result = {
             id: 'remote-inst:1',
@@ -881,6 +1229,23 @@ export const createMockPlugin = (
         const targeted =
           cmd.params?.nodeId !== undefined ||
           cmd.params?.pageId !== undefined
+        const inAlias = slotExportFor(
+          cmd.params?.nodeId as string | undefined,
+        )
+        if (inAlias !== undefined) {
+          result = inAlias
+          break
+        }
+        // A PAGE cannot be exported, so the real plugin ASSEMBLES it from its
+        // children — spending the caller's `depth` on them (B51).
+        if (cmd.params?.pageId === PAGE_ID) {
+          result = pageDocument(
+            typeof cmd.params?.depth === 'number'
+              ? cmd.params.depth
+              : 0,
+          )
+          break
+        }
         if (
           !targeted &&
           selection &&
@@ -908,20 +1273,39 @@ export const createMockPlugin = (
         break
       }
 
-      case 'get_nodes':
-        result = [
-          {
-            ...cardFixture,
-            ...(sharedContext.get(cardFixture.id)
-              ? {
-                  context: sharedContext.get(
-                    cardFixture.id,
-                  ),
-                }
+      // get_nodes: ONE entry per requested id, in order — a raw export, or
+      // {id, error} for a miss. The real plugin resolves each id on its own,
+      // so a mock that answered the card fixture whatever it was asked could
+      // not model a partial read at all — and `search`'s field hydration (B50)
+      // is exactly a multi-id read of ids the scan just reported.
+      case 'get_nodes': {
+        const wanted =
+          (cmd.params?.nodeIds as string[]) ?? []
+        result = wanted.map(id => {
+          const slot = createdSlots.get(id)
+          if (slot !== undefined) {
+            return { ...slot }
+          }
+          const alias = slotExportFor(id)
+          if (alias !== undefined) {
+            return alias
+          }
+          const inTree = fixtureNodeById(id)
+          if (inTree === undefined) {
+            return { id, error: 'Node not found' }
+          }
+          return {
+            ...inTree,
+            ...(id === cardFixture.id
+              ? (appliedState.get(cardFixture.id) ?? {})
               : {}),
-          },
-        ]
+            ...(sharedContext.get(id)
+              ? { context: sharedContext.get(id) }
+              : {}),
+          }
+        })
         break
+      }
 
       // list_pages: Rule A document + page enumeration ({docName, results}).
       case 'list_pages':
@@ -1164,7 +1548,41 @@ export const createMockPlugin = (
           '1:44',
           '1:45',
         ])
-        const knownPages = new Set(['0:1'])
+        const knownPages = new Set(['0:1', 'repaired:1'])
+        // A page whose scan the plugin had to REPAIR (B48 / final-review I-1).
+        // A chip written into a slot answered an alias id, its label threw, and
+        // the repair replaced the chip's row with the one its export names. The
+        // export row is addressable where the alias was not, but it cannot carry
+        // componentKey / instancesOf / styleIds / context — so a hinted match
+        // stops finding a node it used to find, and the plugin SAYS so. This is
+        // the shape `repairScan` now produces; the assertion that matters here
+        // is that the warning survives the server's projection and reaches the
+        // agent beside a result set that is genuinely one row short.
+        if (
+          searchScope === 'page' &&
+          cmd.params?.pageId === 'repaired:1'
+        ) {
+          result = {
+            results: [
+              {
+                id: 'I298:7517;298:7516;298:7523',
+                name: 'Chip',
+                type: 'INSTANCE',
+                size: [96, 28],
+              },
+              {
+                id: 'I298:7517;298:7516;298:7523;298:7510',
+                name: 'Label',
+                type: 'TEXT',
+                size: [80, 16],
+              },
+            ],
+            warnings: [
+              'search: repaired the subtree at I298:7517;298:7516;298:7523 — the row for 298:7519 now comes from the export and cannot carry componentKey, instancesOf; a match on those keys will not find this node',
+            ],
+          }
+          break
+        }
         // The real plugin RESOLVES a not-found as a handler {error} (rides in
         // command-result.result, NOT a WS-level reject), so set result.error.
         if (
@@ -1323,6 +1741,13 @@ export const createMockPlugin = (
       // only assigned. Mirrors the real plugin's {id,name,type,warnings} reply.
       case 'update_node': {
         const unId = cmd.params?.nodeId as string
+        // A compound id that names nothing is a clean not-found, the same
+        // answer every time — never the intermittent network error the bare
+        // resolve used to give a sublayer that DOES exist.
+        if (!resolvesInMockDoc(unId)) {
+          result = { error: 'Node not found: ' + unId }
+          break
+        }
         const spec = (cmd.params?.spec ?? {}) as Record<
           string,
           unknown
@@ -1381,6 +1806,9 @@ export const createMockPlugin = (
             // for a TEXT node, so a text patch here is a silent no-op unless
             // named — the row capabilityWarnings gained with B30.
             ['characters', 'text'],
+            // Only a vector-like node carries path data, so path geometry
+            // patched onto anything else has nowhere to go (B45).
+            ['vectorPaths', 'vectorPaths'],
           ]
           for (const [, label] of capChecks) {
             if (spec[label] !== undefined) {
@@ -1437,6 +1865,13 @@ export const createMockPlugin = (
         unWarnings.push(...unBind.warnings)
         if (!unIncompat) {
           applyStyleState(unId, unBind.applied)
+          // Literal first, binding second — the plugin's own order, and the
+          // reason a written-back `gap: "var(space/8)8"` keeps its token.
+          applyLayoutState(unId, spec)
+          applyLayoutBindingState(
+            unId,
+            layoutBindingsOf(unBind.applied),
+          )
         }
         result = {
           id: unId,
@@ -1468,6 +1903,16 @@ export const createMockPlugin = (
       //   - modeId/modeName without degrade prefix → success (no warning)
       // The mode map is processed independently of variableId/field.
       case 'bind_variable': {
+        const bvNodeId = cmd.params?.nodeId as
+          | string
+          | undefined
+        if (
+          bvNodeId !== undefined &&
+          !resolvesInMockDoc(bvNodeId)
+        ) {
+          result = { error: 'Node not found: ' + bvNodeId }
+          break
+        }
         const bvMode = cmd.params?.mode as
           | Record<
               string,
@@ -1524,6 +1969,22 @@ export const createMockPlugin = (
                 ? 'setBoundVariableForPaint unavailable in this Figma version; paint binding skipped'
                 : 'setBoundVariable unavailable in this Figma version; binding skipped',
             )
+          } else if (
+            bvField !== undefined &&
+            MOCK_LAYOUT_BIND_FIELDS.has(bvField)
+          ) {
+            // A LAYOUT bind LANDS, and the file then reports it (B44). The
+            // reply is `ok, warnings:[]` either way — byte-identical to a
+            // no-op — so the only thing that can tell a real bind from a
+            // silent one is the next read.
+            applyLayoutBindingState(bvNodeId as string, [
+              {
+                field: bvField,
+                name:
+                  mockVariableNameById(variableId) ??
+                  variableId,
+              },
+            ])
           }
           // else: happy path, no additional warning
         }
@@ -1684,7 +2145,13 @@ export const createMockPlugin = (
             cnWarnings.push(...cnResolveWarnings)
           }
         }
-        const createdId = `created:${Math.random().toString(36).slice(2, 8)}`
+        // B41 — a create INTO a slot hands back the PRE-APPEND id; the file
+        // knows the node by its canonical instance chain from here on.
+        const createdId = parentId?.startsWith(
+          'slotparent:',
+        )
+          ? SLOT_ALIAS_ID
+          : `created:${Math.random().toString(36).slice(2, 8)}`
         // Faithful set/getSharedPluginData on the newly created node (see
         // update_node): non-empty persists, empty/whitespace clears.
         if (typeof nodeSpec?.context === 'string') {
@@ -1888,6 +2355,18 @@ export const createMockPlugin = (
           name: string
           type: string
         }[] = []
+        // B41 control: a CLONE of slot-hosted content is minted under the
+        // canonical chain, which is why its wrappers never went missing.
+        if (cmd.params?.nodeId === SLOT_ALIAS_ID) {
+          result = [
+            {
+              id: SLOT_CLONE_ID,
+              name: 'Chip',
+              type: 'INSTANCE',
+            },
+          ]
+          break
+        }
         for (let i = 0; i < cloneCount; i++) {
           cloneArr.push({
             id: `clone:${i}:${Math.random().toString(36).slice(2, 8)}`,

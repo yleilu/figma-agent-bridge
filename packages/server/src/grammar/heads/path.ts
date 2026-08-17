@@ -2,7 +2,7 @@
 //
 // path(NONZERO,"M0 0 L10 0 Z")
 //
-// arg0  winding rule: NONZERO | EVENODD | NONE (default NONZERO)
+// arg0  winding rule: NONZERO | EVENODD | NONE (REQUIRED — see below)
 // arg1  SVG path data in double-quotes (spaces as separators, not commas)
 //
 // Maps the atom <-> a Figma VectorPath object
@@ -15,10 +15,27 @@
 //
 // SVG path data commas are normalized to spaces on the write path so the
 // canonical atom never contains a bare comma in the data field.
+//
+// BOTH args are required, and a path atom that does not carry them is
+// INVALID_PARAM (expression-formats.md — "An atom that does not parse is
+// rejected, never guessed at"). The head used to fill both in silently: a
+// first arg that was not a winding rule fell back to NONZERO and a missing
+// second arg became the empty string, so `path(M 12 0 L 24 24 Z)` — the fill
+// rule forgotten, which is the commonest way to write this atom wrong —
+// converted to `{windingRule:'NONZERO', data:''}`. Figma accepted that, drew
+// nothing, and the node read back `vectorPaths: []` with no warning at all
+// (B45). A guess has nothing to fall back on here: the whole shape lives in
+// the data string.
+//
+// The other malformed form stays a DEGRADE, not a rejection: data that parses
+// as an atom but that Figma refuses (`path(NONZERO,"garbage")`) is an ENGINE
+// refusal — the node lands, the field drops, and the plugin reports Figma's
+// own error on `warnings[]`.
 
 import type { AtomAST, AtomArg } from '../types'
 import { parseAtom } from '../parse-atom'
 import { renderAtom } from '../render-atom'
+import { ToolError } from '../../errors'
 
 export type FigmaVectorPath = {
   windingRule: 'NONZERO' | 'EVENODD' | 'NONE'
@@ -69,7 +86,21 @@ const WINDING_RULES = new Set<WindingRule>([
   'NONE',
 ])
 
-const DEFAULT_WINDING: WindingRule = 'NONZERO'
+/**
+ * The canonical form, in every rejection message. A rejection that only says
+ * what is wrong makes the agent guess the fix, and guessing this atom is what
+ * B45 was.
+ */
+export const PATH_TEACHING =
+  'Write the fill rule first, then the SVG path data in double quotes — path(NONZERO,"M 0 0 L 24 24").'
+
+/** Every path rejection: INVALID_PARAM, and the canonical form to write. */
+const rejectPath = (why: string): never => {
+  throw new ToolError(
+    'INVALID_PARAM',
+    `${why} ${PATH_TEACHING}`,
+  )
+}
 
 const scalar = (
   a: AtomArg | undefined,
@@ -139,31 +170,72 @@ const readSparse = <T>(
 }
 
 /**
+ * Normalize SVG path data for the atom: replace comma separators with spaces.
+ * The SVG spec allows commas between coordinates as whitespace equivalents;
+ * replacing them prevents the grammar's comma-split from misreading the data arg.
+ */
+const normalizePathData = (data: string): string =>
+  data.replace(/,/g, ' ').replace(/\s{2,}/g, ' ')
+
+/**
  * Parse a path atom string into a Figma VectorPath object.
  *
  *   path(NONZERO,"M0 0 L10 0 Z")  →  { windingRule: 'NONZERO', data: 'M0 0 L10 0 Z' }
+ *
+ * Raises `INVALID_PARAM` on every atom it cannot read — the write reaches no
+ * plugin, so a rejected path has changed nothing.
  */
 export const atomToPath = (s: string): FigmaVectorPath => {
-  const ast = parseAtom(s)
+  let ast: AtomAST
+  try {
+    ast = parseAtom(s)
+  } catch {
+    // An unbalanced or malformed atom is the agent's parameter, not a plugin
+    // fault — say so with the code that names it.
+    return rejectPath(`"${s}" is not a path atom.`)
+  }
   if (ast.kind !== 'head' || ast.head !== 'path') {
-    throw new Error(
-      `atomToPath: not a path atom — got "${s}"`,
-    )
+    return rejectPath(`"${s}" is not a path atom.`)
   }
   const { args } = ast
+  if (args.length < 2) {
+    return rejectPath(
+      `path() takes a fill rule and the path data, but "${s}" carries ${args.length === 0 ? 'neither' : 'only one'}.`,
+    )
+  }
 
   // arg0: winding rule scalar (e.g. NONZERO)
   const windingRaw = scalar(args[0])
-  const windingRule: WindingRule =
-    typeof windingRaw === 'string' &&
-    WINDING_RULES.has(windingRaw as WindingRule)
-      ? (windingRaw as WindingRule)
-      : DEFAULT_WINDING
+  if (
+    typeof windingRaw !== 'string' ||
+    !WINDING_RULES.has(windingRaw as WindingRule)
+  ) {
+    return rejectPath(
+      `path() takes NONZERO, EVENODD or NONE as its fill rule, not "${String(windingRaw ?? '')}".`,
+    )
+  }
+  const windingRule = windingRaw as WindingRule
 
-  // arg1: SVG path data (stored in double-quotes in the atom)
-  const dataRaw = scalar(args[1])
-  const data: string =
-    typeof dataRaw === 'string' ? unquote(dataRaw) : ''
+  // arg1…: SVG path data (stored in double-quotes in the atom).
+  //
+  // Everything after the fill rule is the data, rejoined. SVG allows a comma
+  // wherever it allows a space, and the grammar's tokenizer splits a head's
+  // args on every top-level comma — so `path(NONZERO,"M0,0 L10,0 Z")`, the
+  // form an agent copies straight out of an SVG file, arrives here as FOUR
+  // args and used to keep `"M0` as the whole shape. Rejoining and then
+  // normalizing is what makes the write face's own promise true (commas are
+  // normalized to spaces on write — expression-formats.md).
+  const data = normalizePathData(
+    unquote(
+      args
+        .slice(1)
+        .map(a => String(scalar(a) ?? ''))
+        .join(','),
+    ),
+  )
+  if (data.trim() === '') {
+    return rejectPath(`"${s}" carries no path data.`)
+  }
 
   const corners = readSparse(ast.attrs?.corners, asRadius)
   const caps = readSparse(ast.attrs?.caps, asStrokeCap)
@@ -177,14 +249,6 @@ export const atomToPath = (s: string): FigmaVectorPath => {
     ...(joins === undefined ? {} : { joins }),
   }
 }
-
-/**
- * Normalize SVG path data for the atom: replace comma separators with spaces.
- * The SVG spec allows commas between coordinates as whitespace equivalents;
- * replacing them prevents the grammar's comma-split from misreading the data arg.
- */
-const normalizePathData = (data: string): string =>
-  data.replace(/,/g, ' ').replace(/\s{2,}/g, ' ')
 
 /**
  * Render a sparse map back to `index:value` entries, sorted so the atom is

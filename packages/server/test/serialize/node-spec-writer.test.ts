@@ -128,15 +128,31 @@ describe('specToFigma — stroke geometry', () => {
     )
   })
 
-  it('a non-numeric side degrades whole rather than writing NaN', () => {
+  // B38: the UNIFORM arm used to be the silent one. `stroke(fat)` emitted
+  // `strokeWeight: null` (NaN through JSON) with no warning, and Figma killed
+  // the whole write with its own raw validator message. A weight that is not a
+  // number is rejected at parse now — in EITHER spelling.
+  it.each([
+    ['stroke(fat){align=INSIDE}', 'the uniform weight'],
+    ['stroke([1,x,1,0])', 'a per-side entry'],
+  ])('rejects %s — %s is not a number', (atom: string) => {
     const warnings: string[] = []
-    const result = specToFigma(
-      { stroke: 'stroke([1,x,1,0])' },
-      warnings,
-    )
-    expect(result.strokeWeight).toBeUndefined()
-    expect(result.strokeWeights).toBeUndefined()
-    expect(warnings).toHaveLength(1)
+    try {
+      specToFigma({ stroke: atom }, warnings)
+      throw new Error('expected the write to be rejected')
+    } catch (err) {
+      expect((err as { code?: string }).code).toBe(
+        'INVALID_PARAM',
+      )
+      // The same teaching sentence from both arms.
+      expect((err as Error).message).toContain('stroke(1)')
+      expect((err as Error).message).toContain(
+        'stroke([0,0,1,0])',
+      )
+    }
+    // Rejected, so nothing was written and nothing was warned about: a
+    // warning would say the write went on without the field.
+    expect(warnings).toHaveLength(0)
   })
 
   it('per-side stroke with EQUAL sides emits the plain uniform weight', () => {
@@ -441,6 +457,84 @@ describe('specToFigma — text', () => {
       value: 20,
       unit: 'PIXELS',
     })
+  })
+
+  // B42 — `case` is a plain enum, not an atom, so the only thing this converter
+  // owes it is passage. It went nowhere for a while, which made "ALL CAPS" a
+  // value the agent could state, could read back as absent, and could not
+  // explain. Both arms are pinned: the CREATE face carries it onto a new node,
+  // and a one-key PATCH carries it onto an existing one.
+  it('carries text.case verbatim on a create', () => {
+    const result = specToFigmaForCreate({
+      type: 'TEXT',
+      text: {
+        content: 'Section',
+        font: 'font(Inter,SemiBold,12)',
+        case: 'UPPER',
+      },
+    })
+    const text = result.text as Record<string, unknown>
+    expect(text.case).toBe('UPPER')
+  })
+
+  it('carries text.case verbatim on a one-key patch', () => {
+    const text = specToFigma({ text: { case: 'TITLE' } })
+      .text as Record<string, unknown>
+    expect(text.case).toBe('TITLE')
+    // …and states nothing else. `case` is the only key the patch named, so a
+    // sibling here would be a value the agent never asked for.
+    expect(Object.keys(text)).toEqual(['case'])
+  })
+
+  it('omits text.case entirely when the patch does not name it', () => {
+    const text = specToFigma({
+      text: { content: 'Untouched' },
+    }).text as Record<string, unknown>
+    expect(text).not.toHaveProperty('case')
+  })
+
+  // B43 — a per-range write must not disturb the node.
+  //
+  // `text.color` binds through the node's FIRST FILL, so a patch that emitted a
+  // node-level colour alongside the runs would overwrite the paint the variable
+  // is bound to and drop the binding with it. The lock is on what the payload
+  // does NOT say: a runs-only patch names runs and nothing else, and asks for
+  // no binding of its own.
+  it('a runs-only patch names runs and NOTHING else — no node-level colour', () => {
+    const result = specToFigma({
+      text: {
+        runs: [{ at: [0, 4], color: '#FF0000' }],
+      },
+    })
+    const text = result.text as Record<string, unknown>
+    expect(Object.keys(text)).toEqual(['runs'])
+    expect(text).not.toHaveProperty('color')
+    expect(result).not.toHaveProperty('fills')
+    // `bindings` is the channel that RE-binds a field after the literal lands.
+    // A patch that names no wrapper must not open it — an empty or invented
+    // entry here rebinds (or unbinds) a field the caller never mentioned.
+    expect(result).not.toHaveProperty('bindings')
+  })
+
+  it('a runs-only patch keeps each run inside the range it stated', () => {
+    const result = specToFigma({
+      text: {
+        runs: [
+          { at: [0, 4], color: '#FF0000' },
+          { at: [9, 14], font: 'font(Inter,Bold,16)' },
+        ],
+      },
+    })
+    const runs = (result.text as Record<string, unknown>)
+      .runs as Record<string, unknown>[]
+    expect(runs.map(r => r.at)).toEqual([
+      [0, 4],
+      [9, 14],
+    ])
+    expect(runs[0].color).toMatchObject({ type: 'SOLID' })
+    // The gap between the two ranges is stated by no run, so nothing in this
+    // payload reaches it.
+    expect(runs).toHaveLength(2)
   })
 })
 
@@ -769,6 +863,111 @@ describe('specToFigmaForCreate — the default never shrinks a sized frame', () 
   })
 })
 
+// ─── B36: a dropped struct drops its bindings ────────────────────────────────
+//
+// Live: create_node RECTANGLE with `fills:["#888888"]` and
+// `text:{content,font,color:"var(probe/cyan)#22D3EE"}`. The text struct was
+// dropped by the plugin (its text applier runs only for a TEXT node) and the
+// create said nothing at all — but the binding the struct emitted routes
+// through `fills`, so the node read back `fills: [var(probe/cyan)#22D3EE]`.
+// The grey the same spec stated was gone, replaced by a variable the agent
+// never asked to put on that field.
+
+describe('specToFigmaForCreate — a struct the type cannot carry', () => {
+  const REPRO = {
+    type: 'RECTANGLE',
+    name: 'Probe',
+    fills: ['#888888'],
+    text: {
+      content: 'Hello',
+      font: 'font(Inter,Regular,16)',
+      color: 'var(probe/cyan)#22D3EE',
+    },
+  } as const
+
+  it('drops the text struct rather than sending it to be ignored', () => {
+    const out = specToFigmaForCreate({ ...REPRO })
+    expect(out.text).toBeUndefined()
+  })
+
+  it('drops the binding the struct carried WITH it', () => {
+    const out = specToFigmaForCreate({ ...REPRO })
+    expect(out.bindings).toBeUndefined()
+  })
+
+  it('leaves the fills the spec actually stated', () => {
+    const out = specToFigmaForCreate({ ...REPRO })
+    expect(out.fills).toEqual([
+      {
+        type: 'SOLID',
+        color: { r: 0.533, g: 0.533, b: 0.533 },
+      },
+    ])
+  })
+
+  it('says so once, naming the struct and the binding that died with it', () => {
+    const warnings: string[] = []
+    specToFigmaForCreate({ ...REPRO }, warnings)
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toBe(
+      'text ignored — not supported on a RECTANGLE node ' +
+        '(the var(probe/cyan) binding it carried was dropped with it)',
+    )
+  })
+
+  it('names the drop even when the struct carried no binding', () => {
+    const warnings: string[] = []
+    const out = specToFigmaForCreate(
+      {
+        type: 'POLYGON',
+        text: { content: 'Hello' },
+      },
+      warnings,
+    )
+    expect(out.text).toBeUndefined()
+    // The plugin's capabilityWarnings sentence, to the word.
+    expect(warnings).toEqual([
+      'text ignored — not supported on a POLYGON node',
+    ])
+  })
+
+  it('a TEXT node keeps its struct and its binding — nothing was dropped', () => {
+    const warnings: string[] = []
+    const out = specToFigmaForCreate(
+      { ...REPRO, type: 'TEXT' },
+      warnings,
+    )
+    expect(out.text).toBeDefined()
+    expect(out.bindings).toEqual([
+      {
+        kind: 'var',
+        name: 'probe/cyan',
+        field: 'fills',
+        index: 0,
+      },
+    ])
+    expect(warnings).toHaveLength(0)
+  })
+
+  it('a binding the spec named on fills ITSELF survives the drop', () => {
+    // Only the struct's own bindings die with it. A wrapper the agent wrote on
+    // `fills` is the field it named, and it lands.
+    const out = specToFigmaForCreate({
+      type: 'RECTANGLE',
+      fills: ['var(surface/2)#888888'],
+      text: { content: 'Hello' },
+    })
+    expect(out.bindings).toEqual([
+      {
+        kind: 'var',
+        name: 'surface/2',
+        field: 'fills',
+        index: 0,
+      },
+    ])
+  })
+})
+
 // ─── slotEntryToFigma ────────────────────────────────────────────────────────
 
 describe('slotEntryToFigma — creation layout default', () => {
@@ -837,6 +1036,77 @@ describe('slotEntryToFigma — creation layout default', () => {
   it('a bare name states no size, so nothing is pinned', () => {
     expect(slotEntryToFigma('Body').sizing).toBeUndefined()
   })
+
+  // B37 (live): `slots:[{name:'Extra', type:'FRAME', layout:{…},
+  // children:[…]}]` created the slot WITH its layout and reported
+  // `slotsCreated:['Extra']`, `warnings: []`. The type and the children were
+  // dropped without a word — they are real patch keys, so the unknown-key
+  // guard passes them, and the converter emits neither.
+  it('names the two keys a slot entry can state and the slot path cannot honour', () => {
+    const warnings: string[] = []
+    const out = slotEntryToFigma(
+      {
+        name: 'Extra',
+        type: 'FRAME',
+        layout: { mode: 'H', gap: 8 },
+        children: [
+          { type: 'TEXT', text: { content: 'Hi' } },
+        ],
+      } as never,
+      warnings,
+    )
+    // The layout the entry stated still lands — one entry, several fields, and
+    // only the two that cannot be honoured are reported.
+    expect(out.layout).toEqual({ mode: 'H', spacing: 8 })
+    expect(out.children).toBeUndefined()
+    expect(out.type).toBeUndefined()
+    expect(warnings).toHaveLength(2)
+    expect(warnings[0]).toBe(
+      'slot "Extra": children ignored — a new slot is created empty. ' +
+        'Build its contents with create_node or create_tree, parented to the slot.',
+    )
+    expect(warnings[1]).toBe(
+      'slot "Extra": type ignored — an update_component slot entry ' +
+        'always creates a SLOT node.',
+    )
+  })
+
+  it('says nothing about a key the entry did not state', () => {
+    const warnings: string[] = []
+    slotEntryToFigma(
+      { name: 'Body', fills: ['#FFF'] },
+      warnings,
+    )
+    expect(warnings).toHaveLength(0)
+  })
+
+  // B36 on the slot path: every entry creates a SLOT, whatever it says, so the
+  // struct a SLOT cannot carry goes here — before the bindings are collected.
+  // The plugin's own capabilityWarnings names the drop, but only AFTER
+  // applying the binding the struct left behind.
+  it('drops a text struct, its binding, and says so — attributed to the slot', () => {
+    const warnings: string[] = []
+    const out = slotEntryToFigma(
+      {
+        name: 'Extra',
+        fills: ['#888888'],
+        text: { color: 'var(probe/cyan)#22D3EE' },
+      },
+      warnings,
+    )
+    expect(out.text).toBeUndefined()
+    expect(out.bindings).toBeUndefined()
+    expect(out.fills).toEqual([
+      {
+        type: 'SOLID',
+        color: { r: 0.533, g: 0.533, b: 0.533 },
+      },
+    ])
+    expect(warnings).toEqual([
+      'slot "Extra": text ignored — not supported on a SLOT node ' +
+        '(the var(probe/cyan) binding it carried was dropped with it)',
+    ])
+  })
 })
 
 // ─── vectorPaths ─────────────────────────────────────────────────────────────
@@ -874,6 +1144,25 @@ describe('specToFigma — vectorPaths', () => {
   it('omits vectorPaths when absent from spec', () => {
     const result = specToFigma({ type: 'VECTOR' } as never)
     expect(result.vectorPaths).toBeUndefined()
+  })
+
+  // B45: the entry that does not parse takes the WHOLE write down, before any
+  // payload exists. It used to convert to an empty data string, which Figma
+  // accepted and drew as nothing.
+  it('rejects a fill-rule-less entry as INVALID_PARAM, converting nothing', () => {
+    try {
+      specToFigma({
+        vectorPaths: [
+          'path(NONZERO,"M0 0 L10 0 Z")',
+          'path(M 12 0 L 24 24 Z)',
+        ],
+      })
+      throw new Error('expected the write to be rejected')
+    } catch (err) {
+      expect((err as { code?: string }).code).toBe(
+        'INVALID_PARAM',
+      )
+    }
   })
 })
 

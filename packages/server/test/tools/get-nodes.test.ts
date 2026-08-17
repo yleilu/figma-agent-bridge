@@ -90,6 +90,72 @@ describe('handleGetNodes (rebuilt — NodeSpec)', () => {
     expect(out.errors[0].code).toBe('NODE_NOT_FOUND')
   })
 
+  // B39 — one bad id costs its own entry and nothing else. The call is a BATCH:
+  // the goods either side of a miss come back whole, so an agent that mistypes
+  // one id keeps the two reads it got right instead of losing the round trip.
+  it('degrades per ENTRY: a miss between two goods loses neither', async () => {
+    const second = { ...cardFixture, id: '1:43' }
+    const result = await handleGetNodes(
+      { nodeIds: ['1:42', 'ghost', '1:43'] },
+      stubClient({
+        reply: [
+          cardFixture,
+          { id: 'ghost', error: 'Node not found' },
+          second,
+        ],
+      }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { id: string; name: string }[]
+      errors: {
+        id: string
+        error: string
+        code: string
+      }[]
+    }
+    expect(out.errors).toHaveLength(1)
+    expect(out.errors[0].id).toBe('ghost')
+    expect(out.errors[0].code).toBe('NODE_NOT_FOUND')
+    // Both goods, in the order they were asked for, and IN FULL — a degraded
+    // batch must not quietly hand back id-stubs for the reads that worked.
+    expect(out.results.map(r => r.id)).toEqual([
+      '1:42',
+      '1:43',
+    ])
+    for (const spec of out.results) {
+      expect(spec.name).toBe('Card')
+      expect(spec).toHaveProperty('fills')
+      expect(spec).toHaveProperty('layout')
+    }
+  })
+
+  // The same degrade for a COMPOUND instance-sublayer id. `I<inst>;<child>` is
+  // the address an earlier read hands out for anything under an instance, and
+  // it is the form that used to take the whole call down. The receipt has to
+  // echo it CHARACTER FOR CHARACTER — an id the agent cannot paste back names
+  // nothing it can act on.
+  it('degrades per entry for a COMPOUND bad id too, echoed verbatim', async () => {
+    const compound = 'I298:7517;298:7516;298:9999'
+    const result = await handleGetNodes(
+      { nodeIds: ['1:42', compound] },
+      stubClient({
+        reply: [
+          cardFixture,
+          { id: compound, error: 'Node not found' },
+        ],
+      }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { id: string }[]
+      errors: { id: string; code: string }[]
+    }
+    expect(out.results).toHaveLength(1)
+    expect(out.results[0].id).toBe('1:42')
+    expect(out.errors).toHaveLength(1)
+    expect(out.errors[0].id).toBe(compound)
+    expect(out.errors[0].code).toBe('NODE_NOT_FOUND')
+  })
+
   it('applies a fields projection to each result', async () => {
     const result = await handleGetNodes(
       { nodeIds: ['1:42'], fields: ['type', 'name'] },

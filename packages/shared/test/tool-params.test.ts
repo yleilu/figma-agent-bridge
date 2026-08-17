@@ -318,6 +318,49 @@ describe('searchParamsSchema', () => {
       }).success,
     ).toBe(false)
   })
+
+  // B52 / Decision C2 — an unknown TOP-LEVEL key is rejected, never stripped.
+  // The strip inverted the reply: `search({scope:'node', nodeId, name:'Label'})`
+  // validated clean and returned the WHOLE scope (17 rows, zero warnings),
+  // because an unfiltered search is itself a valid call.
+  describe('an unknown top-level key (Decision C2)', () => {
+    const misNested = searchParamsSchema.safeParse({
+      fileKey: 'fk',
+      scope: 'node',
+      nodeId: '298:7508',
+      name: 'Label',
+    })
+
+    it('is rejected, not stripped into a match-all', () => {
+      expect(misNested.success).toBe(false)
+    })
+
+    it('names the key', () => {
+      const issue = misNested.error?.issues[0] as
+        | { code: string; keys?: string[] }
+        | undefined
+      expect(issue?.code).toBe('unrecognized_keys')
+      expect(issue?.keys).toEqual(['name'])
+    })
+
+    it('points at `match`', () => {
+      expect(misNested.error?.issues[0]?.message).toContain(
+        '`match`',
+      )
+    })
+
+    it('keeps every request-envelope key valid', () => {
+      expect(
+        searchParamsSchema.safeParse({
+          fileKey: 'fk',
+          sessionId: 's-1',
+          agentId: 'a-1',
+          agentType: 'figma-designer',
+          match: { name: 'Label' },
+        }).success,
+      ).toBe(true)
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------

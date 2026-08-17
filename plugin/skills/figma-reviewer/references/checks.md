@@ -49,6 +49,21 @@ token-valued paints carry no wrapper, add **one** summary finding stating the me
 binding rate (`N of M token-valued paints are bound`) alongside the per-node findings —
 a scatter of individual warnings understates a systematic miss.
 
+### Spacing tokens
+
+Spacing binds and reads back like a paint does. `layout.gap` — with the GRID spellings
+`rowGap` / `colGap` — and each of the four `layout.pad` sides carry a `var()` wrapper
+when they are bound: `gap: var(space/8)8`, `pad: [var(space/16)16, 16, …]`. `pad` binds
+**per side, by position**, so one bound side beside three literals is a real and
+reportable state, not a read artefact.
+
+So a **bare number is evidence**, the same way a bare hex is: it means the value is
+unbound, not that the binding is invisible. Run the sweep when the file has a spacing
+collection — scan `get_variables` for the value, and a bare `gap` / `pad` side equal to a
+spacing token is a skipped binding → `warning`; a bare value that belongs to the scale but
+matches no token → `nit`. Measure this rate too when the file has a spacing collection at
+all: `N of M spacing values are bound` says more than a list of frames.
+
 ### Style matching
 
 A text node is **on-style** when `inspect` shows `style(Style/Name)font(…)`. A bare
@@ -164,6 +179,11 @@ What to check:
 - `layout.gap` on auto-layout frames
 - `layout.pad` (each of top/right/bottom/left) on auto-layout frames
 - `size` (width/height) on spacing/divider nodes
+
+A bound value arrives wrapped — `gap: var(space/8)8` — so read the number out of the
+wrapper for the scale check, and treat the missing wrapper as its own finding under
+**Dimension 1 → Spacing tokens**. A value on the scale but unbound and a value bound to
+a token off the scale are different problems and belong in different findings.
 
 ### Corner radius
 
@@ -416,6 +436,13 @@ names with or without a trailing number:
 Feed this same pattern to `search` (`match.regex`) to enumerate offenders server-side,
 cursor-paginated, instead of walking the tree. A name that is empty or whitespace-only
 is always flagged.
+
+**A sweep with a mistyped filter fails, it does not over-return.** Every filter goes
+inside `match` — `{scope, nodeId, match: {name, regex, type, …}}` — and an unknown key,
+at the top level or inside `match`, is `INVALID_PARAM` naming the key it refused. So
+`search({name: 'Frame'})` and `search({match: {namee: 'Frame'}})` both stop the sweep
+rather than answering with the whole scope. Trust a search's row count only from a call
+that was accepted.
 
 **Text-node exemption:** a text node (`type: TEXT`) may legitimately be named after its
 own content, so a text node is flagged **only when its name is blank / whitespace** —

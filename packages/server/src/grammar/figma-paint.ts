@@ -11,6 +11,7 @@
 import type { AtomAST, AtomArg, Attrs } from './types'
 import { parseAtom } from './parse-atom'
 import { renderAtom } from './render-atom'
+import { ToolError } from '../errors'
 
 // --- Figma object shapes (structurally compatible, mutable/plain) ---
 
@@ -1001,6 +1002,50 @@ export const fontToAtom = (f: FigmaFontName): string =>
 
 // --- STROKE GEOMETRY: atom <-> Figma ---
 
+/**
+ * A weight as a number, or undefined when the atom did not state one this face
+ * can write.
+ *
+ * `Number()` alone is not the test. It turns `fat` into NaN — which
+ * JSON.stringify writes as `null`, so the payload carried
+ * `{"strokeWeight": null}` and the whole create died on Figma's own raw
+ * validator ("Expected number, received null") with no warning of ours in
+ * front of it (B38). It also turns `true` into 1, which would invent a weight
+ * nobody asked for.
+ */
+const asStrokeWeight = (
+  v: string | number | boolean,
+): number | undefined => {
+  if (typeof v === 'boolean') {
+    return undefined
+  }
+  const n = typeof v === 'number' ? v : Number(v.trim())
+  return Number.isFinite(n) ? n : undefined
+}
+
+/**
+ * One rejection for both spellings of the weight — a malformed atom has no
+ * literal half to fall back on, so it is INVALID_PARAM, raised before the
+ * write reaches the plugin (expression-formats.md).
+ *
+ * `what` names the piece that was wrong, the message names the value that was
+ * written, and both canonical forms follow. The uniform arm and the per-side
+ * arm therefore teach the same fix from the same sentence: an agent that gets
+ * `stroke(fat)` wrong and an agent that gets `stroke([1,x,1,0])` wrong are one
+ * agent making one mistake.
+ */
+const rejectStrokeWeight = (
+  what: string,
+  raw: string | number | boolean,
+): never => {
+  throw new ToolError(
+    'INVALID_PARAM',
+    `stroke() takes ${what} as a number, not "${String(raw)}". ` +
+      'Write stroke(1) for one weight on every side, or stroke([0,0,1,0]) ' +
+      'for per-side weights [top,right,bottom,left].',
+  )
+}
+
 export const atomToStroke = (
   s: string,
 ): FigmaStrokeGeom => {
@@ -1012,9 +1057,28 @@ export const atomToStroke = (
   const out: FigmaStrokeGeom = {}
   const a = args[0]
   if (a?.kind === 'scalar') {
-    out.weight = Number(a.value)
+    const weight = asStrokeWeight(a.value)
+    if (weight === undefined) {
+      return rejectStrokeWeight('the weight', a.value)
+    }
+    out.weight = weight
   } else if (a?.kind === 'tuple') {
-    out.weights = a.items.map(Number)
+    // A SIDE that is not a number is rejected on the same terms as a uniform
+    // weight — one atom, one rule. B27 gave this a warn-and-degrade, which was
+    // the honest answer while the uniform arm was writing `null` silently; now
+    // that a malformed atom is refused, a per-side entry that is not a number
+    // is refused with it (ruling on top of B38).
+    //
+    // ARITY is a different failure and keeps its degrade: `stroke([1,2,3])`
+    // parses — every entry IS a number — and it is the FIELD that has no room
+    // for a list that is not four sides. That judgement stays on the write
+    // face, where the warnings sink is.
+    out.weights = a.items.map(item => {
+      const side = asStrokeWeight(item)
+      return side === undefined
+        ? rejectStrokeWeight('each side weight', item)
+        : side
+    })
   }
   if (attrs !== undefined) {
     if (typeof attrs.align === 'string') {

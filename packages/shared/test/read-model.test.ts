@@ -103,6 +103,61 @@ describe('matchSchema', () => {
         .success,
     ).toBe(false)
   })
+
+  // B52 / Decision C2, one level down. An unknown key inside `match` inverts
+  // the reply exactly as an unknown top-level key did: an empty match matches
+  // EVERYTHING, so `match:{namee:'Label'}` — one typed character — answers the
+  // whole scope with zero warnings.
+  describe('an unknown key inside match', () => {
+    const typo = matchSchema.safeParse({
+      namee: 'Label',
+    })
+
+    it('is rejected, not stripped into a match-all', () => {
+      expect(typo.success).toBe(false)
+    })
+
+    it('names the key', () => {
+      const issue = typo.error?.issues[0] as
+        | { code: string; keys?: string[] }
+        | undefined
+      expect(issue?.code).toBe('unrecognized_keys')
+      expect(issue?.keys).toEqual(['namee'])
+    })
+
+    it('lists the keys `match` does take', () => {
+      const { message } = typo.error!.issues[0]
+      for (const key of [
+        'name',
+        'regex',
+        'type',
+        'componentKey',
+        'styleId',
+        'variableId',
+        'instancesOf',
+      ]) {
+        expect(message).toContain(key)
+      }
+    })
+
+    it('reaches every read that carries `match`, not only search', () => {
+      // matchSchema is a NESTED value, so it survives the shape re-wrapping
+      // `server.tool` does — `inspect` and every list read share it.
+      for (const schema of [
+        treeReadParamsSchema,
+        listReadParamsSchema,
+      ]) {
+        expect(
+          schema.safeParse({ match: { namee: 'Label' } })
+            .success,
+        ).toBe(false)
+        expect(
+          schema.safeParse({ match: { name: 'Label' } })
+            .success,
+        ).toBe(true)
+      }
+    })
+  })
 })
 
 describe('fieldsSchema', () => {

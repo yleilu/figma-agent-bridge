@@ -6,7 +6,7 @@ description: >-
   design-system adherence, consistency, accessibility, layout hygiene, fidelity to
   intent, and naming & context legibility; emits a standardized report and then offers to
   fix (never auto-mutates).
-version: 0.3.0
+version: 0.4.0
 ---
 
 # figma-reviewer skill

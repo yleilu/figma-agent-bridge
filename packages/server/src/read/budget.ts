@@ -22,12 +22,17 @@ import type {
 export const estimateTokens = (n: NodeSpecOrStub): number =>
   Math.ceil(JSON.stringify(n).length / 4)
 
-/** Convert a full NodeSpec to an IdStub (depth/budget collapse). */
+/**
+ * Convert a full NodeSpec to an IdStub (depth/budget collapse).
+ *
+ * `size` is carried, never invented — a node with none (a PAGE) keeps none
+ * (B26/B51).
+ */
 const toStub = (n: NodeSpec): IdStub => ({
   id: n.id ?? '',
   name: n.name ?? '',
   type: n.type,
-  size: n.size ?? [0, 0],
+  ...(n.size !== undefined ? { size: n.size } : {}),
   childCount: n.children?.length ?? 0,
 })
 
@@ -48,6 +53,12 @@ const isStub = (n: NodeSpecOrStub): n is IdStub =>
  * such overflow nodes are dropped from the view but still recorded in the
  * receipt so the agent knows what it didn't get. This guarantees
  * `estimateTokens(view) <= budget` even for very wide levels.
+ *
+ * THE RECEIPT RULE, in one line: a node that was CUT is named, whatever its
+ * `childCount`; a node that was RETURNED is not. Dropping a slot is the cut
+ * this pass makes, and it is the only signal there is — `inspect` answers
+ * `{view, truncated}` with no count on the parent and no `truncated` boolean,
+ * so an unnamed drop is a response the agent reads as complete.
  *
  * Omitted slots are marked with an OMIT sentinel and compacted out of each
  * children array before the view is returned (indices used by queued siblings
@@ -108,9 +119,22 @@ export const fillToBudget = (
 
   // A stub that arrived already-stubbed (an earlier depth pass made it) is
   // still bytes in the response, so it must be charged like anything else —
-  // otherwise a pre-stubbed tree escapes the cap entirely. It is NOT re-added
-  // to the receipt: whichever pass stubbed it already recorded it. When it
-  // does not fit it is dropped, exactly like a stub we create ourselves.
+  // otherwise a pre-stubbed tree escapes the cap entirely.
+  //
+  // It is not re-recorded when it FITS: the stub is in the view, and the pass
+  // that made it decided whether its cut was worth naming. But when it does not
+  // fit it is DROPPED, and a dropped node is named here whatever its
+  // childCount — the node itself is gone from the response, and no other field
+  // reports that. This used to lean on "whichever pass stubbed it already
+  // recorded it", which stopped being true the moment a leaf collapse stopped
+  // earning a receipt entry: a default `inspect` over 1000 leaf children then
+  // returned 803 of them with `truncated: []`, and the 197 missing ids were
+  // named nowhere at all.
+  //
+  // A stub that HIDES a subtree is therefore named twice — once by the depth
+  // pass that collapsed it, once here when it is dropped. Both statements are
+  // true and neither pass can see the other, so the receipts are joined and
+  // deduped by id where they meet (truncate-tree.ts).
   const admitExistingStub = (
     stub: NodeSpecOrStub,
     into: NodeSpecOrStub[],
@@ -119,7 +143,12 @@ export const fillToBudget = (
     if (cost <= remaining) {
       remaining -= cost
       into.push(stub)
+      return
     }
+    truncated.push({
+      id: (stub as IdStub).id,
+      childCount: (stub as IdStub).childCount,
+    })
   }
 
   // Enqueue root's children
@@ -164,17 +193,26 @@ export const fillToBudget = (
       const stub = toStub(node)
       const stubEmissionCost =
         estimateTokens(stub) + FRAMING_TOKENS
-      if (stubEmissionCost <= remaining) {
-        remaining -= stubEmissionCost
-        parentChildrenSlot[slotIndex] = stub
-      } else {
+      const dropped = stubEmissionCost > remaining
+      if (dropped) {
         // Mark for compaction; the slot is dropped from the final view.
         ;(parentChildrenSlot as unknown[])[slotIndex] = OMIT
+      } else {
+        remaining -= stubEmissionCost
+        parentChildrenSlot[slotIndex] = stub
       }
-      truncated.push({
-        id: stub.id,
-        childCount: stub.childCount,
-      })
+      // CUT vs RETURNED, never childCount alone. A node DROPPED from the view
+      // is CUT — the node itself is gone, whatever it held, so it is named
+      // whatever its childCount. A node kept as a STUB is returned, and only
+      // its subtree was cut: the receipt names "which subtrees were cut and how
+      // big", so a leaf's `childCount: 0` entry names a cut that did not
+      // happen (B51).
+      if (dropped || stub.childCount > 0) {
+        truncated.push({
+          id: stub.id,
+          childCount: stub.childCount,
+        })
+      }
     } else {
       // Include this node (object + framing both fit).
       remaining -= fullEmissionCost

@@ -14,6 +14,7 @@ import type {
   ToolCallback,
 } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type {
+  ZodObject,
   ZodRawShape,
   ZodTypeAny,
   objectOutputType,
@@ -135,12 +136,21 @@ export const withFile =
  * `schema.shape` must already carry fileTargetParamsSchema (Task 3). `R` stays a
  * free type var because not every handler returns a bare `ToolResult` — export
  * returns image content too — so its result is inferred, not pinned to ToolResult.
+ *
+ * THE SCHEMA IS REGISTERED, NOT ITS SHAPE (B52). `server.tool(name, shape, cb)`
+ * re-wraps the shape in a plain `z.object`, which silently DROPS every modifier
+ * the schema carries — `.strict()` above all. On `search` that strip inverted
+ * the reply: a mis-nested filter key vanished and the call became a match-all
+ * (Decision C2). `server.registerTool` takes the schema object itself, so what
+ * a tool-params schema says is what validates. For every other tool the two are
+ * identical — a plain `z.object` strips either way, and the advertised JSON
+ * Schema is byte-for-byte the same.
  */
 export const registerFileTool = <S extends ZodRawShape, R>(
   server: McpServer,
   client: FigmaClient,
   name: string,
-  schema: { shape: S },
+  schema: ZodObject<S>,
   handler: (
     params: FileHandlerParams<S>,
     client: ScopedFigmaClient,
@@ -151,18 +161,18 @@ export const registerFileTool = <S extends ZodRawShape, R>(
   ) => void,
 ): void => {
   // The cast is the ONE thing given up: TS can't resolve the withFile closure's
-  // param type against `server.tool`'s overloaded ShapeOutput for a generic `S`,
-  // so we assert ToolCallback<S>. The schema↔param binding lives on the `handler`
+  // param type against the SDK's overloaded ShapeOutput for a generic `S`,
+  // so we assert ToolCallback. The schema↔param binding lives on the `handler`
   // parameter and is checked BEFORE this cast; the cast only bridges the wrapper
   // to the SDK signature, it does not erase that binding.
-  server.tool(
+  server.registerTool(
     name,
-    schema.shape,
+    { inputSchema: schema },
     withFile(
       client,
       handler,
       onJoined,
-    ) as unknown as ToolCallback<S>,
+    ) as unknown as ToolCallback<ZodObject<S>>,
   )
 }
 

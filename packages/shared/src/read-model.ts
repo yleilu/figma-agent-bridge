@@ -35,37 +35,63 @@ export const profileSchema = z.enum([
   'full',
 ])
 
+// What an unknown key INSIDE `match` is told (B52 / Decision C2, one level
+// down).
+//
+// The rule and the reason are the top-level ones. An unknown key is stripped by
+// default, and inside `match` the strip INVERTS the reply: an empty match
+// matches EVERYTHING (see the note on the schema below), so
+// `match:{namee:'Label'}` — one typed character — answers the whole scope with
+// zero warnings, exactly as the top-level spelling did before it was refused.
+// `regex` already states the principle for its own field: a filter this surface
+// cannot read is rejected, "never silently degraded to match-all".
+//
+// The key itself is named by zod's own `unrecognized_keys` issue, whose `keys`
+// array the MCP layer renders verbatim — so the reply says which key it refused
+// and which keys it takes.
+const MATCH_UNKNOWN_KEY =
+  'match takes only these filter keys: name, regex, type, componentKey, ' +
+  'styleId, variableId, instancesOf. The key(s) this issue names are not ' +
+  'among them, and an unknown filter key would silently widen the read to ' +
+  'match everything.'
+
 // A node filter. All fields optional; an empty match (`{}`) matches
 // everything. `type` accepts a single string or an array (any-of).
-export const matchSchema = z.object({
-  name: z.string().optional(),
-  // `regex` is compile-checked here so a malformed pattern is rejected as a
-  // typed validation error at parse time (not later as a raw SyntaxError, and
-  // never silently degraded to match-all). The runtime matcher
-  // (read/match.ts) also guards defensively for callers that bypass the schema.
-  regex: z
-    .string()
-    .refine(
-      pattern => {
-        try {
-          // Compile-check only — the value is discarded.
-          void new RegExp(pattern)
-          return true
-        } catch {
-          return false
-        }
-      },
-      { message: 'invalid regex pattern' },
-    )
-    .optional(),
-  type: z
-    .union([z.string(), z.array(z.string())])
-    .optional(),
-  componentKey: z.string().optional(),
-  styleId: z.string().optional(),
-  variableId: z.string().optional(),
-  instancesOf: z.string().optional(),
-})
+//
+// STRICT: an unknown key is refused, not stripped — see MATCH_UNKNOWN_KEY. This
+// is a NESTED schema, so it survives the shape re-wrapping that `server.tool`
+// does and holds on every read carrying `match`, not only on `search`.
+export const matchSchema = z
+  .object({
+    name: z.string().optional(),
+    // `regex` is compile-checked here so a malformed pattern is rejected as a
+    // typed validation error at parse time (not later as a raw SyntaxError, and
+    // never silently degraded to match-all). The runtime matcher
+    // (read/match.ts) also guards defensively for callers that bypass the schema.
+    regex: z
+      .string()
+      .refine(
+        pattern => {
+          try {
+            // Compile-check only — the value is discarded.
+            void new RegExp(pattern)
+            return true
+          } catch {
+            return false
+          }
+        },
+        { message: 'invalid regex pattern' },
+      )
+      .optional(),
+    type: z
+      .union([z.string(), z.array(z.string())])
+      .optional(),
+    componentKey: z.string().optional(),
+    styleId: z.string().optional(),
+    variableId: z.string().optional(),
+    instancesOf: z.string().optional(),
+  })
+  .strict(MATCH_UNKNOWN_KEY)
 
 // Params for a tree (subtree) read. All optional — an empty object is a
 // valid "read with server defaults" request.

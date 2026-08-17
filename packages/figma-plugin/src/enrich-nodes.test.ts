@@ -11,7 +11,6 @@ import {
   applyPatches,
   collectPatches,
   enrichDocument,
-  nodesWithin,
   styleIdsOf,
   syncPatch,
   variableIdsOf,
@@ -89,41 +88,6 @@ const mixedText = (id: string): LiveNode =>
       },
     ],
   })
-
-describe('nodesWithin — the depth bound', () => {
-  const tree = node({ id: 'a', type: 'FRAME' }, [
-    node({ id: 'b', type: 'FRAME' }, [
-      node({ id: 'c', type: 'RECTANGLE' }),
-    ]),
-  ])
-
-  it('depth 0 is the root alone', () => {
-    expect(nodesWithin(tree, 0).map(n => n.id)).toEqual([
-      'a',
-    ])
-  })
-
-  it('depth 1 is the root plus one level', () => {
-    expect(nodesWithin(tree, 1).map(n => n.id)).toEqual([
-      'a',
-      'b',
-    ])
-  })
-
-  it('depth -1 is every level', () => {
-    expect(nodesWithin(tree, -1).map(n => n.id)).toEqual([
-      'a',
-      'b',
-      'c',
-    ])
-  })
-
-  it('a childless node ends the walk', () => {
-    expect(
-      nodesWithin(node({ id: 'x', type: 'STAR' }), -1),
-    ).toHaveLength(1)
-  })
-})
 
 describe('syncPatch — the fields REST cannot carry', () => {
   it('carries pointCount / innerRadius / size for a STAR', () => {
@@ -276,6 +240,58 @@ describe('syncPatch — the fields REST cannot carry', () => {
     ).toMatchObject({ isMask: true, maskType: 'LUMINANCE' })
   })
 
+  // B44 — JSON_REST_V1 carries no layout binding, so a live `itemSpacing`
+  // bind read back as a bare number and the token was invisible. Only the ids
+  // travel; the reader turns them into the `var()` names it emits.
+  it('ships which variable each bindable LAYOUT field is bound to', () => {
+    const patch = syncPatch(
+      node({
+        id: 'row',
+        type: 'FRAME',
+        boundVariables: {
+          itemSpacing: {
+            type: 'VARIABLE_ALIAS',
+            id: 'V:space8',
+          },
+          paddingTop: {
+            type: 'VARIABLE_ALIAS',
+            id: 'V:space8',
+          },
+          gridRowGap: {
+            type: 'VARIABLE_ALIAS',
+            id: 'V:space16',
+          },
+          // Not a layout field — it rides the paint wrapper's own channel.
+          fills: [
+            { type: 'VARIABLE_ALIAS', id: 'V:brand' },
+          ],
+        },
+      }),
+      MIXED,
+    )
+    expect(patch.layoutBoundVariables).toEqual({
+      itemSpacing: 'V:space8',
+      paddingTop: 'V:space8',
+      gridRowGap: 'V:space16',
+    })
+  })
+
+  it('omits layoutBoundVariables when no layout field is bound', () => {
+    const patch = syncPatch(
+      node({
+        id: 'row',
+        type: 'FRAME',
+        boundVariables: {
+          fills: [
+            { type: 'VARIABLE_ALIAS', id: 'V:brand' },
+          ],
+        },
+      }),
+      MIXED,
+    )
+    expect('layoutBoundVariables' in patch).toBe(false)
+  })
+
   it('omits an empty explicitVariableModes / componentPropertyReferences', () => {
     const patch = syncPatch(
       node({
@@ -409,6 +425,7 @@ describe('collectPatches — the async halves, batched', () => {
     )
     const patches = await collectPatches(
       root,
+      undefined,
       -1,
       deps({
         getVariableName: async id => {
@@ -437,6 +454,7 @@ describe('collectPatches — the async halves, batched', () => {
     ])
     const patches = await collectPatches(
       root,
+      undefined,
       1,
       deps({ getStyleName: async () => 'Brand/Primary' }),
     )
@@ -457,7 +475,12 @@ describe('collectPatches — the async halves, batched', () => {
         }),
       }),
     ])
-    const patches = await collectPatches(root, 1, deps())
+    const patches = await collectPatches(
+      root,
+      undefined,
+      1,
+      deps(),
+    )
     expect(patches.get('kid')).toMatchObject({
       componentKey: 'abc123',
       componentRemote: true,
@@ -473,6 +496,7 @@ describe('collectPatches — the async halves, batched', () => {
     })
     const patches = await collectPatches(
       root,
+      undefined,
       0,
       deps({
         getStyleName: async () => {
@@ -495,6 +519,7 @@ describe('collectPatches — the async halves, batched', () => {
         type: 'RECTANGLE',
         fillStyleId: 'S:abc',
       }),
+      undefined,
       0,
       deps(),
     )
@@ -514,6 +539,7 @@ describe('collectPatches — the async halves, batched', () => {
     ])
     const patches = await collectPatches(
       root,
+      undefined,
       1,
       deps({
         getStyleName: async () => {
@@ -551,7 +577,12 @@ describe('collectPatches — one bad node costs one node (B31)', () => {
       star('good-after'),
     ])
 
-    const patches = await collectPatches(root, -1, deps())
+    const patches = await collectPatches(
+      root,
+      undefined,
+      -1,
+      deps(),
+    )
 
     expect(patches.get('gone')?.readError).toContain(STALE)
     for (const id of ['good-before', 'good-after']) {
@@ -584,7 +615,12 @@ describe('collectPatches — one bad node costs one node (B31)', () => {
       }),
     ])
 
-    const patches = await collectPatches(root, -1, deps())
+    const patches = await collectPatches(
+      root,
+      undefined,
+      -1,
+      deps(),
+    )
 
     expect(
       patches.get('stale-instance')?.readError,
@@ -615,7 +651,12 @@ describe('collectPatches — one bad node costs one node (B31)', () => {
       star('sibling'),
     ])
 
-    const patches = await collectPatches(root, -1, deps())
+    const patches = await collectPatches(
+      root,
+      undefined,
+      -1,
+      deps(),
+    )
 
     expect(patches.get('no-children')).toMatchObject({
       width: 10,
@@ -634,6 +675,7 @@ describe('collectPatches — one bad node costs one node (B31)', () => {
         fillStyleId: 'S:gone',
         pointCount: 5,
       }),
+      undefined,
       0,
       deps({
         getStyleName: (() => {
@@ -770,6 +812,87 @@ describe('applyPatches / enrichDocument — merge by id', () => {
     expect(asText.runs).toHaveLength(2)
   })
 
+  // B23 two levels down, which is where a real read lives: an agent inspects a
+  // screen and gets the frame, its cards, and the sublayers inside them. The
+  // GRANDCHILD is the node the fix is about — it is served in full, so it owes
+  // the caller both the geometry REST drops and the variable NAME only the live
+  // handle can resolve. The level past `depth` owes nothing: it collapses to a
+  // stub server-side, so a lookup for it is a token spent on a node nobody sees.
+  it('reaches a GRANDCHILD at depth 2 — and stops one level later', async () => {
+    const asked: string[] = []
+    const bound = (id: string, kids: LiveNode[] = []) =>
+      node(
+        {
+          id,
+          type: 'VECTOR',
+          width: 24,
+          height: 24,
+          vectorPaths: [
+            { windingRule: 'NONZERO', data: 'M 0 0' },
+          ],
+          vectorNetwork: { vertices: [] },
+          boundVariables: {
+            fills: [{ id: 'V:9', type: 'VARIABLE_ALIAS' }],
+          },
+        },
+        kids,
+      )
+    const live = node({ id: 'screen', type: 'FRAME' }, [
+      node({ id: 'card', type: 'INSTANCE' }, [
+        bound('I card;icon', [bound('I card;glyph')]),
+      ]),
+    ])
+    const doc: Record<string, unknown> = {
+      id: 'screen',
+      type: 'FRAME',
+      children: [
+        {
+          id: 'card',
+          type: 'INSTANCE',
+          children: [
+            {
+              id: 'I card;icon',
+              type: 'VECTOR',
+              children: [
+                { id: 'I card;glyph', type: 'VECTOR' },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+    await enrichDocument(
+      live,
+      doc,
+      2,
+      deps({
+        getVariableName: async id => {
+          asked.push(id)
+          return 'brand/accent'
+        },
+      }),
+    )
+    const card = (doc.children as Record<string, unknown>[])[0]
+    const icon = (
+      card.children as Record<string, unknown>[]
+    )[0]
+    const glyph = (
+      icon.children as Record<string, unknown>[]
+    )[0]
+    // The grandchild: named binding AND the geometry REST has no column for.
+    expect(icon.bindingNames).toEqual({
+      variables: { 'V:9': 'brand/accent' },
+    })
+    expect(icon.vectorPaths).toEqual([
+      { windingRule: 'NONZERO', data: 'M 0 0' },
+    ])
+    // One level further is past `depth`: not walked, not resolved, not paid for.
+    expect('bindingNames' in glyph).toBe(false)
+    expect('vectorPaths' in glyph).toBe(false)
+    // One distinct id, one lookup — the batching holds across levels.
+    expect(asked).toEqual(['V:9'])
+  })
+
   it('does not grow an ordinary node that has none of this', async () => {
     const doc: Record<string, unknown> = {
       id: 'plain',
@@ -786,5 +909,118 @@ describe('applyPatches / enrichDocument — merge by id', () => {
       deps(),
     )
     expect(JSON.stringify(doc)).toBe(before)
+  })
+})
+
+// B41 — content written into a component SLOT keeps its pre-append id, so the
+// live walk and the export disagree about every id in that subtree. The fix is
+// structural pairing; these pin the three-way the sweep reproduced live.
+describe('enrichDocument — the alias subtree (B41)', () => {
+  const CANON = 'I298:7517;298:7516;298:7523'
+  const VAR = 'VariableID:261:4751'
+
+  /** A live handle whose address names no node: every read throws. */
+  const unreadable = (id: string): LiveNode =>
+    new Proxy({} as LiveNode, {
+      get: (_t, prop) => {
+        if (prop === 'id') return id
+        throw new Error(
+          'in get_' +
+            String(prop) +
+            ': The node (instance sublayer or table cell) with id "' +
+            id +
+            '" does not exist',
+        )
+      },
+      has: () => true,
+    })
+
+  /** The exported chip: canonical ids, and the binding on the label's fill. */
+  const slotDoc = (): Record<string, unknown> => ({
+    id: CANON,
+    type: 'INSTANCE',
+    children: [
+      {
+        id: CANON + ';298:7510',
+        type: 'TEXT',
+        fills: [
+          {
+            type: 'SOLID',
+            color: { r: 0.13, g: 0.83, b: 0.93 },
+            boundVariables: {
+              color: { id: VAR, type: 'VARIABLE_ALIAS' },
+            },
+          },
+        ],
+      },
+    ],
+  })
+
+  const named = deps({
+    getStyleName: async () => 'Glow/Accent',
+    getVariableName: async () => 'probe/cyan',
+  })
+
+  it('lands the ROOT patch on the canonical id, not the alias', async () => {
+    // The chip's own handle reads fine — it is only CALLED something else.
+    const chip = node(
+      {
+        id: '298:7519',
+        type: 'INSTANCE',
+        fillStyleId: 'S:glow',
+        width: 96,
+        height: 28,
+      },
+      [node({ id: 'I298:7519;298:7510', type: 'TEXT' })],
+    )
+    const doc = slotDoc()
+    await enrichDocument(chip, doc, -1, named)
+    expect(doc.bindingNames).toEqual({
+      styles: { fill: 'Glow/Accent' },
+    })
+    expect(doc.width).toBe(96)
+    // The whole point: nothing was reported as unattachable.
+    expect('readErrors' in doc).toBe(false)
+  })
+
+  it('names a DESCENDANT binding off the export when its handle is dead', async () => {
+    const chip = node(
+      { id: '298:7519', type: 'INSTANCE' },
+      [unreadable('I298:7519;298:7510')],
+    )
+    const doc = slotDoc()
+    await enrichDocument(chip, doc, -1, named)
+    const label = (
+      doc.children as Record<string, unknown>[]
+    )[0]
+    // var(probe/cyan) survives — the id was on the export all along.
+    expect(label.bindingNames).toEqual({
+      variables: { [VAR]: 'probe/cyan' },
+    })
+    // …and the loss that IS real is named on the node that suffered it,
+    // instead of on the root as an id the caller cannot find (I48).
+    expect(label.readError).toContain('does not exist')
+    expect('readErrors' in doc).toBe(false)
+  })
+
+  it('control: a clone, whose ids already agree, is unchanged', async () => {
+    const clone = node({ id: CANON, type: 'INSTANCE' }, [
+      node({
+        id: CANON + ';298:7510',
+        type: 'TEXT',
+        boundVariables: {
+          fills: [{ id: VAR, type: 'VARIABLE_ALIAS' }],
+        },
+      }),
+    ])
+    const doc = slotDoc()
+    await enrichDocument(clone, doc, -1, named)
+    const label = (
+      doc.children as Record<string, unknown>[]
+    )[0]
+    expect(label.bindingNames).toEqual({
+      variables: { [VAR]: 'probe/cyan' },
+    })
+    expect('readError' in label).toBe(false)
   })
 })

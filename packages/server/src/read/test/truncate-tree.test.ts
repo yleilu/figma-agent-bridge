@@ -25,9 +25,13 @@ const isStub = (n: unknown): n is IdStub =>
   typeof (n as IdStub).childCount === 'number'
 
 describe('truncateTree', () => {
-  it('depth=0: root returned with children collapsed to stubs', () => {
+  // The receipt names SUBTREES that were cut (tool-surface.md), so a collapsed
+  // LEAF earns no entry: it is in the view, and drilling into it yields no
+  // further level. B51 caught the over-report from the other side — a depth-1
+  // frame read listed every leaf sublayer it had already inlined.
+  it('depth=0: children collapse to stubs; only the ones hiding a subtree are receipted', () => {
     const root = mk('root', 'FRAME', [
-      mk('c1', 'RECTANGLE'),
+      mk('c1', 'FRAME', [mk('gc1', 'TEXT')]),
       mk('c2', 'TEXT'),
     ])
     const { view, truncated } = truncateTree(root, {
@@ -40,16 +44,15 @@ describe('truncateTree', () => {
     for (const child of spec.children!) {
       expect(isStub(child)).toBe(true)
     }
-    // Receipt records both stubs
-    expect(truncated).toHaveLength(2)
-    const ids = truncated.map(r => r.id)
-    expect(ids).toContain('c1')
-    expect(ids).toContain('c2')
+    // …but only c1 cut a subtree; c2 is a leaf and lost nothing.
+    expect(truncated).toHaveLength(1)
+    expect(truncated[0].id).toBe('c1')
+    expect(truncated[0].childCount).toBe(1)
   })
 
   it('depth=1: root + first level full, grandchildren stubbed', () => {
-    const gc1 = mk('gc1', 'RECTANGLE')
-    const gc2 = mk('gc2', 'TEXT')
+    const gc1 = mk('gc1', 'FRAME', [mk('ggc1', 'TEXT')])
+    const gc2 = mk('gc2', 'FRAME', [mk('ggc2', 'TEXT')])
     const c1 = mk('c1', 'FRAME', [gc1, gc2])
     const c2 = mk('c2', 'RECTANGLE')
     const root = mk('root', 'FRAME', [c1, c2])
@@ -99,7 +102,7 @@ describe('truncateTree', () => {
 
   it('no depth + no budget → treated as depth=0', () => {
     const root = mk('root', 'FRAME', [
-      mk('c1', 'RECTANGLE'),
+      mk('c1', 'FRAME', [mk('gc1', 'TEXT')]),
     ])
     const { view, truncated } = truncateTree(root, {})
     const spec = view as NodeSpec
@@ -108,7 +111,9 @@ describe('truncateTree', () => {
     expect(truncated).toHaveLength(1)
   })
 
-  it('receipt: names exactly the cut nodes with correct childCount', () => {
+  // B51 — the receipt over-reported: a leaf collapsed at the boundary is in
+  // the view AND was named as lost. `truncated` names REAL loss only.
+  it('receipt: names the cut subtrees, and only those', () => {
     // c1 has 3 children, c2 has 0 children
     const c1 = mk('c1', 'FRAME', [
       mk('gc1', 'RECTANGLE'),
@@ -117,15 +122,16 @@ describe('truncateTree', () => {
     ])
     const c2 = mk('c2', 'RECTANGLE')
     const root = mk('root', 'FRAME', [c1, c2])
-    const { truncated } = truncateTree(root, { depth: 0 })
-    // Both c1 and c2 are stubbed
-    expect(truncated).toHaveLength(2)
-    const c1Entry = truncated.find(r => r.id === 'c1')
-    const c2Entry = truncated.find(r => r.id === 'c2')
-    expect(c1Entry).toBeDefined()
-    expect(c1Entry!.childCount).toBe(3)
-    expect(c2Entry).toBeDefined()
-    expect(c2Entry!.childCount).toBe(0)
+    const { view, truncated } = truncateTree(root, {
+      depth: 0,
+    })
+    // Both c1 and c2 are stubbed — the view is unchanged by this rule.
+    const spec = view as NodeSpec
+    expect(spec.children).toHaveLength(2)
+    // Only c1 cut a subtree.
+    expect(truncated).toHaveLength(1)
+    expect(truncated[0].id).toBe('c1')
+    expect(truncated[0].childCount).toBe(3)
   })
 
   it('receipt invariant: sum of stub childCount = direct children hidden at cut boundaries', () => {
@@ -168,29 +174,47 @@ describe('truncateTree', () => {
     expect(truncated.length).toBeGreaterThan(0)
   })
 
-  it('existing IdStub children are not re-added to receipt', () => {
-    // Simulate a partial tree where c2 is already a stub (pre-collapsed)
-    const alreadyStub: IdStub = {
-      id: 'pre-stub',
-      name: 'pre-stub',
-      type: 'RECTANGLE',
+  // B51 — a stub that reaches this pass was drawn by the READER, from a
+  // boundary the PLUGIN drew (a page read at depth 0 does not serialize its
+  // children's subtrees). This is the FIRST pass over the tree and the budget
+  // pass after it never records a stub it was handed, so nothing else can
+  // record this cut: `truncated: []` claimed a completeness the read did not
+  // have, on exactly the page-rooted read the bug was found on.
+  it('records a plugin-drawn boundary — nothing else has', () => {
+    const drawnBoundary: IdStub = {
+      id: 'page-child',
+      name: 'Screen',
+      type: 'FRAME',
       size: [100, 100],
       childCount: 5,
     }
+    const leafBoundary: IdStub = {
+      id: 'page-leaf',
+      name: 'Divider',
+      type: 'RECTANGLE',
+      size: [100, 1],
+      childCount: 0,
+    }
     const root: NodeSpec = {
-      type: 'FRAME',
-      id: 'root',
-      name: 'root',
-      size: [100, 100],
-      children: [mk('real', 'RECTANGLE'), alreadyStub],
+      type: 'PAGE',
+      id: 'page',
+      name: 'Page 1',
+      children: [
+        mk('real', 'FRAME', [mk('kid', 'TEXT')]),
+        drawnBoundary,
+        leafBoundary,
+      ],
     }
     const { truncated } = truncateTree(root, { depth: 0 })
-    // 'real' gets stubbed by depth cut, 'pre-stub' was already a stub
     const ids = truncated.map(r => r.id)
-    // pre-stub should NOT appear in receipt (it was already cut)
-    expect(ids).not.toContain('pre-stub')
-    // 'real' should appear
+    expect(ids).toContain('page-child')
     expect(ids).toContain('real')
+    // …and the boundary that hides nothing is still not a loss.
+    expect(ids).not.toContain('page-leaf')
+    expect(
+      truncated.find(r => r.id === 'page-child')
+        ?.childCount,
+    ).toBe(5)
   })
 })
 
@@ -247,5 +271,79 @@ describe('truncateTree — always-on budget', () => {
     expect(
       truncateTree(root, { depth: -1 }).truncated,
     ).toEqual([])
+  })
+
+  // C1 — every node the budget DROPPED is named, whatever its childCount.
+  //
+  // The depth pass collapses 1000 leaves to stubs and records none of them
+  // (nothing was cut — they are all in the view). The budget pass then keeps
+  // 803 and drops 197. Those 197 are gone from the response, and `inspect`
+  // answers `{view, truncated}` with no count on the parent and no `truncated`
+  // boolean — so an unnamed drop hands the agent a short list it reads as
+  // complete. The receipt is the ONLY signal there is.
+  it('names every child the budget dropped, leaves or not', () => {
+    const leaves = Array.from({ length: 1000 }, (_, i) =>
+      mk('leaf-' + i, 'RECTANGLE'),
+    )
+    const { view, truncated } = truncateTree(
+      mk('root', 'FRAME', leaves),
+      {},
+    )
+    const kept = (view as NodeSpec).children ?? []
+    // The split is fixture-specific (it tracks how many bytes one stub costs);
+    // the PARTITION below is the invariant. Before the fix this read answered
+    // 772 children and `truncated: []`.
+    expect(kept).toHaveLength(772)
+    expect(truncated).toHaveLength(228)
+    // Every dropped id is named, and no returned id is.
+    const keptIds = new Set(kept.map(c => (c as IdStub).id))
+    for (const entry of truncated) {
+      expect(keptIds.has(entry.id)).toBe(false)
+    }
+    expect(
+      new Set([...keptIds, ...truncated.map(e => e.id)])
+        .size,
+    ).toBe(1000)
+  })
+
+  // N1 — the receipt names each id ONCE, however many passes had reason to.
+  //
+  // The fixture above is all leaves, so the depth pass records none of them and
+  // the double-name cannot appear. Give each child a subtree and both passes
+  // speak: the depth pass collapses it (its subtree was cut), then the budget
+  // drops the stub (the node itself is gone). Two true statements, one node —
+  // and a receipt whose length no longer counts nodes. 1000 cut children came
+  // back as 1228 entries.
+  it('names a child that both passes cut ONCE, not twice', () => {
+    const branches = Array.from({ length: 1000 }, (_, i) =>
+      mk('branch-' + i, 'FRAME', [
+        mk('hidden-' + i, 'TEXT'),
+      ]),
+    )
+    const { view, truncated } = truncateTree(
+      mk('root', 'FRAME', branches),
+      { depth: 0 },
+    )
+    const ids = truncated.map(e => e.id)
+    // No id twice, and the length is the count of nodes the read lost.
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(ids).toHaveLength(1000)
+    // Every branch is named exactly once, for whichever reason applied: the
+    // stubs still in the view cut their subtree, the rest are gone outright.
+    expect(new Set(ids)).toEqual(
+      new Set(branches.map(b => b.id!)),
+    )
+    for (const entry of truncated) {
+      expect(entry.childCount).toBe(1)
+    }
+    // The stubs that survived the budget are in the view AND in the receipt —
+    // one node described from two sides, which is why the dedupe is by id and
+    // not by "was it returned".
+    const kept = (view as NodeSpec).children ?? []
+    expect(kept.length).toBeGreaterThan(0)
+    for (const child of kept) {
+      expect(isStub(child)).toBe(true)
+      expect(ids).toContain((child as IdStub).id)
+    }
   })
 })

@@ -74,7 +74,7 @@ import {
   githubAuthStartParamsSchema,
   githubAuthPollParamsSchema,
 } from '@figma-agent-bridge/shared/tool-params'
-import type { ZodRawShape } from 'zod'
+import type { ZodObject, ZodRawShape } from 'zod'
 import {
   createFigmaClient,
   toHttpUrl,
@@ -281,7 +281,7 @@ if (process.argv.includes('--relay')) {
   /** registerFileTool with `server`, `client` and the baseline hook bound. */
   const fileTool = <S extends ZodRawShape, R>(
     name: string,
-    schema: { shape: S },
+    schema: ZodObject<S>,
     handler: (
       params: FileHandlerParams<S>,
       scoped: ScopedFigmaClient,

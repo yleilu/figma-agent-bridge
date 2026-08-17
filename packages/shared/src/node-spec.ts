@@ -33,18 +33,34 @@ export type Atom = string
 export type StyledAtoms = Atom | Atom[]
 
 /**
+ * A number leaf that a `var()` wrapper may bind: the bare number, or the same
+ * number carrying its wrapper (`"var(space/8)8"`).
+ *
+ * Both spellings mean one value. The wrapper is what a READ emits for a bound
+ * field and what a WRITE re-binds from — the uniform-`radius` precedent, now
+ * covering the layout spacing scalars too (expression-formats.md → *Scope*).
+ */
+export type NumberAtom = number | Atom
+
+/**
  * Auto-layout configuration. `mode: 'NONE'` turns auto-layout off.
  *
  * GRID mode uses the four independent grid keys (`rows`, `cols`, `rowGap`,
  * `colGap`). The scalar `gap` key is H/V-only and stays unused for GRID.
  * T8: grid keys ride the existing layout struct — no separate grammar.
+ *
+ * The spacing scalars are `NumberAtom`s: Figma binds `itemSpacing`, the two
+ * grid gaps and each padding side independently, so each carries its own
+ * `var()` when it is bound, and `pad` binds PER SIDE by position —
+ * `pad: [var(space/8)8, 16, var(space/8)8, 16]` binds top and bottom only.
+ * `rows`/`cols`/`align`/`wrap` are not bindable and stay plain.
  */
 export type LayoutSpec = {
   mode: 'H' | 'V' | 'NONE' | 'GRID'
   /** Item spacing in px (H/V only; not used for GRID). */
-  gap?: number
+  gap?: NumberAtom
   /** [top, right, bottom, left] in px (grammar `pad`). */
-  pad?: [number, number, number, number]
+  pad?: [NumberAtom, NumberAtom, NumberAtom, NumberAtom]
   /** [primaryAxisAlign, counterAxisAlign]. */
   align?: [string, string]
   /** Enable WRAP layout (H/V only). */
@@ -54,9 +70,9 @@ export type LayoutSpec = {
   /** Grid column count (GRID mode only). Maps to `gridColumnCount` on FrameNode. */
   cols?: number
   /** Grid row gap in px (GRID mode only). Maps to `gridRowGap` on FrameNode. */
-  rowGap?: number
+  rowGap?: NumberAtom
   /** Grid column gap in px (GRID mode only). Maps to `gridColumnGap` on FrameNode. */
-  colGap?: number
+  colGap?: NumberAtom
 }
 
 /** A per-range text override; same atoms scoped by `at:[start,end]`. */
@@ -114,12 +130,18 @@ export type OverrideEntry = {
   value?: Atom | string
 }
 
-/** Depth-boundary / wide-node collapse — keeps `id` for drill-by-id. */
+/**
+ * Depth-boundary / wide-node collapse — keeps `id` for drill-by-id.
+ *
+ * `size` is OPTIONAL for the same reason it is optional on a NodeSpec: a PAGE
+ * has none, and a stub that padded it to `[0, 0]` stated a dimension the file
+ * does not hold (B26/B51).
+ */
 export type IdStub = {
   id: string
   name: string
   type: string
-  size: [number, number]
+  size?: [number, number]
   childCount: number
 }
 

@@ -176,6 +176,27 @@ export const searchScopeSchema = z.enum([
 ])
 
 /**
+ * What an unknown TOP-LEVEL key on `search` is told (Decision C2, B52).
+ *
+ * Zod strips an unknown key by default, and on `search` that strip INVERTS the
+ * reply: the filter the caller stated disappears and the call becomes a
+ * match-all, which is itself a valid search — so nothing downstream can notice.
+ * `search({scope:'node', nodeId, name:'Label'})` returned the whole scope, 17
+ * rows, zero warnings. The key is therefore REJECTED, not dropped (T7).
+ *
+ * The message points at `match`, because mis-nesting a filter is what produces
+ * the unknown key. It does not name the key itself: zod's `unrecognized_keys`
+ * issue already carries a `keys` array, and the ZodError the MCP layer renders
+ * is the issue list verbatim — so the reply names the key AND says where it
+ * belongs.
+ */
+const SEARCH_UNKNOWN_KEY =
+  'search takes its filters inside `match`, never at the top level. ' +
+  'Move the key(s) this issue names into `match` — e.g. match:{name:"Label"}. ' +
+  'The top-level keys are: fileKey, scope, pageId, nodeId, depth, match, ' +
+  'fields, profile, limit, cursor.'
+
+/**
  * Params for `search`: flat, paginated node search (Rule A).
  * `scope` selects where the plugin scans; the SERVER applies `match`
  * (the list mixin), `fields` projection, and the opaque cursor + `limit`.
@@ -185,42 +206,49 @@ export const searchScopeSchema = z.enum([
  * traverses — NOT the output shape: results always stay a flat Rule-A list
  * (search is a list read, not a tree read). `-1` (or omitted) scans the whole
  * subtree; `depth=0` scans only the root(s); `depth=N` descends N levels.
+ *
+ * STRICT (Decision C2): an unknown top-level key is rejected — see
+ * SEARCH_UNKNOWN_KEY above. This only reaches the wire because
+ * `registerFileTool` hands the SCHEMA to the MCP server, not its `.shape`; a
+ * shape is re-wrapped in a plain `z.object`, which would strip the key again.
  */
-export const searchParamsSchema = z.object({
-  ...fileTargetParamsSchema.shape,
-  scope: searchScopeSchema
-    .optional()
-    .describe(
-      'Where to scan: document (default) | page | node | selection.',
-    ),
-  pageId: z
-    .string()
-    .optional()
-    .describe(
-      'Page to scan when scope=page (also restricts a document scan).',
-    ),
-  nodeId: z
-    .string()
-    .optional()
-    .describe('Node subtree to scan when scope=node.'),
-  depth: z
-    .number()
-    .int()
-    .optional()
-    .describe(
-      'Scan-scope depth: how deep the plugin traverses each root. -1 (default) = whole subtree; 0 = root(s) only; N = N levels deep. Results stay a flat list.',
-    ),
-  ...listReadParamsSchema.shape,
-  // `profile` rides here rather than on listReadParamsSchema: the presets are
-  // NodeSpec field sets, so they mean something for `search`'s node results and
-  // nothing for a style or font list. Putting it on the shared list mixin would
-  // hand it to every future list read by accident.
-  profile: profileSchema
-    .optional()
-    .describe(
-      'Named field preset for each result: minimal | layout | style | text | full. `fields` wins when both are given.',
-    ),
-})
+export const searchParamsSchema = z
+  .object({
+    ...fileTargetParamsSchema.shape,
+    scope: searchScopeSchema
+      .optional()
+      .describe(
+        'Where to scan: document (default) | page | node | selection.',
+      ),
+    pageId: z
+      .string()
+      .optional()
+      .describe(
+        'Page to scan when scope=page (also restricts a document scan).',
+      ),
+    nodeId: z
+      .string()
+      .optional()
+      .describe('Node subtree to scan when scope=node.'),
+    depth: z
+      .number()
+      .int()
+      .optional()
+      .describe(
+        'Scan-scope depth: how deep the plugin traverses each root. -1 (default) = whole subtree; 0 = root(s) only; N = N levels deep. Results stay a flat list.',
+      ),
+    ...listReadParamsSchema.shape,
+    // `profile` rides here rather than on listReadParamsSchema: the presets are
+    // NodeSpec field sets, so they mean something for `search`'s node results and
+    // nothing for a style or font list. Putting it on the shared list mixin would
+    // hand it to every future list read by accident.
+    profile: profileSchema
+      .optional()
+      .describe(
+        'Named field preset for each result: minimal | layout | style | text | full. `fields` wins when both are given.',
+      ),
+  })
+  .strict(SEARCH_UNKNOWN_KEY)
 
 // ---------------------------------------------------------------------------
 // Session / utility tools

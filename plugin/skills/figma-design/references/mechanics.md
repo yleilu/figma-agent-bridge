@@ -135,6 +135,35 @@ no `#000000` in any `fills`.
 
 ---
 
+## Vector geometry — the path a read gives you writes back
+
+**The shape.** A VECTOR node's geometry is `vectorPaths`, an array of `path()` atoms, and
+both `create_node` and `update_node` write it — so the `vectorPaths` a read hands you goes
+straight back into a patch:
+
+```json
+{
+  "nodeId": "<vectorId>",
+  "patch": {
+    "vectorPaths": ["path(NONZERO,\"M 12 0 L 24 24 L 0 24 Z\")"]
+  }
+}
+```
+
+**Fill rule first, data second — both required.** `path(M 12 0 L 24 24 Z)` is the common
+slip and it is `INVALID_PARAM` before anything is written, with the canonical form in the
+message. Data Figma cannot draw is the other failure and it degrades instead: the node
+lands, `vectorPaths` drops, and `warnings[]` carries Figma's own error. Per-point corners
+and caps ride in the atom's `{…}` channel; full contract in `grammar.md` — **Vector
+geometry**.
+
+**Order inside one patch.** Assigning `vectorPaths` rebuilds the node's network and
+**resizes the node to the new path bounds**, so a `size` stated in the same patch is
+applied after the geometry — state both and the size you asked for is the one you get. A
+path aimed at a node type that carries none is named in `warnings[]`, not swallowed.
+
+---
+
 ## A write into a slot is read back, then trusted
 
 **The problem.** A slot arrives with defaults of its own — a vertical stack, 100×100,
@@ -325,12 +354,36 @@ names the setter to use, not the style's own type — and a category mismatch (a
 style through `field: "text"`) is a hard error, not a warning. Style ids come from
 `get_styles`.
 
+**Spacing tokens are wrappers too.** `layout.gap` (and the GRID spellings `rowGap` /
+`colGap`) and each of the four `layout.pad` sides take a `var()` the same way a paint
+does, so a spacing scale is bound inline and reads back visibly:
+
+```json
+{
+  "nodeId": "<cardId>",
+  "patch": {
+    "layout": {
+      "mode": "V",
+      "gap": "var(space/8)8",
+      "pad": ["var(space/16)16", 16, "var(space/16)16", 16]
+    }
+  }
+}
+```
+
+`pad` binds **per side, by position** — the two sides above are bound and left/right stay
+literal — because Figma holds each padding side as its own field. A read emits the
+wrappers it finds, so a bare `gap: 8` in a read-back is a spacing token that was never
+bound, not a binding the read could not see. Write the struct back verbatim and the
+binding survives.
+
 **Uniform binds, split doesn't.** A wrapper on a per-corner `radius`, a per-side
 `stroke([…])` weight, or a per-range `text.runs[]` atom writes the literal and warns
 (`var(radius/medium) on a per-corner radius: a single binding cannot express per-corner
 values — literal applied unbound`). Figma binds all four corners — or all four sides —
 at once, so there is nothing faithful to bind. Bind the uniform form, or take the
-literal knowingly.
+literal knowingly. (`pad` is not one of these: Figma binds its four sides separately, so
+the grammar does too.)
 
 **Rebind, don't delete-and-recreate.** Deleting a variable or style breaks every
 binding that pointed at it and the delete reply says nothing about it; you find out

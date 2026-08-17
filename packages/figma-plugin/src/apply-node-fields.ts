@@ -1,7 +1,8 @@
 // Field appliers for the flat NodeSpec keys the server writer emits beside the
 // main apply path: stroke geometry (strokeCap/strokeJoin/strokeMiterLimit),
-// per-side stroke weights, exportSettings, and node-level layout grids. Same
-// shape as `apply-layout.ts`: each function
+// per-side stroke weights, exportSettings, node-level layout grids, and the two
+// geometry fields Figma can accept and then quietly overrule — `size` and
+// `position`. Same shape as `apply-layout.ts`: each function
 // declares a minimal structural target so it stays free of the figma runtime
 // and is independently unit-testable with a plain fake node.
 //
@@ -219,6 +220,9 @@ const CAPABILITY_CHECKS: [string, string][] = [
   // `text` is applied by applyTextProperties, which runs only for a TEXT node —
   // so anywhere else the whole struct is a silent no-op unless named here.
   ['characters', 'text'],
+  // Only a vector-like node carries path data. Everywhere else the geometry a
+  // patch states has nowhere to go (B45).
+  ['vectorPaths', 'vectorPaths'],
 ]
 
 /**
@@ -245,4 +249,444 @@ export const capabilityWarnings = (
     }
   }
   return out
+}
+
+// ─── geometry: prove the write (T7) ───────────────────────────────────────────
+//
+// `size` and `position` are the two fields Figma ACCEPTS and then overrules.
+// Nothing throws, nothing is dropped by a capability guard, and the node simply
+// keeps the geometry it had. Every other applier here can trust its
+// assignment. These two read the value back.
+
+/** Figma's own resolution floor is 0.01px — a smaller gap is not a discard. */
+const GEOMETRY_EPSILON = 0.01
+
+const near = (a: number, b: number): boolean =>
+  Math.abs(a - b) < GEOMETRY_EPSILON
+
+const typeName = (node: { type?: unknown }): string =>
+  typeof node.type === 'string' ? node.type : 'unknown'
+
+const nodeLabel = (node: { name?: unknown }): string =>
+  typeof node.name === 'string' && node.name !== ''
+    ? '"' + node.name + '"'
+    : 'the node'
+
+/**
+ * Structural subset the size applier reads, writes, and diagnoses against.
+ *
+ * `resize` is a METHOD rather than a `width`/`height` pair because a method is
+ * the only way Figma lets a size be set — and reading `width`/`height` back is
+ * the only way to learn whether the call did anything.
+ */
+export type SizeTarget = Partial<{
+  type: unknown
+  name: unknown
+  width: unknown
+  height: unknown
+  resize: (width: number, height: number) => void
+  resizeWithoutConstraints: (
+    width: number,
+    height: number,
+  ) => void
+  layoutSizingHorizontal: unknown
+  layoutSizingVertical: unknown
+  textAutoResize: unknown
+  parent: unknown
+}>
+
+type Ancestor = Partial<{
+  type: unknown
+  name: unknown
+  parent: unknown
+}>
+
+// BOUNDED walk. A Figma tree is finite, but this reads a structural `parent`
+// a caller could hand a cycle back on, and a hung plugin is a far worse answer
+// than an unattributed warning.
+const enclosingInstance = (
+  node: SizeTarget,
+): Ancestor | undefined => {
+  let current = node.parent as
+    | Ancestor
+    | null
+    | undefined
+  for (let hops = 0; hops < 64; hops += 1) {
+    if (current === null || current === undefined) {
+      return undefined
+    }
+    if (current.type === 'INSTANCE') return current
+    current = current.parent as Ancestor | null | undefined
+  }
+  return undefined
+}
+
+const measured = (
+  node: SizeTarget,
+): [number, number] | undefined =>
+  typeof node.width === 'number' &&
+  typeof node.height === 'number'
+    ? [node.width, node.height]
+    : undefined
+
+const ownedByLayout = (sizing: unknown): boolean =>
+  sizing === 'FILL' || sizing === 'HUG'
+
+/**
+ * Name the likeliest reason a resize did not take, or `''` when nothing on the
+ * node explains it.
+ *
+ * Every branch states what was OBSERVED and what the caller can do next: a
+ * refusal an agent cannot act on is barely better than the silence it replaces.
+ * The three causes are ordered most-specific first, because a text node inside
+ * an auto-layout frame inside an instance matches all three and only the
+ * innermost one is worth acting on.
+ */
+const sizeRefusalReason = (
+  node: SizeTarget,
+  asked: [number, number],
+  actual: [number, number],
+  statedSizing?: unknown,
+): string => {
+  if (
+    node.type === 'TEXT' &&
+    typeof node.textAutoResize === 'string' &&
+    node.textAutoResize !== 'NONE'
+  ) {
+    return (
+      ' This text node sizes itself to its content (textAutoResize: ' +
+      node.textAutoResize +
+      '). Inside an auto-layout parent, sizing:["FIXED","FIXED"] pins it.'
+    )
+  }
+  const stated = Array.isArray(statedSizing)
+    ? (statedSizing as unknown[])
+    : []
+  const held: string[] = []
+  // `selfContradicted` tracks whether the SAME patch is what handed the axis
+  // away. It changes the remedy from "pin it" — advice a caller who wrote
+  // sizing:['FILL',…] has already refused — to naming the contradiction.
+  let selfContradicted = false
+  if (
+    !near(actual[0], asked[0]) &&
+    ownedByLayout(node.layoutSizingHorizontal)
+  ) {
+    held.push(
+      'width (layoutSizingHorizontal: ' +
+        String(node.layoutSizingHorizontal) +
+        ')',
+    )
+    if (ownedByLayout(stated[0])) selfContradicted = true
+  }
+  if (
+    !near(actual[1], asked[1]) &&
+    ownedByLayout(node.layoutSizingVertical)
+  ) {
+    held.push(
+      'height (layoutSizingVertical: ' +
+        String(node.layoutSizingVertical) +
+        ')',
+    )
+    if (ownedByLayout(stated[1])) selfContradicted = true
+  }
+  if (held.length > 0) {
+    return selfContradicted
+      ? ' This patch set the ' +
+          held.join(' and the ') +
+          ' itself. A stated size and a FILL or HUG axis contradict each other, and the sizing wins.'
+      : ' Auto-layout owns the ' +
+          held.join(' and the ') +
+          '. Pin it with sizing:["FIXED","FIXED"].'
+  }
+  const instance = enclosingInstance(node)
+  if (instance !== undefined) {
+    return (
+      ' This node is a sublayer of the instance ' +
+      nodeLabel(instance) +
+      '. Figma can refuse a size change on an instance sublayer. Resize the main component, or detach the instance.'
+    )
+  }
+  return ''
+}
+
+const noResizeWarning = (
+  node: SizeTarget,
+  warnings?: string[],
+): void => {
+  warnings?.push(
+    'size ignored — a ' +
+      typeName(node) +
+      ' node cannot be resized',
+  )
+}
+
+/**
+ * Apply `size` on the CREATE path.
+ *
+ * No read-back and no catch, both deliberate. The spec that named the size also
+ * named the node and its type, so there is no arbitrary target to be surprised
+ * by — and a throw here reaches `createSingleNode`'s rollback, which is the
+ * right answer for a create that cannot be built as asked.
+ */
+export const applySize = (
+  node: SizeTarget,
+  size: unknown,
+  warnings?: string[],
+): void => {
+  if (size === undefined) return
+  const [width, height] = size as [number, number]
+  if (typeof node.resize !== 'function') {
+    noResizeWarning(node, warnings)
+    return
+  }
+  node.resize(width, height)
+}
+
+/**
+ * Apply `size` on an ARBITRARY target, and prove that it landed (B46).
+ *
+ * `size` is the one field on the common apply path Figma can take without
+ * complaint and then ignore: an auto-layout parent owns its child's flexible
+ * axes, a text node sizes itself to its content, and a sublayer of an instance
+ * can have its geometry refused outright. Each of those returned `warnings: []`
+ * on a patch that moved nothing — which is how a chart shipped four identical
+ * bars labelled four different numbers, with every read-back reporting success.
+ *
+ * This is the arm `update_node` and the `update_component` slot loop run — the
+ * same "the target was chosen by an id, not by the spec" distinction
+ * `capabilityWarnings` draws above. It is also the arm that catches a throw:
+ * a raw throw would discard every other field of the patch and report a partial
+ * write as a total failure.
+ *
+ * It runs LAST, after `sizing` and after any text write, because those change
+ * the size too and a read-back taken before them is not the patch's outcome.
+ * That order also makes `{size, sizing:['FIXED','FIXED']}` land in ONE call: the
+ * pin goes on first, and the resize it enables happens here. `statedSizing` is
+ * the same patch's `sizing`, carried only so a self-contradicting patch
+ * (`FILL` and a size on one axis) is told what it did rather than advised to do
+ * what it already refused.
+ */
+export const applySizeVerified = (
+  node: SizeTarget,
+  size: unknown,
+  warnings?: string[],
+  opts?: { statedSizing?: unknown },
+): void => {
+  if (size === undefined) return
+  const [width, height] = size as [number, number]
+  if (typeof node.resize !== 'function') {
+    noResizeWarning(node, warnings)
+    return
+  }
+  try {
+    node.resize(width, height)
+  } catch (e) {
+    warnings?.push('size rejected by Figma: ' + String(e))
+    return
+  }
+  // undefined = nothing to report, either because the size landed or because
+  // this target does not expose a width/height to judge it by. Silence on an
+  // unmeasurable node is deliberate: a warning nobody can verify is noise.
+  const mismatch = (): [number, number] | undefined => {
+    const actual = measured(node)
+    if (actual === undefined) return undefined
+    return near(actual[0], width) && near(actual[1], height)
+      ? undefined
+      : actual
+  }
+  let actual = mismatch()
+  if (actual === undefined) return
+  // Second chance. `resize` applies every child constraint on the way down and
+  // can be refused where the constraint-free form is not, so the size worth
+  // trying twice is tried twice before anything is called a refusal. Reached
+  // only when the first call left at least one axis where it was.
+  if (typeof node.resizeWithoutConstraints === 'function') {
+    try {
+      node.resizeWithoutConstraints(width, height)
+    } catch {
+      // The mismatch below is the report — a second throw adds nothing to it.
+    }
+    actual = mismatch()
+    if (actual === undefined) return
+  }
+  warnings?.push(
+    'size not applied — asked [' +
+      width +
+      ', ' +
+      height +
+      '], ' +
+      nodeLabel(node) +
+      ' reads [' +
+      actual[0] +
+      ', ' +
+      actual[1] +
+      '].' +
+      sizeRefusalReason(
+        node,
+        [width, height],
+        actual,
+        opts?.statedSizing,
+      ),
+  )
+}
+
+/** Structural subset the placement check reads. */
+export type PlacedTarget = Partial<{
+  name: unknown
+  x: unknown
+  y: unknown
+  layoutPositioning: unknown
+}>
+
+/**
+ * The position a child STATED, when an auto-layout parent threw it away.
+ *
+ * undefined for every other case, which is most of them: no position stated,
+ * a parent that arranges nothing, an `ABSOLUTE` child that escaped the flow, a
+ * node with no readable x/y, and — the one worth spelling out — a child whose
+ * flow slot lands where the spec asked for it anyway. That last case is why the
+ * check is VALUE-based rather than rule-based: nothing was lost, so nothing is
+ * reported, and the message keeps meaning something when it does appear.
+ */
+const discardedPosition = (
+  position: unknown,
+  node: PlacedTarget,
+  parent: unknown,
+): [number, number] | undefined => {
+  if (!Array.isArray(position) || position.length !== 2) {
+    return undefined
+  }
+  const [x, y] = position as unknown[]
+  if (typeof x !== 'number' || typeof y !== 'number') {
+    return undefined
+  }
+  const layoutMode =
+    parent !== null && typeof parent === 'object'
+      ? (parent as { layoutMode?: unknown }).layoutMode
+      : undefined
+  if (
+    typeof layoutMode !== 'string' ||
+    layoutMode === 'NONE'
+  ) {
+    return undefined
+  }
+  if (node.layoutPositioning === 'ABSOLUTE') return undefined
+  if (
+    typeof node.x !== 'number' ||
+    typeof node.y !== 'number'
+  ) {
+    return undefined
+  }
+  if (near(node.x, x) && near(node.y, y)) return undefined
+  return [x, y]
+}
+
+/**
+ * Report a stated `position` that an auto-layout parent threw away (B35).
+ *
+ * `update_node` has warned about this ever since it grew its x/y guard. The
+ * create path never did — and the create path is where it bites, because the
+ * creation default (B29) puts a `layout` on a frame that stated none. A caller
+ * who says nothing about layout and everything about where its children go gets
+ * a vertical stack and, until now, `warnings: []`. The default itself is
+ * specced and stays. What was missing is it saying what it cost.
+ *
+ * VALUE-checked rather than rule-checked: a child whose flow slot lands exactly
+ * where the spec asked for it lost nothing, and warning there would teach the
+ * agent to skip the message. `layoutPositioning:'ABSOLUTE'` is the documented
+ * escape hatch and stays silent for the same reason — the position survived.
+ *
+ * Returns undefined when there is nothing to say.
+ */
+export const statedPositionWarning = (
+  position: unknown,
+  node: PlacedTarget,
+  // `unknown`, not a shape: the create path hands over whatever parent it was
+  // given, and a PAGE has no layoutMode to declare.
+  parent: unknown,
+): string | undefined => {
+  const stated = discardedPosition(position, node, parent)
+  if (stated === undefined) return undefined
+  return (
+    'position [' +
+    stated[0] +
+    ', ' +
+    stated[1] +
+    '] ignored on ' +
+    nodeLabel(node) +
+    ' — an auto-layout parent places its children (set layoutPositioning:ABSOLUTE first). It landed at [' +
+    String(node.x) +
+    ', ' +
+    String(node.y) +
+    '].'
+  )
+}
+
+/** One child as the placement check sees it: what it asked for, and what it is. */
+export type Placement = {
+  position: unknown
+  node: PlacedTarget
+}
+
+/** How many children an aggregated warning names before it starts counting. */
+const NAMED_PLACEMENTS = 3
+
+/**
+ * Report every stated position ONE auto-layout parent threw away, in one line.
+ *
+ * The per-child form was the obvious shape and the wrong one. `create_tree`
+ * pools every warning in the tree into a single array answered on the root
+ * reply, and the B29 default puts `mode:'V'` on every frame-like node that
+ * states no layout — so one careless tree hits every child at once, and fifty
+ * children cost fifty near-identical lines. This module already answers that
+ * with one line and a count (`setRangeProperty`'s `declined` set, T4).
+ *
+ * One child still reads as the singular sentence. Nothing is aggregated away
+ * that a caller would have to reconstruct: the first few children are named
+ * with what they asked for and where they landed, and the rest are counted.
+ */
+export const discardedPositionsWarning = (
+  parent: unknown,
+  children: readonly Placement[],
+): string | undefined => {
+  const lost: [Placement, [number, number]][] = []
+  for (const child of children) {
+    const stated = discardedPosition(
+      child.position,
+      child.node,
+      parent,
+    )
+    if (stated !== undefined) lost.push([child, stated])
+  }
+  if (lost.length === 0) return undefined
+  if (lost.length === 1) {
+    return statedPositionWarning(
+      lost[0][0].position,
+      lost[0][0].node,
+      parent,
+    )
+  }
+  const named = lost
+    .slice(0, NAMED_PLACEMENTS)
+    .map(
+      ([child, stated]) =>
+        nodeLabel(child.node) +
+        ' [' +
+        stated[0] +
+        ', ' +
+        stated[1] +
+        '] → [' +
+        String(child.node.x) +
+        ', ' +
+        String(child.node.y) +
+        ']',
+    )
+  const rest = lost.length - named.length
+  return (
+    String(lost.length) +
+    ' stated positions ignored — an auto-layout parent places its children (set layoutPositioning:ABSOLUTE first): ' +
+    named.join(', ') +
+    (rest > 0 ? ', and ' + String(rest) + ' more' : '') +
+    '.'
+  )
 }

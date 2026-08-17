@@ -79,6 +79,39 @@ describe('handleUpdateNode', () => {
     })
   })
 
+  it('B45 — forwards a path atom as the geometry the plugin assigns, and calls it a known key', async () => {
+    // The write face has always converted vectorPaths, and update_node has
+    // always sent it. It was the plugin that never applied it, so the arm that
+    // stays testable headlessly is this one: the canonical atom a read emits
+    // reaches the plugin as Figma's own {windingRule, data}, and nothing
+    // reports it as an unknown key.
+    const sent: Sent[] = []
+    const result = await handleUpdateNode(
+      {
+        nodeId: '1:42',
+        patch: {
+          name: 'X',
+          vectorPaths: [
+            'path(NONZERO,"M 12 0 L 24 24 L 0 24 Z")',
+          ],
+        },
+      },
+      stubClient({ sent }),
+    )
+    const spec = sent[0].params?.spec as {
+      vectorPaths: { windingRule: string; data: string }[]
+    }
+    expect(spec.vectorPaths).toEqual([
+      {
+        windingRule: 'NONZERO',
+        data: 'M 12 0 L 24 24 L 0 24 Z',
+      },
+    ])
+    expect(result.content[0].text).not.toContain(
+      'vectorPaths',
+    )
+  })
+
   it('surfaces a plugin-side {error} as an error (not success)', async () => {
     const result = await handleUpdateNode(
       { nodeId: '1:42', patch: { opacity: 0.5 } },

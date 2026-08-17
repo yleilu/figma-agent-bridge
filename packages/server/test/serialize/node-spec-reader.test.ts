@@ -152,6 +152,131 @@ describe('toNodeSpec — atom-grammar leaves', () => {
   })
 })
 
+// ─── B44: a bound LAYOUT scalar reads back with its var() wrapper ─────────────
+//
+// `bind_variable {field:'itemSpacing'}` was REAL — the gap moved to the
+// variable's value and `search match:{variableId}` indexed the node — yet the
+// read answered a bare `gap: 8`. No wrapper, no `boundVariables`, nothing to
+// say a binding existed. So spacing tokens were unauditable and an ordinary
+// read-modify-write destroyed them silently.
+describe('toNodeSpec — bound layout scalars (B44)', () => {
+  const bound = (
+    over: Record<string, unknown>,
+  ): Record<string, unknown> => ({
+    id: '1:1',
+    name: 'Row',
+    type: 'FRAME',
+    layoutMode: 'HORIZONTAL',
+    itemSpacing: 8,
+    bindingNames: {
+      variables: {
+        'V:space8': 'space/8',
+        'V:space16': 'space/16',
+      },
+    },
+    ...over,
+  })
+
+  it('emits the wrapper on `gap`', () => {
+    const spec = toNodeSpec(
+      bound({
+        layoutBoundVariables: { itemSpacing: 'V:space8' },
+      }),
+      { depth: 0 },
+    )
+    expect(spec.layout?.gap).toBe('var(space/8)8')
+  })
+
+  it('binds `pad` PER SIDE, by position', () => {
+    const spec = toNodeSpec(
+      bound({
+        paddingTop: 8,
+        paddingRight: 16,
+        paddingBottom: 8,
+        paddingLeft: 16,
+        layoutBoundVariables: {
+          paddingTop: 'V:space8',
+          paddingBottom: 'V:space8',
+        },
+      }),
+      { depth: 0 },
+    )
+    expect(spec.layout?.pad).toEqual([
+      'var(space/8)8',
+      16,
+      'var(space/8)8',
+      16,
+    ])
+  })
+
+  it('emits an all-zero `pad` when a side is bound', () => {
+    // Dropping it would drop the binding sitting on it.
+    const spec = toNodeSpec(
+      bound({
+        layoutBoundVariables: { paddingLeft: 'V:space8' },
+      }),
+      { depth: 0 },
+    )
+    expect(spec.layout?.pad).toEqual([
+      0,
+      0,
+      0,
+      'var(space/8)0',
+    ])
+  })
+
+  it('emits the wrapper on the GRID gaps', () => {
+    const spec = toNodeSpec(
+      bound({
+        layoutMode: 'GRID',
+        gridRowGap: 8,
+        gridColumnGap: 16,
+        layoutBoundVariables: {
+          gridRowGap: 'V:space8',
+          gridColumnGap: 'V:space16',
+        },
+      }),
+      { depth: 0 },
+    )
+    expect(spec.layout?.rowGap).toBe('var(space/8)8')
+    expect(spec.layout?.colGap).toBe('var(space/16)16')
+  })
+
+  it('also reads a binding the EXPORT carries itself', () => {
+    // A node whose live handle refused to be read still resolves whatever its
+    // export knows (the same rule the paint wrappers follow).
+    const spec = toNodeSpec(
+      bound({
+        boundVariables: {
+          itemSpacing: {
+            id: 'V:space8',
+            type: 'VARIABLE_ALIAS',
+          },
+        },
+      }),
+      { depth: 0 },
+    )
+    expect(spec.layout?.gap).toBe('var(space/8)8')
+  })
+
+  it('stays a bare number when nothing is bound', () => {
+    const spec = toNodeSpec(bound({}), { depth: 0 })
+    expect(spec.layout?.gap).toBe(8)
+    expect(spec.layout?.pad).toBeUndefined()
+  })
+
+  it('never falls back to the id when the name is unknown', () => {
+    const spec = toNodeSpec(
+      bound({
+        bindingNames: { variables: {} },
+        layoutBoundVariables: { itemSpacing: 'V:space8' },
+      }),
+      { depth: 0 },
+    )
+    expect(spec.layout?.gap).toBe(8)
+  })
+})
+
 // ─── GRID layout read-back (M12) ─────────────────────────────────────────────
 
 describe('toNodeSpec — GRID layout read-back', () => {
@@ -460,6 +585,65 @@ describe('toNodeSpec — depth + IdStubs', () => {
     const spec = toNodeSpec(raw, {})
     const children = spec.children as IdStub[]
     expect(children[0]).toHaveProperty('childCount')
+  })
+})
+
+// ─── B51: a size the file does not hold is not invented ───────────────────────
+//
+// A PAGE has no width/height — Figma maintains none — and the reader used to
+// pad `[0, 0]` onto it and onto every child of a page-rooted read. A
+// frame-rooted control returned real sizes, which made the zeros read as a fact
+// about the file. B26's rule: never present a value the engine is not
+// maintaining.
+describe('toNodeSpec — a node with no size (B51)', () => {
+  const page = {
+    id: 'page:1',
+    name: 'Page 1',
+    type: 'PAGE',
+    children: [
+      {
+        id: '1:42',
+        name: 'Card',
+        type: 'FRAME',
+        width: 320,
+        height: 200,
+        childCount: 3,
+      },
+    ],
+  }
+
+  it('omits `size` on the PAGE rather than zeroing it', () => {
+    const spec = toNodeSpec(page, { depth: -1 })
+    expect(spec.type).toBe('PAGE')
+    expect(spec).not.toHaveProperty('size')
+  })
+
+  it('keeps a plugin-drawn boundary a STUB, with its real size and count', () => {
+    // depth -1 is "every level" — but the plugin never sent this child's
+    // subtree, so building it as a childless node would report the level as
+    // empty and let the receipt claim nothing was cut.
+    const spec = toNodeSpec(page, { depth: -1 })
+    const child = (spec.children as IdStub[])[0]
+    expect(child.childCount).toBe(3)
+    expect(child.size).toEqual([320, 200])
+    expect(child).not.toHaveProperty('children')
+  })
+
+  it('still reports a node whose only size is a bbox', () => {
+    const spec = toNodeSpec(
+      {
+        id: '1:1',
+        type: 'RECTANGLE',
+        absoluteBoundingBox: {
+          x: 0,
+          y: 0,
+          width: 12,
+          height: 8,
+        },
+      },
+      { depth: 0 },
+    )
+    expect(spec.size).toEqual([12, 8])
   })
 })
 
@@ -2518,6 +2702,123 @@ describe('toNodeSpec — text.runs', () => {
       type: 'SOLID',
       color: { r: 1, g: 0, b: 0 },
     })
+  })
+
+  // B43 — a run and a node binding live on the same TEXT at the same time.
+  //
+  // `text.color` IS the node's first fill, so a per-range colour write lands
+  // one layer below a field that is variable-bound. The read after such a write
+  // has to show both: the range that was written carries its literal, and every
+  // other channel still names the token. A reader that dropped the wrapper here
+  // would report the binding as gone on a node that still holds it — and the
+  // agent's next write would be the one that actually destroys it.
+  it('a per-range colour leaves the node-level binding standing', () => {
+    const bound = {
+      type: 'SOLID',
+      color: { r: 0.08, g: 0.11, b: 0.18 },
+      boundVariables: {
+        color: {
+          id: 'VariableID:9:9',
+          type: 'VARIABLE_ALIAS',
+        },
+      },
+    }
+    const spec = toNodeSpec(
+      mixedText({
+        bindingNames: {
+          variables: { 'VariableID:9:9': 'text/primary' },
+        },
+        fills: [bound],
+        runs: [
+          // The range the update wrote: a literal, no wrapper.
+          {
+            at: [0, 5],
+            color: [
+              {
+                type: 'SOLID',
+                color: { r: 1, g: 0, b: 0 },
+              },
+            ],
+          },
+          // The range it did not touch: still the bound paint.
+          { at: [5, 11], color: [bound] },
+        ],
+      }) as never,
+      { depth: 0 },
+    )
+    // The node-level binding, on both channels that carry it.
+    expect(spec.text?.color).toBe(
+      'var(text/primary)#141C2E',
+    )
+    expect(spec.fills?.[0]).toBe('var(text/primary)#141C2E')
+    // The written range: scoped, literal, and only [0,5].
+    expect(spec.text?.runs?.[0]).toEqual({
+      at: [0, 5],
+      color: '#FF0000',
+    })
+    // The untouched range: still bound.
+    expect(spec.text?.runs?.[1].color).toBe(
+      'var(text/primary)#141C2E',
+    )
+  })
+})
+
+// ─── B42: text.case survives the round trip ───────────────────────────────────
+//
+// `case` is how a design system spells SECTION LABELS, and for a while it was a
+// value the agent could write, could not read back, and therefore could not
+// verify. The read is half the fix: `ORIGINAL` is Figma's "nothing to say" and
+// stays unspoken, every other value is reported, and what the reader emits is
+// what the writer sends back.
+
+describe('toNodeSpec — text.case read-back', () => {
+  const cased = (
+    textCase?: string,
+  ): Record<string, unknown> => ({
+    id: '1:1',
+    name: 'Label',
+    type: 'TEXT',
+    characters: 'Section',
+    style: {
+      fontFamily: 'Inter',
+      fontStyle: 'SemiBold',
+      fontSize: 12,
+      ...(textCase !== undefined ? { textCase } : {}),
+    },
+  })
+
+  it('reports the case a node carries', () => {
+    expect(
+      toNodeSpec(cased('UPPER') as never, { depth: 0 }).text
+        ?.case,
+    ).toBe('UPPER')
+    expect(
+      toNodeSpec(cased('TITLE') as never, { depth: 0 }).text
+        ?.case,
+    ).toBe('TITLE')
+    expect(
+      toNodeSpec(cased('SMALL_CAPS') as never, { depth: 0 })
+        .text?.case,
+    ).toBe('SMALL_CAPS')
+  })
+
+  it('says nothing for ORIGINAL — and nothing for a node with no case at all', () => {
+    expect(
+      toNodeSpec(cased('ORIGINAL') as never, { depth: 0 })
+        .text,
+    ).not.toHaveProperty('case')
+    expect(
+      toNodeSpec(cased() as never, { depth: 0 }).text,
+    ).not.toHaveProperty('case')
+  })
+
+  it('round-trips: what the read emits is what the write sends', () => {
+    const spec = toNodeSpec(cased('UPPER') as never, {
+      depth: 0,
+    })
+    const out = specToFigma(spec) as Record<string, unknown>
+    const text = out.text as Record<string, unknown>
+    expect(text.case).toBe('UPPER')
   })
 })
 

@@ -29,6 +29,7 @@ import type {
   NodeSpecOrStub,
   IdStub,
   LayoutSpec,
+  NumberAtom,
   TextSpec,
   TextRun,
   OverrideEntry,
@@ -329,7 +330,19 @@ const pluginStrokeCap = restVocab({
  */
 const pluginScaleMode = restVocab({ STRETCH: 'CROP' })
 
-const sizeOf = (raw: RawNode): [number, number] => {
+/**
+ * `[width, height]`, or undefined when the node has no size at all.
+ *
+ * A PAGE has none — Figma does not maintain width/height on one — and the
+ * fallback used to invent `[0, 0]` for it, and for every child of a page-rooted
+ * read (B51). B26's rule is the answer: never present a value the engine is not
+ * maintaining. An absent `size` is legible; a fabricated one is not, and a
+ * frame-rooted control returning real sizes made the zeros look like a fact
+ * about the file.
+ */
+const sizeOf = (
+  raw: RawNode,
+): [number, number] | undefined => {
   // Prefer raw.width/height (enriched by plugin — unrotated geometry) over
   // absoluteBoundingBox (axis-aligned bbox, inflated when node is rotated).
   // B7: a rotated node's bbox ≠ its actual dimensions; the plugin enrichment
@@ -342,10 +355,17 @@ const sizeOf = (raw: RawNode): [number, number] => {
   const bbox = raw.absoluteBoundingBox as
     | { width: number; height: number }
     | undefined
-  if (bbox !== undefined && bbox !== null) {
+  if (
+    bbox !== undefined &&
+    bbox !== null &&
+    typeof bbox.width === 'number' &&
+    typeof bbox.height === 'number'
+  ) {
     return [bbox.width, bbox.height]
   }
-  return [w ?? 0, h ?? 0]
+  return w !== undefined || h !== undefined
+    ? [w ?? 0, h ?? 0]
+    : undefined
 }
 
 type RawBBox = { x?: number; y?: number }
@@ -997,8 +1017,51 @@ const exportSettingsArray = (
 
 // ─── layout ───────────────────────────────────────────────────────────────────
 
+/**
+ * The variable bound to one LAYOUT field, named — or undefined when the field
+ * carries no binding this read can resolve.
+ *
+ * Two sources, both in the Plugin API's field spelling. `layoutBoundVariables`
+ * is the plugin's own enrichment (enrich-nodes.ts), which exists because
+ * JSON_REST_V1 carries no layout binding at all — a live `itemSpacing` bind
+ * read back as a bare number, so the binding was invisible and an ordinary
+ * read-modify-write destroyed it (B44). The export's flat `boundVariables` is
+ * consulted too, so a node whose live handle refused to be read still resolves
+ * whatever its export knows.
+ */
+const layoutVarName = (
+  raw: RawNode,
+  bindingNames: BindingNames | undefined,
+  field: string,
+): string | undefined => {
+  const shipped = raw.layoutBoundVariables as
+    | Record<string, unknown>
+    | undefined
+  const id =
+    str(shipped?.[field]) ??
+    flatAliasId(nodeBoundVariables(raw), field)
+  return variableNameFor(id, bindingNames)
+}
+
+/**
+ * A layout number as the read emits it: bare, or carrying its `var()` wrapper.
+ *
+ * `gap: "var(space/8)8"` — the same shape a bound uniform `radius` has always
+ * emitted, and the shape a write re-binds from (expression-formats.md →
+ * *Scope*). One binding per field: Figma binds `itemSpacing`, the two grid gaps
+ * and each padding side independently.
+ */
+const layoutNumberLeaf = (
+  value: number,
+  varName: string | undefined,
+): NumberAtom =>
+  varName === undefined
+    ? value
+    : wrapperFor(undefined, varName) + String(value)
+
 const layoutSpec = (
   raw: RawNode,
+  bindingNames: BindingNames | undefined,
 ): LayoutSpec | undefined => {
   const mode = str(raw.layoutMode)
   if (
@@ -1009,13 +1072,27 @@ const layoutSpec = (
     return undefined
   }
 
-  // Padding applies to every auto-layout mode, GRID included.
-  const pt = num(raw.paddingTop) ?? 0
-  const pr = num(raw.paddingRight) ?? 0
-  const pb = num(raw.paddingBottom) ?? 0
-  const pl = num(raw.paddingLeft) ?? 0
-  const pad: LayoutSpec['pad'] | undefined =
-    pt || pr || pb || pl ? [pt, pr, pb, pl] : undefined
+  // Padding applies to every auto-layout mode, GRID included. Each side binds
+  // on its own, so `pad` is emitted whenever ONE side is non-zero OR bound —
+  // dropping an all-zero pad would drop the bindings sitting on it.
+  const sides = [
+    ['paddingTop', num(raw.paddingTop) ?? 0],
+    ['paddingRight', num(raw.paddingRight) ?? 0],
+    ['paddingBottom', num(raw.paddingBottom) ?? 0],
+    ['paddingLeft', num(raw.paddingLeft) ?? 0],
+  ] as const
+  const padNames = sides.map(([field]) =>
+    layoutVarName(raw, bindingNames, field),
+  )
+  const padAtoms = sides.map(([, value], i) =>
+    layoutNumberLeaf(value, padNames[i]),
+  )
+  const padCarries =
+    sides.some(([, value]) => value !== 0) ||
+    padNames.some(name => name !== undefined)
+  const pad: LayoutSpec['pad'] | undefined = padCarries
+    ? (padAtoms as unknown as LayoutSpec['pad'])
+    : undefined
 
   // GRID branch (M12): two independent gaps, separate row/col counts.
   if (mode === 'GRID') {
@@ -1030,11 +1107,17 @@ const layoutSpec = (
     }
     const rowGap = num(raw.gridRowGap)
     if (rowGap !== undefined) {
-      out.rowGap = rowGap
+      out.rowGap = layoutNumberLeaf(
+        rowGap,
+        layoutVarName(raw, bindingNames, 'gridRowGap'),
+      )
     }
     const colGap = num(raw.gridColumnGap)
     if (colGap !== undefined) {
-      out.colGap = colGap
+      out.colGap = layoutNumberLeaf(
+        colGap,
+        layoutVarName(raw, bindingNames, 'gridColumnGap'),
+      )
     }
     if (pad !== undefined) {
       out.pad = pad
@@ -1047,7 +1130,10 @@ const layoutSpec = (
   }
   const gap = num(raw.itemSpacing)
   if (gap !== undefined) {
-    out.gap = gap
+    out.gap = layoutNumberLeaf(
+      gap,
+      layoutVarName(raw, bindingNames, 'itemSpacing'),
+    )
   }
   if (pad !== undefined) {
     out.pad = pad
@@ -1354,16 +1440,33 @@ const componentMeta = (
 
 // ─── stub ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Is this raw node a boundary the PLUGIN drew — a row that states how many
+ * children it has instead of carrying them?
+ *
+ * A PAGE read at `depth: 0` answers exactly that for each of its children: the
+ * plugin does not serialize their subtrees, because the caller asked for the
+ * page alone. The row is a stub, and the reader keeps it one — building it as a
+ * childless NodeSpec instead would report the level as empty and let the
+ * receipt claim nothing was cut (B51).
+ */
+const isDrawnBoundary = (raw: RawNode): boolean =>
+  !Array.isArray(raw.children) &&
+  num(raw.childCount) !== undefined
+
 const toStub = (raw: RawNode): IdStub => {
   const { children } = raw
+  const size = sizeOf(raw)
   return {
     id: str(raw.id) ?? '',
     name: str(raw.name) ?? '',
     type: str(raw.type) ?? '',
-    size: sizeOf(raw),
+    // Omitted rather than zeroed: a PAGE has no size (B26).
+    ...(size !== undefined ? { size } : {}),
+    // A boundary row states its own count; a serialized node is counted.
     childCount: Array.isArray(children)
       ? children.length
-      : 0,
+      : (num(raw.childCount) ?? 0),
   }
 }
 
@@ -1440,7 +1543,10 @@ const buildNode = (
     }
   }
 
-  out.size = sizeOf(raw)
+  const size = sizeOf(raw)
+  if (size !== undefined) {
+    out.size = size
+  }
 
   // B26 — an invisible child of an auto-layout parent has no live position, so
   // it is emitted with none (see positionIsStale). `visible: false` and the
@@ -1464,7 +1570,7 @@ const buildNode = (
       layoutPositioning as NodeSpec['layoutPositioning']
   }
 
-  const layout = layoutSpec(raw)
+  const layout = layoutSpec(raw, bindingNames)
   if (layout !== undefined) {
     out.layout = layout
   }
@@ -1736,12 +1842,16 @@ const buildNode = (
       // ancestor and a descendant the read returns complete keeps the
       // style(...)/var(...) it actually has.
       const built: NodeSpecOrStub[] = kids.map(c =>
-        buildNode(
-          c,
-          next,
-          childParentBBox,
-          childParentLaysOut,
-        ),
+        // A row the plugin drew as a boundary stays a stub however much depth
+        // is left: the subtree was never sent, so there is nothing to build.
+        isDrawnBoundary(c)
+          ? toStub(c)
+          : buildNode(
+              c,
+              next,
+              childParentBBox,
+              childParentLaysOut,
+            ),
       )
       out.children = built
     }

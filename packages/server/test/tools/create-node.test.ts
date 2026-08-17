@@ -293,4 +293,100 @@ describe('handleCreateNode (rebuilt — single NodeSpec)', () => {
     )
     expect(sent).toHaveLength(1)
   })
+
+  // B36 (live, node 298:7544): a RECTANGLE with `fills:["#888888"]` and a
+  // `text` struct whose colour carried `var(probe/cyan)`. The struct was
+  // dropped silently and its binding — which routes through `fills` — landed
+  // on fills[0], so the node read back the cyan variable and the stated grey
+  // was gone.
+  it('drops a text struct on a non-TEXT create, with its binding, and says so', async () => {
+    const sent: Sent[] = []
+    const result = await handleCreateNode(
+      {
+        spec: {
+          type: 'RECTANGLE',
+          name: 'Probe',
+          size: [40, 40],
+          fills: ['#888888'],
+          text: {
+            content: 'Hello',
+            font: 'font(Inter,Regular,16)',
+            color: 'var(probe/cyan)#22D3EE',
+          },
+        },
+      },
+      stubClient({ sent }),
+    )
+    const spec = sent[0].params?.spec as Record<
+      string,
+      unknown
+    >
+    expect(spec.text).toBeUndefined()
+    // Nothing rebinds fills[0]: the binding died with the struct that asked
+    // for it.
+    expect(spec.bindings).toBeUndefined()
+    // The fills the spec stated are the fills that land.
+    expect(spec.fills).toEqual([
+      {
+        type: 'SOLID',
+        color: { r: 0.533, g: 0.533, b: 0.533 },
+      },
+    ])
+    expect(result.content[0].text).toContain(
+      'text ignored — not supported on a RECTANGLE node',
+    )
+    expect(result.content[0].text).toContain(
+      'var(probe/cyan)',
+    )
+  })
+
+  // B38 (live): `stroke:"stroke(fat){align=INSIDE}"` converted to
+  // `{"strokeWeight":null}` with zero warnings, and the create then failed on
+  // Figma's raw engine message. The parameter is the agent's, so the server
+  // names it as one — before the plugin is contacted.
+  it('rejects a non-numeric stroke weight before the plugin is contacted', async () => {
+    const sent: Sent[] = []
+    const result = await handleCreateNode(
+      {
+        spec: {
+          type: 'RECTANGLE',
+          stroke: 'stroke(fat){align=INSIDE}',
+        },
+      },
+      stubClient({ sent }),
+    )
+    expect(sent).toHaveLength(0)
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INVALID_PARAM')
+    expect(data.error).toContain('stroke(1)')
+  })
+
+  // B45 (live): `vectorPaths:["path(M 12 0 L 24 24 L 0 24 Z)"]` was ACCEPTED —
+  // warnings:[], and the created node read back `vectorPaths: []`. An atom
+  // that does not parse is INVALID_PARAM, raised before the plugin is
+  // contacted (expression-formats.md).
+  it('rejects a fill-rule-less path atom before the plugin is contacted', async () => {
+    const sent: Sent[] = []
+    const result = await handleCreateNode(
+      {
+        spec: {
+          type: 'VECTOR',
+          vectorPaths: ['path(M 12 0 L 24 24 L 0 24 Z)'],
+        },
+      },
+      stubClient({ sent }),
+    )
+    expect(sent).toHaveLength(0)
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INVALID_PARAM')
+    expect(data.error).toContain(
+      'path(NONZERO,"M 0 0 L 24 24")',
+    )
+  })
 })
