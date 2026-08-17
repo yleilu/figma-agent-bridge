@@ -1,0 +1,200 @@
+{
+  "id": "305:8637",
+  "name": "Chart card",
+  "type": "INSTANCE",
+  "componentId": "305:8600",
+  "componentKey": "chart-card-key",
+  "absoluteBoundingBox": {
+    "x": 0,
+    "y": 0,
+    "width": 360,
+    "height": 260
+  },
+  "children": [
+    {
+      "id": "I305:8637;304:8411",
+      "name": "Header",
+      "type": "FRAME",
+      "absoluteBoundingBox": {
+        "x": 0,
+        "y": 0,
+        "width": 360,
+        "height": 40
+      }
+    },
+    {
+      "id": "I305:8637;305:8427",
+      "name": "Plot area",
+      "type": "SLOT",
+      "absoluteBoundingBox": {
+        "x": 0,
+        "y": 40,
+        "width": 360,
+        "height": 220
+      },
+      "children": [
+        {
+          "id": "I305:8637;305:8427;305:8881",
+          "name": "Plot",
+          "type": "FRAME",
+          "absoluteBoundingBox": {
+            "x": 0,
+            "y": 40,
+            "width": 318,
+            "height": 154
+          },
+          "children": [
+            {
+              "id": "I305:8637;305:8427;305:8883",
+              "name": "Total value",
+              "type": "TEXT",
+              "characters": "$4,812,900",
+              "style": {
+                "fontFamily": "JetBrains Mono",
+                "fontStyle": "Bold",
+                "fontSize": 30,
+                "lineHeightUnit": "PIXELS",
+                "lineHeightPx": 38
+              },
+              "absoluteBoundingBox": {
+                "x": 0,
+                "y": 40,
+                "width": 180,
+                "height": 38
+              },
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0.91,
+                    "g": 0.925,
+                    "b": 0.965,
+                    "a": 1
+                  },
+                  "boundVariables": {
+                    "color": {
+                      "id": "VariableID:305:1",
+                      "type": "VARIABLE_ALIAS"
+                    }
+                  }
+                }
+              ],
+              "bindingNames": {
+                "variables": {
+                  "VariableID:305:1": "text/hi"
+                },
+                "styles": {
+                  "text": "Heading/KPI value"
+                }
+              }
+            },
+            {
+              "id": "I305:8637;305:8427;305:8897",
+              "name": "Legend",
+              "type": "FRAME",
+              "absoluteBoundingBox": {
+                "x": 0,
+                "y": 80,
+                "width": 300,
+                "height": 96
+              },
+              "children": [
+                {
+                  "id": "I305:8637;305:8427;305:8902",
+                  "name": "Legend row",
+                  "type": "INSTANCE",
+                  "componentId": "304:8285",
+                  "componentKey": "legend-row-violet-key",
+                  "absoluteBoundingBox": {
+                    "x": 0,
+                    "y": 80,
+                    "width": 300,
+                    "height": 18
+                  },
+                  "children": [
+                    {
+                      "id": "I305:8637;305:8427;305:8902;304:8234",
+                      "name": "Dot",
+                      "type": "ELLIPSE",
+                      "readError": "Error: in getSharedPluginData: The node (instance sublayer or table cell) with id \"I305:8898;304:8234\" does not exist",
+                      "absoluteBoundingBox": {
+                        "x": 0,
+                        "y": 85,
+                        "width": 8,
+                        "height": 8
+                      },
+                      "fills": [
+                        {
+                          "type": "SOLID",
+                          "color": {
+                            "r": 0.486,
+                            "g": 0.361,
+                            "b": 1,
+                            "a": 1
+                          },
+                          "boundVariables": {
+                            "color": {
+                              "id": "VariableID:305:2",
+                              "type": "VARIABLE_ALIAS"
+                            }
+                          }
+                        }
+                      ],
+                      "bindingNames": {
+                        "variables": {
+                          "VariableID:305:2": "brand/violet"
+                        }
+                      }
+                    },
+                    {
+                      "id": "I305:8637;305:8427;305:8902;304:8235",
+                      "name": "Label",
+                      "type": "TEXT",
+                      "characters": "ETH",
+                      "style": {
+                        "fontFamily": "Inter",
+                        "fontStyle": "Regular",
+                        "fontSize": 13,
+                        "lineHeightUnit": "PIXELS",
+                        "lineHeightPx": 18
+                      },
+                      "readError": "Error: in getSharedPluginData: The node (instance sublayer or table cell) with id \"I305:8898;304:8235\" does not exist",
+                      "absoluteBoundingBox": {
+                        "x": 16,
+                        "y": 80,
+                        "width": 252,
+                        "height": 18
+                      },
+                      "fills": [
+                        {
+                          "type": "SOLID",
+                          "color": {
+                            "r": 0.604,
+                            "g": 0.651,
+                            "b": 0.769,
+                            "a": 1
+                          },
+                          "boundVariables": {
+                            "color": {
+                              "id": "VariableID:305:3",
+                              "type": "VARIABLE_ALIAS"
+                            }
+                          }
+                        }
+                      ],
+                      "bindingNames": {
+                        "variables": {
+                          "VariableID:305:3": "text/mid"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

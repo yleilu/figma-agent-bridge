@@ -13,6 +13,7 @@ import {
   targetGuardError,
 } from '@figma-agent-bridge/shared'
 import cardFixture from '../fixtures/card-node-raw.json'
+import slotDeepFixture from '../fixtures/slot-deep-raw.json'
 
 const MOCK_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect fill="red" width="100" height="100"/></svg>'
@@ -719,6 +720,115 @@ export const createMockPlugin = (
     ],
   })
 
+  // ── THREE-LEVEL NESTING: instance → SLOT → created subtree (B53) ───────────
+  //
+  // The fixture above is TWO levels, and B53 is what the third one costs. This
+  // one is transcribed from the 2026-08-17 QA run's own saved reply
+  // (`readbacks/deep-plot-allocation.json`), so the shapes are observed rather
+  // than invented:
+  //
+  //   305:8637                              INSTANCE  "Chart card"
+  //     I305:8637;304:8411                  FRAME     "Header"      master-derived
+  //     I305:8637;305:8427                  SLOT      "Plot area"   master-derived
+  //       I305:8637;305:8427;305:8881       FRAME     "Plot"        slot-override
+  //         I305:8637;305:8427;305:8883     TEXT      "Total value"
+  //         I305:8637;305:8427;305:8897     FRAME     "Legend"
+  //           I305:8637;305:8427;305:8902   INSTANCE  "Legend row"
+  //             …;305:8902;304:8234         ELLIPSE   "Dot"
+  //             …;305:8902;304:8235         TEXT      "Label"
+  //
+  // Three facts the run PROVED, and which this mock therefore models:
+  //
+  //  1. ONE id vocabulary. The chain grows at an INSTANCE or SLOT boundary, not
+  //     per tree level, so Plot and its grandchildren are all 3-segment and only
+  //     the nodes inside the slot-hosted INSTANCE are 4-segment. The reading
+  //     that called this "two vocabularies" mistook the grammar.
+  //  2. At THREE segments the live handle still reads, so the live-only
+  //     wrappers survive — `Total value` carries `style(Heading/KPI value)`.
+  //  3. At FOUR segments the handle is composed from the alias
+  //     (`I305:8898;304:8235`) and answers nothing, so the node keeps its
+  //     `readError` and loses `style()` while the export's `var()` survives.
+  //     That residual is B41's and is NOT fixed here.
+  //
+  // Every id here resolves, because after B53 the plugin resolves a canonical
+  // id through the leading instance's export rather than by matching live ids.
+  // A read of a 4-segment id is served from that same export, which is why it
+  // still carries its `readError` instead of failing.
+  const deepNodeById = (
+    id: string | undefined,
+  ): Record<string, unknown> | undefined => {
+    if (id === undefined) {
+      return undefined
+    }
+    const walk = (
+      node: Record<string, unknown>,
+    ): Record<string, unknown> | undefined => {
+      if (node.id === id) {
+        return node
+      }
+      const kids = node.children
+      if (!Array.isArray(kids)) {
+        return undefined
+      }
+      for (const kid of kids as Record<string, unknown>[]) {
+        const hit = walk(kid)
+        if (hit !== undefined) {
+          return hit
+        }
+      }
+      return undefined
+    }
+    return walk(
+      slotDeepFixture as unknown as Record<string, unknown>,
+    )
+  }
+
+  /** The deep-slot export a read of `id` serves, with earlier writes merged. */
+  const deepExportFor = (
+    id: string | undefined,
+  ): Record<string, unknown> | undefined => {
+    const node = deepNodeById(id)
+    if (node === undefined || id === undefined) {
+      return undefined
+    }
+    return {
+      ...node,
+      ...(appliedState.get(id) ?? {}),
+      ...(sharedContext.get(id)
+        ? { context: sharedContext.get(id) }
+        : {}),
+    }
+  }
+
+  /** Every node of the deep fixture, root first, with its scan level. */
+  const deepScanRows = (): {
+    node: Record<string, unknown>
+    depth: number
+  }[] => {
+    const rows: {
+      node: Record<string, unknown>
+      depth: number
+    }[] = []
+    const walk = (
+      node: Record<string, unknown>,
+      depth: number,
+    ): void => {
+      rows.push({ node, depth })
+      const kids = node.children
+      if (!Array.isArray(kids)) {
+        return
+      }
+      for (const kid of kids as Record<string, unknown>[]) {
+        walk(kid, depth + 1)
+      }
+    }
+    walk(
+      slotDeepFixture as unknown as Record<string, unknown>,
+      0,
+    )
+    return rows
+  }
+
   // ── COMPOUND IDS: writing to an instance sublayer ─────────────────────────
   //
   // A node under an instance is addressed `I<instance>;<child>`, and that is the
@@ -750,7 +860,10 @@ export const createMockPlugin = (
   const resolvesInMockDoc = (id: string): boolean =>
     !id.startsWith('I') ||
     !id.includes(';') ||
-    MOCK_SUBLAYER_IDS.has(id)
+    MOCK_SUBLAYER_IDS.has(id) ||
+    // …and every node of the three-level slot fixture below (B53). A write
+    // addressed by the id a read emitted has to land, at any depth.
+    deepNodeById(id) !== undefined
 
   /** The slot-hosted export a read of `id` serves, or undefined. */
   const slotExportFor = (
@@ -1177,8 +1290,14 @@ export const createMockPlugin = (
             ? undefined
             : createdSlots.get(gnNodeId)
         const gnAlias = slotExportFor(gnNodeId)
+        const gnDeep = deepExportFor(gnNodeId)
         if (gnSlot !== undefined) {
           result = { ...gnSlot }
+        } else if (gnDeep !== undefined) {
+          // B53: a slot-override id resolves at every depth, and the node whose
+          // live handle answers nothing still comes back — from the export,
+          // carrying the readError that says what it could not read.
+          result = gnDeep
         } else if (gnAlias !== undefined) {
           // B41: the read answers the CANONICAL id, not the one it was asked
           // for, and the descendant carries its own bindingNames.
@@ -1229,6 +1348,13 @@ export const createMockPlugin = (
         const targeted =
           cmd.params?.nodeId !== undefined ||
           cmd.params?.pageId !== undefined
+        const inDeep = deepExportFor(
+          cmd.params?.nodeId as string | undefined,
+        )
+        if (inDeep !== undefined) {
+          result = inDeep
+          break
+        }
         const inAlias = slotExportFor(
           cmd.params?.nodeId as string | undefined,
         )
@@ -1285,6 +1411,10 @@ export const createMockPlugin = (
           const slot = createdSlots.get(id)
           if (slot !== undefined) {
             return { ...slot }
+          }
+          const deep = deepExportFor(id)
+          if (deep !== undefined) {
+            return deep
           }
           const alias = slotExportFor(id)
           if (alias !== undefined) {
@@ -1580,6 +1710,53 @@ export const createMockPlugin = (
             warnings: [
               'search: repaired the subtree at I298:7517;298:7516;298:7523 — the row for 298:7519 now comes from the export and cannot carry componentKey, instancesOf; a match on those keys will not find this node',
             ],
+          }
+          break
+        }
+        // B53 — a scan rooted on the three-level slot fixture. The plugin's
+        // repair pass replaces every slot-override row with the one its export
+        // names, so the candidates come back under the CANONICAL ids, which is
+        // what the server then hydrates `component` and the other node-spec
+        // fields from. That hydration is a get_nodes over these same ids, so it
+        // is exactly the round trip B53 ③ broke.
+        if (
+          searchScope === 'node' &&
+          cmd.params?.nodeId === '305:8637'
+        ) {
+          const sdDepth = cmd.params?.depth as
+            | number
+            | undefined
+          result = {
+            results: deepScanRows()
+              // The scan root itself is not a candidate — its children are
+              // level 0, exactly as the real scan counts them.
+              .filter(row => row.depth > 0)
+              .filter(
+                row =>
+                  sdDepth === undefined ||
+                  sdDepth < 0 ||
+                  row.depth - 1 <= sdDepth,
+              )
+              .map(row => {
+                const box = row.node
+                  .absoluteBoundingBox as {
+                  width: number
+                  height: number
+                }
+                const candidate: Record<string, unknown> = {
+                  id: row.node.id,
+                  name: row.node.name,
+                  type: row.node.type,
+                  size: [box.width, box.height],
+                }
+                if (
+                  cmd.params?.collectCharacters === true &&
+                  typeof row.node.characters === 'string'
+                ) {
+                  candidate.characters = row.node.characters
+                }
+                return candidate
+              }),
           }
           break
         }
