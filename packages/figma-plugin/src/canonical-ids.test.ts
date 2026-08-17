@@ -10,6 +10,7 @@ import {
   exportedChildren,
   exportedWithin,
   idOf,
+  indexByCanonicalId,
   liveChildren,
   pairWithExport,
   variableIdsInExport,
@@ -236,5 +237,94 @@ describe('variableIdsInExport — the ids the read face already uses', () => {
     expect(
       variableIdsInExport({ id: 'n', fills: [] }),
     ).toEqual([])
+  })
+})
+
+describe('indexByCanonicalId — addressing the paired tree', () => {
+  // Three levels of the B53 shape: an instance, a master-derived SLOT under it,
+  // and slot-override content whose live handles answer plain alias ids.
+  const liveRoot = live('305:8637', [
+    live('I305:8637;305:8427', [
+      live('305:8880', [live('305:8882')]),
+    ]),
+  ])
+  const exportedRoot = exported('305:8637', [
+    exported('I305:8637;305:8427', [
+      exported('I305:8637;305:8427;305:8881', [
+        exported('I305:8637;305:8427;305:8883'),
+      ]),
+    ]),
+  ])
+
+  it('keys the live handle by the id the EXPORT gives it', () => {
+    const index = indexByCanonicalId(
+      liveRoot,
+      exportedRoot,
+      -1,
+    )
+    expect(
+      index.live.get('I305:8637;305:8427;305:8881')?.id,
+    ).toBe('305:8880')
+    expect(
+      index.live.get('I305:8637;305:8427;305:8883')?.id,
+    ).toBe('305:8882')
+  })
+
+  it('does NOT key the live handle by the alias it answers', () => {
+    const index = indexByCanonicalId(
+      liveRoot,
+      exportedRoot,
+      -1,
+    )
+    // The alias is the id `findOne` matched on, and matching on it is exactly
+    // what left every emitted slot id unresolvable (B53).
+    expect(index.live.has('305:8880')).toBe(false)
+  })
+
+  it('keys the exported node by the same id', () => {
+    const index = indexByCanonicalId(
+      liveRoot,
+      exportedRoot,
+      -1,
+    )
+    expect(
+      index.exported.get('I305:8637;305:8427;305:8881')?.id,
+    ).toBe('I305:8637;305:8427;305:8881')
+  })
+
+  it('holds an EXPORTED node whose live handle refuses to read', () => {
+    const stale = unreadable('I305:8898;304:8235')
+    const id = 'I305:8637;305:8427;305:8902;304:8235'
+    const index = indexByCanonicalId(
+      { id: '305:8637', children: [stale] },
+      exported('305:8637', [exported(id)]),
+      -1,
+    )
+    expect(index.exported.get(id)).toBeDefined()
+    expect(index.live.get(id)).toBe(stale)
+  })
+
+  it('respects the depth bound', () => {
+    const index = indexByCanonicalId(
+      liveRoot,
+      exportedRoot,
+      1,
+    )
+    expect(index.exported.has('I305:8637;305:8427')).toBe(
+      true,
+    )
+    expect(
+      index.exported.has('I305:8637;305:8427;305:8881'),
+    ).toBe(false)
+  })
+
+  it('keys by the live id when there is no export at all', () => {
+    const index = indexByCanonicalId(
+      liveRoot,
+      undefined,
+      -1,
+    )
+    expect(index.live.get('305:8880')?.id).toBe('305:8880')
+    expect(index.exported.size).toBe(0)
   })
 })

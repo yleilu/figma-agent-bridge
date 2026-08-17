@@ -51,6 +51,12 @@ import {
   repairScan,
   type ScanFailure,
 } from './search-candidates'
+import {
+  createNodeResolver,
+  declareDegradedRead,
+  slicedReadMessage,
+} from './resolve-node'
+import type { RawNode } from './canonical-ids'
 import { projectComponentDefs } from './project-component-defs'
 import { rollbackCreated } from './rollback'
 import { resolveInstanceProps } from './resolve-instance-props'
@@ -2189,9 +2195,9 @@ const applyVariableMeta = async (
 // ("I<inst>;<child>", e.g. a SLOT inside an instance) is NOT resolvable that
 // way — the call reaches for Figma's network and hangs (live-verified
 // 2026-07-17), which offline is a "check your internet connection" error on an
-// id the document already holds (B34). Resolve those by traversing the
-// instance: getNodeByIdAsync the leading instance id, then findOne by the full
-// compound id.
+// id the document already holds (B34). Those resolve through the leading
+// instance instead: see resolve-node.ts for the two id families and why a walk
+// alone cannot answer both (B53).
 //
 // Every tool interface stays as it was (T6): the two forms are the same
 // parameter, and which one the caller holds is not something it should have to
@@ -2215,25 +2221,92 @@ const applyVariableMeta = async (
 // node id at all; the rollback resolver only ever sees ids this plugin minted;
 // and the change-feed's `writeScope` already refuses anything but a plain
 // `<n>:<n>` before it resolves (feed/write-scope.ts, PLAIN_NODE_ID).
+const nodeResolver = createNodeResolver({
+  getNodeById: async id =>
+    (await figma.getNodeByIdAsync(
+      id,
+    )) as unknown as LiveNode | null,
+  exportOf: async node => {
+    const raw = await (
+      node as unknown as SceneNode
+    ).exportAsync({ format: 'JSON_REST_V1' })
+    const doc = (raw as unknown as Record<string, unknown>)
+      .document
+    return typeof doc === 'object' && doc !== null
+      ? (doc as RawNode)
+      : undefined
+  },
+})
+
 const resolveNodeId = async (
   nodeId: string,
-): Promise<BaseNode | null> => {
-  const sep = nodeId.indexOf(';')
-  if (nodeId.startsWith('I') && sep > 1) {
-    // "I<instanceId>;<...>" — instance id is between 'I' and the first ';'.
-    const instanceId = nodeId.slice(1, sep)
-    const instance =
-      await figma.getNodeByIdAsync(instanceId)
-    if (instance && 'findOne' in instance) {
-      return (
-        (instance as InstanceNode).findOne(
-          n => n.id === nodeId,
-        ) ?? null
-      )
-    }
-    return null
+): Promise<BaseNode | null> =>
+  (await nodeResolver.resolve(
+    nodeId,
+  )) as unknown as BaseNode | null
+
+/**
+ * One node's read, from the node itself or from its ancestor's export.
+ *
+ * `undefined` means no such node — the caller words the miss, because get_node
+ * and get_nodes spell it differently.
+ *
+ * The second route exists because a handle is not always usable. Content inside
+ * a slot-hosted INSTANCE has an address Figma composed from a stale parent id,
+ * so every property read on it throws, `exportAsync` included. The export of
+ * the instance above it already describes that node — the parent read serves it
+ * from there — so a direct read of the same id serves it the same way, with the
+ * same `readError` on it. An id a read EMITS is an id a read RESOLVES (T2), and
+ * reading a node on its own must not say less than reading it through its
+ * parent.
+ */
+const readNodeDocument = async (
+  nodeId: string,
+  depth: number,
+): Promise<unknown | undefined> => {
+  /**
+   * The node as its ancestor's export describes it, enriched by whatever the
+   * live handle will still answer.
+   *
+   * A slice is a DEGRADED read, and `declareDegradedRead` is what makes it say
+   * so — see resolve-node.ts for why a silent thin row is the one outcome this
+   * fallback must never produce.
+   */
+  const slice = async (
+    live: BaseNode | null,
+    reason: string,
+  ): Promise<Record<string, unknown> | undefined> => {
+    const exported = await nodeResolver.exportedNode(nodeId)
+    if (exported === undefined) return undefined
+    // The index is reused for the length of the dispatch and enrichDocument
+    // merges into the object it is given, so the read gets its own copy.
+    const doc = JSON.parse(
+      JSON.stringify(exported),
+    ) as Record<string, unknown>
+    await enrichDocument(
+      (live ?? {}) as unknown as LiveNode,
+      doc,
+      depth,
+      enrichDeps(),
+    )
+    declareDegradedRead(doc, reason)
+    return doc
   }
-  return figma.getNodeByIdAsync(nodeId)
+  const node = await resolveNodeId(nodeId)
+  if (node === null) {
+    return slice(null, slicedReadMessage(nodeId))
+  }
+  try {
+    return await exportNodeDocument(node, depth)
+  } catch (err) {
+    const sliced = await slice(
+      node,
+      err instanceof Error ? err.message : String(err),
+    )
+    // No export to fall back on — the failure is the answer, not a miss.
+    if (sliced === undefined) throw err
+    return sliced
+  }
 }
 
 // resolveStyle: shared helper for update_styles and delete_styles.
@@ -2282,6 +2355,10 @@ const handleCommand = async (
   // enumeration, and the next command still sees variables/styles this one (or
   // the designer) created. A batch re-dispatches per op, so each op re-reads.
   bindingLookups.reset()
+  // Same bound, same reason, for the exports that resolve a compound id: a
+  // multi-id read pays for one export per instance, and a write in the previous
+  // command can never be answered from a document that predates it.
+  nodeResolver.reset()
   switch (command) {
     case 'get_document_info':
       return {
@@ -2392,19 +2469,21 @@ const handleCommand = async (
     }
 
     case COMMANDS.GET_NODE: {
-      // B34 — resolveNodeId, not getNodeByIdAsync: a compound instance-child
-      // id is what the previous read handed the agent, and resolving it the
-      // bare way reaches for the network and times out.
-      const node = await resolveNodeId(
-        params.nodeId as string,
-      )
-      if (!node) {
-        return { error: 'Node not found: ' + params.nodeId }
-      }
+      // B34/B53 — readNodeDocument, not getNodeByIdAsync: a compound
+      // instance-child id is what the previous read handed the agent, and
+      // resolving it the bare way reaches for the network and times out.
+      //
       // The read's own depth bounds the enrichment: every node get_node
       // returns COMPLETE is enriched, and nothing past it (the server stubs
       // those). Default 0 — the node alone — matching the server's own.
-      return exportNodeDocument(node, readDepth(params))
+      const doc = await readNodeDocument(
+        params.nodeId as string,
+        readDepth(params),
+      )
+      if (doc === undefined) {
+        return { error: 'Node not found: ' + params.nodeId }
+      }
+      return doc
     }
 
     // inspect returns the SAME raw export the reader consumes; the server's
@@ -2417,10 +2496,20 @@ const handleCommand = async (
     case COMMANDS.INSPECT: {
       let target: BaseNode | null = null
       if (params.nodeId !== undefined) {
-        target = await resolveNodeId(
+        // Same route as get_node: a slot-hosted id resolves, and one whose
+        // live handle cannot describe itself is served from the export.
+        const doc = await readNodeDocument(
           params.nodeId as string,
+          readDepth(params),
         )
-      } else if (params.pageId !== undefined) {
+        if (doc === undefined) {
+          return {
+            error: 'Node not found: ' + params.nodeId,
+          }
+        }
+        return doc
+      }
+      if (params.pageId !== undefined) {
         target = await resolveNodeId(
           params.pageId as string,
         )
@@ -2445,8 +2534,7 @@ const handleCommand = async (
       if (!target) {
         return {
           error:
-            'Node not found: ' +
-            ((params.nodeId ?? params.pageId) as string),
+            'Node not found: ' + (params.pageId as string),
         }
       }
       // inspect sends an ALREADY-RESOLVED depth (a budget-only read resolves
@@ -2461,13 +2549,28 @@ const handleCommand = async (
       const nodeIds = (params.nodeIds as string[]) || []
       return Promise.all(
         nodeIds.map(async nodeId => {
-          const node = await resolveNodeId(nodeId)
-          if (!node) {
-            return { id: nodeId, error: 'Node not found' }
+          // Per id, not per call (T7): one id that cannot be read costs its
+          // own row and nothing else. Search hydrates its result page through
+          // here, so one bad row used to cost the whole page of fields.
+          try {
+            // Each explicitly-requested id is its own root, at the one depth
+            // the call carries.
+            const doc = await readNodeDocument(
+              nodeId,
+              readDepth(params),
+            )
+            return (
+              doc ?? { id: nodeId, error: 'Node not found' }
+            )
+          } catch (err) {
+            return {
+              id: nodeId,
+              error:
+                err instanceof Error
+                  ? err.message
+                  : String(err),
+            }
           }
-          // Each explicitly-requested id is its own root, at the one depth
-          // the call carries.
-          return exportNodeDocument(node, readDepth(params))
         }),
       )
     }
