@@ -54,8 +54,12 @@ const SLOT = 'I305:8637;305:8427'
 const PLOT = 'I305:8637;305:8427;305:8881'
 const TOTAL = 'I305:8637;305:8427;305:8883'
 const LEGEND = 'I305:8637;305:8427;305:8897'
+/** Its live handle REFUSES, so its children are served from the export. */
 const ROW = 'I305:8637;305:8427;305:8902'
-const LABEL = 'I305:8637;305:8427;305:8902;304:8235'
+const SLICED_LABEL = 'I305:8637;305:8427;305:8902;304:8235'
+/** Its live handle ANSWERS, so the walk serves its children complete. */
+const ROW_LIVE = 'I305:8637;305:8427;305:8907'
+const WALKED_LABEL = 'I305:8637;305:8427;305:8907;304:8239'
 
 type Spec = Record<string, unknown>
 
@@ -147,7 +151,8 @@ describe('B53 — three-level slot nesting', () => {
     const ids = idsIn(await readCard())
     // Liveness: a walk that found nothing would pass an all-clear loop.
     expect(ids).toContain(PLOT)
-    expect(ids).toContain(LABEL)
+    expect(ids).toContain(SLICED_LABEL)
+    expect(ids).toContain(WALKED_LABEL)
     expect(ids.length).toBeGreaterThanOrEqual(8)
 
     const refused: string[] = []
@@ -212,7 +217,8 @@ describe('B53 — three-level slot nesting', () => {
     expect(segments(LEGEND)).toBe(3)
     expect(segments(ROW)).toBe(3)
     // A fourth segment appears only where the walk crosses another INSTANCE.
-    expect(segments(LABEL)).toBe(4)
+    expect(segments(SLICED_LABEL)).toBe(4)
+    expect(segments(WALKED_LABEL)).toBe(4)
     expect(idsIn(card)).toEqual([
       CARD,
       'I305:8637;304:8411',
@@ -222,7 +228,9 @@ describe('B53 — three-level slot nesting', () => {
       LEGEND,
       ROW,
       'I305:8637;305:8427;305:8902;304:8234',
-      LABEL,
+      SLICED_LABEL,
+      ROW_LIVE,
+      WALKED_LABEL,
     ])
   })
 
@@ -245,23 +253,67 @@ describe('B53 — three-level slot nesting', () => {
     expect(spec.readError).toBeUndefined()
   })
 
-  it('a FOUR-segment node reads, and SAYS what its handle could not answer', async () => {
-    // B41's residual, not B53's: the handle Figma composed for this node is
-    // built from the alias, so no live read lands on it. The row must still
-    // come back, carrying the export's var() and its own readError — the same
-    // row the parent read shows, not a refusal.
+  // Depth does NOT decide fidelity. The live handle does, and the read has to
+  // say which one it got. These two nodes are the same shape at the same depth.
+
+  it('a FOUR-segment node whose handle ANSWERS reads at full fidelity', async () => {
+    // The controller's live battery saw the walk fast-path serve reads at this
+    // depth complete, so a degraded row must not be what four segments MEAN.
     const read = await handleGetNode(
-      { nodeId: LABEL, profile: 'full' },
+      { nodeId: WALKED_LABEL, profile: 'full' },
       scoped,
     )
     const spec = YAML.parse(read.content[0].text) as {
       id: string
       fills: string[]
+      text: { font: string }
       readError?: string
     }
-    expect(spec.id).toBe(LABEL)
+    expect(spec.id).toBe(WALKED_LABEL)
+    expect(spec.fills[0]).toMatch(/^var\(text\/mid\)/)
+    expect(spec.text.font).toContain('style(Label/Caption)')
+    expect(spec.readError).toBeUndefined()
+  })
+
+  it('a FOUR-segment node whose handle REFUSES still reads, and SAYS what it lost', async () => {
+    // The handle Figma composed for this one is built from the alias, so no
+    // live read lands on it and the row is sliced out of the ancestor export.
+    // It must still come back — carrying the export's var(), missing the
+    // live-only style(), and DECLARING the failure. A thin row that reports
+    // success is the defect B53 is.
+    const read = await handleGetNode(
+      { nodeId: SLICED_LABEL, profile: 'full' },
+      scoped,
+    )
+    const spec = YAML.parse(read.content[0].text) as {
+      id: string
+      fills: string[]
+      text: { font: string }
+      readError?: string
+    }
+    expect(spec.id).toBe(SLICED_LABEL)
     expect(spec.fills[0]).toMatch(/^var\(text\/mid\)/)
     expect(spec.readError).toContain('I305:8898;304:8235')
+    // B41's residual, named here so a future fix has a place to land.
+    expect(spec.text.font).not.toContain('style(')
+  })
+
+  it('a sliced row NEVER comes back silent', async () => {
+    // The review's IMPORTANT 1: when the resolve misses but the export names
+    // the node, the reply used to carry export fields and no readError at all —
+    // loud NODE_NOT_FOUND turned into quiet incompleteness. Every row the read
+    // cannot serve live has to declare it, whichever way the live half failed.
+    const read = await handleGetNode(
+      { nodeId: SLICED_LABEL, depth: 1, profile: 'full' },
+      scoped,
+    )
+    const spec = YAML.parse(read.content[0].text) as {
+      readError?: string
+      readErrors?: string[]
+    }
+    expect(
+      spec.readError ?? spec.readErrors?.join(' '),
+    ).toBeTruthy()
   })
 
   // --- the join that inverted a QA verdict ----------------------------------
@@ -307,7 +359,7 @@ describe('B53 — three-level slot nesting', () => {
       warnings?: string[]
     }
     expect(out.results.map(r => r.id).sort()).toEqual(
-      [TOTAL, LABEL].sort(),
+      [TOTAL, SLICED_LABEL, WALKED_LABEL].sort(),
     )
     expect(out.warnings ?? []).toEqual([])
   })

@@ -189,6 +189,65 @@
                       }
                     }
                   ]
+                },
+                {
+                  "id": "I305:8637;305:8427;305:8907",
+                  "name": "Legend row",
+                  "type": "INSTANCE",
+                  "componentId": "304:8286",
+                  "componentKey": "legend-row-cyan-key",
+                  "absoluteBoundingBox": {
+                    "x": 0,
+                    "y": 106,
+                    "width": 300,
+                    "height": 18
+                  },
+                  "children": [
+                    {
+                      "id": "I305:8637;305:8427;305:8907;304:8239",
+                      "name": "Label",
+                      "type": "TEXT",
+                      "characters": "BASE",
+                      "style": {
+                        "fontFamily": "Inter",
+                        "fontStyle": "Regular",
+                        "fontSize": 13,
+                        "lineHeightUnit": "PIXELS",
+                        "lineHeightPx": 18
+                      },
+                      "absoluteBoundingBox": {
+                        "x": 16,
+                        "y": 106,
+                        "width": 252,
+                        "height": 18
+                      },
+                      "fills": [
+                        {
+                          "type": "SOLID",
+                          "color": {
+                            "r": 0.604,
+                            "g": 0.651,
+                            "b": 0.769,
+                            "a": 1
+                          },
+                          "boundVariables": {
+                            "color": {
+                              "id": "VariableID:305:3",
+                              "type": "VARIABLE_ALIAS"
+                            }
+                          }
+                        }
+                      ],
+                      "bindingNames": {
+                        "variables": {
+                          "VariableID:305:3": "text/mid"
+                        },
+                        "styles": {
+                          "text": "Label/Caption"
+                        }
+                      }
+                    }
+                  ]
                 }
               ]
             }

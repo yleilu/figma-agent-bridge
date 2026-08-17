@@ -733,9 +733,11 @@ export const createMockPlugin = (
   //       I305:8637;305:8427;305:8881       FRAME     "Plot"        slot-override
   //         I305:8637;305:8427;305:8883     TEXT      "Total value"
   //         I305:8637;305:8427;305:8897     FRAME     "Legend"
-  //           I305:8637;305:8427;305:8902   INSTANCE  "Legend row"
+  //           I305:8637;305:8427;305:8902   INSTANCE  "Legend row"   handle REFUSES
   //             …;305:8902;304:8234         ELLIPSE   "Dot"
   //             …;305:8902;304:8235         TEXT      "Label"
+  //           I305:8637;305:8427;305:8907   INSTANCE  "Legend row"   handle ANSWERS
+  //             …;305:8907;304:8239         TEXT      "Label"
   //
   // Three facts the run PROVED, and which this mock therefore models:
   //
@@ -745,15 +747,37 @@ export const createMockPlugin = (
   //     that called this "two vocabularies" mistook the grammar.
   //  2. At THREE segments the live handle still reads, so the live-only
   //     wrappers survive — `Total value` carries `style(Heading/KPI value)`.
-  //  3. At FOUR segments the handle is composed from the alias
-  //     (`I305:8898;304:8235`) and answers nothing, so the node keeps its
-  //     `readError` and loses `style()` while the export's `var()` survives.
-  //     That residual is B41's and is NOT fixed here.
+  //  3. A node inside a slot-hosted INSTANCE MAY have a handle composed from the
+  //     alias (`I305:8898;304:8235`), which answers nothing. It may equally have
+  //     one that answers: the controller's live battery read the SAME node, at
+  //     the SAME depth, complete after a reload.
+  //
+  // FIDELITY IS A PROPERTY OF SESSION STATE, NOT OF ID SHAPE — the same rule the
+  // investigation reached for RESOLUTION, and it governs here too. Four segments
+  // do not mean a degraded row. A refusing handle does, and the row must say so.
+  //
+  // The TWO Legend rows model both states, because both are real and the surface
+  // has to be honest in each:
+  //
+  //   `…;305:8902` — its handle refuses, so the read is SLICED out of the
+  //                  ancestor export. It carries the export's `var()`, it loses
+  //                  `style()` (a live-only field), and it DECLARES that with a
+  //                  `readError`. Transcribed from the run's saved reply, and
+  //                  kept deliberately: it is the slice path's only regression
+  //                  coverage. A live session that behaves BETTER cannot fail
+  //                  these assertions — the mock supplies the readError, so the
+  //                  test pins the contract, not the weather.
+  //   `…;305:8907` — its handle answers, so the walk serves it at FULL fidelity:
+  //                  `style(Label/Caption)` present, no `readError`. Modelled
+  //                  from the live battery.
+  //
+  // So a degraded row is not what four segments MEAN. It is what a refusing
+  // handle costs, and the row is required to declare it. The `style()` loss on
+  // the sliced row is B41's residual: a session-state CONDITION, reachable but
+  // not permanent, and NOT fixed here.
   //
   // Every id here resolves, because after B53 the plugin resolves a canonical
   // id through the leading instance's export rather than by matching live ids.
-  // A read of a 4-segment id is served from that same export, which is why it
-  // still carries its `readError` instead of failing.
   const deepNodeById = (
     id: string | undefined,
   ): Record<string, unknown> | undefined => {
