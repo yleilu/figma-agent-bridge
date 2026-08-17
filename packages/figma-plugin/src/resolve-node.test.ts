@@ -20,8 +20,12 @@
 import { describe, expect, it } from 'bun:test'
 import {
   createNodeResolver,
+  declareDegradedRead,
+  exportBudgetMessage,
   findLiveById,
   leadingInstanceId,
+  MAX_INSTANCE_EXPORTS,
+  slicedReadMessage,
 } from './resolve-node'
 import type { LiveNode, RawNode } from './canonical-ids'
 
@@ -305,6 +309,171 @@ describe('createNodeResolver — the export is paid for once', () => {
     resolver.reset()
     await resolver.resolve('I305:8637;305:8427;305:8881')
     expect(calls.exportOf).toBe(2)
+  })
+})
+
+describe('declareDegradedRead — a thin row never comes back silent', () => {
+  // The review's IMPORTANT 1. When the resolve missed but the export named the
+  // node, the reply carried export fields and NO readError — a loud
+  // NODE_NOT_FOUND became quiet incompleteness, which is the defect B53 IS.
+
+  it('stamps the reason on a row the enrichment left silent', () => {
+    const doc: Record<string, unknown> = {
+      id: 'I1:1;1:5;1:9',
+      name: 'Label',
+    }
+    declareDegradedRead(doc, slicedReadMessage('I1:1;1:5;1:9'))
+    expect(doc.readError).toContain('no live handle answered')
+    expect(doc.readError).toContain('I1:1;1:5;1:9')
+  })
+
+  it('never overwrites a failure the enrichment already named', () => {
+    // The enrichment's message names the actual throw, which is more specific
+    // than "no handle answered".
+    const doc: Record<string, unknown> = {
+      id: 'x',
+      readError: 'Error: in getSharedPluginData: …',
+    }
+    declareDegradedRead(doc, 'generic reason')
+    expect(doc.readError).toBe(
+      'Error: in getSharedPluginData: …',
+    )
+  })
+
+  it('treats a descendant failure as already declared', () => {
+    // `readErrors` says a node BELOW me failed. The row is not silent, so
+    // stamping a second, vaguer claim on the root would only add noise.
+    const doc: Record<string, unknown> = {
+      id: 'x',
+      readErrors: ['1:9: does not exist'],
+    }
+    declareDegradedRead(doc, 'generic reason')
+    expect(doc.readError).toBeUndefined()
+  })
+
+  it('the sliced message names the id the caller asked for', () => {
+    // Not the alias. The caller never saw the alias and cannot act on it.
+    expect(slicedReadMessage('I305:8637;305:8427;305:8902')).toContain(
+      'I305:8637;305:8427;305:8902',
+    )
+  })
+})
+
+describe('createNodeResolver — the export budget', () => {
+  // One instance per id, so every resolve needs a NEW export. This is the shape
+  // the cache cannot help with: `search` hydrates a result page with a
+  // `get_nodes` over up to 50 ids, and the QA run's broken rows sat under
+  // different cards.
+  const manyInstances = (maxExports: number) => {
+    const calls = { exportOf: 0 }
+    // Each instance has a master-derived child (the walk answers it, free) and
+    // a slot-override child (only the export names it).
+    const liveOf = (n: number): LiveNode => ({
+      id: n + ':1',
+      children: [
+        { id: 'I' + n + ':1;' + n + ':2', name: 'Header' },
+        { id: n + ':7', name: 'Content ' + n },
+      ],
+    })
+    const exportedOf = (n: number): RawNode => ({
+      id: n + ':1',
+      children: [
+        { id: 'I' + n + ':1;' + n + ':2', name: 'Header' },
+        {
+          id: 'I' + n + ':1;' + n + ':5;' + n + ':9',
+          name: 'Content ' + n,
+        },
+      ],
+    })
+    const deepId = (n: number): string =>
+      'I' + n + ':1;' + n + ':5;' + n + ':9'
+    const resolver = createNodeResolver({
+      maxExports,
+      getNodeById: async id => {
+        const n = Number(id.split(':')[0])
+        return Number.isNaN(n) ? null : liveOf(n)
+      },
+      exportOf: async node => {
+        calls.exportOf++
+        return exportedOf(
+          Number(String(node.id).split(':')[0]),
+        )
+      },
+    })
+    return { resolver, calls, deepId }
+  }
+
+  it('resolves ids up to the budget', async () => {
+    const { resolver, calls, deepId } = manyInstances(2)
+    expect((await resolver.resolve(deepId(1)))?.id).toBe(
+      '1:7',
+    )
+    expect((await resolver.resolve(deepId(2)))?.id).toBe(
+      '2:7',
+    )
+    expect(calls.exportOf).toBe(2)
+  })
+
+  it('past the budget it degrades LOUDLY, naming the cap and the way out', async () => {
+    const { resolver, calls, deepId } = manyInstances(2)
+    await resolver.resolve(deepId(1))
+    await resolver.resolve(deepId(2))
+    // Not null, and not a quiet drop: a caller that read this as "no such node"
+    // would report a node as missing because the command was busy (B39).
+    expect(resolver.resolve(deepId(3))).rejects.toThrow(
+      exportBudgetMessage(deepId(3), 2),
+    )
+    // …and the refusal costs nothing, which is the point of refusing.
+    expect(calls.exportOf).toBe(2)
+  })
+
+  it('the same message comes from exportedNode, so a read degrades once', async () => {
+    const { resolver, deepId } = manyInstances(1)
+    await resolver.resolve(deepId(1))
+    expect(
+      resolver.exportedNode(deepId(2)),
+    ).rejects.toThrow(exportBudgetMessage(deepId(2), 1))
+  })
+
+  it('an instance already exported is free, however many ids name it', async () => {
+    const { resolver, calls, deepId } = manyInstances(1)
+    // The budget counts INSTANCES, not ids: one card with 40 broken rows costs
+    // one export and must not be refused.
+    for (let i = 0; i < 40; i++) {
+      expect(
+        (await resolver.resolve(deepId(1)))?.id,
+      ).toBe('1:7')
+    }
+    expect(calls.exportOf).toBe(1)
+  })
+
+  it('reset restores the budget for the next dispatch', async () => {
+    const { resolver, deepId } = manyInstances(1)
+    await resolver.resolve(deepId(1))
+    expect(resolver.resolve(deepId(2))).rejects.toThrow(
+      'per-command budget',
+    )
+    resolver.reset()
+    expect((await resolver.resolve(deepId(2)))?.id).toBe(
+      '2:7',
+    )
+  })
+
+  it('the walk fast path is never budgeted', async () => {
+    const { resolver, deepId } = manyInstances(1)
+    await resolver.resolve(deepId(1))
+    // `2:2` is answered by the walk, so it costs no export and the exhausted
+    // budget cannot reach it. A call naming a thousand ordinary sublayers is
+    // unaffected by the cap.
+    expect((await resolver.resolve('I2:1;2:2'))?.id).toBe(
+      'I2:1;2:2',
+    )
+  })
+
+  it('the default cap is generous enough for a full search page', async () => {
+    // `search` hydrates up to limit=50 ids, but only a slot-override id costs
+    // an export at all, and the QA run's worst real case was 3 cards.
+    expect(MAX_INSTANCE_EXPORTS).toBeGreaterThanOrEqual(25)
   })
 })
 

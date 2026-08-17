@@ -51,7 +51,11 @@ import {
   repairScan,
   type ScanFailure,
 } from './search-candidates'
-import { createNodeResolver } from './resolve-node'
+import {
+  createNodeResolver,
+  declareDegradedRead,
+  slicedReadMessage,
+} from './resolve-node'
 import type { RawNode } from './canonical-ids'
 import { projectComponentDefs } from './project-component-defs'
 import { rollbackCreated } from './rollback'
@@ -2260,8 +2264,17 @@ const readNodeDocument = async (
   nodeId: string,
   depth: number,
 ): Promise<unknown | undefined> => {
+  /**
+   * The node as its ancestor's export describes it, enriched by whatever the
+   * live handle will still answer.
+   *
+   * A slice is a DEGRADED read, and `declareDegradedRead` is what makes it say
+   * so — see resolve-node.ts for why a silent thin row is the one outcome this
+   * fallback must never produce.
+   */
   const slice = async (
     live: BaseNode | null,
+    reason: string,
   ): Promise<Record<string, unknown> | undefined> => {
     const exported = await nodeResolver.exportedNode(nodeId)
     if (exported === undefined) return undefined
@@ -2276,26 +2289,22 @@ const readNodeDocument = async (
       depth,
       enrichDeps(),
     )
+    declareDegradedRead(doc, reason)
     return doc
   }
   const node = await resolveNodeId(nodeId)
-  if (node === null) return slice(null)
+  if (node === null) {
+    return slice(null, slicedReadMessage(nodeId))
+  }
   try {
     return await exportNodeDocument(node, depth)
   } catch (err) {
-    const sliced = await slice(node)
+    const sliced = await slice(
+      node,
+      err instanceof Error ? err.message : String(err),
+    )
     // No export to fall back on — the failure is the answer, not a miss.
     if (sliced === undefined) throw err
-    // The enrichment names the failure itself whenever the handle is the thing
-    // that broke. When it does not, the throw would otherwise vanish behind a
-    // reply that looks complete, so it becomes this node's readError instead.
-    if (
-      sliced.readError === undefined &&
-      sliced.readErrors === undefined
-    ) {
-      sliced.readError =
-        err instanceof Error ? err.message : String(err)
-    }
     return sliced
   }
 }
