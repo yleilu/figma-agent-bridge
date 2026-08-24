@@ -351,3 +351,52 @@ describe('handleUpdateNode — one-way clamp warning (B57)', () => {
     expect(reply.warnings ?? []).not.toHaveLength(0)
   })
 })
+
+// ─── B58: the pair is refused before anything is sent ────────────────────────
+//
+// A refused write must reach nothing: the point of catching it on the server is
+// that no half-applied layout exists to clean up.
+
+describe('handleUpdateNode — SPACE_BETWEEN + bound gap (B58)', () => {
+  const pair = {
+    layout: {
+      mode: 'H' as const,
+      align: ['SPACE_BETWEEN', 'CENTER'],
+      gap: 'var(space/16)16',
+    },
+  }
+
+  it('refuses, names the node, and sends NOTHING', async () => {
+    const sent: Sent[] = []
+    const result = await handleUpdateNode(
+      { nodeId: '454:4934', patch: pair as never },
+      stubClient({ sent }),
+    )
+    const { text } = result.content[0]
+    expect(text).toContain('SPACE_BETWEEN')
+    expect(text).toContain('454:4934')
+    expect(sent).toHaveLength(0)
+  })
+
+  it('accepts SPACE_BETWEEN with a literal gap, and sends it', async () => {
+    const sent: Sent[] = []
+    await handleUpdateNode(
+      {
+        nodeId: '454:4934',
+        patch: {
+          layout: {
+            mode: 'H',
+            align: ['SPACE_BETWEEN', 'CENTER'],
+            gap: 16,
+          },
+        } as never,
+      },
+      stubClient({ sent }),
+    )
+    expect(sent).toHaveLength(1)
+    const spec = sent[0].params?.spec as {
+      layout: { spacing: number }
+    }
+    expect(spec.layout.spacing).toBe(16)
+  })
+})

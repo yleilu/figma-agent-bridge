@@ -7,8 +7,12 @@ import {
 import {
   applyLayout,
   type AppliedLayout,
-  type SelectionGuard,
 } from './apply-layout'
+import {
+  bindFieldConflict,
+  updateLayoutConflict,
+  type GapConflictNode,
+} from './space-between-gap'
 import {
   originOf,
   reparentPlacement,
@@ -650,14 +654,7 @@ const applyCommonProperties = async (
   // applySizeVerified, after applyPostAppendProperties: `sizing` can overrule a
   // resize, so on a patch the size has to be written last and proven there
   // (B46). A create states its own type and takes the size here.
-  //
-  // `page` is the UI selection guard, passed ONLY by update_node — the one path
-  // whose target is an EXISTING node the user may have selected. applyLayout
-  // takes the target out of that selection for the write and puts it back a
-  // moment later (B58). A create cannot have a selected target, and the slot
-  // loop writes a node it made a moment ago, so neither pays any selection
-  // churn.
-  opts?: { deferSize?: boolean; page?: SelectionGuard },
+  opts?: { deferSize?: boolean },
 ): Promise<void> => {
   // Name
   if (spec.name !== undefined) {
@@ -890,16 +887,10 @@ const applyCommonProperties = async (
   // align write drop silently — and it was called without a sink, so those
   // notes (and the GRID capability degrade beside them) went nowhere.
   if (spec.layout !== undefined && 'layoutMode' in node) {
-    // AWAITED (B58 round 4). On a guarded target applyLayout deselects, waits
-    // for that to render, and only then applies — dropping the await would put
-    // the write straight back into the frame where Figma silently ignores it
-    // and echoes the value back anyway. Unguarded targets never await inside,
-    // so a create still runs straight through.
-    await applyLayout(
+    applyLayout(
       node as FrameNode,
       spec.layout as AppliedLayout,
       warnings,
-      opts?.page,
     )
   }
 
@@ -4411,6 +4402,22 @@ const handleCommand = async (
         delete spec.position
       }
 
+      // B58 — this write may complete the SPACE_BETWEEN + bound-gap pair against
+      // what the node ALREADY holds. The server refuses the pair when one call
+      // carries both halves; only here is the node's current align and gap
+      // binding in hand, and reading them costs nothing extra. Refused BEFORE
+      // anything is applied, so a rejected update has changed nothing.
+      const gapConflict = updateLayoutConflict(
+        node as GapConflictNode,
+        spec.layout as { align?: unknown } | undefined,
+        spec.bindings as
+          | { kind?: unknown; field?: unknown }[]
+          | undefined,
+      )
+      if (gapConflict !== undefined) {
+        return { error: gapConflict }
+      }
+
       // warn-on-no-op (T7): a patched property that the target node type does
       // not support is dropped by applyCommonProperties' `'X' in node` guards.
       // On update_node the target is arbitrary, so name the dropped field
@@ -4453,27 +4460,7 @@ const handleCommand = async (
         spec,
         parent as ParentNode,
         warnings,
-        // B58 — the ONE path that hands over the selection guard: an existing
-        // node the user may be looking at right now. A node selected in the UI
-        // has the properties panel re-assert its stale state after the reply
-        // goes out, which reverted the layout write the handler had already
-        // verified. applyLayout deselects the target for the write and restores
-        // the selection on a timer, past this reply — a same-turn restore never
-        // reaches the UI at all, which is exactly how the first two attempts at
-        // this failed live.
-        //
-        // `onError` is the restore's ONLY channel: it runs after the reply, so
-        // a failure there can never ride `warnings`. figma.notify tells the
-        // user rather than leaving them silently deselected.
-        {
-          deferSize: true,
-          page: {
-            page: figma.currentPage,
-            onError: message => {
-              figma.notify(message, { error: true })
-            },
-          },
-        },
+        { deferSize: true },
       )
       if (node.type === 'TEXT' && spec.text !== undefined) {
         await applyTextProperties(
@@ -4672,6 +4659,17 @@ const handleCommand = async (
         }
       }
       const field = params.field as string
+
+      // B58 — binding a token to the gap of a SPACE_BETWEEN node builds the
+      // self-contradictory pair by the other door: no layout write is involved,
+      // and the result is destroyed the first time anyone clicks the node.
+      const bindConflict = bindFieldConflict(
+        node as GapConflictNode,
+        field,
+      )
+      if (bindConflict !== undefined) {
+        return { error: bindConflict }
+      }
 
       // Paint fields (fills/strokes) are NOT members of VariableBindableNodeField,
       // so node.setBoundVariable('fills', v) would throw. They bind per-paint via

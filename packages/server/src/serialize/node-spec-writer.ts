@@ -68,6 +68,10 @@ import type {
 } from '@figma-agent-bridge/shared/node-spec'
 import { NODE_SPEC_PATCH_KEYS } from '@figma-agent-bridge/shared/node-spec-schema'
 import {
+  SPACE_BETWEEN,
+  spaceBetweenGapConflict,
+} from '@figma-agent-bridge/shared'
+import {
   atomToPaint,
   atomToEffect,
   atomToFont,
@@ -183,11 +187,58 @@ const layoutNumber = (
   return parsed
 }
 
+/** Whether an atom carries a `var(...)` wrapper — i.e. asks for a binding. */
+const isVarBound = (value: NumberAtom): boolean => {
+  if (typeof value !== 'string') {
+    return false
+  }
+  try {
+    return tokenize(value).wrapper?.kind === 'var'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Refuse `align` primary SPACE_BETWEEN paired with a variable-bound `gap`
+ * (B58 — see space-between-guard.ts for the mechanism).
+ *
+ * This sits in `convertLayout` because every write path funnels through it:
+ * create_node, create_tree, update_node, batch's update_node, and the
+ * update_component slot specs all convert their layout here. One choke point,
+ * one rule, no path that can forget it.
+ *
+ * It catches the pair arriving in ONE write. A write that brings only half of
+ * the pair onto a node already holding the other half needs the node's live
+ * state, so the plugin catches that (it has the node in hand and pays no extra
+ * round trip for it).
+ */
+const assertGapCanBind = (
+  layout: LayoutSpec,
+  where?: string,
+): void => {
+  if (
+    layout.align?.[0] === SPACE_BETWEEN &&
+    layout.gap !== undefined &&
+    isVarBound(layout.gap)
+  ) {
+    throw new ToolError(
+      'INVALID_PARAM',
+      spaceBetweenGapConflict({
+        where,
+        arrivingHalf: 'both',
+      }),
+    )
+  }
+}
+
 /** Map a LayoutSpec to the flat layout object the plugin expects. */
 const convertLayout = (
   layout: LayoutSpec,
   warnings?: string[],
+  where?: string,
 ): Record<string, unknown> => {
+  assertGapCanBind(layout, where)
   const out: Record<string, unknown> = { mode: layout.mode }
   if (layout.gap !== undefined) {
     out.spacing = layoutNumber(layout.gap, 'gap')
@@ -394,6 +445,8 @@ export const oneWayClampWarnings = (
 export const specToFigma = (
   spec: NodeSpecPatch,
   warnings?: string[],
+  /** Node id (or other label) named in a refusal — an update knows one, a create does not. */
+  where?: string,
 ): FigmaWritePayload => {
   const out: FigmaWritePayload = {}
 
@@ -422,7 +475,7 @@ export const specToFigma = (
 
   // ── layout ───────────────────────────────────────────────────────────────
   if (spec.layout !== undefined) {
-    out.layout = convertLayout(spec.layout, warnings)
+    out.layout = convertLayout(spec.layout, warnings, where)
   }
   if (spec.sizing !== undefined) {
     out.sizing = spec.sizing

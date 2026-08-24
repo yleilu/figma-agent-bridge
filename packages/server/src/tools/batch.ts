@@ -320,7 +320,7 @@ const convertUpdateNode = (
   // D3/T7: thread the writer warnings sink so a batched update_node surfaces the
   // SAME per-op warnings (e.g. GRID-only layout keys, an unknown patch key)
   // a direct update_node does — no longer a silent lossy conversion.
-  const spec = specToFigma(patch ?? {}, warnings)
+  const spec = specToFigma(patch ?? {}, warnings, nodeId)
   warnings?.push(
     ...unknownPatchKeyWarnings(patch ?? {}, spec),
   )

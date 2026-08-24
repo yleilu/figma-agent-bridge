@@ -13,6 +13,7 @@ export * from './commands'
 export * from './read-model'
 export * from './feedback'
 export * from './identity-guard'
+export * from './space-between-guard'
 // NOTE: `tool-params` is intentionally NOT re-exported here. It is the
 // canonical per-tool param surface and is imported via the
 // `@figma-agent-bridge/shared/tool-params` subpath. Keeping it off the barrel

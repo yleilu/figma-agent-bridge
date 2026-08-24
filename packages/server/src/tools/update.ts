@@ -37,7 +37,7 @@ export const handleUpdateNode = async (
     // The writer pushes lossy-conversion notes (e.g. GRID-only layout keys on
     // an H/V mode) onto `warnings`.
     const warnings: string[] = []
-    const spec = specToFigma(patch, warnings)
+    const spec = specToFigma(patch, warnings, nodeId)
     // A key the write face does not know is DROPPED, not applied — say so
     // rather than reporting a success that moved nothing (T7).
     warnings.push(...unknownPatchKeyWarnings(patch, spec))

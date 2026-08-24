@@ -1275,3 +1275,122 @@ describe('oneWayClampWarnings (B57)', () => {
     expect(w[0]).toContain('sizing')
   })
 })
+
+// ─── B58: SPACE_BETWEEN + a variable-bound gap is refused ────────────────────
+//
+// `align` primary SPACE_BETWEEN means Figma decides the spacing; a `gap` bound
+// to a variable means the gap is that token. Figma's plugin API stores and
+// renders the contradiction — a bar written this way looked right for days —
+// while the UI properties panel silently rewrites the align to MIN the first
+// time anyone clicks the node. Live-proven with a discriminating pair: the
+// literal-gap bar survived a click, the var-bound twin collapsed.
+//
+// convertLayout is the choke point every write path funnels through, so one
+// rule here covers create_node, create_tree, update_node, batch's update_node
+// and the update_component slot specs.
+
+describe('specToFigma — SPACE_BETWEEN + bound gap (B58)', () => {
+  const pair = {
+    layout: {
+      mode: 'H' as const,
+      align: ['SPACE_BETWEEN', 'CENTER'],
+      gap: 'var(space/16)16',
+    },
+  }
+
+  it('refuses the pair', () => {
+    expect(() => specToFigma(pair as never)).toThrow(
+      /SPACE_BETWEEN/,
+    )
+  })
+
+  it('names all three ways out', () => {
+    let message = ''
+    try {
+      specToFigma(pair as never)
+    } catch (err) {
+      message = (err as Error).message
+    }
+    expect(message).toContain('drop the align')
+    expect(message).toContain('LITERAL gap')
+    expect(message).toContain('drop the gap entirely')
+  })
+
+  it('names the node when the caller knows one', () => {
+    let message = ''
+    try {
+      specToFigma(pair as never, [], '454:4934')
+    } catch (err) {
+      message = (err as Error).message
+    }
+    expect(message).toContain('454:4934')
+  })
+
+  // The supported way to write both — Figma ignores the literal under
+  // space-between, and the pair survives a click.
+  it('ACCEPTS SPACE_BETWEEN with a plain literal gap', () => {
+    const out = specToFigma({
+      layout: {
+        mode: 'H',
+        align: ['SPACE_BETWEEN', 'CENTER'],
+        gap: 16,
+      },
+    } as never)
+    expect(
+      (out.layout as { spacing: number }).spacing,
+    ).toBe(16)
+  })
+
+  it('ACCEPTS a bound gap with any other align', () => {
+    const out = specToFigma({
+      layout: {
+        mode: 'H',
+        align: ['MIN', 'CENTER'],
+        gap: 'var(space/16)16',
+      },
+    } as never)
+    expect(
+      (out.layout as { spacing: number }).spacing,
+    ).toBe(16)
+    expect(out.bindings).toBeDefined()
+  })
+
+  it('ACCEPTS a bound gap with no align at all', () => {
+    expect(() =>
+      specToFigma({
+        layout: { mode: 'H', gap: 'var(space/16)16' },
+      } as never),
+    ).not.toThrow()
+  })
+
+  // The COUNTER axis is a different field; only the primary makes gaps auto.
+  it('ACCEPTS SPACE_BETWEEN on the COUNTER axis with a bound gap', () => {
+    expect(() =>
+      specToFigma({
+        layout: {
+          mode: 'H',
+          align: ['MIN', 'SPACE_BETWEEN'],
+          gap: 'var(space/16)16',
+        },
+      } as never),
+    ).not.toThrow()
+  })
+
+  it('refuses on the CREATE path too', () => {
+    expect(() =>
+      specToFigmaForCreate({
+        type: 'FRAME',
+        ...pair,
+      } as never),
+    ).toThrow(/SPACE_BETWEEN/)
+  })
+
+  it('refuses inside a slot spec', () => {
+    expect(() =>
+      slotEntryToFigma({
+        name: 'Pager',
+        ...pair,
+      } as never),
+    ).toThrow(/SPACE_BETWEEN/)
+  })
+})

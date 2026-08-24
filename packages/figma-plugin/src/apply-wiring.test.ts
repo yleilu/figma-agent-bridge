@@ -23,6 +23,12 @@ const read = (name: string): string =>
   // eslint-disable-next-line n/no-sync -- test-only source scan
   readFileSync(join(import.meta.dir, name), 'utf8')
 
+/** Source with comments removed — a scan must not trip over its own prose. */
+const codeOf = (src: string): string =>
+  src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
+
 const helpers = read('apply-node-fields.ts')
 const callers = read('code.ts')
 
@@ -262,9 +268,13 @@ describe('UPDATE_COMPONENT delete-property wiring', () => {
 // does nothing at all unless update_node hands over the REAL
 // `figma.currentPage`. Drop that argument and every test here stays green while
 // the live revert comes straight back.
+// B58 — applyLayout reads every field back and names the ones that did not
+// hold, but it can only report through the sink its caller passes. It was
+// called with NO sink, so the notes had nowhere to go: the module's own tests
+// stayed green and update_node kept answering ok with empty warnings.
 describe('applyLayout call-site wiring', () => {
   const applyCall = callers.slice(
-    callers.indexOf('await applyLayout(\n'),
+    callers.indexOf('applyLayout(\n'),
     callers.indexOf('// Min/max sizing'),
   )
 
@@ -277,73 +287,61 @@ describe('applyLayout call-site wiring', () => {
     expect(applyCall).toContain('warnings')
   })
 
-  it('hands applyLayout the selection host', () => {
-    expect(applyCall).toContain('opts?.page')
-  })
-
-  // B58 round 4: on a guarded target applyLayout deselects, WAITS for that to
-  // render, then applies. Dropping the await puts the write straight back into
-  // the frame where Figma ignores it and echoes the value anyway — the exact
-  // failure of rounds 2 and 3, and invisible to every other test here.
-  it('AWAITS applyLayout, or the write lands in the frame that drops it', () => {
-    expect(applyCall).toContain('await applyLayout(')
-  })
-
-  const updateCase = callers.slice(
-    callers.indexOf('case COMMANDS.UPDATE_NODE'),
-    callers.indexOf('case COMMANDS.DELETE_NODE'),
-  )
-
-  it('update_node is the path that supplies the real page', () => {
-    expect(updateCase.length).toBeGreaterThan(200)
-    expect(updateCase).toContain('page: figma.currentPage')
-  })
-
-  // The restore runs after the reply, so `warnings` cannot carry its failure.
-  // Without a notifier a failed restore leaves the user silently deselected.
-  it('gives the deferred restore a failure channel', () => {
-    expect(updateCase).toContain('onError')
-    expect(updateCase).toContain('figma.notify')
-  })
-
-  // Passing a `defer` here would override the timer with whatever it names —
-  // the production path must take the module's real deferral.
-  it('does not override the deferral at the call site', () => {
-    expect(updateCase).not.toContain('defer:')
-  })
-
-  // A create cannot have a user-selected target, and the slot loop writes a
-  // node it made a moment ago. Neither should pay selection churn.
-  it('the create and slot paths supply no page', () => {
-    // A negative assertion has to prove it looked at something first: a slice
-    // taken from a string that was not found would pass this vacuously.
-    const createAt = callers.indexOf(
-      'await applyCommonProperties(node, spec, parent, warnings)',
+  // Rounds 2-4 deselected the target, waited for the deselection to render,
+  // and restored the selection afterwards — all chasing a trigger that turned
+  // out to be the var-bound gap, not the selection. A plain literal gap writes
+  // fine under a live selection. None of that machinery should return by
+  // accident: it blinked the user's selection on every layout write, for
+  // nothing.
+  it('manipulates no selection in the layout write path', () => {
+    // Comments are stripped first: this file's own history notes describe the
+    // machinery that was removed, and a scan that tripped over the explanation
+    // of a fix would be unmaintainable.
+    const applierCode = codeOf(read('apply-layout.ts'))
+    const callerCode = codeOf(callers)
+    expect(applierCode).not.toContain('selection')
+    for (const trace of ['SelectionGuard', 'deselect']) {
+      expect(callerCode).not.toContain(trace)
+      expect(applierCode).not.toContain(trace)
+    }
+    // Liveness, twice over: `set_selection` is a real tool that legitimately
+    // assigns the selection, so the stripper has to leave real code alone —
+    // and this assertion proves the scan read something.
+    expect(callerCode).toContain(
+      'figma.currentPage.selection = nodes',
     )
-    expect(createAt).toBeGreaterThan(0)
-    expect(
-      callers.slice(createAt, createAt + 80),
-    ).not.toContain('page:')
-
-    const slotApplyAt = slotLoop.indexOf(
-      'applyCommonProperties(',
-    )
-    const slotPostAt = slotLoop.indexOf(
-      'applyPostAppendProperties(',
-    )
-    expect(slotApplyAt).toBeGreaterThan(0)
-    expect(slotPostAt).toBeGreaterThan(slotApplyAt)
-    expect(
-      slotLoop.slice(slotApplyAt, slotPostAt),
-    ).not.toContain('page:')
   })
 })
 
-// B56 — and the path the live repro actually travelled. Both slot-nested
-// instances read fine (whether a handle answers is session state, not shape),
-// so their rows came from the LIVE candidate build, not from a repair. That
-// build must carry the family name too, or `instancesOf:'State block'` answers
-// zero on a document with nothing degraded about it at all.
+// B58's REAL fix — the pair guard. The plugin half answers what only the live
+// node can, and it is pure, so it would stay green with both call sites
+// deleted. Only a live write would notice the guard had stopped running.
+describe('SPACE_BETWEEN gap-guard wiring', () => {
+  it('update_node refuses the pair BEFORE applying anything', () => {
+    const updateCase = callers.slice(
+      callers.indexOf('case COMMANDS.UPDATE_NODE'),
+      callers.indexOf('case COMMANDS.DELETE_NODE'),
+    )
+    expect(updateCase.length).toBeGreaterThan(200)
+    expect(updateCase).toContain('updateLayoutConflict(')
+    // Before the apply, or a refused write has already changed the node.
+    expect(
+      updateCase.indexOf('updateLayoutConflict('),
+    ).toBeLessThan(
+      updateCase.indexOf('applyCommonProperties('),
+    )
+  })
+
+  it('bind_variable refuses binding the gap of a SPACE_BETWEEN node', () => {
+    const bindCase = callers.slice(
+      callers.indexOf('case COMMANDS.BIND_VARIABLE'),
+      callers.indexOf('case COMMANDS.GET_VARIABLES'),
+    )
+    expect(bindCase.length).toBeGreaterThan(200)
+    expect(bindCase).toContain('bindFieldConflict(')
+  })
+})
+
 const liveCandidateRef = ((): string => {
   const from = callers.indexOf('getMainComponentAsync()')
   const to = callers.indexOf('collectStyleId', from)

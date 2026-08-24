@@ -686,3 +686,67 @@ describe('batch op set matches the spec', () => {
     ).toThrow()
   })
 })
+
+describe('handleBatch — SPACE_BETWEEN + bound gap (B58)', () => {
+  // A batch converts every entry BEFORE dispatching, so the pair has to be
+  // caught on the entry that carries it — and the batch must still be honest
+  // about which entry failed rather than sinking the whole call.
+  it('fails ONLY the offending entry, and names the node', async () => {
+    const result = await handleBatch(
+      {
+        ops: [
+          {
+            op: 'update_node',
+            nodeId: '454:4934',
+            patch: {
+              layout: {
+                mode: 'H',
+                align: ['SPACE_BETWEEN', 'CENTER'],
+                gap: 'var(space/16)16',
+              },
+            },
+          },
+          {
+            op: 'update_node',
+            nodeId: '1:1',
+            patch: { opacity: 0.5 },
+          },
+        ],
+      },
+      stubClient({}),
+    )
+    const out = parse(
+      result.content[0].text,
+    ) as BatchOut & {
+      results: { ok: boolean; error?: string }[]
+    }
+    // Partial success (D3): one bad entry never sinks the rest.
+    expect(out.results[0].ok).toBe(false)
+    expect(out.results[0].error).toContain('SPACE_BETWEEN')
+    expect(out.results[0].error).toContain('454:4934')
+    expect(out.results[1].ok).toBe(true)
+  })
+
+  it('lets a literal gap through', async () => {
+    const sent: Sent[] = []
+    await handleBatch(
+      {
+        ops: [
+          {
+            op: 'update_node',
+            nodeId: '454:4934',
+            patch: {
+              layout: {
+                mode: 'H',
+                align: ['SPACE_BETWEEN', 'CENTER'],
+                gap: 16,
+              },
+            },
+          },
+        ],
+      },
+      stubClient({ sent }),
+    )
+    expect(sent).toHaveLength(1)
+  })
+})
