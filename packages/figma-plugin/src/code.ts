@@ -890,7 +890,12 @@ const applyCommonProperties = async (
   // align write drop silently — and it was called without a sink, so those
   // notes (and the GRID capability degrade beside them) went nowhere.
   if (spec.layout !== undefined && 'layoutMode' in node) {
-    applyLayout(
+    // AWAITED (B58 round 4). On a guarded target applyLayout deselects, waits
+    // for that to render, and only then applies — dropping the await would put
+    // the write straight back into the frame where Figma silently ignores it
+    // and echoes the value back anyway. Unguarded targets never await inside,
+    // so a create still runs straight through.
+    await applyLayout(
       node as FrameNode,
       spec.layout as AppliedLayout,
       warnings,

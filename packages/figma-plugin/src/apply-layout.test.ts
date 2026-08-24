@@ -30,10 +30,12 @@ const makeFrame = (): LayoutTarget => ({
   ...SENTINEL,
 })
 
-test('partial {mode:H, wrap:true} does not throw; leaves spacing/padding/align untouched', () => {
+test('partial {mode:H, wrap:true} does not throw; leaves spacing/padding/align untouched', async () => {
   const frame = makeFrame()
   const layout: AppliedLayout = { mode: 'H', wrap: true }
-  expect(() => applyLayout(frame, layout)).not.toThrow()
+  await expect(
+    applyLayout(frame, layout),
+  ).resolves.toBeUndefined()
 
   expect(frame.layoutMode).toBe('HORIZONTAL')
   expect(frame.layoutWrap).toBe('WRAP')
@@ -49,10 +51,12 @@ test('partial {mode:H, wrap:true} does not throw; leaves spacing/padding/align u
   )
 })
 
-test('partial {mode:V, spacing:8} sets spacing only; padding/align untouched', () => {
+test('partial {mode:V, spacing:8} sets spacing only; padding/align untouched', async () => {
   const frame = makeFrame()
   const layout: AppliedLayout = { mode: 'V', spacing: 8 }
-  expect(() => applyLayout(frame, layout)).not.toThrow()
+  await expect(
+    applyLayout(frame, layout),
+  ).resolves.toBeUndefined()
 
   expect(frame.layoutMode).toBe('VERTICAL')
   expect(frame.itemSpacing).toBe(8)
@@ -64,14 +68,16 @@ test('partial {mode:V, spacing:8} sets spacing only; padding/align untouched', (
   expect(frame.layoutWrap).toBe(SENTINEL.layoutWrap)
 })
 
-test('partial {mode:H, spacing:8, padding} (no align) sets padding; align untouched', () => {
+test('partial {mode:H, spacing:8, padding} (no align) sets padding; align untouched', async () => {
   const frame = makeFrame()
   const layout: AppliedLayout = {
     mode: 'H',
     spacing: 8,
     padding: [4, 4, 4, 4],
   }
-  expect(() => applyLayout(frame, layout)).not.toThrow()
+  await expect(
+    applyLayout(frame, layout),
+  ).resolves.toBeUndefined()
 
   expect(frame.itemSpacing).toBe(8)
   expect(frame.paddingTop).toBe(4)
@@ -87,13 +93,15 @@ test('partial {mode:H, spacing:8, padding} (no align) sets padding; align untouc
   )
 })
 
-test('partial {mode:H, align} (no padding) sets align; padding untouched', () => {
+test('partial {mode:H, align} (no padding) sets align; padding untouched', async () => {
   const frame = makeFrame()
   const layout: AppliedLayout = {
     mode: 'H',
     align: ['MIN', 'MIN'],
   }
-  expect(() => applyLayout(frame, layout)).not.toThrow()
+  await expect(
+    applyLayout(frame, layout),
+  ).resolves.toBeUndefined()
 
   expect(frame.primaryAxisAlignItems).toBe('MIN')
   expect(frame.counterAxisAlignItems).toBe('MIN')
@@ -102,9 +110,9 @@ test('partial {mode:H, align} (no padding) sets align; padding untouched', () =>
   expect(frame.paddingLeft).toBe(SENTINEL.paddingLeft)
 })
 
-test('asymmetric padding maps [top,right,bottom,left] in order', () => {
+test('asymmetric padding maps [top,right,bottom,left] in order', async () => {
   const frame = makeFrame()
-  applyLayout(frame, {
+  await applyLayout(frame, {
     mode: 'V',
     padding: [1, 2, 3, 4],
   })
@@ -114,9 +122,9 @@ test('asymmetric padding maps [top,right,bottom,left] in order', () => {
   expect(frame.paddingLeft).toBe(4)
 })
 
-test('full layout sets every field', () => {
+test('full layout sets every field', async () => {
   const frame = makeFrame()
-  applyLayout(frame, {
+  await applyLayout(frame, {
     mode: 'H',
     spacing: 12,
     padding: [10, 20, 30, 40],
@@ -134,16 +142,16 @@ test('full layout sets every field', () => {
   expect(frame.layoutWrap).toBe('WRAP')
 })
 
-test('mode NONE disables auto-layout (not VERTICAL)', () => {
+test('mode NONE disables auto-layout (not VERTICAL)', async () => {
   const frame = makeFrame()
   frame.layoutMode = 'HORIZONTAL'
-  applyLayout(frame, { mode: 'NONE' })
+  await applyLayout(frame, { mode: 'NONE' })
   expect(frame.layoutMode).toBe('NONE')
 })
 
-test('wrap:false does not set WRAP', () => {
+test('wrap:false does not set WRAP', async () => {
   const frame = makeFrame()
-  applyLayout(frame, { mode: 'H', wrap: false })
+  await applyLayout(frame, { mode: 'H', wrap: false })
   expect(frame.layoutWrap).toBe('NO_WRAP')
 })
 
@@ -164,15 +172,15 @@ const makeGridFrame = (): LayoutTarget & {
   gridColumnGap: 0,
 })
 
-test('mode GRID sets layoutMode to GRID', () => {
+test('mode GRID sets layoutMode to GRID', async () => {
   const frame = makeGridFrame()
-  applyLayout(frame, { mode: 'GRID' })
+  await applyLayout(frame, { mode: 'GRID' })
   expect(frame.layoutMode).toBe('GRID')
 })
 
-test('mode GRID with all grid keys sets counts and gaps', () => {
+test('mode GRID with all grid keys sets counts and gaps', async () => {
   const frame = makeGridFrame()
-  applyLayout(frame, {
+  await applyLayout(frame, {
     mode: 'GRID',
     rows: 2,
     cols: 3,
@@ -186,25 +194,25 @@ test('mode GRID with all grid keys sets counts and gaps', () => {
   expect(frame.gridColumnGap).toBe(12)
 })
 
-test('partial GRID (rows only) sets only rows; other grid fields untouched', () => {
+test('partial GRID (rows only) sets only rows; other grid fields untouched', async () => {
   const frame = makeGridFrame()
   // seed sentinel on the grid fields so we can assert untouched
   frame.gridRowCount = -1
   frame.gridColumnCount = -1
   frame.gridRowGap = -1
   frame.gridColumnGap = -1
-  applyLayout(frame, { mode: 'GRID', rows: 4 })
+  await applyLayout(frame, { mode: 'GRID', rows: 4 })
   expect(frame.gridRowCount).toBe(4)
   expect(frame.gridColumnCount).toBe(-1)
   expect(frame.gridRowGap).toBe(-1)
   expect(frame.gridColumnGap).toBe(-1)
 })
 
-test('GRID feature-detect: absent gridRowCount property → no throw, no assignment', () => {
+test('GRID feature-detect: absent gridRowCount property → no throw, no assignment', async () => {
   // Simulate a runtime that does NOT support gridRowCount (T7 degrade).
   // makeFrame() has no gridRowCount so 'gridRowCount' in frame is false.
   const frame = makeFrame()
-  expect(() =>
+  await expect(
     applyLayout(frame, {
       mode: 'GRID',
       rows: 2,
@@ -212,17 +220,17 @@ test('GRID feature-detect: absent gridRowCount property → no throw, no assignm
       rowGap: 8,
       colGap: 12,
     }),
-  ).not.toThrow()
+  ).resolves.toBeUndefined()
   // The fields should not have been set (they don't exist on the object).
   expect('gridRowCount' in frame).toBe(false)
   expect('gridColumnCount' in frame).toBe(false)
 })
 
-test('GRID feature-detect degrade pushes a warning when grid fields absent', () => {
+test('GRID feature-detect degrade pushes a warning when grid fields absent', async () => {
   // makeFrame() has no gridRowCount → feature-detect fails → warning.
   const frame = makeFrame()
   const warnings: string[] = []
-  applyLayout(
+  await applyLayout(
     frame,
     { mode: 'GRID', rows: 2, cols: 3 },
     warnings,
@@ -278,10 +286,10 @@ const stubbornFrame = (
   return frame
 }
 
-test('B58: a dropped align is named, with intended and actual', () => {
+test('B58: a dropped align is named, with intended and actual', async () => {
   const frame = stubbornFrame('primaryAxisAlignItems')
   const warnings: string[] = []
-  applyLayout(
+  await applyLayout(
     frame,
     { mode: 'H', align: ['SPACE_BETWEEN', 'CENTER'] },
     warnings,
@@ -292,11 +300,11 @@ test('B58: a dropped align is named, with intended and actual', () => {
   expect(warnings[0]).toContain('CENTER')
 })
 
-test('B58: the write is retried ONCE before it is called dropped', () => {
+test('B58: the write is retried ONCE before it is called dropped', async () => {
   // Accepts the second write — the shape a transient re-assertion has.
   const frame = stubbornFrame('primaryAxisAlignItems', 2)
   const warnings: string[] = []
-  applyLayout(
+  await applyLayout(
     frame,
     { mode: 'H', align: ['SPACE_BETWEEN', 'CENTER'] },
     warnings,
@@ -305,19 +313,19 @@ test('B58: the write is retried ONCE before it is called dropped', () => {
   expect(warnings).toEqual([])
 })
 
-test('B58: it retries once, not forever', () => {
+test('B58: it retries once, not forever', async () => {
   const frame = stubbornFrame('primaryAxisAlignItems')
-  applyLayout(frame, {
+  await applyLayout(frame, {
     mode: 'H',
     align: ['SPACE_BETWEEN', 'CENTER'],
   })
   expect(frame.writes).toBe(2)
 })
 
-test('B58: a dropped padding is named too', () => {
+test('B58: a dropped padding is named too', async () => {
   const frame = stubbornFrame('paddingLeft')
   const warnings: string[] = []
-  applyLayout(
+  await applyLayout(
     frame,
     { mode: 'V', padding: [8, 8, 8, 24] },
     warnings,
@@ -327,19 +335,19 @@ test('B58: a dropped padding is named too', () => {
   expect(warnings[0]).toContain('24')
 })
 
-test('B58: a dropped layoutMode is named', () => {
+test('B58: a dropped layoutMode is named', async () => {
   const frame = stubbornFrame('layoutMode')
   const warnings: string[] = []
-  applyLayout(frame, { mode: 'H' }, warnings)
+  await applyLayout(frame, { mode: 'H' }, warnings)
   expect(warnings).toHaveLength(1)
   expect(warnings[0]).toContain('layoutMode')
   expect(warnings[0]).toContain('HORIZONTAL')
 })
 
-test('B58: a layout that lands says nothing', () => {
+test('B58: a layout that lands says nothing', async () => {
   const frame = makeFrame()
   const warnings: string[] = []
-  applyLayout(
+  await applyLayout(
     frame,
     {
       mode: 'H',
@@ -353,10 +361,10 @@ test('B58: a layout that lands says nothing', () => {
   expect(warnings).toEqual([])
 })
 
-test('B58: only the field that dropped is named, not the whole patch', () => {
+test('B58: only the field that dropped is named, not the whole patch', async () => {
   const frame = stubbornFrame('itemSpacing')
   const warnings: string[] = []
-  applyLayout(
+  await applyLayout(
     frame,
     {
       mode: 'H',
@@ -372,7 +380,7 @@ test('B58: only the field that dropped is named, not the whole patch', () => {
   expect(frame.primaryAxisAlignItems).toBe('SPACE_BETWEEN')
 })
 
-test('B58: a dropped grid count is named on a runtime that supports GRID', () => {
+test('B58: a dropped grid count is named on a runtime that supports GRID', async () => {
   const frame = makeGridFrame() as LayoutTarget & {
     gridRowCount?: number
   }
@@ -385,33 +393,41 @@ test('B58: a dropped grid count is named on a runtime that supports GRID', () =>
     configurable: true,
   })
   const warnings: string[] = []
-  applyLayout(frame, { mode: 'GRID', rows: 3 }, warnings)
+  await applyLayout(
+    frame,
+    { mode: 'GRID', rows: 3 },
+    warnings,
+  )
   expect(warnings).toHaveLength(1)
   expect(warnings[0]).toContain('gridRowCount')
 })
 
-// ─── B58 rework: the blink has to span real UI frames ────────────────────────
+// ─── B58: sequencing around a Figma platform defect ──────────────────────────
 //
-// Two live attempts failed before this shape, and each one narrowed it.
+// Four live rounds, each narrowing the mechanism.
 //
-// Round 1 read every field back after applying and retried a mismatch once.
-// Live, with Lei holding a real UI selection: ok, EMPTY warnings — the
-// read-back saw the new value and was telling the truth — and a read seconds
-// later showed align MIN with the geometry unchanged. The value holds at apply
-// time and is reverted AFTER the reply, when Figma's properties panel
-// re-asserts its stale state. No in-handler check can catch that.
+// R1 read every field back after applying and retried a mismatch once. Live,
+// with Lei holding a real UI selection: ok, EMPTY warnings — and a read seconds
+// later showed align MIN. The verify passed on a write that had not landed.
 //
-// Round 2 deselected the target for the write and restored the selection in the
-// same handler. The mitigation fired, the warning arrived verbatim, and the
-// value STILL reverted — while a human deselect before the identical write made
-// it stick. A deselect and a restore inside one synchronous turn is not a blink:
-// the UI never gets a frame in which to process it, so the panel never drops
-// its stale context and the selection was, from its point of view, never
-// interrupted.
+// R2 deselected the target and restored the selection in the same handler. Same
+// result, while a human deselect before the identical write made it stick.
 //
-// So the restore is DEFERRED past the reply. What is pinned below is that
-// separation in time — the restore must NOT have happened when the handler
-// would return, and must happen once the deferral runs.
+// R3 deferred the restore past the reply. The blink became VISIBLE on screen —
+// and the decisive observation: the bar never spread, not even for a frame,
+// while the verify still read SPACE_BETWEEN back as applied.
+//
+// That isolates the mechanism, and it is a FIGMA PLATFORM DEFECT the bridge can
+// only sequence around: a layout write landing in the same UI frame as a
+// still-RENDERED selection is a silent no-op at the document layer, while the
+// API object echoes the value back. The verify is lied to from inside the
+// affected frame — so no amount of reading, retrying or reporting can detect
+// it, because the instrument is the thing being falsified. R2 and R3
+// deselected and applied in the same turn, so every apply still happened under
+// a rendered selection.
+//
+// R4, below: deselect, WAIT for that to render, then apply. The wait is
+// load-bearing and cannot be zero.
 
 /**
  * A stand-in for `figma.currentPage`: a settable selection that records every
@@ -436,20 +452,41 @@ const fakePage = (selectedIds: string[]) => {
   }
 }
 
-/** A hand-cranked clock: nothing runs until the test says so. */
+/**
+ * A hand-cranked clock: nothing moves until the test says so.
+ *
+ * `wait` is the PRE-APPLY settle (round 4) and `defer` is the post-reply
+ * restore (round 3). They are separate handles because the whole point is that
+ * they happen at different times.
+ */
 const fakeClock = () => {
-  const pending: (() => void)[] = []
+  const deferred: (() => void)[] = []
+  const waiters: (() => void)[] = []
   return {
     defer: (fn: () => void) => {
-      pending.push(fn)
+      deferred.push(fn)
     },
+    wait: (): Promise<void> =>
+      new Promise<void>(resolve => {
+        waiters.push(resolve)
+      }),
+    /** How many pre-apply settles are outstanding. */
+    get waiting(): number {
+      return waiters.length
+    },
+    /** How many post-reply restores are outstanding. */
     get scheduled(): number {
-      return pending.length
+      return deferred.length
     },
-    /** Run everything deferred so far, as the timer eventually would. */
+    /** Let the pre-apply wait finish, as the timer eventually would. */
+    settle: async (): Promise<void> => {
+      for (const resolve of waiters.splice(0)) {
+        resolve()
+      }
+    },
+    /** Run the deferred restore, as the timer eventually would. */
     flush: () => {
-      const due = pending.splice(0, pending.length)
-      for (const fn of due) {
+      for (const fn of deferred.splice(0)) {
         fn()
       }
     },
@@ -466,53 +503,129 @@ const SELECTED_LAYOUT: AppliedLayout = {
   align: ['SPACE_BETWEEN', 'CENTER'],
 }
 
-test('B58: the restore does NOT run in the handler — that is the whole fix', () => {
+const guardOf = (
+  page: ReturnType<typeof fakePage>,
+  clock: ReturnType<typeof fakeClock>,
+) => ({ page, defer: clock.defer, wait: clock.wait })
+
+test('B58: the apply does NOT happen before the deselection has settled', async () => {
   const page = fakePage(['1:1'])
   const clock = fakeClock()
-  applyLayout(framed('1:1'), SELECTED_LAYOUT, [], {
-    page,
-    defer: clock.defer,
-  })
-  // applyLayout has returned; the reply would go out now. The target must
-  // still be deselected, or the UI never notices the blink at all.
+  const frame = framed('1:1')
+  const running = applyLayout(
+    frame,
+    SELECTED_LAYOUT,
+    [],
+    guardOf(page, clock),
+  )
+  // The deselect is out, the wait is pending, and the document is UNTOUCHED.
+  // Applying here is what rounds 2 and 3 did, and it is why they failed.
   expect(page.history).toEqual([[]])
-  expect(page.selection.map(n => n.id)).toEqual([])
-  expect(clock.scheduled).toBe(1)
+  expect(clock.waiting).toBe(1)
+  expect(frame.primaryAxisAlignItems).toBe('CENTER')
+  expect(frame.layoutMode).toBe('NONE')
+  await clock.settle()
+  await running
 })
 
-test('B58: …and DOES run once the deferral fires', () => {
+test('B58: …and DOES happen once it has', async () => {
   const page = fakePage(['1:1'])
   const clock = fakeClock()
-  applyLayout(framed('1:1'), SELECTED_LAYOUT, [], {
-    page,
-    defer: clock.defer,
-  })
+  const frame = framed('1:1')
+  const running = applyLayout(
+    frame,
+    SELECTED_LAYOUT,
+    [],
+    guardOf(page, clock),
+  )
+  await clock.settle()
+  await running
+  expect(frame.primaryAxisAlignItems).toBe('SPACE_BETWEEN')
+  expect(frame.layoutMode).toBe('HORIZONTAL')
+})
+
+test('B58: the restore is deferred past the reply, not folded into the wait', async () => {
+  const page = fakePage(['1:1'])
+  const clock = fakeClock()
+  const running = applyLayout(
+    framed('1:1'),
+    SELECTED_LAYOUT,
+    [],
+    guardOf(page, clock),
+  )
+  await clock.settle()
+  await running
+  // applyLayout has returned; the reply would go out now, and the target must
+  // still be deselected or the UI never sees the blink at all.
+  expect(page.history).toEqual([[]])
+  expect(clock.scheduled).toBe(1)
   clock.flush()
   expect(page.history).toEqual([[], ['1:1']])
-  expect(page.selection.map(n => n.id)).toEqual(['1:1'])
 })
 
-test('B58: the blink is announced, and says the selection comes back', () => {
+test('B58: an UNSELECTED target keeps the fully synchronous fast path', async () => {
+  const page = fakePage(['9:9'])
+  const clock = fakeClock()
+  const frame = framed('1:1')
+  const warnings: string[] = []
+  const running = applyLayout(
+    frame,
+    SELECTED_LAYOUT,
+    warnings,
+    guardOf(page, clock),
+  )
+  // No wait, no timer, and the write has ALREADY landed before anything is
+  // awaited — an unselected node must pay nothing for this mitigation.
+  expect(clock.waiting).toBe(0)
+  expect(clock.scheduled).toBe(0)
+  expect(frame.primaryAxisAlignItems).toBe('SPACE_BETWEEN')
+  expect(page.history).toEqual([])
+  expect(warnings).toEqual([])
+  await running
+})
+
+test('B58: no guard at all behaves exactly as before', async () => {
+  const frame = framed('1:1')
+  const warnings: string[] = []
+  const running = applyLayout(
+    frame,
+    SELECTED_LAYOUT,
+    warnings,
+  )
+  expect(frame.primaryAxisAlignItems).toBe('SPACE_BETWEEN')
+  expect(warnings).toEqual([])
+  await running
+})
+
+test('B58: the blink is announced, and says the selection comes back', async () => {
   const page = fakePage(['1:1'])
   const clock = fakeClock()
   const warnings: string[] = []
-  applyLayout(framed('1:1'), SELECTED_LAYOUT, warnings, {
-    page,
-    defer: clock.defer,
-  })
+  const running = applyLayout(
+    framed('1:1'),
+    SELECTED_LAYOUT,
+    warnings,
+    guardOf(page, clock),
+  )
+  await clock.settle()
+  await running
   expect(warnings).toHaveLength(1)
   expect(warnings[0]).toContain('selection')
   expect(warnings[0]).toContain('1:1')
   expect(warnings[0]).toContain('a moment later')
 })
 
-test('B58: a multi-selection keeps every OTHER node selected throughout', () => {
+test('B58: a multi-selection keeps every OTHER node selected throughout', async () => {
   const page = fakePage(['0:9', '1:1', '2:2'])
   const clock = fakeClock()
-  applyLayout(framed('1:1'), SELECTED_LAYOUT, [], {
-    page,
-    defer: clock.defer,
-  })
+  const running = applyLayout(
+    framed('1:1'),
+    SELECTED_LAYOUT,
+    [],
+    guardOf(page, clock),
+  )
+  await clock.settle()
+  await running
   expect(page.history).toEqual([['0:9', '2:2']])
   clock.flush()
   expect(page.history).toEqual([
@@ -521,30 +634,10 @@ test('B58: a multi-selection keeps every OTHER node selected throughout', () => 
   ])
 })
 
-test('B58: an UNSELECTED target schedules nothing and touches nothing', () => {
-  const page = fakePage(['9:9'])
-  const clock = fakeClock()
-  const warnings: string[] = []
-  applyLayout(framed('1:1'), SELECTED_LAYOUT, warnings, {
-    page,
-    defer: clock.defer,
-  })
-  expect(page.history).toEqual([])
-  expect(clock.scheduled).toBe(0)
-  expect(warnings).toEqual([])
-})
-
-test('B58: no guard at all behaves exactly as before', () => {
-  const frame = framed('1:1')
-  const warnings: string[] = []
-  applyLayout(frame, SELECTED_LAYOUT, warnings)
-  expect(frame.primaryAxisAlignItems).toBe('SPACE_BETWEEN')
-  expect(warnings).toEqual([])
-})
-
-test('B58: the restore is still SCHEDULED when the apply throws', () => {
+test('B58: the restore is still scheduled when the apply throws', async () => {
   // Leaving the user deselected because a write failed would be worse than the
-  // bug being fixed — and the scheduling is in a `finally` for that reason.
+  // bug being fixed — the scheduling is in a `finally` for that reason, and the
+  // throw now has to survive an await to get there.
   const page = fakePage(['1:1'])
   const clock = fakeClock()
   const frame = framed('1:1')
@@ -555,49 +648,58 @@ test('B58: the restore is still SCHEDULED when the apply throws', () => {
     get: () => 'MIN',
     configurable: true,
   })
-  expect(() =>
-    applyLayout(frame, SELECTED_LAYOUT, [], {
-      page,
-      defer: clock.defer,
-    }),
-  ).toThrow('Cannot set align')
+  const running = applyLayout(
+    frame,
+    SELECTED_LAYOUT,
+    [],
+    guardOf(page, clock),
+  )
+  await clock.settle()
+  await expect(running).rejects.toThrow('Cannot set align')
   expect(clock.scheduled).toBe(1)
   clock.flush()
   expect(page.selection.map(n => n.id)).toEqual(['1:1'])
 })
 
-test('B58: a user who re-selects during the blink KEEPS their selection', () => {
-  // The deferral opens a window the user can act in. Putting the old selection
-  // back on top of one they just made by hand would be a worse theft than the
-  // blink itself.
+test('B58: a user who re-selects during the blink KEEPS their selection', async () => {
+  // The wait plus the deferral opens a window the user can act in. Putting the
+  // old selection back on top of one they just made by hand would be a worse
+  // theft than the blink itself.
   const page = fakePage(['1:1'])
   const clock = fakeClock()
-  applyLayout(framed('1:1'), SELECTED_LAYOUT, [], {
-    page,
-    defer: clock.defer,
-  })
+  const running = applyLayout(
+    framed('1:1'),
+    SELECTED_LAYOUT,
+    [],
+    guardOf(page, clock),
+  )
+  await clock.settle()
+  await running
   page.selection = [{ id: '7:7' }]
   clock.flush()
   expect(page.selection.map(n => n.id)).toEqual(['7:7'])
-  // …and the restore did not write at all, so nothing flickered.
   expect(page.history).toEqual([[], ['7:7']])
 })
 
-test('B58: an untouched selection is restored even as a fresh array', () => {
+test('B58: an untouched selection is restored even as a fresh array', async () => {
   // Figma hands back a NEW array on every read, so identity cannot be the test
   // — the restore compares which nodes are selected.
   const page = fakePage(['1:1'])
   const clock = fakeClock()
-  applyLayout(framed('1:1'), SELECTED_LAYOUT, [], {
-    page,
-    defer: clock.defer,
-  })
+  const running = applyLayout(
+    framed('1:1'),
+    SELECTED_LAYOUT,
+    [],
+    guardOf(page, clock),
+  )
+  await clock.settle()
+  await running
   page.selection = []
   clock.flush()
   expect(page.selection.map(n => n.id)).toEqual(['1:1'])
 })
 
-test('B58: a failed restore reports through onError, not warnings', () => {
+test('B58: a failed restore reports through onError, not warnings', async () => {
   // The reply is long gone by the time the restore runs, so `warnings` cannot
   // carry the failure and an uncaught throw from a timer helps nobody.
   const clock = fakeClock()
@@ -617,11 +719,19 @@ test('B58: a failed restore reports through onError, not warnings', () => {
     },
   }
   const warnings: string[] = []
-  applyLayout(framed('1:1'), SELECTED_LAYOUT, warnings, {
-    page,
-    defer: clock.defer,
-    onError: m => notices.push(m),
-  })
+  const running = applyLayout(
+    framed('1:1'),
+    SELECTED_LAYOUT,
+    warnings,
+    {
+      page,
+      defer: clock.defer,
+      wait: clock.wait,
+      onError: m => notices.push(m),
+    },
+  )
+  await clock.settle()
+  await running
   expect(() => clock.flush()).not.toThrow()
   expect(notices).toHaveLength(1)
   expect(notices[0]).toContain('1:1')
@@ -630,7 +740,7 @@ test('B58: a failed restore reports through onError, not warnings', () => {
   expect(warnings[0]).toContain('a moment later')
 })
 
-test('B58: the verify/retry safety net still runs inside the guard', () => {
+test('B58: the verify/retry safety net still runs after the settle', async () => {
   const page = fakePage(['1:1'])
   const clock = fakeClock()
   const frame = framed('1:1')
@@ -643,10 +753,14 @@ test('B58: the verify/retry safety net still runs inside the guard', () => {
     configurable: true,
   })
   const warnings: string[] = []
-  applyLayout(frame, SELECTED_LAYOUT, warnings, {
-    page,
-    defer: clock.defer,
-  })
+  const running = applyLayout(
+    frame,
+    SELECTED_LAYOUT,
+    warnings,
+    guardOf(page, clock),
+  )
+  await clock.settle()
+  await running
   expect(warnings).toHaveLength(2)
   expect(warnings.some(w => w.includes('selection'))).toBe(
     true,
@@ -656,23 +770,48 @@ test('B58: the verify/retry safety net still runs inside the guard', () => {
   ).toBe(true)
 })
 
-test('B58: a frame with no id is never deselected (nothing to match on)', () => {
+test('B58: a frame with no id is never deselected (nothing to match on)', async () => {
   const page = fakePage(['1:1'])
   const clock = fakeClock()
-  applyLayout(makeFrame(), SELECTED_LAYOUT, [], {
-    page,
-    defer: clock.defer,
-  })
+  await applyLayout(
+    makeFrame(),
+    SELECTED_LAYOUT,
+    [],
+    guardOf(page, clock),
+  )
   expect(page.history).toEqual([])
+  expect(clock.waiting).toBe(0)
   expect(clock.scheduled).toBe(0)
 })
 
-// The PRODUCTION path passes no `defer` — code.ts hands over only the page and
-// the notifier — so the default deferral is what actually ships. A default that
-// quietly ran inline would be round 2 again, with every test above still green.
-test('B58: the DEFAULT deferral is a real one — nothing restores inline', async () => {
+// The PRODUCTION path injects neither `wait` nor `defer` — code.ts hands over
+// only the page and the notifier — so the DEFAULTS are what actually ship. A
+// default that quietly ran inline would be round 3 again, with every test above
+// still green.
+test('B58: the default pre-apply wait is a real TIMER, not a microtask', async () => {
   const page = fakePage(['1:1'])
-  applyLayout(framed('1:1'), SELECTED_LAYOUT, [], { page })
+  const frame = framed('1:1')
+  const running = applyLayout(frame, SELECTED_LAYOUT, [], {
+    page,
+  })
+  expect(frame.primaryAxisAlignItems).toBe('CENTER')
+  // Drain the microtask queue. A `Promise.resolve()` standing in for the wait
+  // would let the apply through right here — and a microtask is the SAME UI
+  // frame, which is precisely the frame Figma drops the write in. Only a
+  // macrotask gives the deselection somewhere to render.
+  for (let i = 0; i < 20; i += 1) {
+    await Promise.resolve()
+  }
+  expect(frame.primaryAxisAlignItems).toBe('CENTER')
+  await running
+  expect(frame.primaryAxisAlignItems).toBe('SPACE_BETWEEN')
+})
+
+test('B58: the default restore deferral is a real one', async () => {
+  const page = fakePage(['1:1'])
+  await applyLayout(framed('1:1'), SELECTED_LAYOUT, [], {
+    page,
+  })
   expect(page.history).toEqual([[]])
   await new Promise(resolve =>
     setTimeout(resolve, RESTORE_DELAY_MS * 3),

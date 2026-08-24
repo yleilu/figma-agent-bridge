@@ -29,23 +29,42 @@
 // keeps every other node. The blink is visible, so it is also NAMED in
 // `warnings`.
 //
-// THE BLINK HAS TO SPAN REAL UI FRAMES. A deselect and restore that both run
-// inside one synchronous handler is not a blink at all: Figma's UI never gets
-// a turn to process the deselection, the properties panel never drops its
-// stale context, and from its point of view the selection was never
-// interrupted — so it re-asserts after the reply exactly as before. That was
-// proven live too: the mitigation fired, the warning arrived verbatim, and the
-// value still reverted. A human deselect before the same write made it stick.
+// THE BLINK HAS TO SPAN REAL UI FRAMES, AND THE APPLY HAS TO LAND OUTSIDE THEM.
 //
-// The restore is therefore DEFERRED past the reply (`defer`, a timer by
-// default). The handler answers without waiting for it, so the restore's own
-// failures cannot ride the reply's `warnings` — they go to `onError`, which
-// the plugin points at `figma.notify`.
+// A deselect and a restore inside one synchronous handler is not a blink at
+// all: Figma's UI never gets a turn to process the deselection. Deferring the
+// RESTORE past the reply made the blink visible on screen — and the value still
+// reverted, with one decisive observation: the bar never spread, not even for a
+// frame, while the verify read SPACE_BETWEEN back as applied.
+//
+// THE UNDERLYING BEHAVIOUR IS A FIGMA PLATFORM DEFECT, and the bridge can only
+// sequence around it. When a layout write lands in the same UI frame as a
+// still-RENDERED selection, the setter is a silent no-op at the document layer
+// while the API object ECHOES the value back. The document never changed; the
+// read-back is lied to. That is why every earlier round's verify passed
+// honestly and reported ok on a write that had not happened, and why a human
+// deselect before the same write always worked — the deselection had real
+// frames to render in before the write arrived.
+//
+// So a guarded write DESELECTS, WAITS for the deselection to render, and only
+// then applies. The wait is load-bearing and cannot be shortened to zero: the
+// whole point is to leave the frame in which the setter lies. Nothing inside
+// this module can detect the affected frame from within it, because the only
+// instrument available — reading the property back — is exactly the thing the
+// defect falsifies.
+//
+// The restore stays DEFERRED past the reply (`defer`, a timer by default). The
+// handler answers without waiting for it, so the restore's own failures cannot
+// ride the reply's `warnings` — they go to `onError`, which the plugin points
+// at `figma.notify`.
 //
 // A deferred restore can also arrive to find the user has moved on. Putting
 // the old selection back then would stomp a selection they made by hand, so
 // the restore checks that the selection is still exactly what the mitigation
 // left before touching it.
+//
+// An UNSELECTED target pays none of this: no wait, no timer, no await — the
+// fast path stays fully synchronous.
 //
 // The read-back and its single retry STAY, as the safety net for every other
 // way a field can fail to hold: a field that still refuses is NAMED, with what
@@ -122,6 +141,17 @@ export type SelectionHost = {
 export const RESTORE_DELAY_MS = 100
 
 /**
+ * How long to wait, after deselecting, before applying.
+ *
+ * About two UI frames. It has to be long enough for Figma to RENDER the
+ * deselection, because a write that lands while the selection is still on
+ * screen is silently dropped at the document layer while the API object echoes
+ * it back (see the module header). Shortening this to zero restores the bug;
+ * there is no in-process signal that says when the frame has passed.
+ */
+export const SETTLE_DELAY_MS = 80
+
+/**
  * Everything the selection mitigation needs, injected so it can be driven by a
  * test with no Figma runtime and no real clock.
  */
@@ -135,12 +165,23 @@ export type SelectionGuard = {
    */
   defer?: (restore: () => void) => void
   /**
+   * Wait `ms` before applying, so the deselection has frames to render in.
+   * Defaults to a timer; a test passes a clock it can settle by hand.
+   */
+  wait?: (ms: number) => Promise<void>
+  /**
    * Where a failed restore is reported. The reply has already gone out by
    * then, so `warnings` cannot carry it; the plugin points this at
    * `figma.notify` so the user is told rather than left deselected in silence.
    */
   onError?: (message: string) => void
 }
+
+/** The default pre-apply wait: a real timer, because a microtask is the same frame. */
+const defaultWait = (ms: number): Promise<void> =>
+  new Promise(resolve => {
+    setTimeout(resolve, ms)
+  })
 
 /**
  * The default deferral: past the current turn, so Figma's UI gets frames in
@@ -355,7 +396,17 @@ const droppedMessage = (
   'again. A node SELECTED in the Figma UI is the known cause: the properties ' +
   'panel re-asserts what it displays. Deselect the node and repeat the call.'
 
-/** Write every intent, read them all back, rewrite the misses once, report the rest. */
+/**
+ * Write every intent, read them all back, rewrite the misses once, report the
+ * rest.
+ *
+ * The read-back is only as honest as the frame it runs in. Under a rendered
+ * selection Figma echoes the value back off the API object while the document
+ * ignored it, so this reports a clean apply on a write that never landed — see
+ * the module header. Sequencing the apply out of that frame is what makes this
+ * check mean anything; it is the safety net for every OTHER way a field fails
+ * to hold, not for that one.
+ */
 const writeAndVerify = (
   frame: LayoutTarget,
   intents: Intent[],
@@ -384,28 +435,31 @@ const writeAndVerify = (
  * `mode` is always set; every other field is set ONLY when present (pure-emit
  * contract mirror).
  *
- * `page` is the UI selection host — pass `figma.currentPage` when the target is
- * an EXISTING node the user may be looking at. When the target is in that
- * selection it is taken out of it for the write and put back after (B58): a
- * selected node has Figma's properties panel re-asserting its stale state
- * afterwards, which reverts the write once the reply has already gone out. Omit
- * `page` for a node the user cannot have selected — a node being created — so
- * a create pays no selection churn.
+ * `guard` carries the UI selection host — pass `figma.currentPage` when the
+ * target is an EXISTING node the user may be looking at. When the target is in
+ * that selection the write is SEQUENCED around a Figma platform defect (B58,
+ * module header): deselect, WAIT for that to render, then apply, then restore
+ * the selection after the reply. Omit `guard` for a node the user cannot have
+ * selected — a node being created — and the whole body runs synchronously with
+ * no timer and no await.
+ *
+ * AWAIT THE RESULT. On the guarded path this resolves only after the wait and
+ * the apply; ignoring the promise would put the write back inside the frame
+ * that drops it.
  *
  * Each written field is still read back, a mismatch rewritten once, and a field
- * that still refuses named on `warnings`. That is the safety net for every
- * OTHER way a write can fail to hold; it cannot see the post-reply revert,
- * which is what the deselect is for.
+ * that still refuses named on `warnings` — the safety net for every OTHER way a
+ * write can fail to hold.
  *
  * T7 feature-detect for GRID: a runtime without `gridRowCount` etc. gets no
  * assignment and one capability warning on the optional `warnings` sink.
  */
-export const applyLayout = (
+export const applyLayout = async (
   frame: LayoutTarget,
   layout: AppliedLayout,
   warnings?: string[],
   guard?: SelectionGuard,
-): void => {
+): Promise<void> => {
   // GRID-mode fields (M12). Feature-detect (T7): a runtime that does not expose
   // them gets ONE warning naming the capability, not four dropped-write
   // reports — an absent property is not a refused one.
@@ -432,6 +486,14 @@ export const applyLayout = (
     warnings,
   )
   try {
+    if (restoreSelection !== undefined) {
+      // The deselection has been REQUESTED, not rendered. Applying now would
+      // land in the frame that still shows the selection, where the setter is
+      // a no-op and the read-back lies about it. This await is the fix; it is
+      // the ONLY thing separating round 4 from three rounds that reported
+      // success on a write that never happened.
+      await (guard?.wait ?? defaultWait)(SETTLE_DELAY_MS)
+    }
     writeAndVerify(frame, intents, warnings)
   } finally {
     // The user's selection comes back whatever the write did — but LATER, past

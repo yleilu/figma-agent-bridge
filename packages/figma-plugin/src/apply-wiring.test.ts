@@ -264,7 +264,7 @@ describe('UPDATE_COMPONENT delete-property wiring', () => {
 // the live revert comes straight back.
 describe('applyLayout call-site wiring', () => {
   const applyCall = callers.slice(
-    callers.indexOf('applyLayout(\n'),
+    callers.indexOf('await applyLayout(\n'),
     callers.indexOf('// Min/max sizing'),
   )
 
@@ -279,6 +279,14 @@ describe('applyLayout call-site wiring', () => {
 
   it('hands applyLayout the selection host', () => {
     expect(applyCall).toContain('opts?.page')
+  })
+
+  // B58 round 4: on a guarded target applyLayout deselects, WAITS for that to
+  // render, then applies. Dropping the await puts the write straight back into
+  // the frame where Figma ignores it and echoes the value anyway — the exact
+  // failure of rounds 2 and 3, and invisible to every other test here.
+  it('AWAITS applyLayout, or the write lands in the frame that drops it', () => {
+    expect(applyCall).toContain('await applyLayout(')
   })
 
   const updateCase = callers.slice(
