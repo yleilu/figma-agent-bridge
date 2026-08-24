@@ -1735,7 +1735,11 @@ export const createMockPlugin = (
           '1:44',
           '1:45',
         ])
-        const knownPages = new Set(['0:1', 'repaired:1'])
+        const knownPages = new Set([
+          '0:1',
+          'repaired:1',
+          'variants:1',
+        ])
         // A page whose scan the plugin had to REPAIR (B48 / final-review I-1 /
         // B56). A chip written into a slot answered an alias id, its label
         // threw, and the repair replaced the chip's row with the one its export
@@ -1783,6 +1787,62 @@ export const createMockPlugin = (
           }
           break
         }
+        // A page holding two instances of a VARIANT family (B56, live shape).
+        // Live, file MFMyzjEZyH5cVyrNejdbyP: 454:5478 is a COMPONENT_SET named
+        // "State block" and 454:5477 is its "State=Error" variant, so an
+        // instance's main-component NAME is `State=Error` and the family name —
+        // the only one the components panel, the design doc or an acceptance
+        // gate ever says — is on the set. The plugin emits both keys; whether
+        // `instancesOf` reaches either is the SERVER's matcher, which is what
+        // this arm exists to drive.
+        if (
+          searchScope === 'page' &&
+          cmd.params?.pageId === 'variants:1'
+        ) {
+          const wantsVariantRef =
+            cmd.params?.collectComponentRef === true
+          const variantRow = (
+            id: string,
+            name: string,
+            ownName: string,
+          ): Record<string, unknown> => {
+            const row: Record<string, unknown> = {
+              id,
+              name,
+              type: 'INSTANCE',
+              size: [200, 120],
+            }
+            if (wantsVariantRef) {
+              row.instancesOf = ownName
+              row.instancesOfSet = 'State block'
+            }
+            return row
+          }
+          result = {
+            results: [
+              variantRow(
+                'I454:5452;453:3882;454:5489',
+                'Error block',
+                'State=Error',
+              ),
+              variantRow(
+                'I454:5346;453:3882;454:5370',
+                'Empty block',
+                'State=Empty',
+              ),
+              // A plain frame on the same page, so a family match proves it is
+              // filtering rather than returning the page.
+              {
+                id: '454:5300',
+                name: 'Plot area',
+                type: 'FRAME',
+                size: [400, 240],
+              },
+            ],
+          }
+          break
+        }
+
         // B53 — a scan rooted on the three-level slot fixture. The plugin's
         // repair pass replaces every slot-override row with the one its export
         // names, so the candidates come back under the CANONICAL ids, which is

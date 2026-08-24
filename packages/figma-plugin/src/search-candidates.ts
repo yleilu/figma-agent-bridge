@@ -18,13 +18,18 @@
 // `characters` and `variableIds` DO come through, which is what the
 // copy-inventory and design-system sweeps run on.
 //
-// `componentKey` / `instancesOf` used to be on that list, and their absence WAS
-// B56: `search {instancesOf:'State block'}` answered `results: []` against two
-// provable slot-nested instances — the repair returned the rows, and the rows
-// matched nothing. The export does name each instance's main, by ID
-// (`componentId`), and a main component is a plain top-level node whose handle
-// answers. So the id is carried out and traded for the name and key through
-// `componentRefOf`, once per distinct master.
+// `componentKey` / `instancesOf` used to be on that list, and B56 is what their
+// absence cost: an export-served row came back in `results` and matched
+// nothing. The export DOES name each instance's main — the node carries
+// `componentId`, and the `components` map beside `document` says what that id
+// is called (`{key, name, componentSetId}`), with `componentSets` naming the
+// family one hop further. Those maps are the source; a live `componentRefOf`
+// covers a runtime whose subtree export omits them.
+//
+// The FAMILY name matters as much as the component's own (B56, live root
+// cause). A variant is named `State=Error`; the set is named `State block`,
+// and the set's name is the only one a human ever sees. So a row carries both,
+// and the server's matcher tests both.
 //
 // That gap is why `repairScan` REPLACES as little as it can. A healthy node
 // inside a broken subtree read fine and its live id is already canonical, so
@@ -64,6 +69,101 @@ const MAIN_COMPONENT_ID = 'mainComponentId'
 
 const str = (v: unknown): string | undefined =>
   typeof v === 'string' ? v : undefined
+
+/**
+ * Fold one export's `components` / `componentSets` maps into the shared
+ * componentId → ref lookup (B56).
+ *
+ * REST names a component by id in `components`, and names the SET that
+ * component belongs to one hop further, through `componentSetId`. Both hops
+ * are optional at every step — a stand-alone component has no set, and a
+ * runtime may omit the maps entirely — so each is read defensively and a
+ * missing half simply leaves that field unset.
+ *
+ * The lookup accumulates ACROSS hosts: two repaired subtrees may reference the
+ * same master, and one export naming it is enough for both.
+ */
+const foldExportRefs = (
+  exported: ExportedHost,
+  into: Map<string, ComponentRef>,
+): void => {
+  const { components, componentSets } = exported
+  if (
+    components === null ||
+    components === undefined ||
+    typeof components !== 'object'
+  ) {
+    return
+  }
+  for (const [id, entry] of Object.entries(components)) {
+    if (entry === null || typeof entry !== 'object') {
+      continue
+    }
+    const setId = str(entry.componentSetId)
+    const ref: ComponentRef = {}
+    const key = str(entry.key)
+    const name = str(entry.name)
+    if (key !== undefined) {
+      ref.key = key
+    }
+    if (name !== undefined) {
+      ref.name = name
+    }
+    const setName =
+      setId === undefined
+        ? undefined
+        : str(componentSets?.[setId]?.name)
+    if (setName !== undefined) {
+      ref.setName = setName
+    }
+    // A later export must not overwrite a fuller earlier answer with a thinner
+    // one — the first export that NAMES a component wins.
+    const held = into.get(id)
+    if (held === undefined || held.name === undefined) {
+      into.set(id, ref)
+    }
+  }
+}
+
+/** As much of a main COMPONENT as the family-name read touches. */
+export type MainComponent = {
+  name?: unknown
+  parent?: unknown
+}
+
+/**
+ * The name of the COMPONENT_SET a main component belongs to, or undefined for
+ * a stand-alone component (B56).
+ *
+ * A variant's own name is `State=Error`. The FAMILY is named on the set —
+ * `State block` — and that is the only name a human ever sees: the components
+ * panel shows it, the design doc says it, the acceptance gate is written
+ * against it. `search {instancesOf:'State block'}` returned nothing while two
+ * instances of that family sat in the file.
+ *
+ * Guarded: reading `.parent` is a read of a live node and a live node can
+ * refuse. A candidate must not be lost over a family name it may not have.
+ */
+export const componentSetOf = (
+  main: MainComponent,
+): string | undefined => {
+  try {
+    const parent = main.parent as
+      | { type?: unknown; name?: unknown }
+      | null
+      | undefined
+    if (
+      parent !== null &&
+      parent !== undefined &&
+      str(parent.type) === 'COMPONENT_SET'
+    ) {
+      return str(parent.name)
+    }
+  } catch {
+    // No family name for this candidate; every other key still stands.
+  }
+  return undefined
+}
 
 /**
  * `[width, height]` for an exported node.
@@ -185,27 +285,68 @@ export type ScanFailure = {
   message: string
 }
 
+/**
+ * What a main component is called, from whichever side answered (B56).
+ *
+ * `setName` is the COMPONENT_SET's name when the main is a variant — the name
+ * `match:{instancesOf}` is usually written against, since it is the only one a
+ * human ever sees.
+ */
+export type ComponentRef = {
+  key?: string
+  name?: string
+  setName?: string
+}
+
+/**
+ * One `exportAsync({format:'JSON_REST_V1'})` result, as much of it as the
+ * repair reads.
+ *
+ * The export is `{document, components, componentSets, …}`, and this pass used
+ * to keep only `document`. That is what left an export-served INSTANCE unable
+ * to name its main: the node carries `componentId`, and the NAME that id
+ * stands for is in the `components` map beside it — `{key, name,
+ * componentSetId}`. `componentSets` closes the same gap one level up, for the
+ * family name.
+ */
+export type ExportedHost = {
+  document: RawNode
+  /** componentId → {key, name, componentSetId}, as REST spells it. */
+  components?: Record<
+    string,
+    {
+      key?: unknown
+      name?: unknown
+      componentSetId?: unknown
+    }
+  >
+  /** componentSetId → {name}. */
+  componentSets?: Record<string, { name?: unknown }>
+}
+
 export type RepairInput = {
   scanned: ScanEntry[]
   /** One slot per `scanned` entry; undefined where the candidate build threw. */
   candidates: (Candidate | undefined)[]
   failures: ScanFailure[]
   hints?: CandidateHints
-  /** The host's exported subtree, or undefined when it cannot describe itself. */
+  /** The host's export, or undefined when it cannot describe itself. */
   exportHost: (
     index: number,
-  ) => Promise<RawNode | undefined>
+  ) => Promise<ExportedHost | undefined>
   /**
-   * A main component's NAME and KEY, by its node id (B56).
+   * A main component's names and key, by its node id — the FALLBACK for when
+   * the export's own `components` map does not name it (B56).
    *
-   * The export names an instance's main by id only, and `match:{instancesOf}`
-   * matches on the name. Omitting the resolver leaves an export-served row
-   * unmatched by those keys, exactly as before — and the trade warning then
-   * says so.
+   * The map is preferred: it arrives with an export that already had to be
+   * paid for, it needs no live handle, and a degraded handle cannot defeat it.
+   * This resolver covers a runtime whose subtree export omits the maps.
+   * Omitting BOTH leaves an export-served row unmatched by those keys, exactly
+   * as before — and the trade warning then says so.
    */
   componentRefOf?: (
     componentId: string,
-  ) => Promise<{ key?: string; name?: string } | undefined>
+  ) => Promise<ComponentRef | undefined>
   /** Cap on how many subtrees may be serialized in one scan (T10). */
   maxRepairs?: number
 }
@@ -288,7 +429,16 @@ export const repairScan = async ({
   componentRefOf,
   maxRepairs = 50,
 }: RepairInput): Promise<RepairOutput> => {
-  const refsResolvable = componentRefOf !== undefined
+  /** componentId → its names and key, from every export folded so far (B56). */
+  const exportRefs = new Map<string, ComponentRef>()
+  /**
+   * Whether a component reference can be recovered for an export-served row —
+   * from the export's own maps, or from the live resolver. It decides only
+   * whether the trade warning still calls those keys LOST. Read at the point of
+   * use, because the maps fill in as hosts are exported.
+   */
+  const refsResolvable = (): boolean =>
+    componentRefOf !== undefined || exportRefs.size > 0
   const covered = new Set<number>()
   const superseded = new Set<number>()
   const rescanned: Candidate[] = []
@@ -319,12 +469,16 @@ export const repairScan = async ({
     if (covered.has(host)) continue
     if (repairs >= maxRepairs) break
     repairs++
-    const doc = await exportHost(host)
-    if (doc === undefined) continue
+    const exported = await exportHost(host)
+    if (exported === undefined) continue
+    // Every ref the maps of THIS export can name, folded into the shared
+    // lookup before the rows below are read. One export can name a component
+    // another export cannot, so the lookup accumulates across hosts.
+    foldExportRefs(exported, exportRefs)
 
     const entry = scanned[host]
     const fromExport = candidatesFromExport(
-      doc,
+      exported.document,
       entry.levelsLeft,
       hints,
     )
@@ -360,7 +514,10 @@ export const repairScan = async ({
         // names the same node properly, a few lines down.
         superseded.add(i)
         liveIds.delete(liveId)
-        const lost = liveOnlyKeysOf(liveRow, refsResolvable)
+        const lost = liveOnlyKeysOf(
+          liveRow,
+          refsResolvable(),
+        )
         if (lost.length > 0) {
           traded.push(
             'search: repaired the subtree at ' +
@@ -389,33 +546,44 @@ export const repairScan = async ({
     }
   }
 
-  // B56 — trade each export row's main component ID for the NAME and KEY the
-  // matcher runs on. Resolved ONCE per distinct component: a repaired card
-  // holds many instances of few masters. The marker is deleted either way, so
-  // no row ever leaves carrying it.
-  const resolved = new Map<
-    string,
-    { key?: string; name?: string } | undefined
-  >()
+  // B56 — trade each export row's main component ID for the names and key the
+  // matcher runs on. The export's OWN maps answer first (`exportRefs`, folded
+  // above); the live resolver is asked only for an id no export named, and
+  // only ONCE per distinct component — a repaired card holds many instances of
+  // few masters. The marker is deleted either way, so no row ever leaves
+  // carrying it.
+  const asked = new Map<string, ComponentRef | undefined>()
   for (const candidate of rescanned) {
     const mainId = candidate[MAIN_COMPONENT_ID]
     if (typeof mainId !== 'string') continue
     delete candidate[MAIN_COMPONENT_ID]
-    if (componentRefOf === undefined) continue
-    if (!resolved.has(mainId)) {
-      resolved.set(
-        mainId,
-        // A main that refuses to resolve costs this row its two ref keys and
-        // nothing else — the row itself is still returned.
-        await componentRefOf(mainId).catch(() => undefined),
-      )
+    let ref = exportRefs.get(mainId)
+    if (
+      ref?.name === undefined &&
+      componentRefOf !== undefined
+    ) {
+      if (!asked.has(mainId)) {
+        asked.set(
+          mainId,
+          // A main that refuses to resolve costs this row its ref keys and
+          // nothing else — the row itself is still returned.
+          await componentRefOf(mainId).catch(
+            () => undefined,
+          ),
+        )
+      }
+      ref = asked.get(mainId) ?? ref
     }
-    const ref = resolved.get(mainId)
     if (ref?.name !== undefined) {
       candidate.instancesOf = ref.name
     }
     if (ref?.key !== undefined) {
       candidate.componentKey = ref.key
+    }
+    // The family name, so `match:{instancesOf:'State block'}` reaches a
+    // variant whose own name is `State=Error`.
+    if (ref?.setName !== undefined) {
+      candidate.instancesOfSet = ref.setName
     }
   }
 

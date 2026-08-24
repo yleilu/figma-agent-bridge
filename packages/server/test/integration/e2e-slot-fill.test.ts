@@ -404,6 +404,68 @@ describe('M2b slot-fill e2e (T7 instance-lock wrap)', () => {
     expect(traded[0]).not.toContain('instancesOf')
   })
 
+  // ─── B56 live root cause: address a variant family by the name humans use ──
+  //
+  // Live evidence, file MFMyzjEZyH5cVyrNejdbyP:
+  //   454:5478 — COMPONENT_SET "State block"
+  //   454:5477 — COMPONENT "State=Error", one of its variants
+  //   I454:5452;453:3882;454:5489 — an INSTANCE of 454:5477
+  //
+  // `search {instancesOf:'State=Error'}` found it. `search {instancesOf:'State
+  // block'}` found NOTHING — and "State block" is the only name that appears in
+  // the components panel, in the design doc, or in the acceptance gate. The
+  // enumeration was never at fault: the matcher compared the main component's
+  // OWN name, and a variant's own name is `State=<Value>`.
+  //
+  // The plugin's half — deriving both names from the export's `components` /
+  // `componentSets` maps — is proved in search-candidates.test.ts, which is the
+  // only place repairScan actually runs. This is the server's half: the wire
+  // shape the plugin emits, through the matcher, to the reply.
+
+  const idsFound = async (instancesOf: string) => {
+    const result = await handleSearch(
+      {
+        scope: 'page',
+        pageId: 'variants:1',
+        match: { instancesOf },
+      },
+      scoped,
+    )
+    return (
+      JSON.parse(result.content[0].text) as {
+        results: { id: string }[]
+      }
+    ).results.map(r => r.id)
+  }
+
+  it('B56: finds every instance of a variant family by the SET name', async () => {
+    expect(await idsFound('State block')).toEqual([
+      'I454:5452;453:3882;454:5489',
+      'I454:5346;453:3882;454:5370',
+    ])
+  })
+
+  it('B56: still finds one variant by its own name', async () => {
+    expect(await idsFound('State=Error')).toEqual([
+      'I454:5452;453:3882;454:5489',
+    ])
+  })
+
+  it('B56: a family match filters — it does not just return the page', async () => {
+    const all = await handleSearch(
+      { scope: 'page', pageId: 'variants:1' },
+      scoped,
+    )
+    expect(
+      (
+        JSON.parse(all.content[0].text) as {
+          results: unknown[]
+        }
+      ).results,
+    ).toHaveLength(3)
+    expect(await idsFound('State blocks')).toEqual([])
+  })
+
   it('a compound id that names nothing is a clean, repeatable refusal', async () => {
     // Not "sometimes a connection error": a write to an id the document does
     // not hold must say so, the same way, every time.

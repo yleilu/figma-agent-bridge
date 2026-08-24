@@ -590,3 +590,82 @@ describe('handleSearch — projection past the scan row (B50)', () => {
     expect(out.warnings?.[0]).toContain('1:2')
   })
 })
+
+// ─── B56 (live root cause): a VARIANT instance is findable by its SET name ───
+//
+// Live evidence, file MFMyzjEZyH5cVyrNejdbyP:
+//   454:5478 is a COMPONENT_SET named "State block"
+//   454:5477 is a COMPONENT named "State=Error" — one of its variants
+//   I454:5452;453:3882;454:5489 is an INSTANCE of 454:5477
+//
+// `search {instancesOf:'State=Error'}` finds it. `search {instancesOf:'State
+// block'}` finds NOTHING — and "State block" is the only name a human ever
+// sees for that family: it is what the components panel shows, what the design
+// doc calls it, and what the acceptance gate was written against. So a correct
+// design scored as a missing master (B56).
+//
+// The enumeration was never the problem here. `instancesOf` compared against
+// the main component's OWN name, and a variant's own name is `State=<Value>`;
+// the family name lives on the set.
+
+const variantCandidates = [
+  {
+    id: 'I454:5452;453:3882;454:5489',
+    name: 'Error block',
+    type: 'INSTANCE',
+    componentKey: 'k-error',
+    instancesOf: 'State=Error',
+    instancesOfSet: 'State block',
+  },
+  {
+    id: 'I454:5346;453:3882;454:5370',
+    name: 'Empty block',
+    type: 'INSTANCE',
+    componentKey: 'k-empty',
+    instancesOf: 'State=Empty',
+    instancesOfSet: 'State block',
+  },
+  {
+    // A plain, set-less component's instance — no set name to match on.
+    id: '1:45',
+    name: 'Action Button',
+    type: 'INSTANCE',
+    componentKey: 'btn-key-123',
+    instancesOf: 'Button',
+  },
+]
+
+describe('handleSearch — instancesOf reaches a variant family (B56)', () => {
+  const found = async (instancesOf: string) => {
+    const result = await handleSearch(
+      { match: { instancesOf } },
+      stubClient({ results: variantCandidates }),
+    )
+    return (
+      YAML.parse(result.content[0].text) as {
+        results: { id: string }[]
+      }
+    ).results.map(r => r.id)
+  }
+
+  it('finds every variant of a set by the SET name', async () => {
+    expect(await found('State block')).toEqual([
+      'I454:5452;453:3882;454:5489',
+      'I454:5346;453:3882;454:5370',
+    ])
+  })
+
+  it('still finds one variant by its own name', async () => {
+    expect(await found('State=Error')).toEqual([
+      'I454:5452;453:3882;454:5489',
+    ])
+  })
+
+  it('still finds a set-less component by its name', async () => {
+    expect(await found('Button')).toEqual(['1:45'])
+  })
+
+  it('matches nothing for a name that is neither', async () => {
+    expect(await found('State blocks')).toEqual([])
+  })
+})

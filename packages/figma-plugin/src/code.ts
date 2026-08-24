@@ -58,7 +58,9 @@ import {
   type LiveNode,
 } from './enrich-nodes'
 import {
+  componentSetOf,
   repairScan,
+  type ExportedHost,
   type ScanFailure,
 } from './search-candidates'
 import {
@@ -3277,6 +3279,15 @@ const handleCommand = async (
               if (main) {
                 candidate.componentKey = main.key
                 candidate.instancesOf = main.name
+                // B56 — a VARIANT's own name is `State=Error`; the FAMILY is
+                // named on its set (`State block`), and the set name is the
+                // only one a human ever sees. The matcher tests both, so carry
+                // both. Guarded on its own: the candidate must not be lost
+                // because a parent read threw.
+                const set = componentSetOf(main)
+                if (set !== undefined) {
+                  candidate.instancesOfSet = set
+                }
               }
             }
 
@@ -3394,23 +3405,41 @@ const handleCommand = async (
                 : {
                     key: (main as ComponentNode).key,
                     name: main.name,
+                    setName: componentSetOf(
+                      main as unknown as {
+                        name?: unknown
+                        parent?: unknown
+                      },
+                    ),
                   }
             }
           : undefined,
+        // The WHOLE export, not just `document` (B56). `components` says what
+        // each `componentId` in the subtree is called and which set it belongs
+        // to, and `componentSets` names the family — the two maps this call
+        // used to drop on the floor, leaving a repaired INSTANCE with an id and
+        // no name for it.
         exportHost: async index => {
           try {
-            const raw = await scanned[
+            const raw = (await scanned[
               index
             ].node.exportAsync({
               format: 'JSON_REST_V1',
-            })
-            const document = (
-              raw as unknown as Record<string, unknown>
-            ).document
-            return typeof document === 'object' &&
-              document !== null
-              ? (document as Record<string, unknown>)
-              : undefined
+            })) as unknown as Record<string, unknown>
+            const document = raw.document
+            if (
+              typeof document !== 'object' ||
+              document === null
+            ) {
+              return undefined
+            }
+            return {
+              document: document as Record<string, unknown>,
+              components:
+                raw.components as ExportedHost['components'],
+              componentSets:
+                raw.componentSets as ExportedHost['componentSets'],
+            }
           } catch {
             // The host cannot describe itself either — the failures it would
             // have covered stay warnings.

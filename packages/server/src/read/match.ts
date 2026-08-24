@@ -18,6 +18,10 @@ import type { Match } from '@figma-agent-bridge/shared/read-model'
  * the matcher.
  *   componentKey — the INSTANCE's main-component key (getMainComponentAsync)
  *   instancesOf  — the INSTANCE's main-component name
+ *   instancesOfSet — the name of the COMPONENT_SET that main belongs to, when
+ *                    it is a variant (`State=Error` has it; a stand-alone
+ *                    component does not). `match.instancesOf` tests BOTH, so a
+ *                    family can be addressed by the name a human reads (B56).
  *   styleId / styleIds   — a style reference id, or (the plugin's emission) the
  *                          node's set of fill/text/effect/stroke/grid style ids
  *   variableId / variableIds — a bound variable id, or (the plugin's emission)
@@ -34,6 +38,7 @@ type MatchableNode = NodeSpec & {
   variableId?: string
   variableIds?: string[]
   instancesOf?: string
+  instancesOfSet?: string
 }
 
 /** Convert a glob pattern (supports * wildcard) to an anchored RegExp. */
@@ -113,11 +118,19 @@ export const buildMatcher = (
     )
   }
 
+  // `instancesOf` names a FAMILY, and a variant family is named on its SET.
+  // A variant component's own name is `State=Error`; the name a human ever
+  // sees — the components panel, the design doc, the acceptance gate — is the
+  // set's, `State block`. Matching only the main's own name meant a design with
+  // two provable instances scored as a missing master (B56). Either name
+  // matches; neither is dropped.
   if (m.instancesOf !== undefined) {
     const compName = m.instancesOf
     predicates.push(
       n =>
-        n.type === 'INSTANCE' && n.instancesOf === compName,
+        n.type === 'INSTANCE' &&
+        (n.instancesOf === compName ||
+          n.instancesOfSet === compName),
     )
   }
 

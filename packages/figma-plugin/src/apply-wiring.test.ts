@@ -164,11 +164,13 @@ describe('REPARENT_NODE position wiring', () => {
   })
 })
 
-// B56 — repairScan can only resolve an export-served instance's main component
-// through a resolver the SEARCH case hands it. The pure side is fully tested in
-// search-candidates.test.ts and would stay green with the dep dropped, and the
-// server mock is a double: only a live search would notice `instancesOf`
-// answering zero again.
+// B56 — repairScan can only name an export-served instance's main component
+// from what the SEARCH case hands it: the export's `components` /
+// `componentSets` maps, and a live resolver for the runtime that omits them.
+// The pure side is fully tested in search-candidates.test.ts and would stay
+// green with either dropped, and the server mock is a double — only a live
+// search would notice `instancesOf` answering zero again, which is exactly how
+// the first cut of this fix reached live verification and failed there.
 const searchCase = ((): string => {
   const from = callers.indexOf(
     'const repaired = await repairScan(',
@@ -193,6 +195,21 @@ describe('SEARCH repair wiring', () => {
     )
     expect(searchCase).toContain('componentRefOf')
     expect(searchCase).toContain('getNodeByIdAsync')
+  })
+
+  // The export is `{document, components, componentSets, …}`. Keeping only
+  // `document` is what left a repaired INSTANCE holding a componentId with no
+  // name for it — the maps are the primary source, the live resolver only the
+  // fallback.
+  it('keeps the export maps, not just the document', () => {
+    expect(searchCase).toContain('raw.components')
+    expect(searchCase).toContain('raw.componentSets')
+  })
+
+  // A variant's own name is `State=Error`; the family is named on the set, and
+  // the set name is the one an operator writes.
+  it('carries the family name on the live fallback too', () => {
+    expect(searchCase).toContain('componentSetOf(')
   })
 })
 
@@ -247,5 +264,30 @@ describe('applyLayout warning-sink wiring', () => {
     )
     expect(call.length).toBeGreaterThan(20)
     expect(call).toContain('warnings')
+  })
+})
+
+// B56 — and the path the live repro actually travelled. Both slot-nested
+// instances read fine (whether a handle answers is session state, not shape),
+// so their rows came from the LIVE candidate build, not from a repair. That
+// build must carry the family name too, or `instancesOf:'State block'` answers
+// zero on a document with nothing degraded about it at all.
+const liveCandidateRef = ((): string => {
+  const from = callers.indexOf('getMainComponentAsync()')
+  const to = callers.indexOf('collectStyleId', from)
+  return from === -1 || to === -1
+    ? ''
+    : callers.slice(from, to)
+})()
+
+describe('SEARCH live-candidate component ref wiring', () => {
+  it('actually found the enrichment (liveness)', () => {
+    expect(liveCandidateRef.length).toBeGreaterThan(100)
+    expect(liveCandidateRef).toContain('instancesOf')
+  })
+
+  it('emits the family name beside the main component name', () => {
+    expect(liveCandidateRef).toContain('componentSetOf(')
+    expect(liveCandidateRef).toContain('instancesOfSet')
   })
 })
