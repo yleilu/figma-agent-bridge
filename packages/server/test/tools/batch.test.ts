@@ -302,6 +302,38 @@ describe('handleBatch', () => {
     ).toBe(true)
   })
 
+  // B57 — a batch is where a family gets re-floored, so the one-way clamp note
+  // has to say the same thing here that a direct update_node says. Parity, not
+  // a second implementation.
+  it('surfaces the one-way clamp warning on a batched update_node entry', async () => {
+    const result = await handleBatch(
+      {
+        ops: [
+          {
+            op: 'update_node',
+            nodeId: '1:1',
+            patch: { minWidth: 320 },
+          },
+          {
+            op: 'update_node',
+            nodeId: '1:2',
+            patch: { minWidth: null },
+          },
+        ],
+      },
+      stubClient({}),
+    )
+    const out = parse(
+      result.content[0].text,
+    ) as BatchOut & {
+      results: { warnings?: string[] }[]
+    }
+    for (const row of out.results) {
+      expect(row.warnings ?? []).toHaveLength(1)
+      expect((row.warnings ?? [])[0]).toContain('minWidth')
+    }
+  })
+
   it('does not attach an empty warnings[] when an update_node entry is clean', async () => {
     const result = await handleBatch(
       {
@@ -652,5 +684,103 @@ describe('batch op set matches the spec', () => {
         ops: [{}],
       }),
     ).toThrow()
+  })
+})
+
+describe('handleBatch — SPACE_BETWEEN + bound gap (B58)', () => {
+  // A batch converts every entry BEFORE dispatching, so the pair has to be
+  // caught on the entry that carries it — and the batch must still be honest
+  // about which entry failed rather than sinking the whole call.
+  it('fails ONLY the offending entry, and names the node', async () => {
+    const result = await handleBatch(
+      {
+        ops: [
+          {
+            op: 'update_node',
+            nodeId: '454:4934',
+            patch: {
+              layout: {
+                mode: 'H',
+                align: ['SPACE_BETWEEN', 'CENTER'],
+                gap: 'var(space/16)16',
+              },
+            },
+          },
+          {
+            op: 'update_node',
+            nodeId: '1:1',
+            patch: { opacity: 0.5 },
+          },
+        ],
+      },
+      stubClient({}),
+    )
+    const out = parse(
+      result.content[0].text,
+    ) as BatchOut & {
+      results: { ok: boolean; error?: string }[]
+    }
+    // Partial success (D3): one bad entry never sinks the rest.
+    expect(out.results[0].ok).toBe(false)
+    expect(out.results[0].error).toContain('SPACE_BETWEEN')
+    expect(out.results[0].error).toContain('454:4934')
+    expect(out.results[1].ok).toBe(true)
+  })
+
+  it('lets a literal gap through', async () => {
+    const sent: Sent[] = []
+    await handleBatch(
+      {
+        ops: [
+          {
+            op: 'update_node',
+            nodeId: '454:4934',
+            patch: {
+              layout: {
+                mode: 'H',
+                align: ['SPACE_BETWEEN', 'CENTER'],
+                gap: 16,
+              },
+            },
+          },
+        ],
+      },
+      stubClient({ sent }),
+    )
+    expect(sent).toHaveLength(1)
+  })
+})
+
+// B58 — `clear` must be spelled the same everywhere. batch derives its entry
+// schemas from the tool param schemas, so this is really a check that the new
+// field was added to the SCHEMA rather than only to the handler: a strict
+// schema (M22b) would reject `clear` as an unknown key otherwise.
+describe('handleBatch — bind_variable clear (B58)', () => {
+  it('accepts a clear entry and forwards it verbatim', async () => {
+    const sent: Sent[] = []
+    const result = await handleBatch(
+      {
+        ops: [
+          {
+            op: 'bind_variable',
+            nodeId: '1:42',
+            field: 'itemSpacing',
+            clear: true,
+          },
+        ],
+      },
+      stubClient({ sent }),
+    )
+    const out = parse(
+      result.content[0].text,
+    ) as BatchOut & {
+      results: { ok: boolean; error?: string }[]
+    }
+    expect(out.results[0].ok).toBe(true)
+    const ops = sent[0].params?.ops as {
+      params: Record<string, unknown>
+    }[]
+    expect(ops[0].params.clear).toBe(true)
+    expect(ops[0].params.field).toBe('itemSpacing')
   })
 })

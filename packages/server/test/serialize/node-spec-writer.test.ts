@@ -12,6 +12,7 @@ import {
   specToFigma,
   specToFigmaForCreate,
   slotEntryToFigma,
+  oneWayClampWarnings,
 } from '@figma-agent-bridge/server/serialize/node-spec-writer'
 
 // ─── omit-untouched (pure) ───────────────────────────────────────────────────
@@ -1212,5 +1213,184 @@ describe('specToFigma — sectionContentsHidden', () => {
   it('omits sectionContentsHidden when absent from spec', () => {
     const result = specToFigma({ type: 'SECTION' } as never)
     expect(result.sectionContentsHidden).toBeUndefined()
+  })
+})
+
+// ─── B57: the one-way clamp is announced ─────────────────────────────────────
+//
+// Figma's min/max is a one-way clamp. Writing `minWidth: 320` on a master
+// forced an instance carrying a FIXED width 238 up to 320 — expected, the
+// family is bound. Dropping the min back down left the instance at 320: the
+// 238 override was gone, not restored. A hugging instance and the hugging
+// MASTER stayed at the clamped value too, and hug did not re-resolve.
+//
+// The apply is faithful — this is Figma's own semantics, and the plugin does a
+// plain property set. What was missing is the warning: the surface reported ok
+// with empty warnings while destroying a size the operator would have to
+// re-enter by hand.
+
+describe('oneWayClampWarnings (B57)', () => {
+  it('says nothing for a patch that touches no clamp', () => {
+    expect(
+      oneWayClampWarnings({ size: [100, 100] }),
+    ).toEqual([])
+  })
+
+  it('warns on a written floor, naming the field', () => {
+    const w = oneWayClampWarnings({ minHeight: 240 })
+    expect(w).toHaveLength(1)
+    expect(w[0]).toContain('minHeight')
+    expect(w[0].toLowerCase()).toContain('one-way')
+  })
+
+  it('warns on a CLEARED floor too — clearing restores nothing', () => {
+    const w = oneWayClampWarnings({ minWidth: null })
+    expect(w).toHaveLength(1)
+    expect(w[0]).toContain('minWidth')
+    // The half that bit S38: a clear reads like an undo and is not one.
+    expect(w[0]).toContain('restore')
+  })
+
+  it('names every clamp the patch touched, one warning each', () => {
+    const w = oneWayClampWarnings({
+      minWidth: 100,
+      maxWidth: 400,
+      minHeight: null,
+      maxHeight: 800,
+    })
+    expect(w).toHaveLength(4)
+    for (const field of [
+      'minWidth',
+      'maxWidth',
+      'minHeight',
+      'maxHeight',
+    ]) {
+      expect(w.some(m => m.includes(field))).toBe(true)
+    }
+  })
+
+  it('tells the operator what to do about it', () => {
+    // S38's doctrine: re-check the sizes of the family after a floor moves.
+    const w = oneWayClampWarnings({ minWidth: 320 })
+    expect(w[0]).toContain('sizing')
+  })
+})
+
+// ─── B58: SPACE_BETWEEN + a variable-bound gap is refused ────────────────────
+//
+// `align` primary SPACE_BETWEEN means Figma decides the spacing; a `gap` bound
+// to a variable means the gap is that token. Figma's plugin API stores and
+// renders the contradiction — a bar written this way looked right for days —
+// while the UI properties panel silently rewrites the align to MIN the first
+// time anyone clicks the node. Live-proven with a discriminating pair: the
+// literal-gap bar survived a click, the var-bound twin collapsed.
+//
+// convertLayout is the choke point every write path funnels through, so one
+// rule here covers create_node, create_tree, update_node, batch's update_node
+// and the update_component slot specs.
+
+describe('specToFigma — SPACE_BETWEEN + bound gap (B58)', () => {
+  const pair = {
+    layout: {
+      mode: 'H' as const,
+      align: ['SPACE_BETWEEN', 'CENTER'],
+      gap: 'var(space/16)16',
+    },
+  }
+
+  it('refuses the pair', () => {
+    expect(() => specToFigma(pair as never)).toThrow(
+      /SPACE_BETWEEN/,
+    )
+  })
+
+  it('names all three ways out', () => {
+    let message = ''
+    try {
+      specToFigma(pair as never)
+    } catch (err) {
+      message = (err as Error).message
+    }
+    expect(message).toContain('drop the align')
+    expect(message).toContain('LITERAL gap')
+    expect(message).toContain('drop the gap entirely')
+  })
+
+  it('names the node when the caller knows one', () => {
+    let message = ''
+    try {
+      specToFigma(pair as never, [], '454:4934')
+    } catch (err) {
+      message = (err as Error).message
+    }
+    expect(message).toContain('454:4934')
+  })
+
+  // The supported way to write both — Figma ignores the literal under
+  // space-between, and the pair survives a click.
+  it('ACCEPTS SPACE_BETWEEN with a plain literal gap', () => {
+    const out = specToFigma({
+      layout: {
+        mode: 'H',
+        align: ['SPACE_BETWEEN', 'CENTER'],
+        gap: 16,
+      },
+    } as never)
+    expect(
+      (out.layout as { spacing: number }).spacing,
+    ).toBe(16)
+  })
+
+  it('ACCEPTS a bound gap with any other align', () => {
+    const out = specToFigma({
+      layout: {
+        mode: 'H',
+        align: ['MIN', 'CENTER'],
+        gap: 'var(space/16)16',
+      },
+    } as never)
+    expect(
+      (out.layout as { spacing: number }).spacing,
+    ).toBe(16)
+    expect(out.bindings).toBeDefined()
+  })
+
+  it('ACCEPTS a bound gap with no align at all', () => {
+    expect(() =>
+      specToFigma({
+        layout: { mode: 'H', gap: 'var(space/16)16' },
+      } as never),
+    ).not.toThrow()
+  })
+
+  // The COUNTER axis is a different field; only the primary makes gaps auto.
+  it('ACCEPTS SPACE_BETWEEN on the COUNTER axis with a bound gap', () => {
+    expect(() =>
+      specToFigma({
+        layout: {
+          mode: 'H',
+          align: ['MIN', 'SPACE_BETWEEN'],
+          gap: 'var(space/16)16',
+        },
+      } as never),
+    ).not.toThrow()
+  })
+
+  it('refuses on the CREATE path too', () => {
+    expect(() =>
+      specToFigmaForCreate({
+        type: 'FRAME',
+        ...pair,
+      } as never),
+    ).toThrow(/SPACE_BETWEEN/)
+  })
+
+  it('refuses inside a slot spec', () => {
+    expect(() =>
+      slotEntryToFigma({
+        name: 'Pager',
+        ...pair,
+      } as never),
+    ).toThrow(/SPACE_BETWEEN/)
   })
 })

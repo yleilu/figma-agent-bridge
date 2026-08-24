@@ -529,6 +529,69 @@ describe('toNodeSpec — constraints REST→Plugin vocab', () => {
   })
 })
 
+// ─── min/max size read-back (B54) ────────────────────────────────────────────
+// `update_node` honours minWidth/minHeight/maxWidth/maxHeight (code.ts:875-888)
+// and the writer emits all four, but the READ dropped them: a min could only be
+// proved by its geometric effect, and nothing told an auditing agent whether a
+// node hugs at 240 because of a floor or because its content happens to be 240.
+// A field the surface writes must be a field the surface reads (T2).
+
+describe('toNodeSpec — min/max size read-back (B54)', () => {
+  const box = (over: Record<string, unknown>): NodeSpec =>
+    toNodeSpec(
+      {
+        id: '9:2',
+        name: 'Chart card',
+        type: 'FRAME',
+        ...over,
+      },
+      { depth: -1 },
+    )
+
+  it('emits a minHeight the write set', () => {
+    expect(box({ minHeight: 240 }).minHeight).toBe(240)
+  })
+
+  it('emits all four when all four are set', () => {
+    const spec = box({
+      minWidth: 100,
+      maxWidth: 400,
+      minHeight: 50,
+      maxHeight: 800,
+    })
+    expect([
+      spec.minWidth,
+      spec.maxWidth,
+      spec.minHeight,
+      spec.maxHeight,
+    ]).toEqual([100, 400, 50, 800])
+  })
+
+  it('emits nothing for a node that has no floor or ceiling', () => {
+    const spec = box({})
+    expect('minWidth' in spec).toBe(false)
+    expect('maxWidth' in spec).toBe(false)
+    expect('minHeight' in spec).toBe(false)
+    expect('maxHeight' in spec).toBe(false)
+  })
+
+  it('omits a cleared field rather than emitting null noise', () => {
+    // `minHeight: null` is how Figma reports "no floor", and how the write
+    // clears one. Emitting it on every node would put four null keys on every
+    // node in a large read for no information (T4).
+    const spec = box({ minWidth: 100, minHeight: null })
+    expect(spec.minWidth).toBe(100)
+    expect('minHeight' in spec).toBe(false)
+  })
+
+  it('survives the round trip back through specToFigma', () => {
+    const spec = box({ minWidth: 100, maxHeight: 800 })
+    const payload = specToFigma(spec)
+    expect(payload.minWidth).toBe(100)
+    expect(payload.maxHeight).toBe(800)
+  })
+})
+
 describe('toNodeSpec — rotation REST radians → Plugin degrees', () => {
   const rot = (rad: number): NodeSpec['rotation'] =>
     toNodeSpec(

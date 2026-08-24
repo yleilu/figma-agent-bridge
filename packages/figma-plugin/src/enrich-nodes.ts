@@ -141,6 +141,14 @@ const LAYOUT_BOUND_FIELDS = [
   'gridColumnGap',
 ] as const
 
+/** The four auto-layout size clamps a write sets and a read must return (B54). */
+const MIN_MAX_FIELDS = [
+  'minWidth',
+  'maxWidth',
+  'minHeight',
+  'maxHeight',
+] as const
+
 /** The node's agent-authored `context`, or undefined when it has none. */
 export const readContext = (
   n: LiveNode,
@@ -307,6 +315,21 @@ export const syncPatch = (
       patch.strokeRightWeight = sides[1]
       patch.strokeBottomWeight = sides[2]
       patch.strokeLeftWeight = sides[3]
+    }
+  }
+
+  // minWidth / maxWidth / minHeight / maxHeight (B54) — the four auto-layout
+  // size clamps. `update_node` writes them (code.ts) and the layout obeys them,
+  // but no read channel carried them, so a floor could only be proved by its
+  // geometric effect. They ride the live patch because the export does not
+  // reliably carry them, and the live node is the value the write just set.
+  //
+  // Only a NUMBER travels. Figma reports an absent clamp as `null`, and four
+  // null keys on every frame of a big read buy nothing (T4) — the absence
+  // already says "no floor".
+  for (const field of MIN_MAX_FIELDS) {
+    if (field in node && typeof node[field] === 'number') {
+      patch[field] = node[field]
     }
   }
 

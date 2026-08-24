@@ -12,6 +12,7 @@ import type { NodeSpecPatch } from '@figma-agent-bridge/shared/node-spec'
 import type { ScopedFigmaClient } from '../figma-client'
 import {
   specToFigma,
+  oneWayClampWarnings,
   unknownPatchKeyWarnings,
 } from '../serialize/node-spec-writer'
 import { assertContextWithinCap } from '../serialize/context-cap'
@@ -36,10 +37,13 @@ export const handleUpdateNode = async (
     // The writer pushes lossy-conversion notes (e.g. GRID-only layout keys on
     // an H/V mode) onto `warnings`.
     const warnings: string[] = []
-    const spec = specToFigma(patch, warnings)
+    const spec = specToFigma(patch, warnings, nodeId)
     // A key the write face does not know is DROPPED, not applied — say so
     // rather than reporting a success that moved nothing (T7).
     warnings.push(...unknownPatchKeyWarnings(patch, spec))
+    // B57 — a min/max write (or clear) destroys the size it overwrites and
+    // Figma restores nothing. The apply is faithful; the silence was not.
+    warnings.push(...oneWayClampWarnings(patch))
     // sendConvertedWrite, not sendCommand: a style named on
     // fills/strokes/effects/grids owns that field, and its name is resolved on
     // the way out, before the patch reaches the document (rules 3 and 4).

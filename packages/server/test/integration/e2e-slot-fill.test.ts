@@ -336,15 +336,14 @@ describe('M2b slot-fill e2e (T7 instance-lock wrap)', () => {
     )
   })
 
-  // --- final-review I-1: a hinted search over a repaired subtree ---
+  // --- B56 (was final-review I-1): a hinted search over a repaired subtree ---
   //
-  // The repair trades the alias row for the one the export names. The export
-  // row is addressable where the alias was not, but it cannot carry
-  // componentKey / instancesOf / styleIds / context, so a hinted match returns
-  // one row fewer than 0.5.0 did. That limit is acceptable; discovering it by
-  // counting is not. This asserts the plugin's warning survives the server's
-  // matcher and projection and lands in front of the agent.
-  it('a hinted match over a repaired subtree returns fewer rows AND says why', async () => {
+  // The repair trades the alias row for the one the export names. That row used
+  // to carry no `instancesOf`, so `search {instancesOf}` answered zero against
+  // instances that provably exist — an acceptance gate counting instances
+  // scored a correct design as missing its master. The export DOES name each
+  // instance's main by id, so the plugin resolves the name and the match lands.
+  it('a hinted match over a repaired subtree FINDS the row', async () => {
     const result = await handleSearch(
       {
         scope: 'page',
@@ -354,13 +353,15 @@ describe('M2b slot-fill e2e (T7 instance-lock wrap)', () => {
       scoped,
     )
     const reply = JSON.parse(result.content[0].text) as {
-      results: unknown[]
+      results: { id: string }[]
       warnings?: string[]
     }
-    // The row really is gone — the export twin has no `instancesOf` to match.
-    expect(reply.results).toHaveLength(0)
-    // Control, so the emptiness is the MATCHER and not a broken fixture: the
-    // same page unfiltered still returns the repaired rows.
+    expect(reply.results).toHaveLength(1)
+    expect(reply.results[0].id).toBe(
+      'I298:7517;298:7516;298:7523',
+    )
+    // Control, so a pass is the MATCHER and not a broken fixture: the same page
+    // unfiltered returns both repaired rows, and the TEXT row does not match.
     const unfiltered = await handleSearch(
       { scope: 'page', pageId: 'repaired:1' },
       scoped,
@@ -372,16 +373,97 @@ describe('M2b slot-fill e2e (T7 instance-lock wrap)', () => {
         }
       ).results,
     ).toHaveLength(2)
-    // …and the reply is NOT clean about it.
-    expect(reply.warnings).toBeDefined()
+  })
+
+  // What the repair still costs is still SAID. `styleIds` and `context` are
+  // live-only reads with no export twin, so a match on those keys really does
+  // stop finding this node — and a reply that reported clean while returning
+  // fewer rows is the failure this whole line of work exists to remove.
+  it('still names the keys the repair genuinely cost', async () => {
+    const result = await handleSearch(
+      {
+        scope: 'page',
+        pageId: 'repaired:1',
+        match: { instancesOf: 'Chip' },
+      },
+      scoped,
+    )
+    const reply = JSON.parse(result.content[0].text) as {
+      warnings?: string[]
+    }
     const traded = (reply.warnings ?? []).filter(w =>
       w.includes('298:7519'),
     )
     expect(traded).toHaveLength(1)
-    expect(traded[0]).toContain('instancesOf')
     expect(traded[0]).toContain(
       'I298:7517;298:7516;298:7523',
     )
+    expect(traded[0]).toContain('context')
+    expect(traded[0]).toContain('styleIds')
+    // …and no longer names the two the repair now recovers.
+    expect(traded[0]).not.toContain('instancesOf')
+  })
+
+  // ─── B56 live root cause: address a variant family by the name humans use ──
+  //
+  // Live evidence, file MFMyzjEZyH5cVyrNejdbyP:
+  //   454:5478 — COMPONENT_SET "State block"
+  //   454:5477 — COMPONENT "State=Error", one of its variants
+  //   I454:5452;453:3882;454:5489 — an INSTANCE of 454:5477
+  //
+  // `search {instancesOf:'State=Error'}` found it. `search {instancesOf:'State
+  // block'}` found NOTHING — and "State block" is the only name that appears in
+  // the components panel, in the design doc, or in the acceptance gate. The
+  // enumeration was never at fault: the matcher compared the main component's
+  // OWN name, and a variant's own name is `State=<Value>`.
+  //
+  // The plugin's half — deriving both names from the export's `components` /
+  // `componentSets` maps — is proved in search-candidates.test.ts, which is the
+  // only place repairScan actually runs. This is the server's half: the wire
+  // shape the plugin emits, through the matcher, to the reply.
+
+  const idsFound = async (instancesOf: string) => {
+    const result = await handleSearch(
+      {
+        scope: 'page',
+        pageId: 'variants:1',
+        match: { instancesOf },
+      },
+      scoped,
+    )
+    return (
+      JSON.parse(result.content[0].text) as {
+        results: { id: string }[]
+      }
+    ).results.map(r => r.id)
+  }
+
+  it('B56: finds every instance of a variant family by the SET name', async () => {
+    expect(await idsFound('State block')).toEqual([
+      'I454:5452;453:3882;454:5489',
+      'I454:5346;453:3882;454:5370',
+    ])
+  })
+
+  it('B56: still finds one variant by its own name', async () => {
+    expect(await idsFound('State=Error')).toEqual([
+      'I454:5452;453:3882;454:5489',
+    ])
+  })
+
+  it('B56: a family match filters — it does not just return the page', async () => {
+    const all = await handleSearch(
+      { scope: 'page', pageId: 'variants:1' },
+      scoped,
+    )
+    expect(
+      (
+        JSON.parse(all.content[0].text) as {
+          results: unknown[]
+        }
+      ).results,
+    ).toHaveLength(3)
+    expect(await idsFound('State blocks')).toEqual([])
   })
 
   it('a compound id that names nothing is a clean, repeatable refusal', async () => {

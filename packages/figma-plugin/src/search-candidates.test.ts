@@ -5,6 +5,7 @@ import { describe, expect, it } from 'bun:test'
 import {
   candidateFromExport,
   candidatesFromExport,
+  componentSetOf,
   repairScan,
   type Candidate,
   type ScanEntry,
@@ -218,7 +219,7 @@ describe('repairScan — repair without downgrading (C1)', () => {
   it('keeps a healthy sibling LIVE, with the fields no export can carry', async () => {
     const { results } = await repairScan({
       ...frameHosted(),
-      exportHost: async () => frameDoc(),
+      exportHost: async () => ({ document: frameDoc() }),
     })
     const byId = new Map(
       results.map(r => [r.id as string, r]),
@@ -243,7 +244,7 @@ describe('repairScan — repair without downgrading (C1)', () => {
     const { results } = await repairScan({
       ...frameHosted(),
       hints: { characters: true },
-      exportHost: async () => frameDoc(),
+      exportHost: async () => ({ document: frameDoc() }),
     })
     const ids = results.map(r => r.id)
     expect(ids).toContain(CANON)
@@ -275,7 +276,9 @@ describe('repairScan — repair without downgrading (C1)', () => {
       ...fixture,
       exportHost: async index => {
         expect(index).toBe(3)
-        return (frameDoc().children as RawNode[])[2]
+        return {
+          document: (frameDoc().children as RawNode[])[2],
+        }
       },
     })
     const ids = results.map(r => r.id)
@@ -289,7 +292,7 @@ describe('repairScan — repair without downgrading (C1)', () => {
   it('says nothing when the export covered the loss', async () => {
     const { warnings } = await repairScan({
       ...frameHosted(),
-      exportHost: async () => frameDoc(),
+      exportHost: async () => ({ document: frameDoc() }),
     })
     expect(warnings).toEqual([])
   })
@@ -333,7 +336,7 @@ describe('repairScan — repair without downgrading (C1)', () => {
       ],
       exportHost: async index => {
         asked.push(index)
-        return frameDoc()
+        return { document: frameDoc() }
       },
     })
     expect(asked).toEqual([0])
@@ -351,7 +354,13 @@ describe('repairScan — repair without downgrading (C1)', () => {
       maxRepairs: 1,
       exportHost: async index => {
         asked.push(index)
-        return { id: '2:2', name: '2:2', type: 'INSTANCE' }
+        return {
+          document: {
+            id: '2:2',
+            name: '2:2',
+            type: 'INSTANCE',
+          },
+        }
       },
     })
     expect(asked).toEqual([1])
@@ -396,8 +405,9 @@ describe('repairScan — repair without downgrading (C1)', () => {
     ]
     const { results, warnings } = await repairScan({
       ...fixture,
-      exportHost: async () =>
-        (frameDoc().children as RawNode[])[2],
+      exportHost: async () => ({
+        document: (frameDoc().children as RawNode[])[2],
+      }),
     })
     // The limit itself: the row is gone from a match on those keys.
     expect(
@@ -435,8 +445,9 @@ describe('repairScan — repair without downgrading (C1)', () => {
     ]
     const { warnings } = await repairScan({
       ...fixture,
-      exportHost: async () =>
-        (frameDoc().children as RawNode[])[2],
+      exportHost: async () => ({
+        document: (frameDoc().children as RawNode[])[2],
+      }),
     })
     expect(warnings).toEqual([])
   })
@@ -448,7 +459,9 @@ describe('repairScan — repair without downgrading (C1)', () => {
     const { results, warnings } = await repairScan({
       ...fixture,
       // A document the candidate builder can make nothing of (no id).
-      exportHost: async () => ({ name: 'anon' }),
+      exportHost: async () => ({
+        document: { name: 'anon' },
+      }),
     })
     expect(results.map(r => r.id)).toEqual([
       '2:1',
@@ -474,8 +487,414 @@ describe('repairScan — repair without downgrading (C1)', () => {
     ]
     const { warnings } = await repairScan({
       ...fixture,
-      exportHost: async () => frameDoc(),
+      exportHost: async () => ({ document: frameDoc() }),
     })
     expect(warnings).toEqual(['search: skipped 9:9'])
+  })
+})
+
+// ─── B56: a slot-nested INSTANCE is findable by instancesOf ───────────────────
+//
+// `search {instancesOf:'State block'}` answered `results: []` against two
+// provable instances. The B48 repair already recovered the rows — but it
+// recovered them from the export, and the export row carried no `instancesOf`,
+// so the matcher had nothing to match on. Any instancesOf-based acceptance gate
+// under-counts a correct design.
+//
+// The export names the main component by ID (`componentId`), and a main
+// component is a plain, top-level node whose handle always answers. So the
+// repair carries the id out and resolves the NAME and KEY through the caller.
+
+/** A Chart card instance whose Plot-area slot holds a State block instance. */
+const slotHostDoc = (): RawNode => ({
+  id: CANON,
+  name: 'Chart card',
+  type: 'INSTANCE',
+  componentId: '453:3800',
+  children: [
+    {
+      id: CANON + ';298:7530',
+      name: 'Plot area',
+      type: 'FRAME',
+      children: [
+        {
+          id: CANON + ';298:7531',
+          name: 'State block',
+          type: 'INSTANCE',
+          componentId: '454:5477',
+        },
+      ],
+    },
+  ],
+})
+
+describe('candidateFromExport — component reference (B56)', () => {
+  it('carries the main component id out when the caller asked for refs', () => {
+    const c = candidateFromExport(
+      {
+        id: 'x',
+        name: 'State block',
+        type: 'INSTANCE',
+        componentId: '454:5477',
+      },
+      { componentRef: true },
+    )
+    expect(c?.mainComponentId).toBe('454:5477')
+  })
+
+  it('carries nothing when the caller did not ask', () => {
+    const c = candidateFromExport({
+      id: 'x',
+      name: 'State block',
+      type: 'INSTANCE',
+      componentId: '454:5477',
+    })
+    expect('mainComponentId' in (c ?? {})).toBe(false)
+  })
+
+  it('carries nothing for a node that is not an instance', () => {
+    const c = candidateFromExport(
+      { id: 'x', name: 'Plot area', type: 'FRAME' },
+      { componentRef: true },
+    )
+    expect('mainComponentId' in (c ?? {})).toBe(false)
+  })
+})
+
+describe('repairScan — instancesOf survives the repair (B56)', () => {
+  const slotHosted = (): Fixture => ({
+    scanned: [
+      { id: '2:1', levelsLeft: -1, subtreeEnd: 2 },
+      { id: '298:7519', levelsLeft: -1, subtreeEnd: 2 },
+    ],
+    candidates: [live('2:1', { type: 'FRAME' }), undefined],
+    failures: [
+      {
+        at: 1,
+        host: 0,
+        message:
+          'search: skipped the children of 298:7519: The node does not exist',
+      },
+    ],
+  })
+
+  const hostDoc = (): RawNode => ({
+    id: '2:1',
+    name: 'Page',
+    type: 'FRAME',
+    children: [slotHostDoc()],
+  })
+
+  it('finds the slot-nested instance by its main component NAME', async () => {
+    const { results } = await repairScan({
+      ...slotHosted(),
+      hints: { componentRef: true },
+      exportHost: async () => ({ document: hostDoc() }),
+      componentRefOf: async id =>
+        id === '454:5477'
+          ? { key: 'k-state', name: 'State block' }
+          : { key: 'k-chart', name: 'Chart card' },
+    })
+    const nested = results.find(
+      r => r.id === CANON + ';298:7531',
+    )
+    expect(nested?.instancesOf).toBe('State block')
+    expect(nested?.componentKey).toBe('k-state')
+    // The slot host itself resolves too — it is an instance as well.
+    expect(
+      results.find(r => r.id === CANON)?.instancesOf,
+    ).toBe('Chart card')
+  })
+
+  it('asks for each distinct main component once', async () => {
+    const asked: string[] = []
+    await repairScan({
+      ...slotHosted(),
+      hints: { componentRef: true },
+      exportHost: async () => ({ document: hostDoc() }),
+      componentRefOf: async id => {
+        asked.push(id)
+        return { name: 'X' }
+      },
+    })
+    expect(asked.length).toBe(new Set(asked).size)
+  })
+
+  it('never leaks the internal marker to the caller', async () => {
+    const { results } = await repairScan({
+      ...slotHosted(),
+      hints: { componentRef: true },
+      exportHost: async () => ({ document: hostDoc() }),
+      componentRefOf: async () => undefined,
+    })
+    expect(results.some(r => 'mainComponentId' in r)).toBe(
+      false,
+    )
+  })
+
+  it('drops the marker, and claims nothing, with no resolver at all', async () => {
+    const { results } = await repairScan({
+      ...slotHosted(),
+      hints: { componentRef: true },
+      exportHost: async () => ({ document: hostDoc() }),
+    })
+    const nested = results.find(
+      r => r.id === CANON + ';298:7531',
+    )
+    expect(nested).toBeDefined()
+    expect('mainComponentId' in (nested ?? {})).toBe(false)
+    expect(nested?.instancesOf).toBeUndefined()
+  })
+
+  it('stops naming instancesOf as lost when the repair can resolve it', async () => {
+    // The trade warning exists because an export row could not carry the four
+    // live-only keys. Two of them it now can, so saying they were lost would
+    // send an operator hunting a filter that works.
+    const fixture = slotHosted()
+    fixture.candidates[1] = live('298:7519', {
+      name: 'Chart card',
+      componentKey: 'k-chart',
+      instancesOf: 'Chart card',
+      context: 'the chart card',
+    })
+    fixture.failures = [
+      { at: -1, host: 1, message: 'search: skipped …' },
+    ]
+    const { warnings } = await repairScan({
+      ...fixture,
+      hints: { componentRef: true },
+      exportHost: async () => ({ document: slotHostDoc() }),
+      componentRefOf: async () => ({
+        key: 'k-chart',
+        name: 'Chart card',
+      }),
+    })
+    const traded = warnings.filter(w =>
+      w.includes('298:7519'),
+    )
+    expect(traded).toHaveLength(1)
+    expect(traded[0]).toContain('context')
+    expect(traded[0]).not.toContain('instancesOf')
+    expect(traded[0]).not.toContain('componentKey')
+  })
+})
+
+// ─── B56 live root cause: the export's own maps, and the FAMILY name ─────────
+//
+// The first cut of this fix carried `componentId` out and resolved it through a
+// live `getNodeByIdAsync`. Live verification says that is not where the answer
+// has to come from: the export already carries it. `exportAsync` returns
+// `{document, components, componentSets, …}` and the repair kept only
+// `document`, so the map that says what `componentId` is CALLED was thrown away
+// on every repair.
+//
+// And the name it resolves to is not the one an operator writes. Live, file
+// MFMyzjEZyH5cVyrNejdbyP: 454:5477 is a COMPONENT named `State=Error`, a
+// variant of COMPONENT_SET 454:5478 named `State block`. Only `State block` is
+// ever visible to a human. Both names travel now.
+
+describe('componentSetOf', () => {
+  it('names the set a variant belongs to', () => {
+    expect(
+      componentSetOf({
+        name: 'State=Error',
+        parent: {
+          type: 'COMPONENT_SET',
+          name: 'State block',
+        },
+      }),
+    ).toBe('State block')
+  })
+
+  it('answers undefined for a stand-alone component', () => {
+    expect(
+      componentSetOf({
+        name: 'Button',
+        parent: { type: 'PAGE', name: 'Page 1' },
+      }),
+    ).toBeUndefined()
+  })
+
+  it('answers undefined rather than throwing on a refusing handle', () => {
+    const hostile = {
+      name: 'X',
+      get parent(): never {
+        throw new Error('The node does not exist')
+      },
+    }
+    expect(() => componentSetOf(hostile)).not.toThrow()
+    expect(componentSetOf(hostile)).toBeUndefined()
+  })
+})
+
+describe('repairScan — refs come from the export maps (B56)', () => {
+  const variantHosted = (): Fixture => ({
+    scanned: [
+      { id: '2:1', levelsLeft: -1, subtreeEnd: 2 },
+      { id: '298:7519', levelsLeft: -1, subtreeEnd: 2 },
+    ],
+    candidates: [live('2:1', { type: 'FRAME' }), undefined],
+    failures: [
+      {
+        at: 1,
+        host: 0,
+        message:
+          'search: skipped the children of 298:7519: The node does not exist',
+      },
+    ],
+  })
+
+  /** A Chart card whose Plot-area slot holds a State block VARIANT instance. */
+  const variantHost = () => ({
+    document: {
+      id: '2:1',
+      name: 'Page',
+      type: 'FRAME',
+      children: [
+        {
+          id: CANON,
+          name: 'Chart card',
+          type: 'INSTANCE',
+          componentId: '453:3878',
+          children: [
+            {
+              id: CANON + ';454:5489',
+              name: 'Error block',
+              type: 'INSTANCE',
+              componentId: '454:5477',
+            },
+          ],
+        },
+      ],
+    },
+    components: {
+      '454:5477': {
+        key: '1c8fd659',
+        name: 'State=Error',
+        componentSetId: '454:5478',
+      },
+      '453:3878': { key: 'e09a5ee5', name: 'Chart card' },
+    },
+    componentSets: {
+      '454:5478': { name: 'State block' },
+    },
+  })
+
+  const rowsOf = async (
+    over: Partial<Parameters<typeof repairScan>[0]> = {},
+  ) => {
+    const { results } = await repairScan({
+      ...variantHosted(),
+      hints: { componentRef: true },
+      exportHost: async () => variantHost(),
+      ...over,
+    })
+    return new Map(results.map(r => [r.id as string, r]))
+  }
+
+  it('names the main from the export map — no live lookup at all', async () => {
+    const rows = await rowsOf()
+    const nested = rows.get(CANON + ';454:5489')
+    expect(nested?.instancesOf).toBe('State=Error')
+    expect(nested?.componentKey).toBe('1c8fd659')
+  })
+
+  // The live repro: the operator writes the SET name, because it is the only
+  // name Figma ever shows them.
+  it('carries the FAMILY name, so the set name can match', async () => {
+    const rows = await rowsOf()
+    expect(
+      rows.get(CANON + ';454:5489')?.instancesOfSet,
+    ).toBe('State block')
+  })
+
+  it('leaves a set-less component with no family name', async () => {
+    const rows = await rowsOf()
+    const card = rows.get(CANON)
+    expect(card?.instancesOf).toBe('Chart card')
+    expect('instancesOfSet' in (card ?? {})).toBe(false)
+  })
+
+  it('never asks the live resolver for an id the map already named', async () => {
+    const asked: string[] = []
+    await rowsOf({
+      componentRefOf: async id => {
+        asked.push(id)
+        return undefined
+      },
+    })
+    expect(asked).toEqual([])
+  })
+
+  it('falls back to the live resolver when the export omits the maps', async () => {
+    // A runtime whose subtree export carries no `components` — the only reason
+    // the live resolver still exists.
+    const rows = await rowsOf({
+      exportHost: async () => ({
+        document: variantHost().document,
+      }),
+      componentRefOf: async id =>
+        id === '454:5477'
+          ? {
+              key: 'k-live',
+              name: 'State=Error',
+              setName: 'State block',
+            }
+          : undefined,
+    })
+    const nested = rows.get(CANON + ';454:5489')
+    expect(nested?.instancesOf).toBe('State=Error')
+    expect(nested?.instancesOfSet).toBe('State block')
+    expect(nested?.componentKey).toBe('k-live')
+  })
+
+  it('claims no name when neither the map nor a resolver has one', async () => {
+    const rows = await rowsOf({
+      exportHost: async () => ({
+        document: variantHost().document,
+      }),
+    })
+    const nested = rows.get(CANON + ';454:5489')
+    expect(nested).toBeDefined()
+    expect(nested?.instancesOf).toBeUndefined()
+    expect('mainComponentId' in (nested ?? {})).toBe(false)
+  })
+
+  it('reuses one export map across the hosts that follow it', async () => {
+    // Two repaired hosts, one master between them: the second must not pay a
+    // live lookup for a name the first export already supplied.
+    const asked: string[] = []
+    const fixture = variantHosted()
+    fixture.scanned.push({
+      id: '2:9',
+      levelsLeft: -1,
+      subtreeEnd: 3,
+    })
+    fixture.candidates.push(undefined)
+    fixture.failures.push({
+      at: 2,
+      host: 2,
+      message: 'search: skipped 2:9',
+    })
+    await repairScan({
+      ...fixture,
+      hints: { componentRef: true },
+      exportHost: async index =>
+        index === 0
+          ? variantHost()
+          : {
+              document: {
+                id: '2:9',
+                name: 'Other',
+                type: 'INSTANCE',
+                componentId: '454:5477',
+              },
+            },
+      componentRefOf: async id => {
+        asked.push(id)
+        return undefined
+      },
+    })
+    expect(asked).toEqual([])
   })
 })

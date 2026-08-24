@@ -23,6 +23,12 @@ const read = (name: string): string =>
   // eslint-disable-next-line n/no-sync -- test-only source scan
   readFileSync(join(import.meta.dir, name), 'utf8')
 
+/** Source with comments removed — a scan must not trip over its own prose. */
+const codeOf = (src: string): string =>
+  src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
+
 const helpers = read('apply-node-fields.ts')
 const callers = read('code.ts')
 
@@ -120,5 +126,256 @@ describe('UPDATE_COMPONENT slot-spec wiring', () => {
     expect(applyBlock).toContain('slotWarnings')
     expect(applyBlock).not.toContain('ucWarnings')
     expect(slotLoop).toContain("'slot \"' + name")
+  })
+})
+
+// B55 — reparent_node's position preservation is pure and unit-tested in
+// reparent-position.test.ts, which is exactly the blind spot above: the math
+// can be perfect while the case never calls it, and only a live reparent
+// notices the node jumping to the canvas origin.
+const reparentCase = ((): string => {
+  const from = callers.indexOf(
+    'case COMMANDS.REPARENT_NODE',
+  )
+  const to = callers.indexOf(
+    'case COMMANDS.REORDER_CHILDREN',
+  )
+  return from === -1 || to === -1
+    ? ''
+    : callers.slice(from, to)
+})()
+
+describe('REPARENT_NODE position wiring', () => {
+  it('actually found the case (liveness)', () => {
+    expect(reparentCase.length).toBeGreaterThan(200)
+    expect(reparentCase.length).toBeLessThan(callers.length)
+    expect(reparentCase).toContain('appendChild')
+  })
+
+  it('reads the child origin BEFORE the move and re-places it after', () => {
+    expect(reparentCase).toContain('originOf(')
+    expect(reparentCase).toContain('reparentPlacement(')
+    // Order matters: the parent-relative x/y the origin is derived from is
+    // reinterpreted the instant the node changes parent.
+    const theMove = reparentCase.indexOf(
+      'parent.appendChild(child)',
+    )
+    expect(theMove).toBeGreaterThan(0)
+    expect(reparentCase.indexOf('originOf(')).toBeLessThan(
+      theMove,
+    )
+    expect(
+      reparentCase.indexOf('reparentPlacement('),
+    ).toBeGreaterThan(theMove)
+  })
+})
+
+// B56 — repairScan can only name an export-served instance's main component
+// from what the SEARCH case hands it: the export's `components` /
+// `componentSets` maps, and a live resolver for the runtime that omits them.
+// The pure side is fully tested in search-candidates.test.ts and would stay
+// green with either dropped, and the server mock is a double — only a live
+// search would notice `instancesOf` answering zero again, which is exactly how
+// the first cut of this fix reached live verification and failed there.
+const searchCase = ((): string => {
+  const from = callers.indexOf(
+    'const repaired = await repairScan(',
+  )
+  const to = callers.indexOf(
+    'skipped.push(...repaired.warnings)',
+  )
+  return from === -1 || to === -1
+    ? ''
+    : callers.slice(from, to)
+})()
+
+describe('SEARCH repair wiring', () => {
+  it('actually found the repairScan call (liveness)', () => {
+    expect(searchCase.length).toBeGreaterThan(200)
+    expect(searchCase).toContain('exportHost')
+  })
+
+  it('hints for component refs and supplies the resolver', () => {
+    expect(searchCase).toContain(
+      'componentRef: collectComponentRef',
+    )
+    expect(searchCase).toContain('componentRefOf')
+    expect(searchCase).toContain('getNodeByIdAsync')
+  })
+
+  // The export is `{document, components, componentSets, …}`. Keeping only
+  // `document` is what left a repaired INSTANCE holding a componentId with no
+  // name for it — the maps are the primary source, the live resolver only the
+  // fallback.
+  it('keeps the export maps, not just the document', () => {
+    expect(searchCase).toContain('raw.components')
+    expect(searchCase).toContain('raw.componentSets')
+  })
+
+  // A variant's own name is `State=Error`; the family is named on the set, and
+  // the set name is the one an operator writes.
+  it('carries the family name on the live fallback too', () => {
+    expect(searchCase).toContain('componentSetOf(')
+  })
+})
+
+// M22a — the delete arm's honesty lives in component-properties.ts, which is
+// pure and fully tested there. The server mock models the CONTRACT, not this
+// code, so both stay green if the arm stops calling the resolver or stops
+// re-reading the definitions. Only a live removal would notice.
+const deleteArm = ((): string => {
+  const from = callers.indexOf('// delete (M22a)')
+  const to = callers.indexOf('// description', from)
+  return from === -1 || to === -1
+    ? ''
+    : callers.slice(from, to)
+})()
+
+describe('UPDATE_COMPONENT delete-property wiring', () => {
+  it('actually found the arm (liveness)', () => {
+    expect(deleteArm.length).toBeGreaterThan(200)
+    expect(deleteArm).toContain('deleteComponentProperty')
+  })
+
+  it('resolves the key, then VERIFIES the property is gone', () => {
+    expect(deleteArm).toContain('resolvePropertyKey(')
+    expect(deleteArm).toContain('undeletedMessage(')
+    // The verify has to read the definitions AGAIN — checking the copy taken
+    // before the delete would always agree with itself.
+    expect(
+      deleteArm.lastIndexOf(
+        'comp.componentPropertyDefinitions',
+      ),
+    ).toBeGreaterThan(
+      deleteArm.indexOf('comp.deleteComponentProperty('),
+    )
+  })
+
+  it('never continues past a refusal as though it worked', () => {
+    // Each of the three arms warns and then skips this entry.
+    const continues = deleteArm.split('continue').length - 1
+    expect(continues).toBe(2)
+  })
+})
+
+// B58 — applyLayout reads every field back and names the ones that did not
+// hold, but it can only report through the sink its caller passes. It was
+// called with NO sink, so the notes had nowhere to go: the module's own tests
+// stayed green and update_node kept answering ok with empty warnings.
+//
+// The deselect/restore mitigation has the same shape of blind spot, one step
+// further out: it is fully unit-tested against a fake selection host, and it
+// does nothing at all unless update_node hands over the REAL
+// `figma.currentPage`. Drop that argument and every test here stays green while
+// the live revert comes straight back.
+// B58 — applyLayout reads every field back and names the ones that did not
+// hold, but it can only report through the sink its caller passes. It was
+// called with NO sink, so the notes had nowhere to go: the module's own tests
+// stayed green and update_node kept answering ok with empty warnings.
+describe('applyLayout call-site wiring', () => {
+  const applyCall = callers.slice(
+    callers.indexOf('applyLayout(\n'),
+    callers.indexOf('// Min/max sizing'),
+  )
+
+  it('actually found the call (liveness)', () => {
+    expect(applyCall.length).toBeGreaterThan(20)
+    expect(applyCall).toContain('AppliedLayout')
+  })
+
+  it('hands applyLayout the warnings sink', () => {
+    expect(applyCall).toContain('warnings')
+  })
+
+  // Rounds 2-4 deselected the target, waited for the deselection to render,
+  // and restored the selection afterwards — all chasing a trigger that turned
+  // out to be the var-bound gap, not the selection. A plain literal gap writes
+  // fine under a live selection. None of that machinery should return by
+  // accident: it blinked the user's selection on every layout write, for
+  // nothing.
+  it('manipulates no selection in the layout write path', () => {
+    // Comments are stripped first: this file's own history notes describe the
+    // machinery that was removed, and a scan that tripped over the explanation
+    // of a fix would be unmaintainable.
+    const applierCode = codeOf(read('apply-layout.ts'))
+    const callerCode = codeOf(callers)
+    expect(applierCode).not.toContain('selection')
+    for (const trace of ['SelectionGuard', 'deselect']) {
+      expect(callerCode).not.toContain(trace)
+      expect(applierCode).not.toContain(trace)
+    }
+    // Liveness, twice over: `set_selection` is a real tool that legitimately
+    // assigns the selection, so the stripper has to leave real code alone —
+    // and this assertion proves the scan read something.
+    expect(callerCode).toContain(
+      'figma.currentPage.selection = nodes',
+    )
+  })
+})
+
+// B58's REAL fix — the pair guard. The plugin half answers what only the live
+// node can, and it is pure, so it would stay green with both call sites
+// deleted. Only a live write would notice the guard had stopped running.
+const bindCase = callers.slice(
+  callers.indexOf('case COMMANDS.BIND_VARIABLE'),
+  callers.indexOf('case COMMANDS.GET_VARIABLES'),
+)
+
+describe('SPACE_BETWEEN gap-guard wiring', () => {
+  it('update_node refuses the pair BEFORE applying anything', () => {
+    const updateCase = callers.slice(
+      callers.indexOf('case COMMANDS.UPDATE_NODE'),
+      callers.indexOf('case COMMANDS.DELETE_NODE'),
+    )
+    expect(updateCase.length).toBeGreaterThan(200)
+    expect(updateCase).toContain('updateLayoutConflict(')
+    // Before the apply, or a refused write has already changed the node.
+    expect(
+      updateCase.indexOf('updateLayoutConflict('),
+    ).toBeLessThan(
+      updateCase.indexOf('applyCommonProperties('),
+    )
+  })
+
+  it('bind_variable refuses binding the gap of a SPACE_BETWEEN node', () => {
+    expect(bindCase.length).toBeGreaterThan(200)
+    expect(bindCase).toContain('bindFieldConflict(')
+  })
+})
+
+// B58 — the guard's own advice depends on this branch existing. It tells a
+// caller with an already-bound gap to clear the token first; if the clear
+// silently fell through to the ordinary binding path it would fail on a
+// missing `variableId`, and the instruction would be a dead end.
+describe('bind_variable clear wiring', () => {
+  it('has a clear branch that unbinds', () => {
+    expect(bindCase).toContain('params.clear === true')
+    expect(bindCase).toContain('clearNodeField(')
+  })
+
+  it('clears BEFORE looking a variable up — a clear names none', () => {
+    expect(
+      bindCase.indexOf('params.clear === true'),
+    ).toBeLessThan(bindCase.indexOf('getVariableByIdAsync'))
+  })
+})
+
+const liveCandidateRef = ((): string => {
+  const from = callers.indexOf('getMainComponentAsync()')
+  const to = callers.indexOf('collectStyleId', from)
+  return from === -1 || to === -1
+    ? ''
+    : callers.slice(from, to)
+})()
+
+describe('SEARCH live-candidate component ref wiring', () => {
+  it('actually found the enrichment (liveness)', () => {
+    expect(liveCandidateRef.length).toBeGreaterThan(100)
+    expect(liveCandidateRef).toContain('instancesOf')
+  })
+
+  it('emits the family name beside the main component name', () => {
+    expect(liveCandidateRef).toContain('componentSetOf(')
+    expect(liveCandidateRef).toContain('instancesOfSet')
   })
 })

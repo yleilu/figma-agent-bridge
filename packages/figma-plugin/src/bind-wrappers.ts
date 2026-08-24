@@ -177,6 +177,45 @@ export const bindPaintField = (
 }
 
 /** Bind a variable to a scalar node field (the VariableBindableNodeField route). */
+/**
+ * REMOVE the variable binding on a scalar node field, leaving the literal value
+ * where it is (B58).
+ *
+ * Writing a literal over a bound field does not unbind it — a token-bound gap
+ * given `{gap: 16}` keeps reading `var(space/16)16` — so there has to be a way
+ * to say "no token here" that is not a write of a value. Figma spells it
+ * `setBoundVariable(field, null)`; this is the only caller of that spelling, and
+ * it degrades like every other binding route (T7) rather than throwing.
+ *
+ * Scalar fields only. `fills`/`strokes` bind per PAINT and are refused by the
+ * caller, which can say something more useful about them.
+ */
+export const clearNodeField = (
+  node: BindTargetNode,
+  field: string,
+  warnings: string[],
+): void => {
+  const bindable = node as {
+    setBoundVariable?: (f: string, v: unknown) => void
+  }
+  if (typeof bindable.setBoundVariable !== 'function') {
+    warnings.push(
+      'setBoundVariable unavailable in this Figma version; binding not cleared',
+    )
+    return
+  }
+  try {
+    bindable.setBoundVariable(field, null)
+  } catch (e) {
+    warnings.push(
+      'could not clear the variable binding on "' +
+        field +
+        '": ' +
+        String(e),
+    )
+  }
+}
+
 export const bindNodeField = (
   node: BindTargetNode,
   field: string,

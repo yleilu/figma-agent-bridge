@@ -471,24 +471,44 @@ export const handleBindVariable = async (
     nodeId,
     variableId,
     field,
+    clear,
     mode,
   }: {
     nodeId: string
     variableId?: string
     field?: string
+    clear?: boolean
     mode?: Record<string, ModeEntry>
   },
   client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
-  // Empty-call guard: must have a field binding or a mode map.
+  // Empty-call guard: must have a field binding, a field CLEAR, or a mode map.
   const hasFieldBinding =
     variableId !== undefined && field !== undefined
+  const hasFieldClear =
+    clear === true && field !== undefined
   const hasModeMap =
     mode !== undefined && Object.keys(mode).length > 0
-  if (!hasFieldBinding && !hasModeMap) {
+  if (!hasFieldBinding && !hasFieldClear && !hasModeMap) {
     return errorEnvelope(
       'INVALID_PARAM',
-      'bind_variable requires at least one of: (variableId + field) for a field binding, or mode for a mode pin.',
+      'bind_variable requires at least one of: (variableId + field) for a field binding, ' +
+        '(field + clear:true) to remove one, or mode for a mode pin.',
+    )
+  }
+  // `clear` is the INVERSE of a binding, so naming a variable alongside it says
+  // two opposite things about the same field. Refuse rather than guess (T7).
+  if (clear === true && variableId !== undefined) {
+    return errorEnvelope(
+      'INVALID_PARAM',
+      'bind_variable takes `clear: true` OR `variableId`, never both — one removes the ' +
+        'binding on `field` and the other creates it. Drop whichever you did not mean.',
+    )
+  }
+  if (clear === true && field === undefined) {
+    return errorEnvelope(
+      'INVALID_PARAM',
+      'bind_variable `clear: true` needs the `field` to clear (e.g. field: "itemSpacing").',
     )
   }
 
@@ -500,6 +520,9 @@ export const handleBindVariable = async (
     }
     if (field !== undefined) {
       params.field = field
+    }
+    if (clear === true) {
+      params.clear = true
     }
     if (mode !== undefined) {
       params.mode = mode

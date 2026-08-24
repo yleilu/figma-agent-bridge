@@ -68,6 +68,10 @@ import type {
 } from '@figma-agent-bridge/shared/node-spec'
 import { NODE_SPEC_PATCH_KEYS } from '@figma-agent-bridge/shared/node-spec-schema'
 import {
+  SPACE_BETWEEN,
+  spaceBetweenGapConflict,
+} from '@figma-agent-bridge/shared'
+import {
   atomToPaint,
   atomToEffect,
   atomToFont,
@@ -183,11 +187,58 @@ const layoutNumber = (
   return parsed
 }
 
+/** Whether an atom carries a `var(...)` wrapper — i.e. asks for a binding. */
+const isVarBound = (value: NumberAtom): boolean => {
+  if (typeof value !== 'string') {
+    return false
+  }
+  try {
+    return tokenize(value).wrapper?.kind === 'var'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Refuse `align` primary SPACE_BETWEEN paired with a variable-bound `gap`
+ * (B58 — see space-between-guard.ts for the mechanism).
+ *
+ * This sits in `convertLayout` because every write path funnels through it:
+ * create_node, create_tree, update_node, batch's update_node, and the
+ * update_component slot specs all convert their layout here. One choke point,
+ * one rule, no path that can forget it.
+ *
+ * It catches the pair arriving in ONE write. A write that brings only half of
+ * the pair onto a node already holding the other half needs the node's live
+ * state, so the plugin catches that (it has the node in hand and pays no extra
+ * round trip for it).
+ */
+const assertGapCanBind = (
+  layout: LayoutSpec,
+  where?: string,
+): void => {
+  if (
+    layout.align?.[0] === SPACE_BETWEEN &&
+    layout.gap !== undefined &&
+    isVarBound(layout.gap)
+  ) {
+    throw new ToolError(
+      'INVALID_PARAM',
+      spaceBetweenGapConflict({
+        where,
+        arrivingHalf: 'both',
+      }),
+    )
+  }
+}
+
 /** Map a LayoutSpec to the flat layout object the plugin expects. */
 const convertLayout = (
   layout: LayoutSpec,
   warnings?: string[],
+  where?: string,
 ): Record<string, unknown> => {
+  assertGapCanBind(layout, where)
   const out: Record<string, unknown> = { mode: layout.mode }
   if (layout.gap !== undefined) {
     out.spacing = layoutNumber(layout.gap, 'gap')
@@ -326,6 +377,58 @@ export const unknownPatchKeyWarnings = (
   return out
 }
 
+/** The four auto-layout size clamps, in the order a patch is scanned (B57). */
+const CLAMP_KEYS = [
+  'minWidth',
+  'maxWidth',
+  'minHeight',
+  'maxHeight',
+] as const
+
+/**
+ * What an update that moves a min/max clamp must say (B57).
+ *
+ * Figma's clamp is ONE-WAY, and the plugin's apply is a faithful property set —
+ * this is Figma's own semantics, not a bridge defect. Writing `minWidth: 320`
+ * on a master forced an instance carrying a FIXED width 238 up to 320, which is
+ * expected. Dropping the min back down left the instance at 320: the 238 was
+ * gone, not restored. A HUGGING instance kept the clamped width over 27 of
+ * content, and so did the hugging MASTER — hug does not re-resolve when a floor
+ * moves.
+ *
+ * So the destructive step is invisible from the reply. The surface answered ok
+ * with an empty `warnings[]` while a size the operator had set by hand was
+ * overwritten for good. That is the silent-failure class T7 forbids, and it
+ * bites the S38 doctrine directly ("set family floors before instances diverge;
+ * re-check instance sizes after changing one").
+ *
+ * A CLEAR warns as loudly as a write: `minWidth: null` reads like an undo and
+ * is not one.
+ */
+export const oneWayClampWarnings = (
+  patch: object,
+): string[] => {
+  const out: string[] = []
+  const p = patch as Record<string, unknown>
+  for (const field of CLAMP_KEYS) {
+    if (!(field in p)) {
+      continue
+    }
+    const cleared = p[field] === null
+    out.push(
+      `\`${field}\` is a ONE-WAY clamp. Figma resizes every node past it and ` +
+        `keeps no record of the size it replaced. ` +
+        (cleared
+          ? 'Clearing it restores nothing: '
+          : 'Clearing it or lowering it later restores nothing: ') +
+        `an instance's own size override stays at the clamped value, and a HUG ` +
+        `does not re-resolve. Re-state \`size\` and \`sizing\` on every node this ` +
+        `clamp reaches, master and instances alike.`,
+    )
+  }
+  return out
+}
+
 /**
  * Convert a (partial) NodeSpec to a FigmaWritePayload.
  *
@@ -342,6 +445,8 @@ export const unknownPatchKeyWarnings = (
 export const specToFigma = (
   spec: NodeSpecPatch,
   warnings?: string[],
+  /** Node id (or other label) named in a refusal — an update knows one, a create does not. */
+  where?: string,
 ): FigmaWritePayload => {
   const out: FigmaWritePayload = {}
 
@@ -370,7 +475,7 @@ export const specToFigma = (
 
   // ── layout ───────────────────────────────────────────────────────────────
   if (spec.layout !== undefined) {
-    out.layout = convertLayout(spec.layout, warnings)
+    out.layout = convertLayout(spec.layout, warnings, where)
   }
   if (spec.sizing !== undefined) {
     out.sizing = spec.sizing

@@ -590,6 +590,28 @@ export const createMockPlugin = (
     appliedState.set(id, state)
   }
 
+  /**
+   * REMOVE a layout binding — the `clear: true` half of bind_variable (B58).
+   *
+   * Modelled as state, not echoed, for the same reason the bind is: a reply
+   * saying "cleared" proves only that the server sent the flag. The read has to
+   * come back without the token, which is what the e2e asserts.
+   */
+  const clearLayoutBindingState = (
+    id: string,
+    field: string,
+  ): void => {
+    const state = appliedState.get(id) ?? {}
+    const layoutBound = {
+      ...((state.layoutBoundVariables as
+        | Record<string, string>
+        | undefined) ?? {}),
+    }
+    delete layoutBound[field]
+    state.layoutBoundVariables = layoutBound
+    appliedState.set(id, state)
+  }
+
   /** The layout half of a converted spec's `bindings[]`. */
   const layoutBindingsOf = (
     applied: MockBinding[],
@@ -963,6 +985,39 @@ export const createMockPlugin = (
     string,
     Record<string, unknown>
   >()
+
+  // COMPONENT PROPERTY DEFINITIONS per component (M22a), keyed by the CANONICAL
+  // id the way Figma's `componentPropertyDefinitions` is. Held as state, not
+  // echoed, for the same reason as the slots above: add → remove → enumerate
+  // only proves anything if the removal is read back from what the document
+  // holds. `properties` in the reply is the list AFTER the call, exactly as the
+  // real plugin's `projectComponentDefs(comp.componentPropertyDefinitions)` is.
+  type MockPropertyDef = {
+    id: string
+    name: string
+    type: string
+    defaultValue: string | boolean
+  }
+  const componentProps = new Map<
+    string,
+    Map<string, MockPropertyDef>
+  >()
+  const propsOf = (
+    componentId: string,
+  ): Map<string, MockPropertyDef> => {
+    const found = componentProps.get(componentId)
+    if (found !== undefined) {
+      return found
+    }
+    const fresh = new Map<string, MockPropertyDef>()
+    componentProps.set(componentId, fresh)
+    return fresh
+  }
+  /** The bare NAME half of a canonical property id — mirrors propertyName(). */
+  const barePropName = (key: string): string => {
+    const hash = key.lastIndexOf('#')
+    return hash > 0 ? key.slice(0, hash) : key
+  }
 
   /**
    * Model `component.createSlot()` plus the apply pipeline the fresh slot then
@@ -1702,28 +1757,41 @@ export const createMockPlugin = (
           '1:44',
           '1:45',
         ])
-        const knownPages = new Set(['0:1', 'repaired:1'])
-        // A page whose scan the plugin had to REPAIR (B48 / final-review I-1).
-        // A chip written into a slot answered an alias id, its label threw, and
-        // the repair replaced the chip's row with the one its export names. The
-        // export row is addressable where the alias was not, but it cannot carry
-        // componentKey / instancesOf / styleIds / context — so a hinted match
-        // stops finding a node it used to find, and the plugin SAYS so. This is
-        // the shape `repairScan` now produces; the assertion that matters here
-        // is that the warning survives the server's projection and reaches the
-        // agent beside a result set that is genuinely one row short.
+        const knownPages = new Set([
+          '0:1',
+          'repaired:1',
+          'variants:1',
+        ])
+        // A page whose scan the plugin had to REPAIR (B48 / final-review I-1 /
+        // B56). A chip written into a slot answered an alias id, its label
+        // threw, and the repair replaced the chip's row with the one its export
+        // names. The export row is addressable where the alias was not.
+        //
+        // It cannot carry `styleIds` or `context` — those are live-only reads,
+        // and the plugin SAYS so rather than returning a short result set
+        // quietly. It CAN carry `componentKey` / `instancesOf` since B56: the
+        // export names the instance's main by id, and the plugin trades that id
+        // for the name and key, but only when the caller hinted for them. So
+        // the reply here depends on the hint, exactly as `repairScan` does.
         if (
           searchScope === 'page' &&
           cmd.params?.pageId === 'repaired:1'
         ) {
+          const wantsRef =
+            cmd.params?.collectComponentRef === true
+          const chip: Record<string, unknown> = {
+            id: 'I298:7517;298:7516;298:7523',
+            name: 'Chip',
+            type: 'INSTANCE',
+            size: [96, 28],
+          }
+          if (wantsRef) {
+            chip.instancesOf = 'Chip'
+            chip.componentKey = 'k-chip'
+          }
           result = {
             results: [
-              {
-                id: 'I298:7517;298:7516;298:7523',
-                name: 'Chip',
-                type: 'INSTANCE',
-                size: [96, 28],
-              },
+              chip,
               {
                 id: 'I298:7517;298:7516;298:7523;298:7510',
                 name: 'Label',
@@ -1732,11 +1800,71 @@ export const createMockPlugin = (
               },
             ],
             warnings: [
-              'search: repaired the subtree at I298:7517;298:7516;298:7523 — the row for 298:7519 now comes from the export and cannot carry componentKey, instancesOf; a match on those keys will not find this node',
+              'search: repaired the subtree at I298:7517;298:7516;298:7523 — the row for 298:7519 now comes from the export and cannot carry ' +
+                (wantsRef
+                  ? 'context, styleIds'
+                  : 'context, styleIds, componentKey, instancesOf') +
+                '; a match on those keys will not find this node',
             ],
           }
           break
         }
+        // A page holding two instances of a VARIANT family (B56, live shape).
+        // Live, file MFMyzjEZyH5cVyrNejdbyP: 454:5478 is a COMPONENT_SET named
+        // "State block" and 454:5477 is its "State=Error" variant, so an
+        // instance's main-component NAME is `State=Error` and the family name —
+        // the only one the components panel, the design doc or an acceptance
+        // gate ever says — is on the set. The plugin emits both keys; whether
+        // `instancesOf` reaches either is the SERVER's matcher, which is what
+        // this arm exists to drive.
+        if (
+          searchScope === 'page' &&
+          cmd.params?.pageId === 'variants:1'
+        ) {
+          const wantsVariantRef =
+            cmd.params?.collectComponentRef === true
+          const variantRow = (
+            id: string,
+            name: string,
+            ownName: string,
+          ): Record<string, unknown> => {
+            const row: Record<string, unknown> = {
+              id,
+              name,
+              type: 'INSTANCE',
+              size: [200, 120],
+            }
+            if (wantsVariantRef) {
+              row.instancesOf = ownName
+              row.instancesOfSet = 'State block'
+            }
+            return row
+          }
+          result = {
+            results: [
+              variantRow(
+                'I454:5452;453:3882;454:5489',
+                'Error block',
+                'State=Error',
+              ),
+              variantRow(
+                'I454:5346;453:3882;454:5370',
+                'Empty block',
+                'State=Empty',
+              ),
+              // A plain frame on the same page, so a family match proves it is
+              // filtering rather than returning the page.
+              {
+                id: '454:5300',
+                name: 'Plot area',
+                type: 'FRAME',
+                size: [400, 240],
+              },
+            ],
+          }
+          break
+        }
+
         // B53 — a scan rooted on the three-level slot fixture. The plugin's
         // repair pass replaces every slot-override row with the one its export
         // names, so the candidates come back under the CANONICAL ids, which is
@@ -2131,6 +2259,33 @@ export const createMockPlugin = (
           | string
           | undefined
         const bvWarnings: string[] = []
+
+        // B58 — `clear: true` removes the binding and names no variable. The
+        // real plugin refuses a paint field here (paints bind per paint, not on
+        // the node field), so the mock mirrors that refusal.
+        if (cmd.params?.clear === true) {
+          if (
+            bvField === 'fills' ||
+            bvField === 'strokes'
+          ) {
+            result = {
+              error:
+                'bind_variable cannot clear a `' +
+                bvField +
+                '` binding: paint variables bind per paint, not on the node field. ' +
+                'Re-write the paint with a plain atom (no var() wrapper) to replace it.',
+            }
+            break
+          }
+          if (
+            bvNodeId !== undefined &&
+            bvField !== undefined
+          ) {
+            clearLayoutBindingState(bvNodeId, bvField)
+          }
+          result = { id: bvNodeId, warnings: bvWarnings }
+          break
+        }
 
         // Process mode map (M13): feature-detect + per-entry degrade.
         if (bvMode !== undefined) {
@@ -2769,17 +2924,16 @@ export const createMockPlugin = (
         const ucSlots = cmd.params?.slots as
           | (string | Record<string, unknown>)[]
           | undefined
+        const ucDelete = cmd.params?.delete as
+          | string[]
+          | undefined
         const ucWarnings: string[] = []
-        const properties: {
-          id: string
-          name: string
-          type: string
-          defaultValue: string | boolean
-        }[] = []
+        const defs = propsOf(ucId)
         if (ucAdd) {
           for (const p of ucAdd) {
-            properties.push({
-              id: `${p.name}#1:0`,
+            const canonical = `${p.name}#1:0`
+            defs.set(canonical, {
+              id: canonical,
               name: p.name,
               type: p.type,
               defaultValue: p.defaultValue,
@@ -2797,6 +2951,56 @@ export const createMockPlugin = (
             // componentPropertyReferences on the child. The mock cannot do that
             // (no live Figma node tree), so it simply skips — headless fidelity
             // boundary documented in comments.
+          }
+        }
+        // delete (M22a) — mirrors the real plugin's arm exactly: resolve by the
+        // canonical id OR by a bare name only one property carries, refuse an
+        // ambiguous or unknown name by NAMING what is there, and re-read the
+        // definitions afterwards so a removal Figma refused is reported rather
+        // than passing as ok. A `lockedprops:` componentId models that refusal
+        // (Figma keeps SLOT and set-variant properties) — a mock affordance,
+        // since nothing headless can make Figma refuse.
+        if (ucDelete) {
+          for (const requested of ucDelete) {
+            let key: string | undefined
+            if (defs.has(requested)) {
+              key = requested
+            } else {
+              const byName = [...defs.keys()].filter(
+                k => barePropName(k) === requested,
+              )
+              if (byName.length === 1) {
+                ;[key] = byName
+              } else if (byName.length > 1) {
+                ucWarnings.push(
+                  `Failed to delete property: "${requested}" names ${byName.length} component properties (` +
+                    byName.map(k => `"${k}"`).join(', ') +
+                    ') — pass the full property id, not the bare name',
+                )
+                continue
+              } else {
+                const known = [...defs.keys()]
+                ucWarnings.push(
+                  `Failed to delete property: no component property named "${requested}"` +
+                    (known.length === 0
+                      ? ' — this component has none'
+                      : ' — this component has: ' +
+                        known
+                          .map(k => `"${k}"`)
+                          .join(', ')),
+                )
+                continue
+              }
+            }
+            if (ucId.startsWith('lockedprops:')) {
+              ucWarnings.push(
+                `component property "${key}" is still defined after deleteComponentProperty — ` +
+                  'Figma refused the removal (a SLOT property and a variant property of a set ' +
+                  'are the known cases). Remove it from the component panel in Figma.',
+              )
+              continue
+            }
+            defs.delete(key)
           }
         }
         if (ucExpose && ucExpose.length > 0) {
@@ -2847,7 +3051,10 @@ export const createMockPlugin = (
         }
         result = {
           id: ucId,
-          properties,
+          // The list AFTER the call, never just what this call added — that is
+          // what `projectComponentDefs(comp.componentPropertyDefinitions)`
+          // returns, and it is what makes add → remove → enumerate provable.
+          properties: [...defs.values()],
           slotsCreated,
           slotsSkipped,
           warnings: ucWarnings,

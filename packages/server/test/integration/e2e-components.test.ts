@@ -412,6 +412,170 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
     )
   })
 
+  // ─── M22a: removal, and every refusal spoken ───────────────────────────────
+  //
+  // The repro: a Top bar's `Show date` BOOLEAN was orphaned when its bound node
+  // was deleted with the old Actions frame. `update_component` answered ok,
+  // warnings [], property list unchanged. The UI can remove a property; the
+  // surface could not, and said nothing about it.
+
+  const propsOfReply = (
+    text: string,
+  ): { id: string; name: string }[] =>
+    (
+      JSON.parse(text) as {
+        properties: { id: string; name: string }[]
+      }
+    ).properties
+
+  const warningsOfReply = (text: string): string[] =>
+    (JSON.parse(text) as { warnings?: string[] })
+      .warnings ?? []
+
+  it('M22a: add → remove → enumerate leaves the property gone', async () => {
+    const added = await handleUpdateComponent(
+      {
+        componentId: 'c:m22a',
+        add: [
+          {
+            name: 'Show date',
+            type: 'BOOLEAN',
+            defaultValue: true,
+            targetNodeId: '2:5',
+          },
+          {
+            name: 'Label',
+            type: 'TEXT',
+            defaultValue: 'Hi',
+            targetNodeId: '2:6',
+          },
+        ],
+      },
+      scoped,
+    )
+    expect(
+      propsOfReply(added.content[0].text).map(p => p.name),
+    ).toEqual(['Show date', 'Label'])
+
+    const removed = await handleUpdateComponent(
+      {
+        componentId: 'c:m22a',
+        delete: ['Show date#1:0'],
+      },
+      scoped,
+    )
+    // The enumeration IS the reply — no second read needed.
+    expect(
+      propsOfReply(removed.content[0].text).map(
+        p => p.name,
+      ),
+    ).toEqual(['Label'])
+    expect(
+      warningsOfReply(removed.content[0].text),
+    ).toEqual([])
+  })
+
+  it('M22a: removal takes the bare NAME the reply showed', async () => {
+    await handleUpdateComponent(
+      {
+        componentId: 'c:m22a-bare',
+        add: [
+          {
+            name: 'Show date',
+            type: 'BOOLEAN',
+            defaultValue: true,
+            targetNodeId: '2:5',
+          },
+        ],
+      },
+      scoped,
+    )
+    // `properties[].name` is "Show date"; the definitions are keyed
+    // "Show date#1:0". Refusing the name the agent just read would be
+    // technically true and practically useless.
+    const removed = await handleUpdateComponent(
+      { componentId: 'c:m22a-bare', delete: ['Show date'] },
+      scoped,
+    )
+    expect(propsOfReply(removed.content[0].text)).toEqual(
+      [],
+    )
+  })
+
+  it('M22a: an unknown property is REFUSED by name, never silently ok', async () => {
+    await handleUpdateComponent(
+      {
+        componentId: 'c:m22a-unknown',
+        add: [
+          {
+            name: 'Label',
+            type: 'TEXT',
+            defaultValue: 'Hi',
+            targetNodeId: '2:6',
+          },
+        ],
+      },
+      scoped,
+    )
+    const removed = await handleUpdateComponent(
+      {
+        componentId: 'c:m22a-unknown',
+        delete: ['Show week'],
+      },
+      scoped,
+    )
+    const warnings = warningsOfReply(
+      removed.content[0].text,
+    )
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('Show week')
+    // …and it says what the component DOES have, so the next call can land.
+    expect(warnings[0]).toContain('Label#1:0')
+    // Nothing was removed on the strength of a name that matched nothing.
+    expect(
+      propsOfReply(removed.content[0].text),
+    ).toHaveLength(1)
+  })
+
+  it('M22a: a removal Figma refuses is reported, not reported as done', async () => {
+    // `lockedprops:` models Figma keeping the property (SLOT properties and a
+    // set's variant properties are the known cases). The plugin re-reads the
+    // definitions after the call precisely so this cannot pass as ok.
+    await handleUpdateComponent(
+      {
+        componentId: 'lockedprops:c:1',
+        add: [
+          {
+            name: 'Plot area',
+            type: 'SLOT',
+            defaultValue: '',
+            targetNodeId: '2:7',
+          },
+        ],
+      },
+      scoped,
+    )
+    const removed = await handleUpdateComponent(
+      {
+        componentId: 'lockedprops:c:1',
+        delete: ['Plot area'],
+      },
+      scoped,
+    )
+    const warnings = warningsOfReply(
+      removed.content[0].text,
+    )
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('Plot area#1:0')
+    expect(warnings[0]).toContain('still defined')
+    // The reply's property list agrees with the warning.
+    expect(
+      propsOfReply(removed.content[0].text).map(
+        p => p.name,
+      ),
+    ).toEqual(['Plot area'])
+  })
+
   // B3: the unbound-targetNodeId warning surfaces on SUCCESS when targetNodeId
   // is absent, turning the old silent trap into an honest T7 warning.
   it('B3: add without targetNodeId emits honest unbound warning (T7)', async () => {

@@ -8,6 +8,21 @@ import {
   applyLayout,
   type AppliedLayout,
 } from './apply-layout'
+import {
+  bindFieldConflict,
+  updateLayoutConflict,
+  type GapConflictNode,
+} from './space-between-gap'
+import {
+  originOf,
+  reparentPlacement,
+  type Placeable,
+} from './reparent-position'
+import {
+  resolvePropertyKey,
+  undeletedMessage,
+  type PropertyDefs,
+} from './component-properties'
 import { importComponentByKeyWithDeadline } from './import-by-key'
 import { createFontLoader } from './font-cache'
 import { applyPointDetail } from './vector-points'
@@ -26,6 +41,7 @@ import {
   applyStyleField,
   applyWrapperBindings,
   bindNodeField,
+  clearNodeField,
   bindPaintField,
   createBindingLookups,
   STYLE_TYPES,
@@ -48,7 +64,9 @@ import {
   type LiveNode,
 } from './enrich-nodes'
 import {
+  componentSetOf,
   repairScan,
+  type ExportedHost,
   type ScanFailure,
 } from './search-candidates'
 import {
@@ -864,10 +882,16 @@ const applyCommonProperties = async (
   // Layout (FRAME only). Partial layouts are honored: each field is applied
   // only when present, mirroring the server writer's PURE contract (see
   // apply-layout.ts).
+  //
+  // The sink is NOT optional here (B58). applyLayout reads every field back and
+  // names the ones that did not hold — a UI selection on the target makes an
+  // align write drop silently — and it was called without a sink, so those
+  // notes (and the GRID capability degrade beside them) went nowhere.
   if (spec.layout !== undefined && 'layoutMode' in node) {
     applyLayout(
       node as FrameNode,
       spec.layout as AppliedLayout,
+      warnings,
     )
   }
 
@@ -1926,9 +1950,7 @@ const createTreeNode = async (
 
   // Clone reference: { id } with no type
   if (spec.id !== undefined && spec.type === undefined) {
-    const existing = await resolveNodeId(
-      spec.id as string,
-    )
+    const existing = await resolveNodeId(spec.id as string)
     if (!existing)
       throw new Error(
         'Node not found for clone: ' + spec.id,
@@ -3263,6 +3285,15 @@ const handleCommand = async (
               if (main) {
                 candidate.componentKey = main.key
                 candidate.instancesOf = main.name
+                // B56 — a VARIANT's own name is `State=Error`; the FAMILY is
+                // named on its set (`State block`), and the set name is the
+                // only one a human ever sees. The matcher tests both, so carry
+                // both. Guarded on its own: the candidate must not be lost
+                // because a parent read threw.
+                const set = componentSetOf(main)
+                if (set !== undefined) {
+                  candidate.instancesOfSet = set
+                }
               }
             }
 
@@ -3366,21 +3397,55 @@ const handleCommand = async (
         hints: {
           characters: collectCharacters,
           variableIds: collectVariableId,
+          componentRef: collectComponentRef,
         },
+        // B56 — a repaired INSTANCE names its main by id; `match:{instancesOf}`
+        // matches on the NAME. A main component is a plain, top-level node, so
+        // its handle answers even when the instance's own sublayers do not.
+        componentRefOf: collectComponentRef
+          ? async componentId => {
+              const main =
+                await figma.getNodeByIdAsync(componentId)
+              return main === null
+                ? undefined
+                : {
+                    key: (main as ComponentNode).key,
+                    name: main.name,
+                    setName: componentSetOf(
+                      main as unknown as {
+                        name?: unknown
+                        parent?: unknown
+                      },
+                    ),
+                  }
+            }
+          : undefined,
+        // The WHOLE export, not just `document` (B56). `components` says what
+        // each `componentId` in the subtree is called and which set it belongs
+        // to, and `componentSets` names the family — the two maps this call
+        // used to drop on the floor, leaving a repaired INSTANCE with an id and
+        // no name for it.
         exportHost: async index => {
           try {
-            const raw = await scanned[
+            const raw = (await scanned[
               index
             ].node.exportAsync({
               format: 'JSON_REST_V1',
-            })
-            const document = (
-              raw as unknown as Record<string, unknown>
-            ).document
-            return typeof document === 'object' &&
-              document !== null
-              ? (document as Record<string, unknown>)
-              : undefined
+            })) as unknown as Record<string, unknown>
+            const document = raw.document
+            if (
+              typeof document !== 'object' ||
+              document === null
+            ) {
+              return undefined
+            }
+            return {
+              document: document as Record<string, unknown>,
+              components:
+                raw.components as ExportedHost['components'],
+              componentSets:
+                raw.componentSets as ExportedHost['componentSets'],
+            }
           } catch {
             // The host cannot describe itself either — the failures it would
             // have covered stay warnings.
@@ -3412,9 +3477,7 @@ const handleCommand = async (
     case COMMANDS.CREATE_NODE: {
       const parentNode =
         params.parentId !== undefined
-          ? await resolveNodeId(
-              params.parentId as string,
-            )
+          ? await resolveNodeId(params.parentId as string)
           : figma.currentPage
       if (!parentNode || !('appendChild' in parentNode)) {
         return {
@@ -3482,9 +3545,7 @@ const handleCommand = async (
     case COMMANDS.CREATE_TREE: {
       const treeParentNode =
         params.parentId !== undefined
-          ? await resolveNodeId(
-              params.parentId as string,
-            )
+          ? await resolveNodeId(params.parentId as string)
           : figma.currentPage
       if (
         !treeParentNode ||
@@ -3766,19 +3827,45 @@ const handleCommand = async (
           }
         }
       }
-      // delete
+      // delete (M22a). Three ways a removal used to end in silence, all closed:
+      //   - the caller passes the bare NAME the reply showed, while the
+      //     definitions are keyed by the canonical id — resolvePropertyKey
+      //     accepts either, and names the candidates when a name is ambiguous;
+      //   - the property does not exist — the refusal lists what does;
+      //   - Figma REFUSES the removal without throwing (a SLOT property, a
+      //     variant property of a set) — the definitions are re-read after the
+      //     call and a survivor is named.
+      // Never ok with an unchanged property list and empty warnings (M22).
       const delProps = params.delete as string[] | undefined
       if (delProps) {
-        for (const name of delProps) {
+        for (const requested of delProps) {
+          const found = resolvePropertyKey(
+            (comp.componentPropertyDefinitions ??
+              {}) as PropertyDefs,
+            requested,
+          )
+          if (found.key === undefined) {
+            ucWarnings.push(
+              'Failed to delete property: ' + found.error,
+            )
+            continue
+          }
+          const { key } = found
           try {
-            comp.deleteComponentProperty(name)
+            comp.deleteComponentProperty(key)
           } catch (e) {
             ucWarnings.push(
               'Failed to delete property "' +
-                name +
+                key +
                 '": ' +
                 String(e),
             )
+            continue
+          }
+          if (
+            key in (comp.componentPropertyDefinitions ?? {})
+          ) {
+            ucWarnings.push(undeletedMessage(key))
           }
         }
       }
@@ -4015,9 +4102,7 @@ const handleCommand = async (
       }
       const cvParentNode =
         params.parentId !== undefined
-          ? await resolveNodeId(
-              params.parentId as string,
-            )
+          ? await resolveNodeId(params.parentId as string)
           : cvComps[0].parent
       let cvParent: BaseNode & ChildrenMixin
       if (cvParentNode && 'appendChild' in cvParentNode) {
@@ -4318,6 +4403,22 @@ const handleCommand = async (
         delete spec.position
       }
 
+      // B58 — this write may complete the SPACE_BETWEEN + bound-gap pair against
+      // what the node ALREADY holds. The server refuses the pair when one call
+      // carries both halves; only here is the node's current align and gap
+      // binding in hand, and reading them costs nothing extra. Refused BEFORE
+      // anything is applied, so a rejected update has changed nothing.
+      const gapConflict = updateLayoutConflict(
+        node as GapConflictNode,
+        spec.layout as { align?: unknown } | undefined,
+        spec.bindings as
+          | { kind?: unknown; field?: unknown }[]
+          | undefined,
+      )
+      if (gapConflict !== undefined) {
+        return { error: gapConflict }
+      }
+
       // warn-on-no-op (T7): a patched property that the target node type does
       // not support is dropped by applyCommonProperties' `'X' in node` guards.
       // On update_node the target is arbitrary, so name the dropped field
@@ -4548,6 +4649,36 @@ const handleCommand = async (
         return { id: node.id, warnings }
       }
 
+      // ── Field CLEAR (B58) ────────────────────────────────────────────────
+      // Writing a literal over a bound field does NOT unbind it — proven live:
+      // `{gap: 16}` on a token-bound bar left `var(space/16)16` in place. So
+      // taking a token OFF a field needs its own door, and this is it. It runs
+      // BEFORE the variable lookup, because a clear names no variable.
+      if (params.clear === true) {
+        const clearField = params.field as string
+        if (
+          clearField === 'fills' ||
+          clearField === 'strokes'
+        ) {
+          // Paint bindings live per PAINT (setBoundVariableForPaint), not on
+          // the node field, so this route cannot reach them. Say so (T7)
+          // rather than reporting a clear that did not happen.
+          return {
+            error:
+              'bind_variable cannot clear a `' +
+              clearField +
+              '` binding: paint variables bind per paint, not on the node field. ' +
+              'Re-write the paint with a plain atom (no var() wrapper) to replace it.',
+          }
+        }
+        clearNodeField(
+          node as unknown as BindTargetNode,
+          clearField,
+          warnings,
+        )
+        return { id: node.id, warnings }
+      }
+
       // ── Field binding (original path) ─────────────────────────────────────
       const variable =
         await figma.variables.getVariableByIdAsync(
@@ -4559,6 +4690,17 @@ const handleCommand = async (
         }
       }
       const field = params.field as string
+
+      // B58 — binding a token to the gap of a SPACE_BETWEEN node builds the
+      // self-contradictory pair by the other door: no layout write is involved,
+      // and the result is destroyed the first time anyone clicks the node.
+      const bindConflict = bindFieldConflict(
+        node as GapConflictNode,
+        field,
+      )
+      if (bindConflict !== undefined) {
+        return { error: bindConflict }
+      }
 
       // Paint fields (fills/strokes) are NOT members of VariableBindableNodeField,
       // so node.setBoundVariable('fills', v) would throw. They bind per-paint via
@@ -4991,7 +5133,11 @@ const handleCommand = async (
     // given, else appendChild. For a NON-auto-layout new parent we preserve the
     // child's VISUAL (absolute) position across the move — appendChild keeps the
     // raw relative x/y, which otherwise makes the node jump. For an auto-layout
-    // new parent we leave x/y so the node re-flows in the layout.
+    // new parent we leave x/y so the node re-flows in the layout. THE PAGE is a
+    // non-auto-layout parent too (B55): it carries no absoluteTransform, and
+    // treating that as an unknown origin skipped the preservation on the most
+    // common move of all — un-nesting to the canvas. reparent-position.ts owns
+    // that decision and is unit-tested on its own.
     // Missing node/parent → {error}.
     case COMMANDS.REPARENT_NODE: {
       const nodeId = params.nodeId as string
@@ -5011,52 +5157,33 @@ const handleCommand = async (
       }
       const parent = newParent as ParentNode
       const child = node as SceneNode
-      // Capture the child's absolute position BEFORE the move. absoluteTransform
-      // is [[a,b,tx],[c,d,ty]]; the translation [tx,ty] is the page-absolute
-      // origin of the (unrotated) node.
-      const childAbs =
-        'absoluteTransform' in child
-          ? (
-              child as SceneNode & {
-                absoluteTransform: Transform
-              }
-            ).absoluteTransform
-          : undefined
+      // Capture the child's absolute origin BEFORE the move — appendChild keeps
+      // the raw parent-relative x/y, so without this the node jumps.
+      const childOrigin = originOf(child as Placeable)
       const index = params.index as number | undefined
       if (index !== undefined) {
         parent.insertChild(index, child)
       } else {
         parent.appendChild(child)
       }
-      // Recompute the child's parent-relative x/y so its absolute position is
-      // unchanged — ONLY when the new parent is not auto-layout. An auto-layout
-      // parent owns child placement, so leave x/y for the re-flow.
-      const parentLayoutMode =
-        'layoutMode' in parent
-          ? (parent as FrameNode).layoutMode
-          : 'NONE'
-      const newParentAbs =
-        'absoluteTransform' in parent
-          ? (
-              parent as BaseNode & {
-                absoluteTransform: Transform
-              }
-            ).absoluteTransform
-          : undefined
+      // Recompute the child's parent-relative x/y so its CANVAS position is
+      // unchanged. reparentPlacement answers undefined when the new parent owns
+      // placement (auto-layout / GRID re-flow) or when an origin is unknown.
+      // B55: a PAGE has no absoluteTransform, and reading that as "unknown"
+      // is what dropped the node's position every time it was un-nested.
+      const placement = reparentPlacement(
+        childOrigin,
+        parent as Placeable,
+      )
       if (
-        parentLayoutMode === 'NONE' &&
-        childAbs !== undefined &&
-        newParentAbs !== undefined &&
+        placement !== undefined &&
         'x' in child &&
         'y' in child
       ) {
-        // child.x/y in the new parent = childAbsoluteOrigin − newParentOrigin.
-        const targetX = childAbs[0][2] - newParentAbs[0][2]
-        const targetY = childAbs[1][2] - newParentAbs[1][2]
         ;(child as SceneNode & { x: number; y: number }).x =
-          targetX
+          placement.x
         ;(child as SceneNode & { x: number; y: number }).y =
-          targetY
+          placement.y
       }
       return {
         id: child.id,
@@ -5073,8 +5200,7 @@ const handleCommand = async (
     // an existing child). Missing parent → {error}.
     case COMMANDS.REORDER_CHILDREN: {
       const parentId = params.parentId as string
-      const parentNode =
-        await resolveNodeId(parentId)
+      const parentNode = await resolveNodeId(parentId)
       if (!parentNode || !('children' in parentNode)) {
         return {
           error:

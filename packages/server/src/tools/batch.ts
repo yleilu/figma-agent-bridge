@@ -67,6 +67,7 @@ import {
 } from '@figma-agent-bridge/shared/tool-params'
 import type { ScopedFigmaClient } from '../figma-client'
 import {
+  oneWayClampWarnings,
   slotEntryToFigma,
   specToFigma,
   unknownPatchKeyWarnings,
@@ -319,10 +320,13 @@ const convertUpdateNode = (
   // D3/T7: thread the writer warnings sink so a batched update_node surfaces the
   // SAME per-op warnings (e.g. GRID-only layout keys, an unknown patch key)
   // a direct update_node does — no longer a silent lossy conversion.
-  const spec = specToFigma(patch ?? {}, warnings)
+  const spec = specToFigma(patch ?? {}, warnings, nodeId)
   warnings?.push(
     ...unknownPatchKeyWarnings(patch ?? {}, spec),
   )
+  // B57 — the one-way min/max clamp note, so a batched update says exactly
+  // what a direct one says. A batch is where a family gets re-floored.
+  warnings?.push(...oneWayClampWarnings(patch ?? {}))
   return { nodeId, spec }
 }
 
