@@ -281,13 +281,27 @@ describe('applyLayout call-site wiring', () => {
     expect(applyCall).toContain('opts?.page')
   })
 
+  const updateCase = callers.slice(
+    callers.indexOf('case COMMANDS.UPDATE_NODE'),
+    callers.indexOf('case COMMANDS.DELETE_NODE'),
+  )
+
   it('update_node is the path that supplies the real page', () => {
-    const updateCase = callers.slice(
-      callers.indexOf('case COMMANDS.UPDATE_NODE'),
-      callers.indexOf('case COMMANDS.DELETE_NODE'),
-    )
     expect(updateCase.length).toBeGreaterThan(200)
     expect(updateCase).toContain('page: figma.currentPage')
+  })
+
+  // The restore runs after the reply, so `warnings` cannot carry its failure.
+  // Without a notifier a failed restore leaves the user silently deselected.
+  it('gives the deferred restore a failure channel', () => {
+    expect(updateCase).toContain('onError')
+    expect(updateCase).toContain('figma.notify')
+  })
+
+  // Passing a `defer` here would override the timer with whatever it names —
+  // the production path must take the module's real deferral.
+  it('does not override the deferral at the call site', () => {
+    expect(updateCase).not.toContain('defer:')
   })
 
   // A create cannot have a user-selected target, and the slot loop writes a

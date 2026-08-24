@@ -26,9 +26,26 @@
 // So the target is briefly DESELECTED for the write and the selection restored
 // afterwards, which makes the panel re-read the node instead of re-asserting
 // its stale state. Only the target leaves the selection — a multi-selection
-// keeps every other node — and the restore runs in a `finally`, because leaving
-// the user deselected because a write failed would be worse than the bug. The
-// blink is visible, so it is also NAMED in `warnings`.
+// keeps every other node. The blink is visible, so it is also NAMED in
+// `warnings`.
+//
+// THE BLINK HAS TO SPAN REAL UI FRAMES. A deselect and restore that both run
+// inside one synchronous handler is not a blink at all: Figma's UI never gets
+// a turn to process the deselection, the properties panel never drops its
+// stale context, and from its point of view the selection was never
+// interrupted — so it re-asserts after the reply exactly as before. That was
+// proven live too: the mitigation fired, the warning arrived verbatim, and the
+// value still reverted. A human deselect before the same write made it stick.
+//
+// The restore is therefore DEFERRED past the reply (`defer`, a timer by
+// default). The handler answers without waiting for it, so the restore's own
+// failures cannot ride the reply's `warnings` — they go to `onError`, which
+// the plugin points at `figma.notify`.
+//
+// A deferred restore can also arrive to find the user has moved on. Putting
+// the old selection back then would stomp a selection they made by hand, so
+// the restore checks that the selection is still exactly what the mitigation
+// left before touching it.
 //
 // The read-back and its single retry STAY, as the safety net for every other
 // way a field can fail to hold: a field that still refuses is NAMED, with what
@@ -101,6 +118,59 @@ export type SelectionHost = {
   selection: readonly { id: string }[]
 }
 
+/** How long the selection stays away before it is put back. */
+export const RESTORE_DELAY_MS = 100
+
+/**
+ * Everything the selection mitigation needs, injected so it can be driven by a
+ * test with no Figma runtime and no real clock.
+ */
+export type SelectionGuard = {
+  /** The page whose selection to protect — `figma.currentPage`. */
+  page: SelectionHost
+  /**
+   * Run the restore LATER, past the reply. Defaults to a timer; a test passes
+   * a collector and flushes it by hand. Deferring is the whole mitigation —
+   * see the timing note in the module header.
+   */
+  defer?: (restore: () => void) => void
+  /**
+   * Where a failed restore is reported. The reply has already gone out by
+   * then, so `warnings` cannot carry it; the plugin points this at
+   * `figma.notify` so the user is told rather than left deselected in silence.
+   */
+  onError?: (message: string) => void
+}
+
+/**
+ * The default deferral: past the current turn, so Figma's UI gets frames in
+ * which to process the deselection.
+ *
+ * A runtime with no timers restores IMMEDIATELY. That is the synchronous
+ * behaviour this rework exists to replace, so the mitigation stops working —
+ * but never giving the selection back would be worse than not mitigating.
+ */
+const defaultDefer = (restore: () => void): void => {
+  if (typeof setTimeout === 'function') {
+    setTimeout(restore, RESTORE_DELAY_MS)
+    return
+  }
+  restore()
+}
+
+/** Same nodes, order ignored — a selection is a set, not a sequence. */
+const sameNodes = (
+  a: readonly { id: string }[],
+  b: readonly { id: string }[],
+): boolean => {
+  if (a.length !== b.length) {
+    return false
+  }
+  const left = a.map(n => n?.id).sort()
+  const right = b.map(n => n?.id).sort()
+  return left.every((id, i) => id === right[i])
+}
+
 /** One Figma field this call means to set, and the value it means to set it to. */
 type Intent = {
   field: keyof LayoutTarget
@@ -110,57 +180,64 @@ type Intent = {
 /** What the caller is told when their selection blinked, and why. */
 const selectionBlinkMessage = (id: string): string =>
   `applyLayout: \`${id}\` was selected in the Figma UI, so the selection was ` +
-  'briefly cleared to apply the layout change and then restored. A selected ' +
-  "node has Figma's properties panel re-asserting what it displays over it, " +
-  'which reverts a layout write AFTER the call returns (B58). The change ' +
-  'landed; the selection blink is the cost of making it stick.'
+  'briefly cleared to apply the layout change. It comes back a moment later, ' +
+  'once Figma has had frames in which to notice — a selected node has the ' +
+  'properties panel re-asserting what it displays over it, which reverts a ' +
+  'layout write AFTER the call returns (B58). The change landed; the selection ' +
+  'blink is the cost of making it stick.'
 
 /**
- * Take the target out of the UI selection for the duration of the write, and
- * return the function that puts the selection back.
+ * Take the target out of the UI selection for the write, and return the
+ * function that puts the selection back — or UNDEFINED when nothing was done,
+ * so an unselected write schedules no restore at all.
  *
  * Every step degrades to "do nothing" rather than throwing: a page that will
  * not report or accept a selection is a reason to skip the mitigation, never a
- * reason to fail the layout write it was meant to protect. Returns a no-op when
- * there is no host, no id, or the target is not selected — an unselected write
- * must cost no selection churn at all.
+ * reason to fail the layout write it was meant to protect.
  */
 const deselectTarget = (
   frame: LayoutTarget,
-  page: SelectionHost | undefined,
+  guard: SelectionGuard | undefined,
   warnings?: string[],
-): (() => void) => {
-  const noop = (): void => {}
+): (() => void) | undefined => {
   const { id } = frame
-  if (page === undefined || typeof id !== 'string') {
-    return noop
+  if (guard === undefined || typeof id !== 'string') {
+    return undefined
   }
+  const { page, onError } = guard
   let saved: readonly { id: string }[]
   try {
     saved = [...page.selection]
   } catch {
-    return noop
+    return undefined
   }
   if (!saved.some(n => n?.id === id)) {
-    return noop
+    return undefined
   }
+  // Only the TARGET leaves. Clearing the whole selection would lose a
+  // multi-selection the user built by hand.
+  const left = saved.filter(n => n?.id !== id)
   try {
-    // Only the TARGET leaves. Clearing the whole selection would lose a
-    // multi-selection the user built by hand.
-    page.selection = saved.filter(n => n?.id !== id)
+    page.selection = left
   } catch {
-    return noop
+    return undefined
   }
   warnings?.push(selectionBlinkMessage(id))
   return () => {
     try {
+      // The user may have selected something else during the blink. Putting
+      // the old selection back on top of theirs would be a worse theft than
+      // the blink itself, so restore ONLY an untouched selection.
+      if (!sameNodes([...page.selection], left)) {
+        return
+      }
       page.selection = saved
     } catch {
-      // Guarded so a failed restore cannot replace the real error when this
-      // runs from a `finally` after the apply threw.
-      warnings?.push(
-        `applyLayout: the UI selection could not be restored after writing \`${id}\`. ` +
-          'Re-select the node in Figma.',
+      // The reply is long gone by the time this runs, so `warnings` cannot
+      // carry the failure — and an uncaught throw from a timer helps nobody.
+      onError?.(
+        `The Figma selection could not be restored after the layout write to ${id}. ` +
+          'Re-select the node.',
       )
     }
   }
@@ -327,7 +404,7 @@ export const applyLayout = (
   frame: LayoutTarget,
   layout: AppliedLayout,
   warnings?: string[],
-  page?: SelectionHost,
+  guard?: SelectionGuard,
 ): void => {
   // GRID-mode fields (M12). Feature-detect (T7): a runtime that does not expose
   // them gets ONE warning naming the capability, not four dropped-write
@@ -351,13 +428,17 @@ export const applyLayout = (
   const intents = intentsOf(frame, layout)
   const restoreSelection = deselectTarget(
     frame,
-    page,
+    guard,
     warnings,
   )
   try {
     writeAndVerify(frame, intents, warnings)
   } finally {
-    // The user's selection comes back whatever the write did.
-    restoreSelection()
+    // The user's selection comes back whatever the write did — but LATER, past
+    // this reply, or the UI never notices it went away (see the module header).
+    // Fire-and-forget: the handler does not wait for it.
+    if (restoreSelection !== undefined) {
+      ;(guard?.defer ?? defaultDefer)(restoreSelection)
+    }
   }
 }

@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 
 import {
   applyLayout,
+  RESTORE_DELAY_MS,
   type AppliedLayout,
   type LayoutTarget,
 } from './apply-layout'
@@ -389,21 +390,28 @@ test('B58: a dropped grid count is named on a runtime that supports GRID', () =>
   expect(warnings[0]).toContain('gridRowCount')
 })
 
-// ─── B58 rework: the revert lands AFTER the reply, so deselect first ─────────
+// ─── B58 rework: the blink has to span real UI frames ────────────────────────
 //
-// The verify-after-apply above was proved insufficient live, and the failure
-// told us why. With Lei holding a real UI selection on the target, the write
-// returned ok with EMPTY warnings — the in-handler read-back saw the new value
-// and was telling the truth — yet a read seconds later showed align MIN and
-// unchanged geometry. The value HOLDS at apply time and is REVERTED after the
-// reply returns, when Figma's properties panel re-asserts its stale state over
-// the still-selected node.
+// Two live attempts failed before this shape, and each one narrowed it.
 //
-// No in-handler check can catch that. The check passes honestly and the revert
-// wins afterwards. So the target is briefly DESELECTED for the write and the
-// selection restored after, which makes the panel re-read the node instead of
-// re-asserting what it was showing. The verify + retry machinery stays as the
-// safety net for anything else that drops a field.
+// Round 1 read every field back after applying and retried a mismatch once.
+// Live, with Lei holding a real UI selection: ok, EMPTY warnings — the
+// read-back saw the new value and was telling the truth — and a read seconds
+// later showed align MIN with the geometry unchanged. The value holds at apply
+// time and is reverted AFTER the reply, when Figma's properties panel
+// re-asserts its stale state. No in-handler check can catch that.
+//
+// Round 2 deselected the target for the write and restored the selection in the
+// same handler. The mitigation fired, the warning arrived verbatim, and the
+// value STILL reverted — while a human deselect before the identical write made
+// it stick. A deselect and a restore inside one synchronous turn is not a blink:
+// the UI never gets a frame in which to process it, so the panel never drops
+// its stale context and the selection was, from its point of view, never
+// interrupted.
+//
+// So the restore is DEFERRED past the reply. What is pinned below is that
+// separation in time — the restore must NOT have happened when the handler
+// would return, and must happen once the deferral runs.
 
 /**
  * A stand-in for `figma.currentPage`: a settable selection that records every
@@ -428,6 +436,26 @@ const fakePage = (selectedIds: string[]) => {
   }
 }
 
+/** A hand-cranked clock: nothing runs until the test says so. */
+const fakeClock = () => {
+  const pending: (() => void)[] = []
+  return {
+    defer: (fn: () => void) => {
+      pending.push(fn)
+    },
+    get scheduled(): number {
+      return pending.length
+    },
+    /** Run everything deferred so far, as the timer eventually would. */
+    flush: () => {
+      const due = pending.splice(0, pending.length)
+      for (const fn of due) {
+        fn()
+      }
+    },
+  }
+}
+
 const framed = (id: string): LayoutTarget => ({
   ...makeFrame(),
   id,
@@ -438,57 +466,75 @@ const SELECTED_LAYOUT: AppliedLayout = {
   align: ['SPACE_BETWEEN', 'CENTER'],
 }
 
-test('B58: a SELECTED target is deselected for the write and restored after', () => {
+test('B58: the restore does NOT run in the handler — that is the whole fix', () => {
   const page = fakePage(['1:1'])
-  const warnings: string[] = []
-  applyLayout(
-    framed('1:1'),
-    SELECTED_LAYOUT,
-    warnings,
+  const clock = fakeClock()
+  applyLayout(framed('1:1'), SELECTED_LAYOUT, [], {
     page,
-  )
+    defer: clock.defer,
+  })
+  // applyLayout has returned; the reply would go out now. The target must
+  // still be deselected, or the UI never notices the blink at all.
+  expect(page.history).toEqual([[]])
+  expect(page.selection.map(n => n.id)).toEqual([])
+  expect(clock.scheduled).toBe(1)
+})
+
+test('B58: …and DOES run once the deferral fires', () => {
+  const page = fakePage(['1:1'])
+  const clock = fakeClock()
+  applyLayout(framed('1:1'), SELECTED_LAYOUT, [], {
+    page,
+    defer: clock.defer,
+  })
+  clock.flush()
   expect(page.history).toEqual([[], ['1:1']])
   expect(page.selection.map(n => n.id)).toEqual(['1:1'])
 })
 
-test('B58: the blink is announced — the user deserves to know', () => {
+test('B58: the blink is announced, and says the selection comes back', () => {
   const page = fakePage(['1:1'])
+  const clock = fakeClock()
   const warnings: string[] = []
-  applyLayout(
-    framed('1:1'),
-    SELECTED_LAYOUT,
-    warnings,
+  applyLayout(framed('1:1'), SELECTED_LAYOUT, warnings, {
     page,
-  )
+    defer: clock.defer,
+  })
   expect(warnings).toHaveLength(1)
   expect(warnings[0]).toContain('selection')
   expect(warnings[0]).toContain('1:1')
+  expect(warnings[0]).toContain('a moment later')
 })
 
 test('B58: a multi-selection keeps every OTHER node selected throughout', () => {
   const page = fakePage(['0:9', '1:1', '2:2'])
-  applyLayout(framed('1:1'), SELECTED_LAYOUT, [], page)
-  // Only the target leaves, and the whole selection comes back in order.
+  const clock = fakeClock()
+  applyLayout(framed('1:1'), SELECTED_LAYOUT, [], {
+    page,
+    defer: clock.defer,
+  })
+  expect(page.history).toEqual([['0:9', '2:2']])
+  clock.flush()
   expect(page.history).toEqual([
     ['0:9', '2:2'],
     ['0:9', '1:1', '2:2'],
   ])
 })
 
-test('B58: an UNSELECTED target costs no selection churn at all', () => {
+test('B58: an UNSELECTED target schedules nothing and touches nothing', () => {
   const page = fakePage(['9:9'])
+  const clock = fakeClock()
   const warnings: string[] = []
-  applyLayout(
-    framed('1:1'),
-    SELECTED_LAYOUT,
-    warnings,
+  applyLayout(framed('1:1'), SELECTED_LAYOUT, warnings, {
     page,
-  )
+    defer: clock.defer,
+  })
   expect(page.history).toEqual([])
+  expect(clock.scheduled).toBe(0)
   expect(warnings).toEqual([])
 })
 
-test('B58: no page host at all behaves exactly as before', () => {
+test('B58: no guard at all behaves exactly as before', () => {
   const frame = framed('1:1')
   const warnings: string[] = []
   applyLayout(frame, SELECTED_LAYOUT, warnings)
@@ -496,10 +542,11 @@ test('B58: no page host at all behaves exactly as before', () => {
   expect(warnings).toEqual([])
 })
 
-test('B58: the selection is restored even when the apply THROWS', () => {
-  // Leaving the user deselected because a write failed would be a worse bug
-  // than the one being fixed.
+test('B58: the restore is still SCHEDULED when the apply throws', () => {
+  // Leaving the user deselected because a write failed would be worse than the
+  // bug being fixed — and the scheduling is in a `finally` for that reason.
   const page = fakePage(['1:1'])
+  const clock = fakeClock()
   const frame = framed('1:1')
   Object.defineProperty(frame, 'primaryAxisAlignItems', {
     set: () => {
@@ -509,14 +556,83 @@ test('B58: the selection is restored even when the apply THROWS', () => {
     configurable: true,
   })
   expect(() =>
-    applyLayout(frame, SELECTED_LAYOUT, [], page),
+    applyLayout(frame, SELECTED_LAYOUT, [], {
+      page,
+      defer: clock.defer,
+    }),
   ).toThrow('Cannot set align')
-  expect(page.history).toEqual([[], ['1:1']])
+  expect(clock.scheduled).toBe(1)
+  clock.flush()
   expect(page.selection.map(n => n.id)).toEqual(['1:1'])
+})
+
+test('B58: a user who re-selects during the blink KEEPS their selection', () => {
+  // The deferral opens a window the user can act in. Putting the old selection
+  // back on top of one they just made by hand would be a worse theft than the
+  // blink itself.
+  const page = fakePage(['1:1'])
+  const clock = fakeClock()
+  applyLayout(framed('1:1'), SELECTED_LAYOUT, [], {
+    page,
+    defer: clock.defer,
+  })
+  page.selection = [{ id: '7:7' }]
+  clock.flush()
+  expect(page.selection.map(n => n.id)).toEqual(['7:7'])
+  // …and the restore did not write at all, so nothing flickered.
+  expect(page.history).toEqual([[], ['7:7']])
+})
+
+test('B58: an untouched selection is restored even as a fresh array', () => {
+  // Figma hands back a NEW array on every read, so identity cannot be the test
+  // — the restore compares which nodes are selected.
+  const page = fakePage(['1:1'])
+  const clock = fakeClock()
+  applyLayout(framed('1:1'), SELECTED_LAYOUT, [], {
+    page,
+    defer: clock.defer,
+  })
+  page.selection = []
+  clock.flush()
+  expect(page.selection.map(n => n.id)).toEqual(['1:1'])
+})
+
+test('B58: a failed restore reports through onError, not warnings', () => {
+  // The reply is long gone by the time the restore runs, so `warnings` cannot
+  // carry the failure and an uncaught throw from a timer helps nobody.
+  const clock = fakeClock()
+  const notices: string[] = []
+  let current: readonly { id: string }[] = [{ id: '1:1' }]
+  let writes = 0
+  const page = {
+    get selection(): readonly { id: string }[] {
+      return current
+    },
+    set selection(next: readonly { id: string }[]) {
+      writes += 1
+      if (writes > 1) {
+        throw new Error('selection is not settable now')
+      }
+      current = next
+    },
+  }
+  const warnings: string[] = []
+  applyLayout(framed('1:1'), SELECTED_LAYOUT, warnings, {
+    page,
+    defer: clock.defer,
+    onError: m => notices.push(m),
+  })
+  expect(() => clock.flush()).not.toThrow()
+  expect(notices).toHaveLength(1)
+  expect(notices[0]).toContain('1:1')
+  // The reply's warnings carry the blink only — never the later failure.
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain('a moment later')
 })
 
 test('B58: the verify/retry safety net still runs inside the guard', () => {
   const page = fakePage(['1:1'])
+  const clock = fakeClock()
   const frame = framed('1:1')
   let held = 'MIN'
   Object.defineProperty(frame, 'primaryAxisAlignItems', {
@@ -527,8 +643,10 @@ test('B58: the verify/retry safety net still runs inside the guard', () => {
     configurable: true,
   })
   const warnings: string[] = []
-  applyLayout(frame, SELECTED_LAYOUT, warnings, page)
-  // Both notes: the blink that happened, and the field that still refused.
+  applyLayout(frame, SELECTED_LAYOUT, warnings, {
+    page,
+    defer: clock.defer,
+  })
   expect(warnings).toHaveLength(2)
   expect(warnings.some(w => w.includes('selection'))).toBe(
     true,
@@ -536,11 +654,28 @@ test('B58: the verify/retry safety net still runs inside the guard', () => {
   expect(
     warnings.some(w => w.includes('primaryAxisAlignItems')),
   ).toBe(true)
-  expect(page.history).toEqual([[], ['1:1']])
 })
 
 test('B58: a frame with no id is never deselected (nothing to match on)', () => {
   const page = fakePage(['1:1'])
-  applyLayout(makeFrame(), SELECTED_LAYOUT, [], page)
+  const clock = fakeClock()
+  applyLayout(makeFrame(), SELECTED_LAYOUT, [], {
+    page,
+    defer: clock.defer,
+  })
   expect(page.history).toEqual([])
+  expect(clock.scheduled).toBe(0)
+})
+
+// The PRODUCTION path passes no `defer` — code.ts hands over only the page and
+// the notifier — so the default deferral is what actually ships. A default that
+// quietly ran inline would be round 2 again, with every test above still green.
+test('B58: the DEFAULT deferral is a real one — nothing restores inline', async () => {
+  const page = fakePage(['1:1'])
+  applyLayout(framed('1:1'), SELECTED_LAYOUT, [], { page })
+  expect(page.history).toEqual([[]])
+  await new Promise(resolve =>
+    setTimeout(resolve, RESTORE_DELAY_MS * 3),
+  )
+  expect(page.history).toEqual([[], ['1:1']])
 })

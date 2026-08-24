@@ -7,7 +7,7 @@ import {
 import {
   applyLayout,
   type AppliedLayout,
-  type SelectionHost,
+  type SelectionGuard,
 } from './apply-layout'
 import {
   originOf,
@@ -651,12 +651,13 @@ const applyCommonProperties = async (
   // resize, so on a patch the size has to be written last and proven there
   // (B46). A create states its own type and takes the size here.
   //
-  // `page` is the UI selection host, passed ONLY by update_node — the one path
+  // `page` is the UI selection guard, passed ONLY by update_node — the one path
   // whose target is an EXISTING node the user may have selected. applyLayout
-  // takes the target out of that selection for the write and puts it back
-  // (B58). A create cannot have a selected target, and the slot loop writes a
-  // node it made a moment ago, so neither pays any selection churn.
-  opts?: { deferSize?: boolean; page?: SelectionHost },
+  // takes the target out of that selection for the write and puts it back a
+  // moment later (B58). A create cannot have a selected target, and the slot
+  // loop writes a node it made a moment ago, so neither pays any selection
+  // churn.
+  opts?: { deferSize?: boolean; page?: SelectionGuard },
 ): Promise<void> => {
   // Name
   if (spec.name !== undefined) {
@@ -4447,14 +4448,26 @@ const handleCommand = async (
         spec,
         parent as ParentNode,
         warnings,
-        // B58 — the ONE path that hands over the selection host: an existing
+        // B58 — the ONE path that hands over the selection guard: an existing
         // node the user may be looking at right now. A node selected in the UI
         // has the properties panel re-assert its stale state after the reply
         // goes out, which reverted the layout write the handler had already
-        // verified. applyLayout deselects the target for the write only.
+        // verified. applyLayout deselects the target for the write and restores
+        // the selection on a timer, past this reply — a same-turn restore never
+        // reaches the UI at all, which is exactly how the first two attempts at
+        // this failed live.
+        //
+        // `onError` is the restore's ONLY channel: it runs after the reply, so
+        // a failure there can never ride `warnings`. figma.notify tells the
+        // user rather than leaving them silently deselected.
         {
           deferSize: true,
-          page: figma.currentPage as unknown as SelectionHost,
+          page: {
+            page: figma.currentPage,
+            onError: message => {
+              figma.notify(message, { error: true })
+            },
+          },
         },
       )
       if (node.type === 'TEXT' && spec.text !== undefined) {
