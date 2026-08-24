@@ -15,6 +15,9 @@ export default [
       '.claude/**',
       'plugin/bin/**',
       'plugin/figma-plugin/**',
+      // Gitignored QA scratch — throwaway operator scripts,
+      // not gated source.
+      'docs/scratch/**',
     ],
   },
   plugins.stylistic,
