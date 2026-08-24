@@ -181,8 +181,6 @@ describe('handleReparentNode', () => {
 // wrapper (or a real scoped client) reaches the plugin joined on the target
 // file's channel, and a mismatched fileKey is refused by the wrapper's gate.
 describe('delete_node routing through the scoped client', () => {
-  const TEST_PORT = 3117
-  const RELAY_URL = `ws://localhost:${TEST_PORT}`
   const TEST_CHANNEL = 'structure-routing'
   const FK = 'fk-structure'
   let server: Server<{ id: string }>
@@ -191,10 +189,13 @@ describe('delete_node routing through the scoped client', () => {
     null
 
   beforeEach(async () => {
-    server = startRelay(TEST_PORT)
-    client = createFigmaClient(RELAY_URL)
+    // Port 0 = OS-assigned ephemeral port — an unrelated
+    // local listener can never collide with this block.
+    server = startRelay(0)
+    const relayUrl = `ws://localhost:${server.port}`
+    client = createFigmaClient(relayUrl)
     plugin = createMockPlugin({
-      relayUrl: RELAY_URL,
+      relayUrl,
       channel: TEST_CHANNEL,
       fileKey: FK,
     })
@@ -207,8 +208,12 @@ describe('delete_node routing through the scoped client', () => {
       plugin.stop()
       plugin = null
     }
-    client.disconnect()
-    stopRelay(server)
+    // Guarded: a beforeEach that threw must surface its own
+    // error, not this teardown's TypeError.
+    client?.disconnect()
+    if (server) {
+      stopRelay(server)
+    }
   })
 
   it('routes to the joined file and returns the deleted node', async () => {
