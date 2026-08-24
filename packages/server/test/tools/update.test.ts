@@ -285,3 +285,69 @@ describe('handleUpdateNode — unknown patch keys are never silent', () => {
     expect(data.warnings ?? []).toEqual([])
   })
 })
+
+// ─── B57: the one-way clamp warning reaches the agent ────────────────────────
+//
+// The write itself is faithful — Figma's min/max IS a one-way clamp, and the
+// plugin does a plain property set. What was wrong is that `update_node`
+// answered ok with `warnings: []` while a size the operator had set by hand was
+// destroyed: dropping a min back down left the clamped value in place, on an
+// overridden instance, on a hugging instance, and on the hugging master.
+
+describe('handleUpdateNode — one-way clamp warning (B57)', () => {
+  const warningsOf = async (
+    patch: Record<string, unknown>,
+  ): Promise<string[]> => {
+    const result = await handleUpdateNode(
+      { nodeId: '1:42', patch },
+      stubClient({
+        reply: {
+          id: '1:42',
+          name: 'Card',
+          type: 'FRAME',
+          warnings: [],
+        },
+      }),
+    )
+    const reply = JSON.parse(result.content[0].text) as {
+      warnings?: string[]
+    }
+    return reply.warnings ?? []
+  }
+
+  it('warns, naming the field, when a floor is written', async () => {
+    const warnings = await warningsOf({ minHeight: 240 })
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('minHeight')
+  })
+
+  it('warns when a floor is CLEARED — the clear restores nothing', async () => {
+    const warnings = await warningsOf({ minWidth: null })
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('minWidth')
+    expect(warnings[0]).toContain('restore')
+  })
+
+  it('stays silent on a patch that moves no clamp', async () => {
+    expect(await warningsOf({ opacity: 0.5 })).toEqual([])
+  })
+
+  it('never reports ok with empty warnings for a clamp write', async () => {
+    // The B57 failure shape verbatim: ok + warnings:[] while a size was lost.
+    const result = await handleUpdateNode(
+      { nodeId: '1:42', patch: { minWidth: 320 } },
+      stubClient({
+        reply: {
+          id: '1:42',
+          name: 'State block',
+          type: 'COMPONENT',
+          warnings: [],
+        },
+      }),
+    )
+    const reply = JSON.parse(result.content[0].text) as {
+      warnings?: string[]
+    }
+    expect(reply.warnings ?? []).not.toHaveLength(0)
+  })
+})

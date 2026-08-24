@@ -326,6 +326,58 @@ export const unknownPatchKeyWarnings = (
   return out
 }
 
+/** The four auto-layout size clamps, in the order a patch is scanned (B57). */
+const CLAMP_KEYS = [
+  'minWidth',
+  'maxWidth',
+  'minHeight',
+  'maxHeight',
+] as const
+
+/**
+ * What an update that moves a min/max clamp must say (B57).
+ *
+ * Figma's clamp is ONE-WAY, and the plugin's apply is a faithful property set —
+ * this is Figma's own semantics, not a bridge defect. Writing `minWidth: 320`
+ * on a master forced an instance carrying a FIXED width 238 up to 320, which is
+ * expected. Dropping the min back down left the instance at 320: the 238 was
+ * gone, not restored. A HUGGING instance kept the clamped width over 27 of
+ * content, and so did the hugging MASTER — hug does not re-resolve when a floor
+ * moves.
+ *
+ * So the destructive step is invisible from the reply. The surface answered ok
+ * with an empty `warnings[]` while a size the operator had set by hand was
+ * overwritten for good. That is the silent-failure class T7 forbids, and it
+ * bites the S38 doctrine directly ("set family floors before instances diverge;
+ * re-check instance sizes after changing one").
+ *
+ * A CLEAR warns as loudly as a write: `minWidth: null` reads like an undo and
+ * is not one.
+ */
+export const oneWayClampWarnings = (
+  patch: object,
+): string[] => {
+  const out: string[] = []
+  const p = patch as Record<string, unknown>
+  for (const field of CLAMP_KEYS) {
+    if (!(field in p)) {
+      continue
+    }
+    const cleared = p[field] === null
+    out.push(
+      `\`${field}\` is a ONE-WAY clamp. Figma resizes every node past it and ` +
+        `keeps no record of the size it replaced. ` +
+        (cleared
+          ? 'Clearing it restores nothing: '
+          : 'Clearing it or lowering it later restores nothing: ') +
+        `an instance's own size override stays at the clamped value, and a HUG ` +
+        `does not re-resolve. Re-state \`size\` and \`sizing\` on every node this ` +
+        `clamp reaches, master and instances alike.`,
+    )
+  }
+  return out
+}
+
 /**
  * Convert a (partial) NodeSpec to a FigmaWritePayload.
  *

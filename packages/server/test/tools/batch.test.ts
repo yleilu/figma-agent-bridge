@@ -302,6 +302,38 @@ describe('handleBatch', () => {
     ).toBe(true)
   })
 
+  // B57 — a batch is where a family gets re-floored, so the one-way clamp note
+  // has to say the same thing here that a direct update_node says. Parity, not
+  // a second implementation.
+  it('surfaces the one-way clamp warning on a batched update_node entry', async () => {
+    const result = await handleBatch(
+      {
+        ops: [
+          {
+            op: 'update_node',
+            nodeId: '1:1',
+            patch: { minWidth: 320 },
+          },
+          {
+            op: 'update_node',
+            nodeId: '1:2',
+            patch: { minWidth: null },
+          },
+        ],
+      },
+      stubClient({}),
+    )
+    const out = parse(
+      result.content[0].text,
+    ) as BatchOut & {
+      results: { warnings?: string[] }[]
+    }
+    for (const row of out.results) {
+      expect(row.warnings ?? []).toHaveLength(1)
+      expect((row.warnings ?? [])[0]).toContain('minWidth')
+    }
+  })
+
   it('does not attach an empty warnings[] when an update_node entry is clean', async () => {
     const result = await handleBatch(
       {

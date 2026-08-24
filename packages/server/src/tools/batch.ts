@@ -67,6 +67,7 @@ import {
 } from '@figma-agent-bridge/shared/tool-params'
 import type { ScopedFigmaClient } from '../figma-client'
 import {
+  oneWayClampWarnings,
   slotEntryToFigma,
   specToFigma,
   unknownPatchKeyWarnings,
@@ -323,6 +324,9 @@ const convertUpdateNode = (
   warnings?.push(
     ...unknownPatchKeyWarnings(patch ?? {}, spec),
   )
+  // B57 — the one-way min/max clamp note, so a batched update says exactly
+  // what a direct one says. A batch is where a family gets re-floored.
+  warnings?.push(...oneWayClampWarnings(patch ?? {}))
   return { nodeId, spec }
 }
 

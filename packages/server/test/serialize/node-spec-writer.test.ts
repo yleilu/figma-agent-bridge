@@ -12,6 +12,7 @@ import {
   specToFigma,
   specToFigmaForCreate,
   slotEntryToFigma,
+  oneWayClampWarnings,
 } from '@figma-agent-bridge/server/serialize/node-spec-writer'
 
 // ─── omit-untouched (pure) ───────────────────────────────────────────────────
@@ -1212,5 +1213,65 @@ describe('specToFigma — sectionContentsHidden', () => {
   it('omits sectionContentsHidden when absent from spec', () => {
     const result = specToFigma({ type: 'SECTION' } as never)
     expect(result.sectionContentsHidden).toBeUndefined()
+  })
+})
+
+// ─── B57: the one-way clamp is announced ─────────────────────────────────────
+//
+// Figma's min/max is a one-way clamp. Writing `minWidth: 320` on a master
+// forced an instance carrying a FIXED width 238 up to 320 — expected, the
+// family is bound. Dropping the min back down left the instance at 320: the
+// 238 override was gone, not restored. A hugging instance and the hugging
+// MASTER stayed at the clamped value too, and hug did not re-resolve.
+//
+// The apply is faithful — this is Figma's own semantics, and the plugin does a
+// plain property set. What was missing is the warning: the surface reported ok
+// with empty warnings while destroying a size the operator would have to
+// re-enter by hand.
+
+describe('oneWayClampWarnings (B57)', () => {
+  it('says nothing for a patch that touches no clamp', () => {
+    expect(
+      oneWayClampWarnings({ size: [100, 100] }),
+    ).toEqual([])
+  })
+
+  it('warns on a written floor, naming the field', () => {
+    const w = oneWayClampWarnings({ minHeight: 240 })
+    expect(w).toHaveLength(1)
+    expect(w[0]).toContain('minHeight')
+    expect(w[0].toLowerCase()).toContain('one-way')
+  })
+
+  it('warns on a CLEARED floor too — clearing restores nothing', () => {
+    const w = oneWayClampWarnings({ minWidth: null })
+    expect(w).toHaveLength(1)
+    expect(w[0]).toContain('minWidth')
+    // The half that bit S38: a clear reads like an undo and is not one.
+    expect(w[0]).toContain('restore')
+  })
+
+  it('names every clamp the patch touched, one warning each', () => {
+    const w = oneWayClampWarnings({
+      minWidth: 100,
+      maxWidth: 400,
+      minHeight: null,
+      maxHeight: 800,
+    })
+    expect(w).toHaveLength(4)
+    for (const field of [
+      'minWidth',
+      'maxWidth',
+      'minHeight',
+      'maxHeight',
+    ]) {
+      expect(w.some(m => m.includes(field))).toBe(true)
+    }
+  })
+
+  it('tells the operator what to do about it', () => {
+    // S38's doctrine: re-check the sizes of the family after a floor moves.
+    const w = oneWayClampWarnings({ minWidth: 320 })
+    expect(w[0]).toContain('sizing')
   })
 })
