@@ -13,6 +13,11 @@ import {
   reparentPlacement,
   type Placeable,
 } from './reparent-position'
+import {
+  resolvePropertyKey,
+  undeletedMessage,
+  type PropertyDefs,
+} from './component-properties'
 import { importComponentByKeyWithDeadline } from './import-by-key'
 import { createFontLoader } from './font-cache'
 import { applyPointDetail } from './vector-points'
@@ -3781,19 +3786,45 @@ const handleCommand = async (
           }
         }
       }
-      // delete
+      // delete (M22a). Three ways a removal used to end in silence, all closed:
+      //   - the caller passes the bare NAME the reply showed, while the
+      //     definitions are keyed by the canonical id — resolvePropertyKey
+      //     accepts either, and names the candidates when a name is ambiguous;
+      //   - the property does not exist — the refusal lists what does;
+      //   - Figma REFUSES the removal without throwing (a SLOT property, a
+      //     variant property of a set) — the definitions are re-read after the
+      //     call and a survivor is named.
+      // Never ok with an unchanged property list and empty warnings (M22).
       const delProps = params.delete as string[] | undefined
       if (delProps) {
-        for (const name of delProps) {
+        for (const requested of delProps) {
+          const found = resolvePropertyKey(
+            (comp.componentPropertyDefinitions ??
+              {}) as PropertyDefs,
+            requested,
+          )
+          if (found.key === undefined) {
+            ucWarnings.push(
+              'Failed to delete property: ' + found.error,
+            )
+            continue
+          }
+          const { key } = found
           try {
-            comp.deleteComponentProperty(name)
+            comp.deleteComponentProperty(key)
           } catch (e) {
             ucWarnings.push(
               'Failed to delete property "' +
-                name +
+                key +
                 '": ' +
                 String(e),
             )
+            continue
+          }
+          if (
+            key in (comp.componentPropertyDefinitions ?? {})
+          ) {
+            ucWarnings.push(undeletedMessage(key))
           }
         }
       }

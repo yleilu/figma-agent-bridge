@@ -964,6 +964,39 @@ export const createMockPlugin = (
     Record<string, unknown>
   >()
 
+  // COMPONENT PROPERTY DEFINITIONS per component (M22a), keyed by the CANONICAL
+  // id the way Figma's `componentPropertyDefinitions` is. Held as state, not
+  // echoed, for the same reason as the slots above: add → remove → enumerate
+  // only proves anything if the removal is read back from what the document
+  // holds. `properties` in the reply is the list AFTER the call, exactly as the
+  // real plugin's `projectComponentDefs(comp.componentPropertyDefinitions)` is.
+  type MockPropertyDef = {
+    id: string
+    name: string
+    type: string
+    defaultValue: string | boolean
+  }
+  const componentProps = new Map<
+    string,
+    Map<string, MockPropertyDef>
+  >()
+  const propsOf = (
+    componentId: string,
+  ): Map<string, MockPropertyDef> => {
+    const found = componentProps.get(componentId)
+    if (found !== undefined) {
+      return found
+    }
+    const fresh = new Map<string, MockPropertyDef>()
+    componentProps.set(componentId, fresh)
+    return fresh
+  }
+  /** The bare NAME half of a canonical property id — mirrors propertyName(). */
+  const barePropName = (key: string): string => {
+    const hash = key.lastIndexOf('#')
+    return hash > 0 ? key.slice(0, hash) : key
+  }
+
   /**
    * Model `component.createSlot()` plus the apply pipeline the fresh slot then
    * runs (B30).
@@ -2782,17 +2815,16 @@ export const createMockPlugin = (
         const ucSlots = cmd.params?.slots as
           | (string | Record<string, unknown>)[]
           | undefined
+        const ucDelete = cmd.params?.delete as
+          | string[]
+          | undefined
         const ucWarnings: string[] = []
-        const properties: {
-          id: string
-          name: string
-          type: string
-          defaultValue: string | boolean
-        }[] = []
+        const defs = propsOf(ucId)
         if (ucAdd) {
           for (const p of ucAdd) {
-            properties.push({
-              id: `${p.name}#1:0`,
+            const canonical = `${p.name}#1:0`
+            defs.set(canonical, {
+              id: canonical,
               name: p.name,
               type: p.type,
               defaultValue: p.defaultValue,
@@ -2810,6 +2842,56 @@ export const createMockPlugin = (
             // componentPropertyReferences on the child. The mock cannot do that
             // (no live Figma node tree), so it simply skips — headless fidelity
             // boundary documented in comments.
+          }
+        }
+        // delete (M22a) — mirrors the real plugin's arm exactly: resolve by the
+        // canonical id OR by a bare name only one property carries, refuse an
+        // ambiguous or unknown name by NAMING what is there, and re-read the
+        // definitions afterwards so a removal Figma refused is reported rather
+        // than passing as ok. A `lockedprops:` componentId models that refusal
+        // (Figma keeps SLOT and set-variant properties) — a mock affordance,
+        // since nothing headless can make Figma refuse.
+        if (ucDelete) {
+          for (const requested of ucDelete) {
+            let key: string | undefined
+            if (defs.has(requested)) {
+              key = requested
+            } else {
+              const byName = [...defs.keys()].filter(
+                k => barePropName(k) === requested,
+              )
+              if (byName.length === 1) {
+                ;[key] = byName
+              } else if (byName.length > 1) {
+                ucWarnings.push(
+                  `Failed to delete property: "${requested}" names ${byName.length} component properties (` +
+                    byName.map(k => `"${k}"`).join(', ') +
+                    ') — pass the full property id, not the bare name',
+                )
+                continue
+              } else {
+                const known = [...defs.keys()]
+                ucWarnings.push(
+                  `Failed to delete property: no component property named "${requested}"` +
+                    (known.length === 0
+                      ? ' — this component has none'
+                      : ' — this component has: ' +
+                        known
+                          .map(k => `"${k}"`)
+                          .join(', ')),
+                )
+                continue
+              }
+            }
+            if (ucId.startsWith('lockedprops:')) {
+              ucWarnings.push(
+                `component property "${key}" is still defined after deleteComponentProperty — ` +
+                  'Figma refused the removal (a SLOT property and a variant property of a set ' +
+                  'are the known cases). Remove it from the component panel in Figma.',
+              )
+              continue
+            }
+            defs.delete(key)
           }
         }
         if (ucExpose && ucExpose.length > 0) {
@@ -2860,7 +2942,10 @@ export const createMockPlugin = (
         }
         result = {
           id: ucId,
-          properties,
+          // The list AFTER the call, never just what this call added — that is
+          // what `projectComponentDefs(comp.componentPropertyDefinitions)`
+          // returns, and it is what makes add → remove → enumerate provable.
+          properties: [...defs.values()],
           slotsCreated,
           slotsSkipped,
           warnings: ucWarnings,

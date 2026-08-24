@@ -195,3 +195,42 @@ describe('SEARCH repair wiring', () => {
     expect(searchCase).toContain('getNodeByIdAsync')
   })
 })
+
+// M22a — the delete arm's honesty lives in component-properties.ts, which is
+// pure and fully tested there. The server mock models the CONTRACT, not this
+// code, so both stay green if the arm stops calling the resolver or stops
+// re-reading the definitions. Only a live removal would notice.
+const deleteArm = ((): string => {
+  const from = callers.indexOf('// delete (M22a)')
+  const to = callers.indexOf('// description', from)
+  return from === -1 || to === -1
+    ? ''
+    : callers.slice(from, to)
+})()
+
+describe('UPDATE_COMPONENT delete-property wiring', () => {
+  it('actually found the arm (liveness)', () => {
+    expect(deleteArm.length).toBeGreaterThan(200)
+    expect(deleteArm).toContain('deleteComponentProperty')
+  })
+
+  it('resolves the key, then VERIFIES the property is gone', () => {
+    expect(deleteArm).toContain('resolvePropertyKey(')
+    expect(deleteArm).toContain('undeletedMessage(')
+    // The verify has to read the definitions AGAIN — checking the copy taken
+    // before the delete would always agree with itself.
+    expect(
+      deleteArm.lastIndexOf(
+        'comp.componentPropertyDefinitions',
+      ),
+    ).toBeGreaterThan(
+      deleteArm.indexOf('comp.deleteComponentProperty('),
+    )
+  })
+
+  it('never continues past a refusal as though it worked', () => {
+    // Each of the three arms warns and then skips this entry.
+    const continues = deleteArm.split('continue').length - 1
+    expect(continues).toBe(2)
+  })
+})

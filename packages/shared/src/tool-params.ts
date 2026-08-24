@@ -1319,7 +1319,9 @@ export const updateComponentParamsSchema = strictParams({
   delete: z
     .array(z.string())
     .optional()
-    .describe('Property names to delete.'),
+    .describe(
+      'Component properties to REMOVE, by the canonical id ("Show date#453:63") or by the bare name ("Show date") when only one property carries it. An ambiguous name, an unknown one, and a removal Figma refuses (SLOT properties, a set\'s variant properties) each come back named in warnings[] — never as a silent ok. The reply\'s `properties` is the list AFTER the removal.',
+    ),
   description: z
     .string()
     .optional()
