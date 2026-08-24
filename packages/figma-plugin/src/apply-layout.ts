@@ -9,20 +9,32 @@
 // "Cannot read properties of undefined (reading '0')", failing the whole
 // create/update.
 //
-// THE WRITE PROVES ITSELF (B58). Setting a Figma property is not the same as
-// the property holding the value. Proven live: a REAL UI selection on the
-// target at write time makes the align write silently drop — `ok`, `warnings:
-// []`, read-back unchanged, geometry unchanged. Deselect and the identical
-// write lands, every time. Seven agent-only variants had passed, an API
-// `set_selection` on the target included, so the trigger is the UI selection
-// specifically; Figma's properties panel re-asserting what it displays is the
-// suspected mechanism.
+// THE REVERT COMES AFTER THE REPLY (B58). A REAL UI selection on the target at
+// write time makes the align write silently drop — `ok`, `warnings: []`, and a
+// read seconds later shows the old value with the geometry unchanged. Deselect
+// and the identical write lands, every time. Seven agent-only variants had
+// passed, an API `set_selection` on the target included, so the trigger is the
+// UI selection specifically: Figma's properties panel re-asserts what it is
+// displaying over the still-selected node.
 //
-// So every field this module writes is READ BACK. A mismatch is written once
-// more — a transient re-assertion loses a race, not a rematch — and a field
-// that still refuses is NAMED in `warnings`, with what was asked and what is
-// actually there. What this module must never do is what it used to do: report
-// nothing while the layout the caller stated is not the layout on the node.
+// The first fix for this read every field back after applying and retried a
+// mismatch once. Live verification showed why that cannot work: the read-back
+// SUCCEEDS. The value holds at apply time, the handler honestly reports ok, and
+// the panel reverts it after the reply has already been sent. No in-handler
+// check can catch a post-reply revert.
+//
+// So the target is briefly DESELECTED for the write and the selection restored
+// afterwards, which makes the panel re-read the node instead of re-asserting
+// its stale state. Only the target leaves the selection — a multi-selection
+// keeps every other node — and the restore runs in a `finally`, because leaving
+// the user deselected because a write failed would be worse than the bug. The
+// blink is visible, so it is also NAMED in `warnings`.
+//
+// The read-back and its single retry STAY, as the safety net for every other
+// way a field can fail to hold: a field that still refuses is NAMED, with what
+// was asked and what is actually there. What this module must never do is what
+// it used to do — report nothing while the layout the caller stated is not the
+// layout on the node.
 //
 // This module declares the FrameNode surface it touches structurally (the
 // figma `FrameNode` is structurally assignable to it) so it stays free of the
@@ -47,6 +59,12 @@ export type AppliedLayout = {
 
 /** Structural subset of FrameNode this applier writes to. */
 export type LayoutTarget = {
+  /**
+   * Optional so every existing caller and fake stays assignable — a real
+   * FrameNode always has one. Without it the selection guard has nothing to
+   * match the target against, so it simply does not run.
+   */
+  id?: string
   layoutMode: 'NONE' | 'HORIZONTAL' | 'VERTICAL' | 'GRID'
   itemSpacing: number
   paddingTop: number
@@ -73,10 +91,79 @@ export type LayoutTarget = {
   gridColumnGap?: number
 }
 
+/**
+ * Structural stand-in for `figma.currentPage` — a SETTABLE selection.
+ *
+ * Injected rather than reached for, so the deselect/restore dance is
+ * unit-testable without a Figma runtime, like everything else here.
+ */
+export type SelectionHost = {
+  selection: readonly { id: string }[]
+}
+
 /** One Figma field this call means to set, and the value it means to set it to. */
 type Intent = {
   field: keyof LayoutTarget
   value: string | number
+}
+
+/** What the caller is told when their selection blinked, and why. */
+const selectionBlinkMessage = (id: string): string =>
+  `applyLayout: \`${id}\` was selected in the Figma UI, so the selection was ` +
+  'briefly cleared to apply the layout change and then restored. A selected ' +
+  "node has Figma's properties panel re-asserting what it displays over it, " +
+  'which reverts a layout write AFTER the call returns (B58). The change ' +
+  'landed; the selection blink is the cost of making it stick.'
+
+/**
+ * Take the target out of the UI selection for the duration of the write, and
+ * return the function that puts the selection back.
+ *
+ * Every step degrades to "do nothing" rather than throwing: a page that will
+ * not report or accept a selection is a reason to skip the mitigation, never a
+ * reason to fail the layout write it was meant to protect. Returns a no-op when
+ * there is no host, no id, or the target is not selected — an unselected write
+ * must cost no selection churn at all.
+ */
+const deselectTarget = (
+  frame: LayoutTarget,
+  page: SelectionHost | undefined,
+  warnings?: string[],
+): (() => void) => {
+  const noop = (): void => {}
+  const { id } = frame
+  if (page === undefined || typeof id !== 'string') {
+    return noop
+  }
+  let saved: readonly { id: string }[]
+  try {
+    saved = [...page.selection]
+  } catch {
+    return noop
+  }
+  if (!saved.some(n => n?.id === id)) {
+    return noop
+  }
+  try {
+    // Only the TARGET leaves. Clearing the whole selection would lose a
+    // multi-selection the user built by hand.
+    page.selection = saved.filter(n => n?.id !== id)
+  } catch {
+    return noop
+  }
+  warnings?.push(selectionBlinkMessage(id))
+  return () => {
+    try {
+      page.selection = saved
+    } catch {
+      // Guarded so a failed restore cannot replace the real error when this
+      // runs from a `finally` after the apply threw.
+      warnings?.push(
+        `applyLayout: the UI selection could not be restored after writing \`${id}\`. ` +
+          'Re-select the node in Figma.',
+      )
+    }
+  }
 }
 
 /**
@@ -191,12 +278,47 @@ const droppedMessage = (
   'again. A node SELECTED in the Figma UI is the known cause: the properties ' +
   'panel re-asserts what it displays. Deselect the node and repeat the call.'
 
+/** Write every intent, read them all back, rewrite the misses once, report the rest. */
+const writeAndVerify = (
+  frame: LayoutTarget,
+  intents: Intent[],
+  warnings?: string[],
+): void => {
+  writeLayout(frame, intents)
+  const reader = frame as unknown as Record<string, unknown>
+  const missed = intents.filter(
+    i => !held(reader[i.field], i.value),
+  )
+  if (missed.length === 0) {
+    return
+  }
+  writeLayout(frame, missed)
+  for (const intent of missed) {
+    const actual = reader[intent.field]
+    if (!held(actual, intent.value)) {
+      warnings?.push(droppedMessage(intent, actual))
+    }
+  }
+}
+
 /**
- * Apply a (possibly partial) layout to a frame, and prove it landed.
+ * Apply a (possibly partial) layout to a frame, and make it stick.
  *
  * `mode` is always set; every other field is set ONLY when present (pure-emit
- * contract mirror). Each written field is read back; a mismatch is rewritten
- * once and then, if it still refuses, named on `warnings` (B58).
+ * contract mirror).
+ *
+ * `page` is the UI selection host — pass `figma.currentPage` when the target is
+ * an EXISTING node the user may be looking at. When the target is in that
+ * selection it is taken out of it for the write and put back after (B58): a
+ * selected node has Figma's properties panel re-asserting its stale state
+ * afterwards, which reverts the write once the reply has already gone out. Omit
+ * `page` for a node the user cannot have selected — a node being created — so
+ * a create pays no selection churn.
+ *
+ * Each written field is still read back, a mismatch rewritten once, and a field
+ * that still refuses named on `warnings`. That is the safety net for every
+ * OTHER way a write can fail to hold; it cannot see the post-reply revert,
+ * which is what the deselect is for.
  *
  * T7 feature-detect for GRID: a runtime without `gridRowCount` etc. gets no
  * assignment and one capability warning on the optional `warnings` sink.
@@ -205,6 +327,7 @@ export const applyLayout = (
   frame: LayoutTarget,
   layout: AppliedLayout,
   warnings?: string[],
+  page?: SelectionHost,
 ): void => {
   // GRID-mode fields (M12). Feature-detect (T7): a runtime that does not expose
   // them gets ONE warning naming the capability, not four dropped-write
@@ -226,22 +349,15 @@ export const applyLayout = (
   }
 
   const intents = intentsOf(frame, layout)
-  writeLayout(frame, intents)
-
-  // Read back. Everything that did not take is rewritten ONCE — a transient
-  // re-assertion loses a rematch — and then reported if it still refuses.
-  const reader = frame as unknown as Record<string, unknown>
-  const missed = intents.filter(
-    i => !held(reader[i.field], i.value),
+  const restoreSelection = deselectTarget(
+    frame,
+    page,
+    warnings,
   )
-  if (missed.length === 0) {
-    return
-  }
-  writeLayout(frame, missed)
-  for (const intent of missed) {
-    const actual = reader[intent.field]
-    if (!held(actual, intent.value)) {
-      warnings?.push(droppedMessage(intent, actual))
-    }
+  try {
+    writeAndVerify(frame, intents, warnings)
+  } finally {
+    // The user's selection comes back whatever the write did.
+    restoreSelection()
   }
 }

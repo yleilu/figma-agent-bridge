@@ -7,6 +7,7 @@ import {
 import {
   applyLayout,
   type AppliedLayout,
+  type SelectionHost,
 } from './apply-layout'
 import {
   originOf,
@@ -649,7 +650,13 @@ const applyCommonProperties = async (
   // applySizeVerified, after applyPostAppendProperties: `sizing` can overrule a
   // resize, so on a patch the size has to be written last and proven there
   // (B46). A create states its own type and takes the size here.
-  opts?: { deferSize?: boolean },
+  //
+  // `page` is the UI selection host, passed ONLY by update_node — the one path
+  // whose target is an EXISTING node the user may have selected. applyLayout
+  // takes the target out of that selection for the write and puts it back
+  // (B58). A create cannot have a selected target, and the slot loop writes a
+  // node it made a moment ago, so neither pays any selection churn.
+  opts?: { deferSize?: boolean; page?: SelectionHost },
 ): Promise<void> => {
   // Name
   if (spec.name !== undefined) {
@@ -886,6 +893,7 @@ const applyCommonProperties = async (
       node as FrameNode,
       spec.layout as AppliedLayout,
       warnings,
+      opts?.page,
     )
   }
 
@@ -4439,7 +4447,15 @@ const handleCommand = async (
         spec,
         parent as ParentNode,
         warnings,
-        { deferSize: true },
+        // B58 — the ONE path that hands over the selection host: an existing
+        // node the user may be looking at right now. A node selected in the UI
+        // has the properties panel re-assert its stale state after the reply
+        // goes out, which reverted the layout write the handler had already
+        // verified. applyLayout deselects the target for the write only.
+        {
+          deferSize: true,
+          page: figma.currentPage as unknown as SelectionHost,
+        },
       )
       if (node.type === 'TEXT' && spec.text !== undefined) {
         await applyTextProperties(

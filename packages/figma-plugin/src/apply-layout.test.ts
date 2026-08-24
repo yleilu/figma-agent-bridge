@@ -388,3 +388,159 @@ test('B58: a dropped grid count is named on a runtime that supports GRID', () =>
   expect(warnings).toHaveLength(1)
   expect(warnings[0]).toContain('gridRowCount')
 })
+
+// ─── B58 rework: the revert lands AFTER the reply, so deselect first ─────────
+//
+// The verify-after-apply above was proved insufficient live, and the failure
+// told us why. With Lei holding a real UI selection on the target, the write
+// returned ok with EMPTY warnings — the in-handler read-back saw the new value
+// and was telling the truth — yet a read seconds later showed align MIN and
+// unchanged geometry. The value HOLDS at apply time and is REVERTED after the
+// reply returns, when Figma's properties panel re-asserts its stale state over
+// the still-selected node.
+//
+// No in-handler check can catch that. The check passes honestly and the revert
+// wins afterwards. So the target is briefly DESELECTED for the write and the
+// selection restored after, which makes the panel re-read the node instead of
+// re-asserting what it was showing. The verify + retry machinery stays as the
+// safety net for anything else that drops a field.
+
+/**
+ * A stand-in for `figma.currentPage`: a settable selection that records every
+ * assignment, so a test can assert the deselect→restore SEQUENCE and not just
+ * the final state (restoring correctly while never having deselected would
+ * otherwise look identical).
+ */
+const fakePage = (selectedIds: string[]) => {
+  let current: readonly { id: string }[] = selectedIds.map(
+    id => ({ id }),
+  )
+  const history: string[][] = []
+  return {
+    get selection(): readonly { id: string }[] {
+      return current
+    },
+    set selection(next: readonly { id: string }[]) {
+      current = next
+      history.push(next.map(n => n.id))
+    },
+    history,
+  }
+}
+
+const framed = (id: string): LayoutTarget => ({
+  ...makeFrame(),
+  id,
+})
+
+const SELECTED_LAYOUT: AppliedLayout = {
+  mode: 'H',
+  align: ['SPACE_BETWEEN', 'CENTER'],
+}
+
+test('B58: a SELECTED target is deselected for the write and restored after', () => {
+  const page = fakePage(['1:1'])
+  const warnings: string[] = []
+  applyLayout(
+    framed('1:1'),
+    SELECTED_LAYOUT,
+    warnings,
+    page,
+  )
+  expect(page.history).toEqual([[], ['1:1']])
+  expect(page.selection.map(n => n.id)).toEqual(['1:1'])
+})
+
+test('B58: the blink is announced — the user deserves to know', () => {
+  const page = fakePage(['1:1'])
+  const warnings: string[] = []
+  applyLayout(
+    framed('1:1'),
+    SELECTED_LAYOUT,
+    warnings,
+    page,
+  )
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain('selection')
+  expect(warnings[0]).toContain('1:1')
+})
+
+test('B58: a multi-selection keeps every OTHER node selected throughout', () => {
+  const page = fakePage(['0:9', '1:1', '2:2'])
+  applyLayout(framed('1:1'), SELECTED_LAYOUT, [], page)
+  // Only the target leaves, and the whole selection comes back in order.
+  expect(page.history).toEqual([
+    ['0:9', '2:2'],
+    ['0:9', '1:1', '2:2'],
+  ])
+})
+
+test('B58: an UNSELECTED target costs no selection churn at all', () => {
+  const page = fakePage(['9:9'])
+  const warnings: string[] = []
+  applyLayout(
+    framed('1:1'),
+    SELECTED_LAYOUT,
+    warnings,
+    page,
+  )
+  expect(page.history).toEqual([])
+  expect(warnings).toEqual([])
+})
+
+test('B58: no page host at all behaves exactly as before', () => {
+  const frame = framed('1:1')
+  const warnings: string[] = []
+  applyLayout(frame, SELECTED_LAYOUT, warnings)
+  expect(frame.primaryAxisAlignItems).toBe('SPACE_BETWEEN')
+  expect(warnings).toEqual([])
+})
+
+test('B58: the selection is restored even when the apply THROWS', () => {
+  // Leaving the user deselected because a write failed would be a worse bug
+  // than the one being fixed.
+  const page = fakePage(['1:1'])
+  const frame = framed('1:1')
+  Object.defineProperty(frame, 'primaryAxisAlignItems', {
+    set: () => {
+      throw new Error('Cannot set align on this node')
+    },
+    get: () => 'MIN',
+    configurable: true,
+  })
+  expect(() =>
+    applyLayout(frame, SELECTED_LAYOUT, [], page),
+  ).toThrow('Cannot set align')
+  expect(page.history).toEqual([[], ['1:1']])
+  expect(page.selection.map(n => n.id)).toEqual(['1:1'])
+})
+
+test('B58: the verify/retry safety net still runs inside the guard', () => {
+  const page = fakePage(['1:1'])
+  const frame = framed('1:1')
+  let held = 'MIN'
+  Object.defineProperty(frame, 'primaryAxisAlignItems', {
+    get: () => held,
+    set: () => {
+      held = 'MIN'
+    },
+    configurable: true,
+  })
+  const warnings: string[] = []
+  applyLayout(frame, SELECTED_LAYOUT, warnings, page)
+  // Both notes: the blink that happened, and the field that still refused.
+  expect(warnings).toHaveLength(2)
+  expect(warnings.some(w => w.includes('selection'))).toBe(
+    true,
+  )
+  expect(
+    warnings.some(w => w.includes('primaryAxisAlignItems')),
+  ).toBe(true)
+  expect(page.history).toEqual([[], ['1:1']])
+})
+
+test('B58: a frame with no id is never deselected (nothing to match on)', () => {
+  const page = fakePage(['1:1'])
+  applyLayout(makeFrame(), SELECTED_LAYOUT, [], page)
+  expect(page.history).toEqual([])
+})

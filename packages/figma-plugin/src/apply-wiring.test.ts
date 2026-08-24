@@ -256,14 +256,64 @@ describe('UPDATE_COMPONENT delete-property wiring', () => {
 // hold, but it can only report through the sink its caller passes. It was
 // called with NO sink, so the notes had nowhere to go: the module's own tests
 // stayed green and update_node kept answering ok with empty warnings.
-describe('applyLayout warning-sink wiring', () => {
-  it('code.ts hands applyLayout the warnings sink', () => {
-    const call = callers.slice(
-      callers.indexOf('applyLayout(\n'),
-      callers.indexOf('// Min/max sizing'),
+//
+// The deselect/restore mitigation has the same shape of blind spot, one step
+// further out: it is fully unit-tested against a fake selection host, and it
+// does nothing at all unless update_node hands over the REAL
+// `figma.currentPage`. Drop that argument and every test here stays green while
+// the live revert comes straight back.
+describe('applyLayout call-site wiring', () => {
+  const applyCall = callers.slice(
+    callers.indexOf('applyLayout(\n'),
+    callers.indexOf('// Min/max sizing'),
+  )
+
+  it('actually found the call (liveness)', () => {
+    expect(applyCall.length).toBeGreaterThan(20)
+    expect(applyCall).toContain('AppliedLayout')
+  })
+
+  it('hands applyLayout the warnings sink', () => {
+    expect(applyCall).toContain('warnings')
+  })
+
+  it('hands applyLayout the selection host', () => {
+    expect(applyCall).toContain('opts?.page')
+  })
+
+  it('update_node is the path that supplies the real page', () => {
+    const updateCase = callers.slice(
+      callers.indexOf('case COMMANDS.UPDATE_NODE'),
+      callers.indexOf('case COMMANDS.DELETE_NODE'),
     )
-    expect(call.length).toBeGreaterThan(20)
-    expect(call).toContain('warnings')
+    expect(updateCase.length).toBeGreaterThan(200)
+    expect(updateCase).toContain('page: figma.currentPage')
+  })
+
+  // A create cannot have a user-selected target, and the slot loop writes a
+  // node it made a moment ago. Neither should pay selection churn.
+  it('the create and slot paths supply no page', () => {
+    // A negative assertion has to prove it looked at something first: a slice
+    // taken from a string that was not found would pass this vacuously.
+    const createAt = callers.indexOf(
+      'await applyCommonProperties(node, spec, parent, warnings)',
+    )
+    expect(createAt).toBeGreaterThan(0)
+    expect(
+      callers.slice(createAt, createAt + 80),
+    ).not.toContain('page:')
+
+    const slotApplyAt = slotLoop.indexOf(
+      'applyCommonProperties(',
+    )
+    const slotPostAt = slotLoop.indexOf(
+      'applyPostAppendProperties(',
+    )
+    expect(slotApplyAt).toBeGreaterThan(0)
+    expect(slotPostAt).toBeGreaterThan(slotApplyAt)
+    expect(
+      slotLoop.slice(slotApplyAt, slotPostAt),
+    ).not.toContain('page:')
   })
 })
 
