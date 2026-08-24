@@ -750,3 +750,37 @@ describe('handleBatch — SPACE_BETWEEN + bound gap (B58)', () => {
     expect(sent).toHaveLength(1)
   })
 })
+
+// B58 — `clear` must be spelled the same everywhere. batch derives its entry
+// schemas from the tool param schemas, so this is really a check that the new
+// field was added to the SCHEMA rather than only to the handler: a strict
+// schema (M22b) would reject `clear` as an unknown key otherwise.
+describe('handleBatch — bind_variable clear (B58)', () => {
+  it('accepts a clear entry and forwards it verbatim', async () => {
+    const sent: Sent[] = []
+    const result = await handleBatch(
+      {
+        ops: [
+          {
+            op: 'bind_variable',
+            nodeId: '1:42',
+            field: 'itemSpacing',
+            clear: true,
+          },
+        ],
+      },
+      stubClient({ sent }),
+    )
+    const out = parse(
+      result.content[0].text,
+    ) as BatchOut & {
+      results: { ok: boolean; error?: string }[]
+    }
+    expect(out.results[0].ok).toBe(true)
+    const ops = sent[0].params?.ops as {
+      params: Record<string, unknown>
+    }[]
+    expect(ops[0].params.clear).toBe(true)
+    expect(ops[0].params.field).toBe('itemSpacing')
+  })
+})

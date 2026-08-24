@@ -41,6 +41,7 @@ import {
   applyStyleField,
   applyWrapperBindings,
   bindNodeField,
+  clearNodeField,
   bindPaintField,
   createBindingLookups,
   STYLE_TYPES,
@@ -4645,6 +4646,36 @@ const handleCommand = async (
         params.variableId === undefined &&
         params.field === undefined
       ) {
+        return { id: node.id, warnings }
+      }
+
+      // ── Field CLEAR (B58) ────────────────────────────────────────────────
+      // Writing a literal over a bound field does NOT unbind it — proven live:
+      // `{gap: 16}` on a token-bound bar left `var(space/16)16` in place. So
+      // taking a token OFF a field needs its own door, and this is it. It runs
+      // BEFORE the variable lookup, because a clear names no variable.
+      if (params.clear === true) {
+        const clearField = params.field as string
+        if (
+          clearField === 'fills' ||
+          clearField === 'strokes'
+        ) {
+          // Paint bindings live per PAINT (setBoundVariableForPaint), not on
+          // the node field, so this route cannot reach them. Say so (T7)
+          // rather than reporting a clear that did not happen.
+          return {
+            error:
+              'bind_variable cannot clear a `' +
+              clearField +
+              '` binding: paint variables bind per paint, not on the node field. ' +
+              'Re-write the paint with a plain atom (no var() wrapper) to replace it.',
+          }
+        }
+        clearNodeField(
+          node as unknown as BindTargetNode,
+          clearField,
+          warnings,
+        )
         return { id: node.id, warnings }
       }
 

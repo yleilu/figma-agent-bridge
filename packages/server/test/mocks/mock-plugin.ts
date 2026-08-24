@@ -590,6 +590,28 @@ export const createMockPlugin = (
     appliedState.set(id, state)
   }
 
+  /**
+   * REMOVE a layout binding — the `clear: true` half of bind_variable (B58).
+   *
+   * Modelled as state, not echoed, for the same reason the bind is: a reply
+   * saying "cleared" proves only that the server sent the flag. The read has to
+   * come back without the token, which is what the e2e asserts.
+   */
+  const clearLayoutBindingState = (
+    id: string,
+    field: string,
+  ): void => {
+    const state = appliedState.get(id) ?? {}
+    const layoutBound = {
+      ...((state.layoutBoundVariables as
+        | Record<string, string>
+        | undefined) ?? {}),
+    }
+    delete layoutBound[field]
+    state.layoutBoundVariables = layoutBound
+    appliedState.set(id, state)
+  }
+
   /** The layout half of a converted spec's `bindings[]`. */
   const layoutBindingsOf = (
     applied: MockBinding[],
@@ -2237,6 +2259,33 @@ export const createMockPlugin = (
           | string
           | undefined
         const bvWarnings: string[] = []
+
+        // B58 — `clear: true` removes the binding and names no variable. The
+        // real plugin refuses a paint field here (paints bind per paint, not on
+        // the node field), so the mock mirrors that refusal.
+        if (cmd.params?.clear === true) {
+          if (
+            bvField === 'fills' ||
+            bvField === 'strokes'
+          ) {
+            result = {
+              error:
+                'bind_variable cannot clear a `' +
+                bvField +
+                '` binding: paint variables bind per paint, not on the node field. ' +
+                'Re-write the paint with a plain atom (no var() wrapper) to replace it.',
+            }
+            break
+          }
+          if (
+            bvNodeId !== undefined &&
+            bvField !== undefined
+          ) {
+            clearLayoutBindingState(bvNodeId, bvField)
+          }
+          result = { id: bvNodeId, warnings: bvWarnings }
+          break
+        }
 
         // Process mode map (M13): feature-detect + per-entry degrade.
         if (bvMode !== undefined) {

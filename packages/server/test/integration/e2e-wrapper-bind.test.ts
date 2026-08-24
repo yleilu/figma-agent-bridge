@@ -496,4 +496,71 @@ describe('inline wrapper bindings e2e (I39)', () => {
       expect(after.layout.gap).toBe(24)
     })
   })
+
+  // ─── B58: taking the token back off ────────────────────────────────────────
+  //
+  // Writing a literal over a bound field does NOT unbind it — proven live, a
+  // token-bound gap given `{gap: 16}` still read back `var(space/16)16`. That
+  // made the SPACE_BETWEEN guard's advice a circle: it told callers to write a
+  // literal gap, the binding survived, and the guard refused again. `clear` is
+  // the door that was missing.
+  //
+  // FIDELITY BOUNDARY: the mock models the binding as state and the reader
+  // renders it, so this proves the SERVER round trip — the flag reaches the
+  // plugin and an unbound read comes back unbound. That `setBoundVariable(f,
+  // null)` really clears it in Figma is live-only.
+  it('bind_variable clear: true takes a layout token off, and the read shows it gone', async () => {
+    const bound = await handleUpdateNode(
+      {
+        nodeId: '1:42',
+        patch: {
+          layout: { mode: 'V', gap: 'var(space/8)8' },
+        },
+      },
+      scoped,
+    )
+    expect(bound.content[0].text).not.toContain('Error:')
+
+    const withToken = await handleGetNode(
+      { nodeId: '1:42' },
+      scoped,
+    )
+    const boundSpec = YAML.parse(
+      withToken.content[0].text,
+    ) as { layout?: { gap?: unknown } }
+    expect(String(boundSpec.layout?.gap)).toContain(
+      'var(space/8)',
+    )
+
+    const cleared = await handleBindVariable(
+      {
+        nodeId: '1:42',
+        field: 'itemSpacing',
+        clear: true,
+      },
+      scoped,
+    )
+    expect(cleared.content[0].text).not.toContain('Error:')
+
+    const after = await handleGetNode(
+      { nodeId: '1:42' },
+      scoped,
+    )
+    const plainSpec = YAML.parse(after.content[0].text) as {
+      layout?: { gap?: unknown }
+    }
+    // The VALUE stays; only the token is gone — that is what unbinding means.
+    expect(String(plainSpec.layout?.gap)).not.toContain(
+      'var(',
+    )
+    expect(Number(plainSpec.layout?.gap)).toBe(8)
+  })
+
+  it('bind_variable refuses to clear a paint binding, and says why', async () => {
+    const result = await handleBindVariable(
+      { nodeId: '1:42', field: 'fills', clear: true },
+      scoped,
+    )
+    expect(result.content[0].text).toContain('per paint')
+  })
 })

@@ -4,6 +4,7 @@ import {
   applyWrapperBindings,
   createBindingLookups,
   type WrapperBinding,
+  clearNodeField,
 } from './bind-wrappers'
 
 // A stand-in for figma.variables.setBoundVariableForPaint: returns a NEW paint
@@ -449,4 +450,57 @@ test('styles resolve by name within their own category', async () => {
   expect(
     await lookups.styleByName('Ghost/Style', 'paint'),
   ).toBeNull()
+})
+
+// ─── B58: taking a token OFF a field ─────────────────────────────────────────
+//
+// Proven live: writing a literal over a bound field does NOT unbind it. A bar
+// whose gap was bound to space/16, given `{gap: 16}`, still read back
+// `var(space/16)16`. So "no token here" needs its own door — Figma spells it
+// `setBoundVariable(field, null)`, and this is the only caller of that spelling.
+
+test('clearNodeField clears the binding with a null variable', () => {
+  const calls: [string, unknown][] = []
+  const warnings: string[] = []
+  clearNodeField(
+    {
+      type: 'FRAME',
+      setBoundVariable: (f: string, v: unknown) => {
+        calls.push([f, v])
+      },
+    },
+    'itemSpacing',
+    warnings,
+  )
+  expect(calls).toEqual([['itemSpacing', null]])
+  expect(warnings).toEqual([])
+})
+
+test('clearNodeField degrades on a runtime without setBoundVariable', () => {
+  const warnings: string[] = []
+  expect(() =>
+    clearNodeField(
+      { type: 'FRAME' },
+      'itemSpacing',
+      warnings,
+    ),
+  ).not.toThrow()
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain('not cleared')
+})
+
+test('clearNodeField names a field Figma refuses to clear', () => {
+  const warnings: string[] = []
+  clearNodeField(
+    {
+      type: 'FRAME',
+      setBoundVariable: () => {
+        throw new Error('not a bindable field')
+      },
+    },
+    'itemSpacing',
+    warnings,
+  )
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain('itemSpacing')
 })

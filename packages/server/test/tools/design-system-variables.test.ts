@@ -576,3 +576,78 @@ describe('handleGetVariables', () => {
     expect(out).not.toHaveProperty('cursor')
   })
 })
+
+// ─── B58: clearing a binding ─────────────────────────────────────────────────
+//
+// Writing a literal over a bound field does NOT unbind it — proven live, a
+// token-bound gap given `{gap: 16}` still read back `var(space/16)16`. So the
+// SPACE_BETWEEN guard's "take the token off first" advice needed a door that
+// actually existed. `clear: true` is that door, spelled like the `clearMode`
+// entry the same tool already carries for mode pins.
+
+describe('handleBindVariable — clear (B58)', () => {
+  it('forwards {nodeId, field, clear} with no variableId', async () => {
+    const sent: Sent[] = []
+    await handleBindVariable(
+      {
+        nodeId: '1:42',
+        field: 'itemSpacing',
+        clear: true,
+      },
+      stubClient({ sent }),
+    )
+    expect(sent[0].command).toBe(COMMANDS.BIND_VARIABLE)
+    expect(sent[0].params).toEqual({
+      nodeId: '1:42',
+      field: 'itemSpacing',
+      clear: true,
+    })
+  })
+
+  it('refuses `clear` without a field to clear', async () => {
+    const sent: Sent[] = []
+    const result = await handleBindVariable(
+      { nodeId: '1:42', clear: true },
+      stubClient({ sent }),
+    )
+    expect(result.content[0].text).toContain('field')
+    expect(sent).toHaveLength(0)
+  })
+
+  // Naming a variable AND clearing says two opposite things about one field.
+  it('refuses `clear` together with a variableId', async () => {
+    const sent: Sent[] = []
+    const result = await handleBindVariable(
+      {
+        nodeId: '1:42',
+        field: 'itemSpacing',
+        variableId: 'v:9',
+        clear: true,
+      },
+      stubClient({ sent }),
+    )
+    expect(result.content[0].text).toContain('never both')
+    expect(sent).toHaveLength(0)
+  })
+
+  it('still refuses a call that asks for nothing at all', async () => {
+    const result = await handleBindVariable(
+      { nodeId: '1:42' },
+      stubClient({}),
+    )
+    expect(result.content[0].text).toContain('clear:true')
+  })
+
+  it('leaves an ordinary binding call untouched', async () => {
+    const sent: Sent[] = []
+    await handleBindVariable(
+      {
+        nodeId: '1:42',
+        variableId: 'v:9',
+        field: 'itemSpacing',
+      },
+      stubClient({ sent }),
+    )
+    expect(sent[0].params).not.toHaveProperty('clear')
+  })
+})

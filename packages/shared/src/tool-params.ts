@@ -670,7 +670,13 @@ export const bindVariableParamsSchema = strictParams({
     .string()
     .optional()
     .describe(
-      'Node field to bind (e.g. "fills", "opacity", "itemSpacing"). Required when `variableId` is present.',
+      'Node field to bind (e.g. "fills", "opacity", "itemSpacing"). Required when `variableId` is present, and when `clear` is true.',
+    ),
+  clear: z
+    .boolean()
+    .optional()
+    .describe(
+      'CLEAR the variable binding on `field`, leaving the literal value in place. Pass with `field` and WITHOUT `variableId` — it is the inverse of a binding, spelled like the `clearMode` entry below. Writing a literal over a bound field does NOT unbind it, so this is the only way to take a token off a field (B58).',
     ),
   /**
    * M13 — per-collection explicit mode pin. Keys are collection IDs; values

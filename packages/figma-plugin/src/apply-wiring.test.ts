@@ -316,6 +316,11 @@ describe('applyLayout call-site wiring', () => {
 // B58's REAL fix — the pair guard. The plugin half answers what only the live
 // node can, and it is pure, so it would stay green with both call sites
 // deleted. Only a live write would notice the guard had stopped running.
+const bindCase = callers.slice(
+  callers.indexOf('case COMMANDS.BIND_VARIABLE'),
+  callers.indexOf('case COMMANDS.GET_VARIABLES'),
+)
+
 describe('SPACE_BETWEEN gap-guard wiring', () => {
   it('update_node refuses the pair BEFORE applying anything', () => {
     const updateCase = callers.slice(
@@ -333,12 +338,25 @@ describe('SPACE_BETWEEN gap-guard wiring', () => {
   })
 
   it('bind_variable refuses binding the gap of a SPACE_BETWEEN node', () => {
-    const bindCase = callers.slice(
-      callers.indexOf('case COMMANDS.BIND_VARIABLE'),
-      callers.indexOf('case COMMANDS.GET_VARIABLES'),
-    )
     expect(bindCase.length).toBeGreaterThan(200)
     expect(bindCase).toContain('bindFieldConflict(')
+  })
+})
+
+// B58 — the guard's own advice depends on this branch existing. It tells a
+// caller with an already-bound gap to clear the token first; if the clear
+// silently fell through to the ordinary binding path it would fail on a
+// missing `variableId`, and the instruction would be a dead end.
+describe('bind_variable clear wiring', () => {
+  it('has a clear branch that unbinds', () => {
+    expect(bindCase).toContain('params.clear === true')
+    expect(bindCase).toContain('clearNodeField(')
+  })
+
+  it('clears BEFORE looking a variable up — a clear names none', () => {
+    expect(
+      bindCase.indexOf('params.clear === true'),
+    ).toBeLessThan(bindCase.indexOf('getVariableByIdAsync'))
   })
 })
 

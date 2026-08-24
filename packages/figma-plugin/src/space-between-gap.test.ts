@@ -88,7 +88,7 @@ describe('updateLayoutConflict — the half arriving onto the other half', () =>
     )
     expect(message).toBeDefined()
     expect(message).toContain('454:4934')
-    expect(message).toContain('already has the bound gap')
+    expect(message).toContain('already bound to a variable')
   })
 
   it('refuses binding the gap on a node already SPACE_BETWEEN', () => {
@@ -99,7 +99,7 @@ describe('updateLayoutConflict — the half arriving onto the other half', () =>
     )
     expect(message).toBeDefined()
     expect(message).toContain('454:4935')
-    expect(message).toContain('already has the align')
+    expect(message).toContain(`already ${'SPACE_BETWEEN'}`)
   })
 
   it('refuses both halves in one write, even reaching the plugin alone', () => {
@@ -165,16 +165,62 @@ describe('updateLayoutConflict — the half arriving onto the other half', () =>
     ).toBeUndefined()
   })
 
-  it('names all three ways out', () => {
+  // The exits have to work FROM WHERE THE CALLER IS STANDING. Found live: on a
+  // node whose gap is already bound, "write a literal gap" resolves nothing —
+  // the literal write leaves the binding in place, so the guard refuses the
+  // next call too and the caller goes in a circle.
+  it('offers the already-bound node the UNBIND, not a literal gap', () => {
     const message =
       updateLayoutConflict(
         boundGapBar,
         { align: ['SPACE_BETWEEN', 'CENTER'] },
         undefined,
       ) ?? ''
+    expect(message).toContain('different align')
+    expect(message).toContain('clear: true')
+    expect(message).toContain('itemSpacing')
+    // …and it says WHY the obvious move does not work.
+    expect(message).toContain(
+      'Writing a literal `gap` does NOT remove the binding',
+    )
+  })
+
+  it('names the node inside the unbind call it suggests', () => {
+    const message =
+      updateLayoutConflict(
+        boundGapBar,
+        { align: ['SPACE_BETWEEN', 'CENTER'] },
+        undefined,
+      ) ?? ''
+    expect(message).toContain('nodeId: "454:4934"')
+  })
+
+  // Nothing is bound yet in this direction, so there is nothing to clear —
+  // suggesting an unbind here would be noise.
+  it('offers the already-space-between node a literal or an align change', () => {
+    const message =
+      updateLayoutConflict(
+        spaceBetweenBar,
+        undefined,
+        varGapBinding,
+      ) ?? ''
+    expect(message).toContain('LITERAL')
+    expect(message).toContain('change the align first')
+    expect(message).not.toContain('clear: true')
+  })
+
+  it('keeps all three original exits for a same-call pair', () => {
+    const message =
+      updateLayoutConflict(
+        plainBar,
+        { align: ['SPACE_BETWEEN', 'CENTER'] },
+        varGapBinding,
+      ) ?? ''
     expect(message).toContain('drop the align')
     expect(message).toContain('LITERAL gap')
     expect(message).toContain('drop the gap entirely')
+    // Nothing is bound yet, so no unbind is suggested.
+    expect(message).not.toContain('clear: true')
   })
 })
 
