@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import { identityHeadersSchema } from './identity-headers'
+import { strictParams } from './strict-params'
 
 // `createFromSvgParamsSchema` is the one schema that lives here: it is
 // barrel-exported and imported by the live server (create_from_svg tool).
@@ -6,35 +8,21 @@ import { z } from 'zod'
 // their nested node/tree/component-property specs) were the green-window
 // versions; the live server now imports the canonical NodeSpec-based shapes
 // from `tool-params.ts`, so those were retired here in M3-E.
-export const createFromSvgParamsSchema = z.object({
-  // fileKey + sessionId + agentId/agentType MIRROR fileTargetParamsSchema
-  // (tool-params.ts); inlined here rather than spread because this module is
-  // barrel-exported and importing tool-params.ts would reintroduce a
-  // barrel-export cycle. Keep the describe() strings in sync with the mixin's.
+//
+// STRICT (M22b): an undeclared top-level key is rejected, not stripped.
+export const createFromSvgParamsSchema = strictParams({
+  // fileKey MIRRORS fileTargetParamsSchema (tool-params.ts); it is inlined here
+  // rather than spread because this module is barrel-exported and importing
+  // tool-params.ts would reintroduce a barrel-export cycle. The three reserved
+  // identity headers no longer need mirroring — identity-headers.ts holds the
+  // one definition both modules spread.
   fileKey: z
     .string()
     .min(1)
     .describe(
       'Stable Figma fileKey of the file this call operates on (from status/connect available[]). Required — the server never guesses which file (B3).',
     ),
-  sessionId: z
-    .string()
-    .optional()
-    .describe(
-      'Reserved — server-managed. Do NOT set. Injected by the session PreToolUse hook (request-envelope.md); the server remembers it once and keys the change-feed count file on it (change-feed.md).',
-    ),
-  agentId: z
-    .string()
-    .optional()
-    .describe(
-      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); the server forwards it as the key of the agent status row for this call (status-monitor.md).',
-    ),
-  agentType: z
-    .string()
-    .optional()
-    .describe(
-      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); the server forwards it as the display label on that agent status row (status-monitor.md).',
-    ),
+  ...identityHeadersSchema.shape,
   parentId: z
     .string()
     .describe(

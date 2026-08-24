@@ -10,6 +10,7 @@ import type {
   ToolCallback,
 } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type {
+  ZodObject,
   ZodRawShape,
   ZodTypeAny,
   objectOutputType,
@@ -104,6 +105,11 @@ export const withBuffer =
  * The one way to register a BUFFER-ADDRESSED tool. Like registerFileTool it
  * derives the handler's param type from the schema shape, so a mismatched
  * schema↔handler pairing is a compile error rather than a runtime surprise.
+ *
+ * THE SCHEMA IS REGISTERED, NOT ITS SHAPE (B52 / M22b). `server.tool(name,
+ * shape, cb)` re-wraps the shape in a plain `z.object` and silently drops every
+ * modifier the schema carries — `.strict()` above all — so this path would have
+ * kept stripping unknown keys after M22b made the schema strict.
  */
 export const registerBufferTool = <
   S extends ZodRawShape,
@@ -113,20 +119,20 @@ export const registerBufferTool = <
   client: FigmaClient,
   feed: ChangeFeed,
   name: string,
-  schema: { shape: S },
+  schema: ZodObject<S>,
   handler: (
     params: BufferHandlerParams<S>,
     ctx: BufferContext,
   ) => Promise<R>,
 ): void => {
-  server.tool(
+  server.registerTool(
     name,
-    schema.shape,
+    { inputSchema: schema },
     withBuffer(
       client,
       feed,
       handler,
-    ) as unknown as ToolCallback<S>,
+    ) as unknown as ToolCallback<ZodObject<S>>,
   )
 }
 

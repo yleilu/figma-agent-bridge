@@ -23,6 +23,12 @@
 
 import { z } from 'zod'
 import { FEEDBACK_CATEGORIES } from './feedback'
+// M22b — every tool params schema below is built with `strictParams`, never a
+// bare `z.object`: an undeclared top-level key is REJECTED, not stripped. The
+// mixins (`fileTargetParamsSchema`, the two read/pagination mixins) stay plain
+// objects, because only their `.shape` is ever spread.
+import { strictParams } from './strict-params'
+import { identityHeadersSchema } from './identity-headers'
 import {
   nodeSpecSchema,
   partialNodeSpecSchema,
@@ -77,7 +83,7 @@ export const listPaginationParamsSchema = z.object({
 // overview.md + request-envelope.md are the source of truth.
 // ---------------------------------------------------------------------------
 
-/** The per-call fileKey (required) + reserved sessionId, shared by every file-addressed tool. */
+/** The per-call fileKey (required) + the reserved identity headers, shared by every file-addressed tool. */
 export const fileTargetParamsSchema = z.object({
   fileKey: z
     .string()
@@ -85,24 +91,7 @@ export const fileTargetParamsSchema = z.object({
     .describe(
       'Stable Figma fileKey of the file this call operates on (from status/connect available[]). Required — the server never guesses which file (B3).',
     ),
-  sessionId: z
-    .string()
-    .optional()
-    .describe(
-      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook (request-envelope.md); the server remembers it once and keys the change-feed count file on it (change-feed.md).',
-    ),
-  agentId: z
-    .string()
-    .optional()
-    .describe(
-      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); the server forwards it as the key of the agent status row for this call (status-monitor.md).',
-    ),
-  agentType: z
-    .string()
-    .optional()
-    .describe(
-      'Reserved — server-managed. Do NOT set. Injected by the identity PreToolUse hook for subagent calls (request-envelope.md); the server forwards it as the display label on that agent status row (status-monitor.md).',
-    ),
+  ...identityHeadersSchema.shape,
 })
 
 // ---------------------------------------------------------------------------
@@ -117,14 +106,14 @@ export const fileTargetParamsSchema = z.object({
 // ---------------------------------------------------------------------------
 
 /** Params for `get_node`: retrieve a single node by ID. */
-export const getNodeParamsSchema = z.object({
+export const getNodeParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeId: z.string().describe('The node ID to retrieve.'),
   ...fidelityReadParamsSchema.shape,
 })
 
 /** Params for `get_nodes`: retrieve multiple nodes by their IDs. */
-export const getNodesParamsSchema = z.object({
+export const getNodesParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeIds: z
     .array(z.string())
@@ -140,7 +129,7 @@ export const getNodesParamsSchema = z.object({
  * truncation receipt applied across the whole set; a single selected node
  * returns that node's view; an empty selection falls back to the current page.
  */
-export const inspectParamsSchema = z.object({
+export const inspectParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
@@ -255,10 +244,12 @@ export const searchParamsSchema = z
 // ---------------------------------------------------------------------------
 
 /** Params for `status`: no params — reads connection/document state. */
-export const statusParamsSchema = z.object({})
+export const statusParamsSchema = strictParams({
+  ...identityHeadersSchema.shape,
+})
 
 /** Params for `get_selection`: reads the current selection of the target file. */
-export const getSelectionParamsSchema = z.object({
+export const getSelectionParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
 })
 
@@ -268,13 +259,13 @@ export const getSelectionParamsSchema = z.object({
  * (`limit` defaults to 100, `cursor` continues when `truncated`) — `docName`
  * stays on the envelope alongside the bounded page.
  */
-export const listPagesParamsSchema = z.object({
+export const listPagesParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   ...listPaginationParamsSchema.shape,
 })
 
 /** Params for `set_selection`: replace the current Figma selection. */
-export const setSelectionParamsSchema = z.object({
+export const setSelectionParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeIds: z
     .array(z.string())
@@ -288,7 +279,7 @@ export const setSelectionParamsSchema = z.object({
 // ---------------------------------------------------------------------------
 
 /** Params for `delete_node`: remove a node from the document. */
-export const deleteNodeParamsSchema = z.object({
+export const deleteNodeParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeId: z.string().describe('ID of the node to delete.'),
 })
@@ -299,7 +290,7 @@ export const deleteNodeParamsSchema = z.object({
  * (which now returns the live viewport). This moves the CANVAS only — it does
  * not change the selection (pair with set_selection for that).
  */
-export const setFocusParamsSchema = z.object({
+export const setFocusParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeIds: z
     .array(z.string())
@@ -312,7 +303,7 @@ export const setFocusParamsSchema = z.object({
  * Params for `clone_node`: duplicate a node, optionally into a parent at an
  * index, optionally `count` times. Returns one entry per clone.
  */
-export const cloneNodeParamsSchema = z.object({
+export const cloneNodeParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeId: z.string().describe('ID of the node to clone.'),
   parentId: z
@@ -342,7 +333,7 @@ export const cloneNodeParamsSchema = z.object({
  * Params for `reparent_node`: move a node under a new parent (re-flows under
  * the new parent's layout), optionally at a specific index.
  */
-export const reparentNodeParamsSchema = z.object({
+export const reparentNodeParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
@@ -366,7 +357,7 @@ export const reparentNodeParamsSchema = z.object({
  * the desired full order; the plugin set-equality validates it against the
  * parent's actual children (warns on mismatch, never throws — T7).
  */
-export const reorderChildrenParamsSchema = z.object({
+export const reorderChildrenParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   parentId: z
     .string()
@@ -384,7 +375,7 @@ export const reorderChildrenParamsSchema = z.object({
  * Params for `boolean_op`: combine ≥2 nodes into a BooleanOperationNode via
  * union/subtract/intersect/exclude.
  */
-export const booleanOpParamsSchema = z.object({
+export const booleanOpParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   op: z
     .enum(['UNION', 'SUBTRACT', 'INTERSECT', 'EXCLUDE'])
@@ -402,7 +393,7 @@ export const booleanOpParamsSchema = z.object({
 })
 
 /** Params for `flatten`: flatten one or more nodes into a single vector. */
-export const flattenParamsSchema = z.object({
+export const flattenParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeIds: z
     .array(z.string())
@@ -417,7 +408,7 @@ export const flattenParamsSchema = z.object({
 })
 
 /** Params for `group_nodes`: group ≥1 existing nodes into a GROUP node. */
-export const groupNodesParamsSchema = z.object({
+export const groupNodesParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeIds: z
     .array(z.string())
@@ -520,7 +511,7 @@ export const transformModifierSchema = z.discriminatedUnion(
  * Batch op-set member — same operation-over-existing-ids shape as
  * `boolean_op`, `flatten`, and `group_nodes`.
  */
-export const transformGroupParamsSchema = z.object({
+export const transformGroupParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeIds: z
     .array(z.string())
@@ -547,13 +538,13 @@ export const transformGroupParamsSchema = z.object({
 // ---------------------------------------------------------------------------
 
 /** Params for `create_page`: add a new page to the document. */
-export const createPageParamsSchema = z.object({
+export const createPageParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   name: z.string().describe('Name for the new page.'),
 })
 
 /** Params for `set_current_page`: switch the active page. */
-export const setCurrentPageParamsSchema = z.object({
+export const setCurrentPageParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   pageId: z
     .string()
@@ -561,7 +552,7 @@ export const setCurrentPageParamsSchema = z.object({
 })
 
 /** Params for `duplicate_page`: clone an existing page, optionally renaming it. */
-export const duplicatePageParamsSchema = z.object({
+export const duplicatePageParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   pageId: z
     .string()
@@ -583,7 +574,7 @@ export const duplicatePageParamsSchema = z.object({
  * `patch` is a partial NodeSpec — only supplied fields are updated;
  * omitted fields are left untouched.
  */
-export const updateNodeParamsSchema = z.object({
+export const updateNodeParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeId: z.string().describe('ID of the node to update.'),
   patch: partialNodeSpecSchema.describe(
@@ -599,7 +590,7 @@ export const updateNodeParamsSchema = z.object({
  * `create-schemas.ts` version of the same name on purpose; both coexist
  * (this module is NOT barrel-exported) until the create path migrates.
  */
-export const createNodeParamsSchema = z.object({
+export const createNodeParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   spec: nodeSpecSchema.describe(
     'The NodeSpec to create. Its `type` selects the Figma node kind. A FRAME that names no `layout` is created as a vertical auto-layout stack, and a `size` it stated is pinned FIXED so the stack cannot hug it away; pass `layout:{mode:"NONE"}` for an absolutely-positioned frame, or any other `layout` to choose your own (then `sizing` is yours to state too).',
@@ -618,7 +609,7 @@ export const createNodeParamsSchema = z.object({
  * `{ ref }` pool reference, or an `{ id }` clone-by-id). `refs` is the
  * ref-pool the `{ ref }` nodes resolve against.
  */
-export const createTreeParamsSchema = z.object({
+export const createTreeParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   tree: treeNodeSpecSchema.describe(
     'The root TreeNodeSpec (recursive children, { ref } reuse, or { id } clone). Every FRAME in the tree that names no `layout` is created as a vertical auto-layout stack, and a `size` it stated is pinned FIXED so the stack cannot hug it away; pass `layout:{mode:"NONE"}` on the ones that position their children absolutely.',
@@ -643,7 +634,7 @@ export const createTreeParamsSchema = z.object({
  * (raw image bytes as a number array, passed to createImage). The handler
  * validates that exactly one is present.
  */
-export const createImageParamsSchema = z.object({
+export const createImageParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   url: z
     .string()
@@ -664,7 +655,7 @@ export const createImageParamsSchema = z.object({
 // ---------------------------------------------------------------------------
 
 /** Params for `bind_variable`: bind a variable to a node field and/or pin a frame to a variable-collection mode. */
-export const bindVariableParamsSchema = z.object({
+export const bindVariableParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
@@ -711,7 +702,7 @@ export const bindVariableParamsSchema = z.object({
  * via the shared limit+cursor contract (`limit` defaults to 100, `cursor`
  * continues when `truncated`).
  */
-export const getVariablesParamsSchema = z.object({
+export const getVariablesParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   collectionId: z
     .string()
@@ -779,7 +770,7 @@ export const createVariableSpecSchema = z.object({
  * modes), then its variables with per-mode values. Returns
  * { collectionId, modes, variables:[{id,name}] }.
  */
-export const createVariablesParamsSchema = z.object({
+export const createVariablesParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   collection: z
     .string()
@@ -834,7 +825,7 @@ export const updateVariableSpecSchema = z.object({
  * scopes, codeSyntax, hiddenFromPublishing). Each gated member degrades with a
  * warning (T7). Returns { collectionId, modes, warnings[] }.
  */
-export const updateVariablesParamsSchema = z.object({
+export const updateVariablesParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   collectionId: z
     .string()
@@ -878,7 +869,7 @@ export const updateVariablesParamsSchema = z.object({
  * is enforced in the handler (INVALID_PARAM) rather than via .refine() so the
  * schema retains .shape for registerFileTool / MCP SDK registration.
  */
-export const deleteVariablesParamsSchema = z.object({
+export const deleteVariablesParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   variables: z
     .array(z.string())
@@ -930,7 +921,7 @@ export const createStyleSpecSchema = z.object({
  * grammar atom values with PARTIAL SUCCESS — one entry's failure does not abort
  * the rest. Returns { results:[{id,key,name,type,index}], errors:[{index,error}] }.
  */
-export const createStylesParamsSchema = z.object({
+export const createStylesParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   styles: z
     .array(createStyleSpecSchema)
@@ -980,7 +971,7 @@ export const updateStyleSpecSchema = z.object({
  * and/or description with PARTIAL SUCCESS — one entry's failure does not abort
  * the rest. Returns { results:[{id,index}], errors:[{index,error}] }.
  */
-export const updateStylesParamsSchema = z.object({
+export const updateStylesParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   styles: z
     .array(updateStyleSpecSchema)
@@ -1021,7 +1012,7 @@ export const deleteStyleSpecSchema = z.object({
  * retains .shape for registerFileTool / MCP SDK registration (avoids the ZodEffects
  * .shape-spreading caveat hit in M1a).
  */
-export const deleteStylesParamsSchema = z.object({
+export const deleteStylesParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   styles: z
     .array(deleteStyleSpecSchema)
@@ -1033,7 +1024,7 @@ export const deleteStylesParamsSchema = z.object({
  * setFillStyleIdAsync / setStrokeStyleIdAsync / setTextStyleIdAsync /
  * setEffectStyleIdAsync / setGridStyleIdAsync. Returns { id, warnings[] }.
  */
-export const applyStyleParamsSchema = z.object({
+export const applyStyleParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
@@ -1056,7 +1047,7 @@ export const applyStyleParamsSchema = z.object({
  * shared limit+cursor contract (`limit` defaults to 100, `cursor` continues when
  * `truncated`).
  */
-export const getStylesParamsSchema = z.object({
+export const getStylesParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   type: z
     .enum(['paint', 'text', 'effect', 'grid'])
@@ -1079,7 +1070,7 @@ export const getStylesParamsSchema = z.object({
  * timed out live on a real UI-kit document; default false returns only the
  * cheap LOCAL component/set scan.
  */
-export const getComponentsParamsSchema = z.object({
+export const getComponentsParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   query: z
     .string()
@@ -1103,7 +1094,7 @@ export const getComponentsParamsSchema = z.object({
  * post-`query` list) via the shared limit+cursor contract (`limit` defaults to
  * 100, `cursor` continues when `truncated`).
  */
-export const listFontsParamsSchema = z.object({
+export const listFontsParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   query: z
     .string()
@@ -1124,7 +1115,7 @@ export const listFontsParamsSchema = z.object({
  * defaults to 100, `cursor` continues when `truncated`); the T7 degrade
  * `warnings` still ride on the success envelope.
  */
-export const getReactionsParamsSchema = z.object({
+export const getReactionsParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
@@ -1135,7 +1126,7 @@ export const getReactionsParamsSchema = z.object({
 })
 
 /** Params for `get_plugin_data`: read a node's plugin data. */
-export const getPluginDataParamsSchema = z.object({
+export const getPluginDataParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
@@ -1149,7 +1140,7 @@ export const getPluginDataParamsSchema = z.object({
 })
 
 /** Params for `set_plugin_data`: write a single plugin-data key on a node. */
-export const setPluginDataParamsSchema = z.object({
+export const setPluginDataParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
@@ -1169,7 +1160,7 @@ export const setPluginDataParamsSchema = z.object({
 })
 
 /** Params for `set_reactions`: replace a node's prototype reactions. */
-export const setReactionsParamsSchema = z.object({
+export const setReactionsParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
@@ -1191,7 +1182,7 @@ export const setReactionsParamsSchema = z.object({
  * (`limit` defaults to 100, `cursor` continues when `truncated`); the
  * editorType-gated T7 degrade `warnings` still ride on the success envelope.
  */
-export const getAnnotationsParamsSchema = z.object({
+export const getAnnotationsParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
@@ -1203,7 +1194,7 @@ export const getAnnotationsParamsSchema = z.object({
 })
 
 /** Params for `set_annotations`: replace a node's annotations. */
-export const setAnnotationsParamsSchema = z.object({
+export const setAnnotationsParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
@@ -1220,7 +1211,7 @@ export const setAnnotationsParamsSchema = z.object({
 // ---------------------------------------------------------------------------
 
 /** Params for `export`: render a node to PNG/JPG/SVG/PDF. */
-export const exportParamsSchema = z.object({
+export const exportParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeId: z.string().describe('The node to export.'),
   format: z
@@ -1246,7 +1237,7 @@ export const exportParamsSchema = z.object({
  * createComponentFromNode(); optionally renames / sets its description. To build
  * a node first, use create_node / create_tree, then promote the returned id.
  */
-export const createComponentParamsSchema = z.object({
+export const createComponentParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeId: z
     .string()
@@ -1308,7 +1299,7 @@ export const componentPropertyEditSchema = z.object({
  * Params for `update_component`: add/edit/delete componentPropertyDefinitions,
  * set the description, and (T7-gated) expose nested instances.
  */
-export const updateComponentParamsSchema = z.object({
+export const updateComponentParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   componentId: z
     .string()
@@ -1348,7 +1339,7 @@ export const updateComponentParamsSchema = z.object({
 })
 
 /** Params for `combine_variants`: combine ≥2 components into a variant set. */
-export const combineVariantsParamsSchema = z.object({
+export const combineVariantsParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   componentIds: z
     .array(z.string())
@@ -1374,7 +1365,7 @@ export const combineVariantsParamsSchema = z.object({
  * a warning). At least one is required. If BOTH are given the LOCAL
  * `mainComponentId` WINS (it needs no async import).
  */
-export const swapComponentParamsSchema = z.object({
+export const swapComponentParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   instanceId: z
     .string()
@@ -1397,7 +1388,7 @@ export const swapComponentParamsSchema = z.object({
  * Params for `set_instance`: set instance properties (variant + BOOLEAN / TEXT /
  * INSTANCE_SWAP) and/or apply per-node overrides.
  */
-export const setInstanceParamsSchema = z.object({
+export const setInstanceParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   instanceId: z
     .string()
@@ -1496,7 +1487,7 @@ export const batchEntrySchema = z
  * `{ results: [{index, op, ok, result|error}], errors: [{index, op, error}] }`
  * — one entry's failure does NOT abort the rest.
  */
-export const batchParamsSchema = z.object({
+export const batchParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   op: batchOpSchema
     .optional()
@@ -1515,7 +1506,7 @@ export const batchParamsSchema = z.object({
 // Component index tools
 // ---------------------------------------------------------------------------
 
-export const searchComponentsParamsSchema = z.object({
+export const searchComponentsParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   query: z
     .string()
@@ -1534,7 +1525,7 @@ export const searchComponentsParamsSchema = z.object({
     .describe('Max results (default 25).'),
 })
 
-export const reindexParamsSchema = z.object({
+export const reindexParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
 })
 
@@ -1547,7 +1538,7 @@ export const reindexParamsSchema = z.object({
  * file's server-side change buffer. Non-idempotent — a second immediate call
  * returns an empty `ok`.
  */
-export const pullChangesParamsSchema = z.object({
+export const pullChangesParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   limit: z
     .number()
@@ -1573,7 +1564,7 @@ export const pullChangesParamsSchema = z.object({
  * Params for `report_status`: a fire-and-forget, file-scoped status push
  * (status-monitor.md). Display-only — it never reaches `code.ts`/`figma.*`.
  */
-export const reportStatusParamsSchema = z.object({
+export const reportStatusParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   text: z
     .string()
@@ -1605,7 +1596,8 @@ export type ReportStatusInput = z.infer<
  * Params for `record_feedback`: record a piece of friction or a proposal into
  * the local feedback queue.
  */
-export const recordFeedbackParamsSchema = z.object({
+export const recordFeedbackParamsSchema = strictParams({
+  ...identityHeadersSchema.shape,
   category: z
     .enum(FEEDBACK_CATEGORIES)
     .describe(
@@ -1629,11 +1621,13 @@ export const recordFeedbackParamsSchema = z.object({
     ),
 })
 
-export const listFeedbackParamsSchema = z.object({
+export const listFeedbackParamsSchema = strictParams({
+  ...identityHeadersSchema.shape,
   ...listPaginationParamsSchema.shape,
 })
 
-export const sendFeedbackParamsSchema = z.object({
+export const sendFeedbackParamsSchema = strictParams({
+  ...identityHeadersSchema.shape,
   send: z
     .array(z.string())
     .describe('Backlog item paths to file to GitHub.'),
@@ -1655,7 +1649,8 @@ export const sendFeedbackParamsSchema = z.object({
     ),
 })
 
-export const discardFeedbackParamsSchema = z.object({
+export const discardFeedbackParamsSchema = strictParams({
+  ...identityHeadersSchema.shape,
   paths: z
     .array(z.string())
     .describe(
@@ -1663,6 +1658,10 @@ export const discardFeedbackParamsSchema = z.object({
     ),
 })
 
-export const githubAuthStartParamsSchema = z.object({})
+export const githubAuthStartParamsSchema = strictParams({
+  ...identityHeadersSchema.shape,
+})
 
-export const githubAuthPollParamsSchema = z.object({})
+export const githubAuthPollParamsSchema = strictParams({
+  ...identityHeadersSchema.shape,
+})

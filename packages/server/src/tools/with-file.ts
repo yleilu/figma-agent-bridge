@@ -185,18 +185,28 @@ export const registerFileTool = <S extends ZodRawShape, R>(
  * explicitly documents the exemption.
  *
  * It does NOT call `sessionIdentity.remember`, unlike the file and buffer
- * wrappers: none of these schemas spreads `fileTargetParamsSchema`, so an
- * injected `sessionId` is stripped by zod before the handler runs and there is
- * nothing here to remember. Adoption therefore happens on the first
- * file-addressed or buffer-addressed call, and the count mirror's `_unattributed`
- * sentinel + migrate path is exactly what covers the window until then
+ * wrappers. Each of these eight DECLARES the reserved identity headers (M22b
+ * spreads `identityHeadersSchema` into them, because a strict schema must
+ * declare what the PreToolUse hook stamps or it would reject the very call the
+ * hook annotates) — but this wrapper still ignores them. Adoption stays on the
+ * first file-addressed or buffer-addressed call, and the count mirror's
+ * `_unattributed` sentinel + migrate path covers the window until then
  * (change-feed.md, Adoption).
+ *
+ * THE SCHEMA IS REGISTERED, NOT ITS SHAPE (B52 / M22b) — same reason as
+ * registerFileTool above. This path used `server.tool(name, schema.shape, cb)`
+ * until every tool schema went `.strict()`; the re-wrap would have dropped the
+ * modifier and these eight would have kept stripping unknown keys in silence.
  */
 export const registerSessionTool = <S extends ZodRawShape>(
   server: McpServer,
   name: string,
-  schema: { shape: S },
-  handler: ToolCallback<S>,
+  schema: ZodObject<S>,
+  handler: ToolCallback<ZodObject<S>>,
 ): void => {
-  server.tool(name, schema.shape, handler)
+  server.registerTool(
+    name,
+    { inputSchema: schema },
+    handler,
+  )
 }

@@ -55,30 +55,27 @@ describe('getNodeParamsSchema', () => {
   })
 
   // B1 — get_node is the fidelity exception (never budget-truncated, no match
-  // filter). Zod strips unknown keys by default, so assert the PARSED OUTPUT
-  // never carries budget/match (the schema does not advertise them).
-  it('drops budget (the fidelity exception is never budget-truncated)', () => {
+  // filter). Since M22b the schema is `.strict()`, so a caller who asks for
+  // either is TOLD the tool does not take it, by name, instead of receiving a
+  // full-fidelity read that quietly ignored the request.
+  it('rejects budget (the fidelity exception is never budget-truncated)', () => {
     const parsed = getNodeParamsSchema.safeParse({
       fileKey: 'fk',
       nodeId: '1:2',
       budget: 5000,
     })
-    expect(parsed.success).toBe(true)
-    if (parsed.success) {
-      expect(parsed.data).not.toHaveProperty('budget')
-    }
+    expect(parsed.success).toBe(false)
+    expect(parsed.error?.message).toContain('budget')
   })
 
-  it('drops match (no source-side filter on the edit reader)', () => {
+  it('rejects match (no source-side filter on the edit reader)', () => {
     const parsed = getNodeParamsSchema.safeParse({
       fileKey: 'fk',
       nodeId: '1:2',
       match: { type: ['FRAME', 'TEXT'], name: 'Row' },
     })
-    expect(parsed.success).toBe(true)
-    if (parsed.success) {
-      expect(parsed.data).not.toHaveProperty('match')
-    }
+    expect(parsed.success).toBe(false)
+    expect(parsed.error?.message).toContain('match')
   })
 
   it('rejects a missing nodeId', () => {
@@ -127,18 +124,16 @@ describe('getNodesParamsSchema', () => {
 
   // B1 — get_nodes is the fidelity exception too: budget/match are not
   // advertised, so a supplied budget/match is stripped from the parsed output.
-  it('drops budget and match (fidelity exception, no source filter)', () => {
+  it('rejects budget and match (fidelity exception, no source filter)', () => {
     const parsed = getNodesParamsSchema.safeParse({
       fileKey: 'fk',
       nodeIds: ['1:2'],
       budget: 1000,
       match: { type: 'FRAME' },
     })
-    expect(parsed.success).toBe(true)
-    if (parsed.success) {
-      expect(parsed.data).not.toHaveProperty('budget')
-      expect(parsed.data).not.toHaveProperty('match')
-    }
+    expect(parsed.success).toBe(false)
+    expect(parsed.error?.message).toContain('budget')
+    expect(parsed.error?.message).toContain('match')
   })
 
   it('rejects missing nodeIds', () => {
@@ -373,11 +368,15 @@ describe('statusParamsSchema', () => {
     )
   })
 
-  it('ignores extra keys (Zod strips by default)', () => {
-    expect(
-      statusParamsSchema.safeParse({ extra: 'ignored' })
-        .success,
-    ).toBe(true)
+  // M22b — a no-param tool still answers an invented param. Before the strict
+  // pass this returned ok, which is how `update_component {remove:[…]}` came
+  // back ok with nothing removed (M22).
+  it('rejects an extra key and names it', () => {
+    const parsed = statusParamsSchema.safeParse({
+      extra: 'ignored',
+    })
+    expect(parsed.success).toBe(false)
+    expect(parsed.error?.message).toContain('extra')
   })
 })
 

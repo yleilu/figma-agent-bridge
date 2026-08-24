@@ -7,18 +7,7 @@ import type {
 } from '@figma-agent-bridge/server/figma-client'
 import { PluginDisconnectedError } from '@figma-agent-bridge/server/figma-client'
 import type { ChannelInfo } from '@figma-agent-bridge/shared'
-import {
-  discardFeedbackParamsSchema,
-  githubAuthPollParamsSchema,
-  githubAuthStartParamsSchema,
-  listFeedbackParamsSchema,
-  pullChangesParamsSchema,
-  recordFeedbackParamsSchema,
-  searchParamsSchema,
-  sendFeedbackParamsSchema,
-  statusParamsSchema,
-} from '@figma-agent-bridge/shared/tool-params'
-import { connectParamsSchema } from '@figma-agent-bridge/shared'
+import { searchParamsSchema } from '@figma-agent-bridge/shared/tool-params'
 import { textResult } from '@figma-agent-bridge/server/tools/shared'
 import {
   registerFileTool,
@@ -251,39 +240,19 @@ describe('registerFileTool', () => {
     ).toBeUndefined()
   })
 
-  // The two OTHER registration wrappers still hand the SDK a `.shape`, which
+  // The two OTHER registration wrappers USED to hand the SDK a `.shape`, which
   // re-wraps it in a plain `z.object` and silently discards every modifier the
-  // schema carries. Nothing is discarded today — every one of these nine is a
-  // plain strip object — but the discard is silent, so the day somebody writes
-  // `.strict()` on one of them the schema would read correct and the wire would
-  // not enforce it. This test is the gate that makes that failure loud.
-  it('no shape-registered tool carries a modifier the SDK would drop', () => {
-    const shapeRegistered = {
-      // registerSessionTool
-      connect: connectParamsSchema,
-      status: statusParamsSchema,
-      record_feedback: recordFeedbackParamsSchema,
-      list_feedback: listFeedbackParamsSchema,
-      send_feedback: sendFeedbackParamsSchema,
-      discard_feedback: discardFeedbackParamsSchema,
-      github_auth_start: githubAuthStartParamsSchema,
-      github_auth_poll: githubAuthPollParamsSchema,
-      // registerBufferTool
-      pull_changes: pullChangesParamsSchema,
-    }
+  // schema carries. Nothing was discarded then — those nine were plain strip
+  // objects — but M22b made every tool schema `.strict()`, so both wrappers
+  // moved to `server.registerTool` too. The strictness of all sixty schemas and
+  // the identity of what each of the three paths registers are asserted in
+  // test/tools/strict-params.test.ts; this file keeps only the `search` case
+  // that first exposed the trap.
+  it('carries the strict modifier the shape path would have dropped', () => {
     const unknownKeysOf = (schema: {
       _def: unknown
     }): string | undefined =>
       (schema._def as { unknownKeys?: string }).unknownKeys
-    // Control: the probe CAN see a modifier — `search` carries one, and it is
-    // registered through the wrapper that honours it.
     expect(unknownKeysOf(searchParamsSchema)).toBe('strict')
-    for (const [name, schema] of Object.entries(
-      shapeRegistered,
-    )) {
-      expect(`${name}:${unknownKeysOf(schema)}`).toBe(
-        `${name}:strip`,
-      )
-    }
   })
 })

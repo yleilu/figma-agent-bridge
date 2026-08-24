@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import { identityHeadersSchema } from './identity-headers'
+import { strictParams } from './strict-params'
 
 // `connectParamsSchema` is the one schema that lives here: it has its own test
 // (connect-params.test.ts), is barrel-exported, and is imported by the live
@@ -6,7 +8,13 @@ import { z } from 'zod'
 // list_pages/export) that previously sat alongside it were the green-window
 // versions; the live server now imports those from `tool-params.ts` (the
 // canonical M2 shapes), so they were retired here in M3-E.
-export const connectParamsSchema = z.object({
+//
+// STRICT (M22b): an undeclared top-level key is rejected, not stripped. That is
+// why the reserved identity headers are spread in — the PreToolUse hook stamps
+// `sessionId` on `connect` too, and a strict schema that did not declare it
+// would reject every hooked call.
+export const connectParamsSchema = strictParams({
+  ...identityHeadersSchema.shape,
   fileKey: z
     .string()
     .min(1)
