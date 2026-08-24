@@ -1,7 +1,7 @@
 {
   "name": "figma-agent-bridge",
   "displayName": "Figma Bridge",
-  "version": "0.6.1",
+  "version": "0.3.0",
   "description": "Drive Figma from Claude Code — design, review, and file feedback.",
   "author": {
     "name": "Lei",
