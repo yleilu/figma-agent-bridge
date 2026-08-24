@@ -8,6 +8,11 @@ import {
   applyLayout,
   type AppliedLayout,
 } from './apply-layout'
+import {
+  originOf,
+  reparentPlacement,
+  type Placeable,
+} from './reparent-position'
 import { importComponentByKeyWithDeadline } from './import-by-key'
 import { createFontLoader } from './font-cache'
 import { applyPointDetail } from './vector-points'
@@ -1926,9 +1931,7 @@ const createTreeNode = async (
 
   // Clone reference: { id } with no type
   if (spec.id !== undefined && spec.type === undefined) {
-    const existing = await resolveNodeId(
-      spec.id as string,
-    )
+    const existing = await resolveNodeId(spec.id as string)
     if (!existing)
       throw new Error(
         'Node not found for clone: ' + spec.id,
@@ -3412,9 +3415,7 @@ const handleCommand = async (
     case COMMANDS.CREATE_NODE: {
       const parentNode =
         params.parentId !== undefined
-          ? await resolveNodeId(
-              params.parentId as string,
-            )
+          ? await resolveNodeId(params.parentId as string)
           : figma.currentPage
       if (!parentNode || !('appendChild' in parentNode)) {
         return {
@@ -3482,9 +3483,7 @@ const handleCommand = async (
     case COMMANDS.CREATE_TREE: {
       const treeParentNode =
         params.parentId !== undefined
-          ? await resolveNodeId(
-              params.parentId as string,
-            )
+          ? await resolveNodeId(params.parentId as string)
           : figma.currentPage
       if (
         !treeParentNode ||
@@ -4015,9 +4014,7 @@ const handleCommand = async (
       }
       const cvParentNode =
         params.parentId !== undefined
-          ? await resolveNodeId(
-              params.parentId as string,
-            )
+          ? await resolveNodeId(params.parentId as string)
           : cvComps[0].parent
       let cvParent: BaseNode & ChildrenMixin
       if (cvParentNode && 'appendChild' in cvParentNode) {
@@ -4991,7 +4988,11 @@ const handleCommand = async (
     // given, else appendChild. For a NON-auto-layout new parent we preserve the
     // child's VISUAL (absolute) position across the move — appendChild keeps the
     // raw relative x/y, which otherwise makes the node jump. For an auto-layout
-    // new parent we leave x/y so the node re-flows in the layout.
+    // new parent we leave x/y so the node re-flows in the layout. THE PAGE is a
+    // non-auto-layout parent too (B55): it carries no absoluteTransform, and
+    // treating that as an unknown origin skipped the preservation on the most
+    // common move of all — un-nesting to the canvas. reparent-position.ts owns
+    // that decision and is unit-tested on its own.
     // Missing node/parent → {error}.
     case COMMANDS.REPARENT_NODE: {
       const nodeId = params.nodeId as string
@@ -5011,52 +5012,33 @@ const handleCommand = async (
       }
       const parent = newParent as ParentNode
       const child = node as SceneNode
-      // Capture the child's absolute position BEFORE the move. absoluteTransform
-      // is [[a,b,tx],[c,d,ty]]; the translation [tx,ty] is the page-absolute
-      // origin of the (unrotated) node.
-      const childAbs =
-        'absoluteTransform' in child
-          ? (
-              child as SceneNode & {
-                absoluteTransform: Transform
-              }
-            ).absoluteTransform
-          : undefined
+      // Capture the child's absolute origin BEFORE the move — appendChild keeps
+      // the raw parent-relative x/y, so without this the node jumps.
+      const childOrigin = originOf(child as Placeable)
       const index = params.index as number | undefined
       if (index !== undefined) {
         parent.insertChild(index, child)
       } else {
         parent.appendChild(child)
       }
-      // Recompute the child's parent-relative x/y so its absolute position is
-      // unchanged — ONLY when the new parent is not auto-layout. An auto-layout
-      // parent owns child placement, so leave x/y for the re-flow.
-      const parentLayoutMode =
-        'layoutMode' in parent
-          ? (parent as FrameNode).layoutMode
-          : 'NONE'
-      const newParentAbs =
-        'absoluteTransform' in parent
-          ? (
-              parent as BaseNode & {
-                absoluteTransform: Transform
-              }
-            ).absoluteTransform
-          : undefined
+      // Recompute the child's parent-relative x/y so its CANVAS position is
+      // unchanged. reparentPlacement answers undefined when the new parent owns
+      // placement (auto-layout / GRID re-flow) or when an origin is unknown.
+      // B55: a PAGE has no absoluteTransform, and reading that as "unknown"
+      // is what dropped the node's position every time it was un-nested.
+      const placement = reparentPlacement(
+        childOrigin,
+        parent as Placeable,
+      )
       if (
-        parentLayoutMode === 'NONE' &&
-        childAbs !== undefined &&
-        newParentAbs !== undefined &&
+        placement !== undefined &&
         'x' in child &&
         'y' in child
       ) {
-        // child.x/y in the new parent = childAbsoluteOrigin − newParentOrigin.
-        const targetX = childAbs[0][2] - newParentAbs[0][2]
-        const targetY = childAbs[1][2] - newParentAbs[1][2]
         ;(child as SceneNode & { x: number; y: number }).x =
-          targetX
+          placement.x
         ;(child as SceneNode & { x: number; y: number }).y =
-          targetY
+          placement.y
       }
       return {
         id: child.id,
@@ -5073,8 +5055,7 @@ const handleCommand = async (
     // an existing child). Missing parent → {error}.
     case COMMANDS.REORDER_CHILDREN: {
       const parentId = params.parentId as string
-      const parentNode =
-        await resolveNodeId(parentId)
+      const parentNode = await resolveNodeId(parentId)
       if (!parentNode || !('children' in parentNode)) {
         return {
           error:

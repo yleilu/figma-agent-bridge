@@ -122,3 +122,44 @@ describe('UPDATE_COMPONENT slot-spec wiring', () => {
     expect(slotLoop).toContain("'slot \"' + name")
   })
 })
+
+// B55 — reparent_node's position preservation is pure and unit-tested in
+// reparent-position.test.ts, which is exactly the blind spot above: the math
+// can be perfect while the case never calls it, and only a live reparent
+// notices the node jumping to the canvas origin.
+const reparentCase = ((): string => {
+  const from = callers.indexOf(
+    'case COMMANDS.REPARENT_NODE',
+  )
+  const to = callers.indexOf(
+    'case COMMANDS.REORDER_CHILDREN',
+  )
+  return from === -1 || to === -1
+    ? ''
+    : callers.slice(from, to)
+})()
+
+describe('REPARENT_NODE position wiring', () => {
+  it('actually found the case (liveness)', () => {
+    expect(reparentCase.length).toBeGreaterThan(200)
+    expect(reparentCase.length).toBeLessThan(callers.length)
+    expect(reparentCase).toContain('appendChild')
+  })
+
+  it('reads the child origin BEFORE the move and re-places it after', () => {
+    expect(reparentCase).toContain('originOf(')
+    expect(reparentCase).toContain('reparentPlacement(')
+    // Order matters: the parent-relative x/y the origin is derived from is
+    // reinterpreted the instant the node changes parent.
+    const theMove = reparentCase.indexOf(
+      'parent.appendChild(child)',
+    )
+    expect(theMove).toBeGreaterThan(0)
+    expect(reparentCase.indexOf('originOf(')).toBeLessThan(
+      theMove,
+    )
+    expect(
+      reparentCase.indexOf('reparentPlacement('),
+    ).toBeGreaterThan(theMove)
+  })
+})
