@@ -3369,7 +3369,23 @@ const handleCommand = async (
         hints: {
           characters: collectCharacters,
           variableIds: collectVariableId,
+          componentRef: collectComponentRef,
         },
+        // B56 — a repaired INSTANCE names its main by id; `match:{instancesOf}`
+        // matches on the NAME. A main component is a plain, top-level node, so
+        // its handle answers even when the instance's own sublayers do not.
+        componentRefOf: collectComponentRef
+          ? async componentId => {
+              const main =
+                await figma.getNodeByIdAsync(componentId)
+              return main === null
+                ? undefined
+                : {
+                    key: (main as ComponentNode).key,
+                    name: main.name,
+                  }
+            }
+          : undefined,
         exportHost: async index => {
           try {
             const raw = await scanned[

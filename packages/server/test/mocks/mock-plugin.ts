@@ -1703,27 +1703,36 @@ export const createMockPlugin = (
           '1:45',
         ])
         const knownPages = new Set(['0:1', 'repaired:1'])
-        // A page whose scan the plugin had to REPAIR (B48 / final-review I-1).
-        // A chip written into a slot answered an alias id, its label threw, and
-        // the repair replaced the chip's row with the one its export names. The
-        // export row is addressable where the alias was not, but it cannot carry
-        // componentKey / instancesOf / styleIds / context — so a hinted match
-        // stops finding a node it used to find, and the plugin SAYS so. This is
-        // the shape `repairScan` now produces; the assertion that matters here
-        // is that the warning survives the server's projection and reaches the
-        // agent beside a result set that is genuinely one row short.
+        // A page whose scan the plugin had to REPAIR (B48 / final-review I-1 /
+        // B56). A chip written into a slot answered an alias id, its label
+        // threw, and the repair replaced the chip's row with the one its export
+        // names. The export row is addressable where the alias was not.
+        //
+        // It cannot carry `styleIds` or `context` — those are live-only reads,
+        // and the plugin SAYS so rather than returning a short result set
+        // quietly. It CAN carry `componentKey` / `instancesOf` since B56: the
+        // export names the instance's main by id, and the plugin trades that id
+        // for the name and key, but only when the caller hinted for them. So
+        // the reply here depends on the hint, exactly as `repairScan` does.
         if (
           searchScope === 'page' &&
           cmd.params?.pageId === 'repaired:1'
         ) {
+          const wantsRef =
+            cmd.params?.collectComponentRef === true
+          const chip: Record<string, unknown> = {
+            id: 'I298:7517;298:7516;298:7523',
+            name: 'Chip',
+            type: 'INSTANCE',
+            size: [96, 28],
+          }
+          if (wantsRef) {
+            chip.instancesOf = 'Chip'
+            chip.componentKey = 'k-chip'
+          }
           result = {
             results: [
-              {
-                id: 'I298:7517;298:7516;298:7523',
-                name: 'Chip',
-                type: 'INSTANCE',
-                size: [96, 28],
-              },
+              chip,
               {
                 id: 'I298:7517;298:7516;298:7523;298:7510',
                 name: 'Label',
@@ -1732,7 +1741,11 @@ export const createMockPlugin = (
               },
             ],
             warnings: [
-              'search: repaired the subtree at I298:7517;298:7516;298:7523 — the row for 298:7519 now comes from the export and cannot carry componentKey, instancesOf; a match on those keys will not find this node',
+              'search: repaired the subtree at I298:7517;298:7516;298:7523 — the row for 298:7519 now comes from the export and cannot carry ' +
+                (wantsRef
+                  ? 'context, styleIds'
+                  : 'context, styleIds, componentKey, instancesOf') +
+                '; a match on those keys will not find this node',
             ],
           }
           break

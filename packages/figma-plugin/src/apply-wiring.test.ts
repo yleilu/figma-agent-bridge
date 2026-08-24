@@ -163,3 +163,35 @@ describe('REPARENT_NODE position wiring', () => {
     ).toBeGreaterThan(theMove)
   })
 })
+
+// B56 — repairScan can only resolve an export-served instance's main component
+// through a resolver the SEARCH case hands it. The pure side is fully tested in
+// search-candidates.test.ts and would stay green with the dep dropped, and the
+// server mock is a double: only a live search would notice `instancesOf`
+// answering zero again.
+const searchCase = ((): string => {
+  const from = callers.indexOf(
+    'const repaired = await repairScan(',
+  )
+  const to = callers.indexOf(
+    'skipped.push(...repaired.warnings)',
+  )
+  return from === -1 || to === -1
+    ? ''
+    : callers.slice(from, to)
+})()
+
+describe('SEARCH repair wiring', () => {
+  it('actually found the repairScan call (liveness)', () => {
+    expect(searchCase.length).toBeGreaterThan(200)
+    expect(searchCase).toContain('exportHost')
+  })
+
+  it('hints for component refs and supplies the resolver', () => {
+    expect(searchCase).toContain(
+      'componentRef: collectComponentRef',
+    )
+    expect(searchCase).toContain('componentRefOf')
+    expect(searchCase).toContain('getNodeByIdAsync')
+  })
+})

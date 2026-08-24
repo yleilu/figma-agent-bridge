@@ -479,3 +479,189 @@ describe('repairScan — repair without downgrading (C1)', () => {
     expect(warnings).toEqual(['search: skipped 9:9'])
   })
 })
+
+// ─── B56: a slot-nested INSTANCE is findable by instancesOf ───────────────────
+//
+// `search {instancesOf:'State block'}` answered `results: []` against two
+// provable instances. The B48 repair already recovered the rows — but it
+// recovered them from the export, and the export row carried no `instancesOf`,
+// so the matcher had nothing to match on. Any instancesOf-based acceptance gate
+// under-counts a correct design.
+//
+// The export names the main component by ID (`componentId`), and a main
+// component is a plain, top-level node whose handle always answers. So the
+// repair carries the id out and resolves the NAME and KEY through the caller.
+
+/** A Chart card instance whose Plot-area slot holds a State block instance. */
+const slotHostDoc = (): RawNode => ({
+  id: CANON,
+  name: 'Chart card',
+  type: 'INSTANCE',
+  componentId: '453:3800',
+  children: [
+    {
+      id: CANON + ';298:7530',
+      name: 'Plot area',
+      type: 'FRAME',
+      children: [
+        {
+          id: CANON + ';298:7531',
+          name: 'State block',
+          type: 'INSTANCE',
+          componentId: '454:5477',
+        },
+      ],
+    },
+  ],
+})
+
+describe('candidateFromExport — component reference (B56)', () => {
+  it('carries the main component id out when the caller asked for refs', () => {
+    const c = candidateFromExport(
+      {
+        id: 'x',
+        name: 'State block',
+        type: 'INSTANCE',
+        componentId: '454:5477',
+      },
+      { componentRef: true },
+    )
+    expect(c?.mainComponentId).toBe('454:5477')
+  })
+
+  it('carries nothing when the caller did not ask', () => {
+    const c = candidateFromExport({
+      id: 'x',
+      name: 'State block',
+      type: 'INSTANCE',
+      componentId: '454:5477',
+    })
+    expect('mainComponentId' in (c ?? {})).toBe(false)
+  })
+
+  it('carries nothing for a node that is not an instance', () => {
+    const c = candidateFromExport(
+      { id: 'x', name: 'Plot area', type: 'FRAME' },
+      { componentRef: true },
+    )
+    expect('mainComponentId' in (c ?? {})).toBe(false)
+  })
+})
+
+describe('repairScan — instancesOf survives the repair (B56)', () => {
+  const slotHosted = (): Fixture => ({
+    scanned: [
+      { id: '2:1', levelsLeft: -1, subtreeEnd: 2 },
+      { id: '298:7519', levelsLeft: -1, subtreeEnd: 2 },
+    ],
+    candidates: [live('2:1', { type: 'FRAME' }), undefined],
+    failures: [
+      {
+        at: 1,
+        host: 0,
+        message:
+          'search: skipped the children of 298:7519: The node does not exist',
+      },
+    ],
+  })
+
+  const hostDoc = (): RawNode => ({
+    id: '2:1',
+    name: 'Page',
+    type: 'FRAME',
+    children: [slotHostDoc()],
+  })
+
+  it('finds the slot-nested instance by its main component NAME', async () => {
+    const { results } = await repairScan({
+      ...slotHosted(),
+      hints: { componentRef: true },
+      exportHost: async () => hostDoc(),
+      componentRefOf: async id =>
+        id === '454:5477'
+          ? { key: 'k-state', name: 'State block' }
+          : { key: 'k-chart', name: 'Chart card' },
+    })
+    const nested = results.find(
+      r => r.id === CANON + ';298:7531',
+    )
+    expect(nested?.instancesOf).toBe('State block')
+    expect(nested?.componentKey).toBe('k-state')
+    // The slot host itself resolves too — it is an instance as well.
+    expect(
+      results.find(r => r.id === CANON)?.instancesOf,
+    ).toBe('Chart card')
+  })
+
+  it('asks for each distinct main component once', async () => {
+    const asked: string[] = []
+    await repairScan({
+      ...slotHosted(),
+      hints: { componentRef: true },
+      exportHost: async () => hostDoc(),
+      componentRefOf: async id => {
+        asked.push(id)
+        return { name: 'X' }
+      },
+    })
+    expect(asked.length).toBe(new Set(asked).size)
+  })
+
+  it('never leaks the internal marker to the caller', async () => {
+    const { results } = await repairScan({
+      ...slotHosted(),
+      hints: { componentRef: true },
+      exportHost: async () => hostDoc(),
+      componentRefOf: async () => undefined,
+    })
+    expect(results.some(r => 'mainComponentId' in r)).toBe(
+      false,
+    )
+  })
+
+  it('drops the marker, and claims nothing, with no resolver at all', async () => {
+    const { results } = await repairScan({
+      ...slotHosted(),
+      hints: { componentRef: true },
+      exportHost: async () => hostDoc(),
+    })
+    const nested = results.find(
+      r => r.id === CANON + ';298:7531',
+    )
+    expect(nested).toBeDefined()
+    expect('mainComponentId' in (nested ?? {})).toBe(false)
+    expect(nested?.instancesOf).toBeUndefined()
+  })
+
+  it('stops naming instancesOf as lost when the repair can resolve it', async () => {
+    // The trade warning exists because an export row could not carry the four
+    // live-only keys. Two of them it now can, so saying they were lost would
+    // send an operator hunting a filter that works.
+    const fixture = slotHosted()
+    fixture.candidates[1] = live('298:7519', {
+      name: 'Chart card',
+      componentKey: 'k-chart',
+      instancesOf: 'Chart card',
+      context: 'the chart card',
+    })
+    fixture.failures = [
+      { at: -1, host: 1, message: 'search: skipped …' },
+    ]
+    const { warnings } = await repairScan({
+      ...fixture,
+      hints: { componentRef: true },
+      exportHost: async () => slotHostDoc(),
+      componentRefOf: async () => ({
+        key: 'k-chart',
+        name: 'Chart card',
+      }),
+    })
+    const traded = warnings.filter(w =>
+      w.includes('298:7519'),
+    )
+    expect(traded).toHaveLength(1)
+    expect(traded[0]).toContain('context')
+    expect(traded[0]).not.toContain('instancesOf')
+    expect(traded[0]).not.toContain('componentKey')
+  })
+})

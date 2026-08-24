@@ -15,9 +15,16 @@
 // What an export cannot supply is named here rather than guessed:
 //   - `context`         — getSharedPluginData is a live-only read
 //   - `styleIds`        — JSON_REST_V1 carries no style reference
-//   - `componentKey` / `instancesOf` — needs the instance's main, resolved live
 // `characters` and `variableIds` DO come through, which is what the
 // copy-inventory and design-system sweeps run on.
+//
+// `componentKey` / `instancesOf` used to be on that list, and their absence WAS
+// B56: `search {instancesOf:'State block'}` answered `results: []` against two
+// provable slot-nested instances — the repair returned the rows, and the rows
+// matched nothing. The export does name each instance's main, by ID
+// (`componentId`), and a main component is a plain top-level node whose handle
+// answers. So the id is carried out and traded for the name and key through
+// `componentRefOf`, once per distinct master.
 //
 // That gap is why `repairScan` REPLACES as little as it can. A healthy node
 // inside a broken subtree read fine and its live id is already canonical, so
@@ -41,7 +48,19 @@ export type Candidate = Record<string, unknown>
 export type CandidateHints = {
   characters?: boolean
   variableIds?: boolean
+  /** B56 — carry each INSTANCE's main component id out for resolution. */
+  componentRef?: boolean
 }
+
+/**
+ * The key an export row carries its main component's ID on, before the id is
+ * traded for the NAME and KEY a matcher runs on (B56).
+ *
+ * INTERNAL. `repairScan` deletes it from every row it returns, resolved or not:
+ * the candidate shape the server matches and projects has no such field, and a
+ * raw id leaking into results would be a fifth thing to explain.
+ */
+const MAIN_COMPONENT_ID = 'mainComponentId'
 
 const str = (v: unknown): string | undefined =>
   typeof v === 'string' ? v : undefined
@@ -98,6 +117,20 @@ export const candidateFromExport = (
     const ids = variableIdsInExport(n)
     if (ids.length > 0) {
       candidate.variableIds = ids
+    }
+  }
+  // B56 — the instance's main component, by id. JSON_REST_V1 names it on every
+  // INSTANCE (`componentId`), and a main component is a plain, top-level node
+  // whose handle answers, so the id is enough to recover the NAME and KEY that
+  // `match:{instancesOf}` / `match:{componentKey}` run on. Without this a
+  // slot-nested instance came back in `results` but matched nothing.
+  if (
+    hints.componentRef === true &&
+    str(n.type) === 'INSTANCE'
+  ) {
+    const mainId = str(n.componentId)
+    if (mainId !== undefined && mainId !== '') {
+      candidate[MAIN_COMPONENT_ID] = mainId
     }
   }
   return candidate
@@ -159,7 +192,20 @@ export type RepairInput = {
   failures: ScanFailure[]
   hints?: CandidateHints
   /** The host's exported subtree, or undefined when it cannot describe itself. */
-  exportHost: (index: number) => Promise<RawNode | undefined>
+  exportHost: (
+    index: number,
+  ) => Promise<RawNode | undefined>
+  /**
+   * A main component's NAME and KEY, by its node id (B56).
+   *
+   * The export names an instance's main by id only, and `match:{instancesOf}`
+   * matches on the name. Omitting the resolver leaves an export-served row
+   * unmatched by those keys, exactly as before — and the trade warning then
+   * says so.
+   */
+  componentRefOf?: (
+    componentId: string,
+  ) => Promise<{ key?: string; name?: string } | undefined>
   /** Cap on how many subtrees may be serialized in one scan (T10). */
   maxRepairs?: number
 }
@@ -185,9 +231,26 @@ const LIVE_ONLY_KEYS = [
   'instancesOf',
 ] as const
 
-/** Which of them this row actually carries — i.e. what dropping it costs. */
-const liveOnlyKeysOf = (c: Candidate): string[] =>
-  LIVE_ONLY_KEYS.filter(k => c[k] !== undefined)
+/**
+ * Which of them this row actually carries — i.e. what dropping it costs.
+ *
+ * `componentKey` and `instancesOf` stop counting as lost once a component
+ * resolver is in hand (B56): the export names the main by id and the resolver
+ * turns that into the same name and key the live row held, so calling them lost
+ * would send an operator hunting a filter that works.
+ */
+const liveOnlyKeysOf = (
+  c: Candidate,
+  refsResolvable: boolean,
+): string[] =>
+  LIVE_ONLY_KEYS.filter(
+    k =>
+      c[k] !== undefined &&
+      !(
+        refsResolvable &&
+        (k === 'componentKey' || k === 'instancesOf')
+      ),
+  )
 
 /**
  * Turn a degraded scan into a complete one, by exporting the subtrees the live
@@ -222,8 +285,10 @@ export const repairScan = async ({
   failures,
   hints = {},
   exportHost,
+  componentRefOf,
   maxRepairs = 50,
 }: RepairInput): Promise<RepairOutput> => {
+  const refsResolvable = componentRefOf !== undefined
   const covered = new Set<number>()
   const superseded = new Set<number>()
   const rescanned: Candidate[] = []
@@ -295,7 +360,7 @@ export const repairScan = async ({
         // names the same node properly, a few lines down.
         superseded.add(i)
         liveIds.delete(liveId)
-        const lost = liveOnlyKeysOf(liveRow)
+        const lost = liveOnlyKeysOf(liveRow, refsResolvable)
         if (lost.length > 0) {
           traded.push(
             'search: repaired the subtree at ' +
@@ -321,6 +386,36 @@ export const repairScan = async ({
         rescannedIds.add(id)
       }
       rescanned.push(candidate)
+    }
+  }
+
+  // B56 — trade each export row's main component ID for the NAME and KEY the
+  // matcher runs on. Resolved ONCE per distinct component: a repaired card
+  // holds many instances of few masters. The marker is deleted either way, so
+  // no row ever leaves carrying it.
+  const resolved = new Map<
+    string,
+    { key?: string; name?: string } | undefined
+  >()
+  for (const candidate of rescanned) {
+    const mainId = candidate[MAIN_COMPONENT_ID]
+    if (typeof mainId !== 'string') continue
+    delete candidate[MAIN_COMPONENT_ID]
+    if (componentRefOf === undefined) continue
+    if (!resolved.has(mainId)) {
+      resolved.set(
+        mainId,
+        // A main that refuses to resolve costs this row its two ref keys and
+        // nothing else — the row itself is still returned.
+        await componentRefOf(mainId).catch(() => undefined),
+      )
+    }
+    const ref = resolved.get(mainId)
+    if (ref?.name !== undefined) {
+      candidate.instancesOf = ref.name
+    }
+    if (ref?.key !== undefined) {
+      candidate.componentKey = ref.key
     }
   }
 

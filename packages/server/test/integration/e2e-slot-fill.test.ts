@@ -336,15 +336,14 @@ describe('M2b slot-fill e2e (T7 instance-lock wrap)', () => {
     )
   })
 
-  // --- final-review I-1: a hinted search over a repaired subtree ---
+  // --- B56 (was final-review I-1): a hinted search over a repaired subtree ---
   //
-  // The repair trades the alias row for the one the export names. The export
-  // row is addressable where the alias was not, but it cannot carry
-  // componentKey / instancesOf / styleIds / context, so a hinted match returns
-  // one row fewer than 0.5.0 did. That limit is acceptable; discovering it by
-  // counting is not. This asserts the plugin's warning survives the server's
-  // matcher and projection and lands in front of the agent.
-  it('a hinted match over a repaired subtree returns fewer rows AND says why', async () => {
+  // The repair trades the alias row for the one the export names. That row used
+  // to carry no `instancesOf`, so `search {instancesOf}` answered zero against
+  // instances that provably exist — an acceptance gate counting instances
+  // scored a correct design as missing its master. The export DOES name each
+  // instance's main by id, so the plugin resolves the name and the match lands.
+  it('a hinted match over a repaired subtree FINDS the row', async () => {
     const result = await handleSearch(
       {
         scope: 'page',
@@ -354,13 +353,15 @@ describe('M2b slot-fill e2e (T7 instance-lock wrap)', () => {
       scoped,
     )
     const reply = JSON.parse(result.content[0].text) as {
-      results: unknown[]
+      results: { id: string }[]
       warnings?: string[]
     }
-    // The row really is gone — the export twin has no `instancesOf` to match.
-    expect(reply.results).toHaveLength(0)
-    // Control, so the emptiness is the MATCHER and not a broken fixture: the
-    // same page unfiltered still returns the repaired rows.
+    expect(reply.results).toHaveLength(1)
+    expect(reply.results[0].id).toBe(
+      'I298:7517;298:7516;298:7523',
+    )
+    // Control, so a pass is the MATCHER and not a broken fixture: the same page
+    // unfiltered returns both repaired rows, and the TEXT row does not match.
     const unfiltered = await handleSearch(
       { scope: 'page', pageId: 'repaired:1' },
       scoped,
@@ -372,16 +373,35 @@ describe('M2b slot-fill e2e (T7 instance-lock wrap)', () => {
         }
       ).results,
     ).toHaveLength(2)
-    // …and the reply is NOT clean about it.
-    expect(reply.warnings).toBeDefined()
+  })
+
+  // What the repair still costs is still SAID. `styleIds` and `context` are
+  // live-only reads with no export twin, so a match on those keys really does
+  // stop finding this node — and a reply that reported clean while returning
+  // fewer rows is the failure this whole line of work exists to remove.
+  it('still names the keys the repair genuinely cost', async () => {
+    const result = await handleSearch(
+      {
+        scope: 'page',
+        pageId: 'repaired:1',
+        match: { instancesOf: 'Chip' },
+      },
+      scoped,
+    )
+    const reply = JSON.parse(result.content[0].text) as {
+      warnings?: string[]
+    }
     const traded = (reply.warnings ?? []).filter(w =>
       w.includes('298:7519'),
     )
     expect(traded).toHaveLength(1)
-    expect(traded[0]).toContain('instancesOf')
     expect(traded[0]).toContain(
       'I298:7517;298:7516;298:7523',
     )
+    expect(traded[0]).toContain('context')
+    expect(traded[0]).toContain('styleIds')
+    // …and no longer names the two the repair now recovers.
+    expect(traded[0]).not.toContain('instancesOf')
   })
 
   it('a compound id that names nothing is a clean, repeatable refusal', async () => {
