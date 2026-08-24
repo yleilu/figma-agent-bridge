@@ -719,6 +719,16 @@ release pull request** (§5) — the pipeline reads the label and applies that b
 version-of-record. Where there is no pull request to label, which is the hotfix path (§5), the number
 is supplied to the pipeline at dispatch and stamped the same way (§7).
 
+**Only CI can bump the versions — this is mandatory.** No commit on any branch moves a version
+field. The release commit the pipeline creates (§7) is the only commit that may touch the four
+stamped manifests (`package.json`, `plugin/package.json`, `plugin/.claude-plugin/plugin.json`,
+`.claude-plugin/marketplace.json`). A change's compatibility meaning travels as the release-PR
+**label**, never as a stamp: a breaking change on `dev` obligates `release:minor` on the next
+release PR and edits nothing. A commit whose diff moves a version field is a defect — revert it.
+**Exception, tests only:** an agent may change a version field in the working tree to run a test
+(for example, to force the handshake mismatch banner). The change stays uncommitted, and the agent
+reverts it when the test ends.
+
 | Label on the release PR | Bump      | When it is applied                                                                        |
 | ----------------------- | --------- | ----------------------------------------------------------------------------------------- |
 | `release:patch`         | **patch** | when the release **breaks nothing** — the ordinary case                                    |

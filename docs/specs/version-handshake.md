@@ -43,6 +43,13 @@ diagnostic). A handshake flags both immediately.
 - **App semver, per [[figma-bridge/docs/principles|B2]]** — each side reports its **app version**
   (`APP_VERSION`, the root `package.json` semver, frozen into the build). A breaking change bumps
   the **minor**; a patch is non-breaking. There is **no** separate protocol-version constant.
+- **Who moves the number — only CI.** Every "bumps the minor (B2)" statement in this spec names
+  the release label the change demands: `release:minor` on the release pull request that ships
+  it. It is not an instruction to edit a manifest. Only CI bumps the versions
+  ([[figma-bridge/docs/specs/dev-ops|dev-ops.md]] §6.5): the pipeline computes the number from
+  the label and stamps it at release. No agent commits a version change. Exception for tests: an
+  agent may set a version field in the working tree to run a test (for example, to force a
+  handshake mismatch). The change stays uncommitted. The agent reverts it when the test ends.
   `appVersion` is **connection-level** — reported once in the register handshake and compared
   **major.minor** — **not** a per-request header (contrast the per-request `meta` block owned by
   [[figma-bridge/docs/specs/request-envelope|request-envelope.md]]).
