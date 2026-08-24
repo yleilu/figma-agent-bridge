@@ -67,7 +67,10 @@ Model as a component, before placement:
 was not ignorance of components — it was scope: the one shell the brief happened to name got
 componentized, and the two it didn't name were hand-built seven times each. If a thing repeats
 and the brief is silent about it, it is still a component. Decide from the design, not from the
-list.
+list. This rule has a mechanism that makes it run when attention is spent: **the
+screen-boundary census** (SKILL.md, *Workflow spine*) — before every screen after the first,
+list each construction that now exists twice and name its master; a repeat with no master is
+a stop.
 
 If a `figma-bridge-prefs` skill is installed it may raise this — up to _everything placed on a
 page is an instance_. Defer to it when it does; this file is the floor.

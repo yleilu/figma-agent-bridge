@@ -6,7 +6,7 @@ description: >-
   "Figma". Teaches the design-system-first workflow, the value grammar, and the exact
   tool mechanics (bind_variable, apply_style, instance overrides, sizing) that make
   output correct, not just valid. Invoke before building or editing in Figma.
-version: 0.4.0
+version: 0.5.0
 ---
 
 # figma-design skill
@@ -276,6 +276,31 @@ A default order, not a mandate — adapt to the request:
    `figma-bridge-prefs`.
 5. **Content** — populate text, images, instance overrides.
 6. **Verify** — `export` + read-back; check token bindings and instance types.
+
+### The screen-boundary census
+
+Before assembling every screen after the first, stop and write a census in your
+progress narration — three columns, one row per repeated element:
+
+| Element (by construction, not content) | Seen where | Master |
+
+List every element whose **construction** now exists twice — on the screens built,
+in the brief's descriptions of screens to come, or one of each. Shells and wrappers
+count: a boxed container with a title row over a body IS an element even when every
+occurrence holds different contents. Two things that share their box, their header
+arrangement, and their body arrangement are one element wearing different occupants
+— slots and properties carry the difference (`references/components.md`). For each
+row, name the master that carries it, or create that master before assembling the
+screen. **A repeat with no master is a stop, not a note.**
+
+Why a census and not just the rule: in every observed large build, the elements a
+brief happened to *name* got masters, and the un-named repeating shell was
+hand-built on every screen — the components phase felt finished, attention was
+spent on content, and the abstract rule lost to the concrete examples. The census
+forces the classification to run at the screen boundary, which is exactly where
+reuse is cheapest and rebuilding is about to become the path of least resistance.
+Single-screen tasks never trigger it; a six-screen build runs it five times, and
+it is three lines each time.
 
 For edits to an existing file, start at whichever step is relevant (often Content or
 Verify first to understand the current state).
