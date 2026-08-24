@@ -221,8 +221,170 @@ test('GRID feature-detect degrade pushes a warning when grid fields absent', () 
   // makeFrame() has no gridRowCount → feature-detect fails → warning.
   const frame = makeFrame()
   const warnings: string[] = []
-  applyLayout(frame, { mode: 'GRID', rows: 2, cols: 3 }, warnings)
+  applyLayout(
+    frame,
+    { mode: 'GRID', rows: 2, cols: 3 },
+    warnings,
+  )
   // Should warn that grid fields are unsupported at runtime.
   expect(warnings.length).toBeGreaterThan(0)
   expect(warnings[0]).toMatch(/GRID/i)
+})
+
+// ─── B58: a layout write proves itself, or says it failed ────────────────────
+//
+// Proven live with Lei holding the selection: a REAL UI selection on the target
+// node at write time makes the align write silently drop. ok, warnings [],
+// read-back unchanged, geometry unchanged. Deselect and the IDENTICAL write
+// lands. Seven agent-only variants had all passed, an API set_selection on the
+// target included, so the trigger is the UI selection specifically — Figma's
+// properties panel re-asserting what it is showing, most likely.
+//
+// The mock cannot hold a UI selection, so what is pinned here is the CODE PATH
+// CONTRACT: after applying, read the values back; on a mismatch write once
+// more; if it still did not take, name the field, what was asked, and what is
+// actually there. Never ok with empty warnings on a field that did not hold.
+// Only live verification can prove the retry beats the panel.
+
+/**
+ * A frame whose named property refuses every write — the panel re-asserting
+ * its own value. `acceptFrom` lets it start accepting on the Nth write, which
+ * is how the retry arm is exercised.
+ */
+const stubbornFrame = (
+  field: keyof LayoutTarget,
+  acceptFrom = Infinity,
+): LayoutTarget & { writes: number } => {
+  const frame = makeFrame() as LayoutTarget & {
+    writes: number
+  }
+  let held = frame[field] as unknown
+  let writes = 0
+  Object.defineProperty(frame, field, {
+    get: () => held,
+    set: (v: unknown) => {
+      writes += 1
+      if (writes >= acceptFrom) {
+        held = v
+      }
+    },
+    configurable: true,
+  })
+  Object.defineProperty(frame, 'writes', {
+    get: () => writes,
+    configurable: true,
+  })
+  return frame
+}
+
+test('B58: a dropped align is named, with intended and actual', () => {
+  const frame = stubbornFrame('primaryAxisAlignItems')
+  const warnings: string[] = []
+  applyLayout(
+    frame,
+    { mode: 'H', align: ['SPACE_BETWEEN', 'CENTER'] },
+    warnings,
+  )
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain('primaryAxisAlignItems')
+  expect(warnings[0]).toContain('SPACE_BETWEEN')
+  expect(warnings[0]).toContain('CENTER')
+})
+
+test('B58: the write is retried ONCE before it is called dropped', () => {
+  // Accepts the second write — the shape a transient re-assertion has.
+  const frame = stubbornFrame('primaryAxisAlignItems', 2)
+  const warnings: string[] = []
+  applyLayout(
+    frame,
+    { mode: 'H', align: ['SPACE_BETWEEN', 'CENTER'] },
+    warnings,
+  )
+  expect(frame.primaryAxisAlignItems).toBe('SPACE_BETWEEN')
+  expect(warnings).toEqual([])
+})
+
+test('B58: it retries once, not forever', () => {
+  const frame = stubbornFrame('primaryAxisAlignItems')
+  applyLayout(frame, {
+    mode: 'H',
+    align: ['SPACE_BETWEEN', 'CENTER'],
+  })
+  expect(frame.writes).toBe(2)
+})
+
+test('B58: a dropped padding is named too', () => {
+  const frame = stubbornFrame('paddingLeft')
+  const warnings: string[] = []
+  applyLayout(
+    frame,
+    { mode: 'V', padding: [8, 8, 8, 24] },
+    warnings,
+  )
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain('paddingLeft')
+  expect(warnings[0]).toContain('24')
+})
+
+test('B58: a dropped layoutMode is named', () => {
+  const frame = stubbornFrame('layoutMode')
+  const warnings: string[] = []
+  applyLayout(frame, { mode: 'H' }, warnings)
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain('layoutMode')
+  expect(warnings[0]).toContain('HORIZONTAL')
+})
+
+test('B58: a layout that lands says nothing', () => {
+  const frame = makeFrame()
+  const warnings: string[] = []
+  applyLayout(
+    frame,
+    {
+      mode: 'H',
+      spacing: 12,
+      padding: [4, 4, 4, 4],
+      align: ['SPACE_BETWEEN', 'CENTER'],
+      wrap: true,
+    },
+    warnings,
+  )
+  expect(warnings).toEqual([])
+})
+
+test('B58: only the field that dropped is named, not the whole patch', () => {
+  const frame = stubbornFrame('itemSpacing')
+  const warnings: string[] = []
+  applyLayout(
+    frame,
+    {
+      mode: 'H',
+      spacing: 12,
+      align: ['SPACE_BETWEEN', 'CENTER'],
+    },
+    warnings,
+  )
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain('itemSpacing')
+  // …and the fields that DID land are not slandered.
+  expect(warnings[0]).not.toContain('primaryAxis')
+  expect(frame.primaryAxisAlignItems).toBe('SPACE_BETWEEN')
+})
+
+test('B58: a dropped grid count is named on a runtime that supports GRID', () => {
+  const frame = makeGridFrame() as LayoutTarget & {
+    gridRowCount?: number
+  }
+  let held = 0
+  Object.defineProperty(frame, 'gridRowCount', {
+    get: () => held,
+    set: () => {
+      held = 0
+    },
+    configurable: true,
+  })
+  const warnings: string[] = []
+  applyLayout(frame, { mode: 'GRID', rows: 3 }, warnings)
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain('gridRowCount')
 })

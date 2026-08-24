@@ -874,10 +874,16 @@ const applyCommonProperties = async (
   // Layout (FRAME only). Partial layouts are honored: each field is applied
   // only when present, mirroring the server writer's PURE contract (see
   // apply-layout.ts).
+  //
+  // The sink is NOT optional here (B58). applyLayout reads every field back and
+  // names the ones that did not hold — a UI selection on the target makes an
+  // align write drop silently — and it was called without a sink, so those
+  // notes (and the GRID capability degrade beside them) went nowhere.
   if (spec.layout !== undefined && 'layoutMode' in node) {
     applyLayout(
       node as FrameNode,
       spec.layout as AppliedLayout,
+      warnings,
     )
   }
 

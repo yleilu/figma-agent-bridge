@@ -234,3 +234,18 @@ describe('UPDATE_COMPONENT delete-property wiring', () => {
     expect(continues).toBe(2)
   })
 })
+
+// B58 — applyLayout reads every field back and names the ones that did not
+// hold, but it can only report through the sink its caller passes. It was
+// called with NO sink, so the notes had nowhere to go: the module's own tests
+// stayed green and update_node kept answering ok with empty warnings.
+describe('applyLayout warning-sink wiring', () => {
+  it('code.ts hands applyLayout the warnings sink', () => {
+    const call = callers.slice(
+      callers.indexOf('applyLayout(\n'),
+      callers.indexOf('// Min/max sizing'),
+    )
+    expect(call.length).toBeGreaterThan(20)
+    expect(call).toContain('warnings')
+  })
+})
