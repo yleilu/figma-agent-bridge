@@ -292,6 +292,42 @@ describe('syncPatch — the fields REST cannot carry', () => {
     expect('layoutBoundVariables' in patch).toBe(false)
   })
 
+  // B54 — the four auto-layout size clamps. `update_node` writes them and the
+  // layout honours them, but no read channel carried them, so an agent could
+  // only infer a floor from its geometric effect. They ride the live patch
+  // because the export does not always carry them.
+  it('ships the min/max size clamps a write set', () => {
+    const patch = syncPatch(
+      node({
+        id: 'card',
+        type: 'FRAME',
+        minWidth: 100,
+        maxWidth: 400,
+        minHeight: 240,
+        maxHeight: null,
+      }),
+      MIXED,
+    )
+    expect(patch.minWidth).toBe(100)
+    expect(patch.maxWidth).toBe(400)
+    expect(patch.minHeight).toBe(240)
+    // A cleared clamp reads null. Shipping it would put a null key on every
+    // frame in a read for no information — the absence already says "no
+    // ceiling".
+    expect('maxHeight' in patch).toBe(false)
+  })
+
+  it('omits all four on a node that carries none', () => {
+    const patch = syncPatch(
+      node({ id: 'plain', type: 'RECTANGLE' }),
+      MIXED,
+    )
+    expect('minWidth' in patch).toBe(false)
+    expect('maxWidth' in patch).toBe(false)
+    expect('minHeight' in patch).toBe(false)
+    expect('maxHeight' in patch).toBe(false)
+  })
+
   it('omits an empty explicitVariableModes / componentPropertyReferences', () => {
     const patch = syncPatch(
       node({
@@ -872,7 +908,9 @@ describe('applyPatches / enrichDocument — merge by id', () => {
         },
       }),
     )
-    const card = (doc.children as Record<string, unknown>[])[0]
+    const card = (
+      doc.children as Record<string, unknown>[]
+    )[0]
     const icon = (
       card.children as Record<string, unknown>[]
     )[0]

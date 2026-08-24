@@ -242,6 +242,14 @@ const num = (v: unknown): number | undefined =>
 const str = (v: unknown): string | undefined =>
   typeof v === 'string' ? v : undefined
 
+/** The four auto-layout size clamps, read and written under the same names (B54). */
+const MIN_MAX_FIELDS = [
+  'minWidth',
+  'maxWidth',
+  'minHeight',
+  'maxHeight',
+] as const
+
 // ─── REST→Plugin vocabulary ───────────────────────────────────────────────────
 //
 // Figma spells several enums one way in a JSON_REST_V1 export and another in
@@ -1589,6 +1597,23 @@ const buildNode = (
       restConstraintToPlugin(constraints.horizontal),
       restConstraintToPlugin(constraints.vertical),
     ]
+  }
+
+  // The four auto-layout size clamps (B54). `update_node` writes them and the
+  // layout obeys them, but no read channel carried them: a min could only be
+  // proved by its geometric effect, so an agent auditing a file could not tell
+  // "hugs at 240 because of a floor" from "content happens to be 240". A field
+  // the surface writes is a field the surface reads (T2).
+  //
+  // NULL IS OMITTED, not emitted. Figma reports an absent clamp as `null`, and
+  // `minHeight: null` is also how a write CLEARS one — but four null keys on
+  // every frame of a large read buy nothing (T4), and the absence already says
+  // "no floor". So only a number lands here.
+  for (const field of MIN_MAX_FIELDS) {
+    const v = num(raw[field])
+    if (v !== undefined) {
+      out[field] = v
+    }
   }
 
   const fills = paintArray(
