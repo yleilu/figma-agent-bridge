@@ -28,6 +28,18 @@ floor.
 - Never detach an instance.
 - Name components by role.
 
+## Everything responsive (strict)
+
+- Every component survives any width its parent gives it — no exceptions beyond
+  intrinsic art.
+- Every text-bearing master carries a min/max width contract.
+- Text measure cap: 420 px at 14 px body (scale with the ramp).
+- Breakpoint widths: 390 / 768 / 1200 / 1440 (edit to taste).
+- Collections: wrap when the column count should answer the width; grid when rows and
+  columns must hold alignment.
+- Device layer: variable modes when the plan allows multi-mode collections; otherwise
+  per-screen tokens carrying the mode values.
+
 ## Concrete values
 
 - **Spacing scale:** 4, 8, 12, 16, 24, 32, 48, 64 (px).

@@ -3,9 +3,10 @@ name: figma-design
 description: >-
   Use whenever the user wants to build, create, edit, or restyle anything in Figma —
   a dashboard, UI screen, component, layout, or design system, even if they don't say
-  "Figma". Teaches the design-system-first workflow, the value grammar, and the exact
-  tool mechanics (bind_variable, apply_style, instance overrides, sizing) that make
-  output correct, not just valid. Invoke before building or editing in Figma.
+  "Figma". Teaches the three-pillar practice (design system, component-first,
+  everything responsive), the value grammar, and the exact tool mechanics
+  (bind_variable, apply_style, instance overrides, sizing) that make output correct,
+  not just valid. Invoke before building or editing in Figma.
 version: 0.5.0
 ---
 
@@ -49,36 +50,45 @@ non-empty is the signal, and absence means ask.
 
 ---
 
-## Principles
+## The three pillars
 
-These apply once a design system is in play:
+The practice stands on three pillars of equal weight. Each ships its basic
+level here; `figma-bridge-prefs` may raise any pillar to a strict level and
+supply concrete values.
 
-1. **Single source of truth** — reuse tokens and components; never duplicate.
+1. **Design system** — one source of truth, entered by writing the wrapper.
+   - **Single source of truth** — reuse tokens and components; never duplicate.
+   - **Bind by writing the wrapper** — the default way to use a token _is_ the write:
+     `fills: ["var(surface/2)#141B2E"]`, `text.font: "style(Heading/H2)font(Inter,SemiBold,20)"`.
+     An inline `var()` / `style()` wrapper binds as it lands (grammar:
+     `references/grammar.md`). A `style()` on `fills` / `strokes` / `effects` / `grids`
+     is different in kind: it owns the **whole** field — `effects: "style(AB/Blur)"`, a
+     reference and not an entry, so a style beside literal siblings is rejected rather
+     than written. Never emit a bare value that merely equals a token — the
+     read-back can't tell it from a hardcode that has drifted. `bind_variable` /
+     `apply_style` are the retrofit route: a node you aren't otherwise writing, and
+     `bind_variable`'s collection-mode pin. The three splits the grammar cuts finer than
+     Figma's binding surface (per-corner radius, per-side stroke weight, per-range run
+     color) degrade to literal + warning — bind them uniformly, or take the literal
+     knowingly.
 2. **Component-first** — repeats and stateful things become components **before** they
    are placed, and instances inherit from the master. Never build-place-promote: a node
    inside a SLOT cannot be componentized at all. The modeling doctrine — what must be a
    component, variants vs booleans, slots vs visibility toggles, what to build last —
    is `references/components.md`; load it before creating any component, variant, or slot.
-3. **Bind by writing the wrapper** — the default way to use a token _is_ the write:
-   `fills: ["var(surface/2)#141B2E"]`, `text.font: "style(Heading/H2)font(Inter,SemiBold,20)"`.
-   An inline `var()` / `style()` wrapper binds as it lands (grammar:
-   `references/grammar.md`). A `style()` on `fills` / `strokes` / `effects` / `grids`
-   is different in kind: it owns the **whole** field — `effects: "style(AB/Blur)"`, a
-   reference and not an entry, so a style beside literal siblings is rejected rather
-   than written. Never emit a bare value that merely equals a token — the
-   read-back can't tell it from a hardcode that has drifted. `bind_variable` /
-   `apply_style` are the retrofit route: a node you aren't otherwise writing, and
-   `bind_variable`'s collection-mode pin. The three splits the grammar cuts finer than
-   Figma's binding surface (per-corner radius, per-side stroke weight, per-range run
-   color) degrade to literal + warning — bind them uniformly, or take the literal
-   knowingly.
+3. **Everything responsive** — nothing FIXED without a reason; masters hug while
+   instances fill; text wraps instead of overflowing; floors live on containers as
+   min-sizes; collections flow with wrap or hold with grid; squeeze-check a master
+   before calling it done. The doctrine — the two layers, the sizing roles, wrap vs
+   grid, slot sizing, the device layer — is `references/responsive.md`; load it before
+   sizing any component, slot, or text block.
 
-> **Basic level only.** This skill ships only the **basic (reactive)** level of
-> design-system-first and component-first — adopt a system if one exists, reuse before
-> create, bind an existing token. A user's `figma-bridge-prefs` may raise these to a
-> strict/proactive level and supply concrete values (tokens, spacing scale, type ramp,
-> naming, file organization, data display). See `docs/specs/customization.md` in the repo
-> (not shipped) (P1).
+> **Basic level only.** This skill ships only the **basic (reactive)** level of the
+> three pillars — adopt a system if one exists, reuse before create, bind an existing
+> token, keep components responsive at the floor level. A user's `figma-bridge-prefs`
+> may raise these to a strict/proactive level and supply concrete values (tokens,
+> spacing scale, type ramp, naming, file organization, data display, breakpoint
+> widths). See `docs/specs/customization.md` in the repo (not shipped) (P1).
 
 ---
 
@@ -272,8 +282,9 @@ A default order, not a mandate — adapt to the request:
    frames**). `NONE` is for frames whose children really are placed by coordinate — a
    plot area holding gridlines or scatter points — and for nothing else. Align siblings
    with layout, not coordinates: a shared column is one auto-layout parent with a `gap`,
-   never hand-matched `x` offsets. The concrete spacing scale, if any, comes from
-   `figma-bridge-prefs`.
+   never hand-matched `x` offsets. Sizing doctrine — which axis FILLs, where floors
+   live, wrap vs grid — is `references/responsive.md`. The concrete spacing scale, if
+   any, comes from `figma-bridge-prefs`.
 5. **Content** — populate text, images, instance overrides.
 6. **Verify** — `export` + read-back; check token bindings and instance types.
 
@@ -398,6 +409,10 @@ are in `references/grammar.md`. Load it when writing or reading any atom value.
 The modeling decision that comes _before_ those calls — what becomes a component and
 when, variants vs booleans, slots vs visibility toggles, complex components last — is
 `references/components.md`. Load it before creating any component, variant, or slot.
+
+The sizing decision — FIXED vs HUG vs FILL, min/max floors, wrap vs grid, slot
+sizing, the squeeze check — is `references/responsive.md`. Load it before sizing any
+component, slot, or text block.
 
 ---
 

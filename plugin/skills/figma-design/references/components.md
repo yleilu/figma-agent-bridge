@@ -72,6 +72,12 @@ screen-boundary census** (SKILL.md, *Workflow spine*) — before every screen af
 list each construction that now exists twice and name its master; a repeat with no master is
 a stop.
 
+**Role earns component status too — repetition is only the common case.** Identity assets
+(a brand logo) and standard UI patterns (pagination, breadcrumb, tab bar) are components
+at **one** occurrence: their role in the design system is the reason, not their count. A
+pagination bar whose buttons are all instances while the bar itself stays a loose FRAME
+is the observed failure — the pattern is the component, not just its parts.
+
 If a `figma-bridge-prefs` skill is installed it may raise this — up to _everything placed on a
 page is an instance_. Defer to it when it does; this file is the floor.
 
@@ -112,6 +118,14 @@ Worked example — a top bar with a connected and a not-connected state:
 This split is also what the surface allows: slots are created per **component**, and
 `update_component`'s `slots` is skipped with a warning on a COMPONENT_SET. The shell that
 holds slots is a plain component; the part that varies is the set.
+
+**Page identity is never a variant axis.** A sidebar modeled as
+`Active=Overview/Payments/Accounts` is the smallest-part rule violated at file scale: N
+pages would mean N near-identical shell masters, each duplicating the brand block and
+every nav row, differing only in which row is active. The correct model is this
+section's own pattern — a plain shell (logo + a `Menu` slot) with the active state
+living on the menu ITEM. The axis belongs to the item; the shell never knows which page
+it is on.
 
 ---
 
@@ -191,6 +205,16 @@ When the region already holds an instance and you only need to point it somewher
 }
 ```
 
+- **Size a slot by its tier** (the sizing doctrine is `responsive.md` §6). An
+  **optional** slot — a trailing region a screen may not use — is authored width FILL,
+  height written to plain `0` at rest: an empty instance adds nothing to its bar, and
+  nothing gets hidden per instance. (Figma stores a sub-pixel epsilon for 0; any
+  read-back height under 1px IS the 0 you wrote, never a drift to repair.) A
+  **required-content** slot — one the component is meaningless without — is HUG with no
+  stored height: the children own their heights, and any floor lives on the container
+  as a min-size. **Either kind, once filled: set the instance slot's height sizing to
+  HUG in the same breath** — a FIXED-0 slot clips its content invisible
+  (`clipsContent` is born true).
 - **Check the reply.** `slotsCreated` / `slotsSkipped` are name lists and are always present —
   a slot that didn't land is named there rather than quietly missing.
 - **Fill a slot by placing an INSTANCE into it** — `create_node` with the slot as `parentId`,

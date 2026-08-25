@@ -377,6 +377,12 @@ wrappers it finds, so a bare `gap: 8` in a read-back is a spacing token that was
 bound, not a binding the read could not see. Write the struct back verbatim and the
 binding survives.
 
+One pair is refused everywhere: `align: ["SPACE_BETWEEN", …]` with a **variable-bound**
+gap is self-contradictory (space-between means the gap is automatic), and every write
+door rejects it. A document that already carries the pair refuses align edits until the
+gap is cleared — `bind_variable {nodeId, field: 'itemSpacing', clear: true}`, then
+write.
+
 **Uniform binds, split doesn't.** A wrapper on a per-corner `radius`, a per-side
 `stroke([…])` weight, or a per-range `text.runs[]` atom writes the literal and warns
 (`var(radius/medium) on a per-corner radius: a single binding cannot express per-corner
@@ -418,6 +424,13 @@ After combining, the result is a `COMPONENT_SET` node containing `COMPONENT`
 children with `variantProperties` set, and the reply's `variantAxes` reports the axes
 Figma actually derived — read it back to confirm you got the grouping you meant.
 Instances of the set get a `variantProperties` field that selects which variant is shown.
+
+**Then give the set container room.** A fresh set is a dashed frame hugging its
+variants flush against the border. Patch it with auto-layout **and** HUG sizing in one
+call — `layout: {mode: 'H', pad: […], gap: …}` plus `sizing: ["HUG","HUG"]` — so the
+variants sit clear of the dashed frame; layout alone keeps the old FIXED height and the
+children poke past it. Set geometry is definition chrome — no screen instance moves
+when it changes. The concrete padding and gap are a house value (`figma-bridge-prefs`).
 
 ---
 

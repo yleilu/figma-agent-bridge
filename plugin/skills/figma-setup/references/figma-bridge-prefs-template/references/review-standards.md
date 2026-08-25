@@ -35,6 +35,13 @@ unchecked (the reviewer asserts no threshold of its own).
 - **Touch-target size:** interactive elements ≥ 44 × 44 pt (≥ 24 × 24 pt in a compact /
   dense layout).
 
+## Responsive standards
+
+- Probe each text-bearing master at the breakpoint widths in the house style (390 /
+  768 / 1200 / 1440 by default); any escape is a blocker.
+- Flag a text-bearing master without a min/max contract.
+- Flag body text whose line exceeds the measure cap (420 px at 14 px by default).
+
 ## The reviewer's floor (non-overridable)
 
 The reviewer's floor is fixed and applies regardless of these house checks: destructive-op

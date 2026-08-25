@@ -476,6 +476,49 @@ Always `nit` / advisory — never a hard fail, since either field could be the s
 
 ---
 
+## Dimension 7 — Responsiveness
+
+**Floor dimension** — runs with or without `figma-bridge-prefs`. The probe is
+threshold-free: "nothing escapes" is binary.
+
+### The intent escape (check first)
+
+Never flag geometry the request or brief states. A stated width ("sidebar is 240",
+"canvas is 1440") is a reason; intrinsic art (icons, avatars, dots, plot frames) is a
+reason. The dimension hunts **unforced** FIXED only. When in doubt whether a size was
+specified, report the finding as advisory and say the intent is unresolved.
+
+### Static audit
+
+Read `sizing`, `minWidth`/`maxWidth`, and text width modes on the target:
+
+- **FIXED sizing on a text-bearing node** with no stated reason → `warning`.
+- **HUG-width multi-word text** (content contains whitespace and the node's horizontal
+  sizing is HUG, inside a FILL/FIXED ancestor) → `warning` — this is the overflow
+  mechanism.
+- **Long text without a maxWidth** (single-line length beyond the house measure cap
+  when prefs supply one; advisory without prefs) → `nit`.
+- **A descendant whose bounds already escape its container** at authored size →
+  `blocker` (it is broken before any resize).
+
+### The squeeze probe (the verdict)
+
+For each text-bearing master in the review target:
+
+1. Clone one instance into scratch space (never the reviewed artifact).
+2. Set the probe's width to the master's `minWidth`; with no floor, ~60% of its
+   natural width.
+3. Read all descendant bounds against the probe's container box.
+4. **Any escape → `blocker`** on the master (name the escaping descendant and the
+   overhang in px).
+5. Delete the probe. The reviewed artifact is never mutated.
+
+With `figma-bridge-prefs` installed, probe additionally at each house breakpoint width
+from `review-standards.md`, and flag a text-bearing master that carries no min/max
+contract → `warning` (prefs only — never asserted without them).
+
+---
+
 ## Quick-reference severity table
 
 | Dimension        | Blocker                                                                                                                                    | Warning                                                           | Nit                                                              |
@@ -486,3 +529,4 @@ Always `nit` / advisory — never a hard fail, since either field could be the s
 | Layout hygiene   | —                                                                                                                                          | Pile-up at [0,0]; effect may be clipped (reach > slack on a side) | Redundant nesting; hidden nodes; default constraints             |
 | Fidelity         | Missing named section or feature                                                                                                           | Count mismatch; placeholder content                               | Extra elements not asked for                                     |
 | Naming & context | —                                                                                                                                          | Blank/default-named frames/components; unclosed/over-cap context  | Default-named leaves; missing `purpose`; name↔role contradiction |
+| Responsiveness   | Squeeze-probe escape; bounds already escaping at authored size                                                                             | Unforced FIXED on text-bearing node; HUG-width multi-word text; missing min/max contract (prefs only) | Long text without a maxWidth                                     |

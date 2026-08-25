@@ -4,14 +4,14 @@ description: >-
   Use to review a Figma design — as figma-designer's own self-check before calling a
   build done, or an existing frame/file on request ("review my selection"). Checks
   design-system adherence, consistency, accessibility, layout hygiene, fidelity to
-  intent, and naming & context legibility; emits a standardized report and then offers to
-  fix (never auto-mutates).
+  intent, naming & context legibility, and responsiveness; emits a standardized report
+  and then offers to fix (never auto-mutates).
 version: 0.4.0
 ---
 
 # figma-reviewer skill
 
-Reviews a **design artifact** against six quality dimensions and emits a standardized
+Reviews a **design artifact** against seven quality dimensions and emits a standardized
 report. Distinct from `figma-feedback`, which reviews the **tool** (bugs/proposals).
 
 Consumed by:
@@ -63,7 +63,7 @@ successful review. Fire-and-forget — it's the progress line, not the finding r
 
 ---
 
-## The six dimensions
+## The seven dimensions
 
 ### 1. Design-system adherence _(context-aware)_
 
@@ -191,6 +191,25 @@ blank / default-name floor.)
 **Bounded enumeration.** Don't walk the whole tree by hand — run `search` with
 `match.regex` set to the default-name pattern (a server-side, cursor-paginated, bounded
 filter) to collect offenders, then batch renames via `update_node` / `batch`.
+
+### 7. Responsiveness _(floor)_
+
+A component must survive a container it was not drawn in. Two passes:
+
+- **Static audit** — flag: FIXED sizing on a text-bearing node with no stated reason
+  (intrinsic art is a reason; a size the request or brief states is a reason — never
+  flag specified geometry); HUG-width multi-word text; a descendant whose bounds
+  already escape its container.
+- **The squeeze probe (the verdict)** — for each text-bearing master in the review
+  target: clone one instance to scratch space, set its width to the master's minWidth
+  (no floor: ~60% of natural), read descendant bounds against the container box. Any
+  escape = `blocker`. Delete the probe. Never mutate the reviewed artifact; the probe
+  lives and dies in scratch space.
+
+The probe is threshold-free and runs without `figma-bridge-prefs`. When prefs are
+installed, also probe at the house breakpoint widths and flag a text-bearing master
+missing its min/max contract (`review-standards.md`). Procedure and severities:
+`references/checks.md`, Dimension 7.
 
 ---
 
