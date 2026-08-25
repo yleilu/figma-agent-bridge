@@ -37,10 +37,7 @@ export const applyStrokeGeometry = (
   node: StrokeGeometryTarget,
   spec: StrokeGeometrySpec,
 ): void => {
-  if (
-    spec.strokeCap !== undefined &&
-    'strokeCap' in node
-  ) {
+  if (spec.strokeCap !== undefined && 'strokeCap' in node) {
     node.strokeCap = spec.strokeCap
   }
   if (
@@ -147,7 +144,9 @@ const reviveExportSetting = (setting: unknown): unknown => {
   if (
     setting === null ||
     typeof setting !== 'object' ||
-    !Array.isArray((setting as { constraint?: unknown }).constraint)
+    !Array.isArray(
+      (setting as { constraint?: unknown }).constraint,
+    )
   ) {
     return setting
   }
@@ -307,10 +306,7 @@ type Ancestor = Partial<{
 const enclosingInstance = (
   node: SizeTarget,
 ): Ancestor | undefined => {
-  let current = node.parent as
-    | Ancestor
-    | null
-    | undefined
+  let current = node.parent as Ancestor | null | undefined
   for (let hops = 0; hops < 64; hops += 1) {
     if (current === null || current === undefined) {
       return undefined
@@ -409,6 +405,89 @@ const sizeRefusalReason = (
   return ''
 }
 
+/**
+ * The one line a node says when its stated size is not the size it reads, or
+ * undefined when the size landed (or the node has no width/height to judge).
+ *
+ * ONE author for the sentence, because two write paths emit it. `update_node`
+ * has said this since B46; the create paths said nothing at all, so the SAME
+ * frame given the SAME `size` was silently hugged away on create and pinned on
+ * update, and only one of the two admitted anything (B61). A caller who paid
+ * fifteen repair calls for that found out from a read-back.
+ */
+export const sizeMismatchWarning = (
+  node: SizeTarget,
+  width: number,
+  height: number,
+  statedSizing?: unknown,
+): string | undefined => {
+  const actual = measured(node)
+  // Silence on an unmeasurable node is deliberate: a warning nobody can verify
+  // is noise.
+  if (actual === undefined) return undefined
+  if (near(actual[0], width) && near(actual[1], height)) {
+    return undefined
+  }
+  return (
+    'size not applied — asked [' +
+    width +
+    ', ' +
+    height +
+    '], ' +
+    nodeLabel(node) +
+    ' reads [' +
+    actual[0] +
+    ', ' +
+    actual[1] +
+    '].' +
+    sizeRefusalReason(
+      node,
+      [width, height],
+      actual,
+      statedSizing,
+    )
+  )
+}
+
+/**
+ * Name a stated size the CREATE path could not honour (B61).
+ *
+ * The create path applies the size and does not re-apply it, which is right:
+ * the node is fresh, its type and its sizing came from the same spec, and a
+ * second resize would fight the deferred FILL/HUG collapse B60 exists for. What
+ * it owes the caller is the TRUTH about what happened — a `size` on a
+ * layout-bearing frame is discarded by the sizing that wins, and until now the
+ * reply carried no `warnings` key at all.
+ *
+ * Runs where the node is FINISHED: after its sizing is written and, on the tree
+ * path, after its children are in it. Judging a parent mid-build would report
+ * every hugging frame as a failure between its own append and its subtree.
+ */
+export const verifyCreatedSize = (
+  node: SizeTarget,
+  size: unknown,
+  warnings?: string[],
+  statedSizing?: unknown,
+): void => {
+  if (size === undefined) return
+  const [width, height] = size as [number, number]
+  if (
+    typeof width !== 'number' ||
+    typeof height !== 'number'
+  ) {
+    return
+  }
+  const message = sizeMismatchWarning(
+    node,
+    width,
+    height,
+    statedSizing,
+  )
+  if (message !== undefined) {
+    warnings?.push(message)
+  }
+}
+
 const noResizeWarning = (
   node: SizeTarget,
   warnings?: string[],
@@ -485,17 +564,16 @@ export const applySizeVerified = (
     return
   }
   // undefined = nothing to report, either because the size landed or because
-  // this target does not expose a width/height to judge it by. Silence on an
-  // unmeasurable node is deliberate: a warning nobody can verify is noise.
-  const mismatch = (): [number, number] | undefined => {
-    const actual = measured(node)
-    if (actual === undefined) return undefined
-    return near(actual[0], width) && near(actual[1], height)
-      ? undefined
-      : actual
-  }
-  let actual = mismatch()
-  if (actual === undefined) return
+  // this target does not expose a width/height to judge it by.
+  const mismatch = (): string | undefined =>
+    sizeMismatchWarning(
+      node,
+      width,
+      height,
+      opts?.statedSizing,
+    )
+  let message = mismatch()
+  if (message === undefined) return
   // Second chance. `resize` applies every child constraint on the way down and
   // can be refused where the constraint-free form is not, so the size worth
   // trying twice is tried twice before anything is called a refusal. Reached
@@ -506,28 +584,10 @@ export const applySizeVerified = (
     } catch {
       // The mismatch below is the report — a second throw adds nothing to it.
     }
-    actual = mismatch()
-    if (actual === undefined) return
+    message = mismatch()
+    if (message === undefined) return
   }
-  warnings?.push(
-    'size not applied — asked [' +
-      width +
-      ', ' +
-      height +
-      '], ' +
-      nodeLabel(node) +
-      ' reads [' +
-      actual[0] +
-      ', ' +
-      actual[1] +
-      '].' +
-      sizeRefusalReason(
-        node,
-        [width, height],
-        actual,
-        opts?.statedSizing,
-      ),
-  )
+  warnings?.push(message)
 }
 
 /** Structural subset the placement check reads. */
@@ -570,7 +630,8 @@ const discardedPosition = (
   ) {
     return undefined
   }
-  if (node.layoutPositioning === 'ABSOLUTE') return undefined
+  if (node.layoutPositioning === 'ABSOLUTE')
+    return undefined
   if (
     typeof node.x !== 'number' ||
     typeof node.y !== 'number'

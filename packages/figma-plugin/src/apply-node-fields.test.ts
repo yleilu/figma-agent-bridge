@@ -12,6 +12,7 @@ import {
   capabilityWarnings,
   discardedPositionsWarning,
   statedPositionWarning,
+  verifyCreatedSize,
 } from './apply-node-fields'
 
 // ─── applyStrokeGeometry ───────────────────────────────────────────────────
@@ -57,10 +58,11 @@ test('applyStrokeGeometry: undefined spec values leave existing node values unto
 })
 
 test('applyStrokeGeometry: each field is independent — a target missing only one property still gets the others', () => {
-  const node: { strokeCap: unknown; strokeJoin: unknown } = {
-    strokeCap: 'NONE',
-    strokeJoin: 'MITER',
-  }
+  const node: { strokeCap: unknown; strokeJoin: unknown } =
+    {
+      strokeCap: 'NONE',
+      strokeJoin: 'MITER',
+    }
   applyStrokeGeometry(node, {
     strokeCap: 'ROUND',
     strokeJoin: 'ROUND',
@@ -154,7 +156,11 @@ test('applyExportSettings: assigns when the target carries exportSettings', () =
     exportSettings: [],
   }
   const settings = [
-    { format: 'PNG', suffix: '@2x', constraint: { type: 'SCALE', value: 2 } },
+    {
+      format: 'PNG',
+      suffix: '@2x',
+      constraint: { type: 'SCALE', value: 2 },
+    },
   ]
   applyExportSettings(node, settings)
   expect(node.exportSettings).toEqual(settings)
@@ -177,12 +183,16 @@ test('applyExportSettings: undefined settings leaves an existing node value unto
   expect(node.exportSettings).toBe(existing)
 })
 
-test('applyExportSettings: revives the wire-format constraint tuple to Figma\'s {type,value} object', () => {
+test("applyExportSettings: revives the wire-format constraint tuple to Figma's {type,value} object", () => {
   const node: { exportSettings: unknown } = {
     exportSettings: [],
   }
   applyExportSettings(node, [
-    { format: 'PNG', suffix: '@2x', constraint: ['SCALE', 2] },
+    {
+      format: 'PNG',
+      suffix: '@2x',
+      constraint: ['SCALE', 2],
+    },
   ])
   expect(node.exportSettings).toEqual([
     {
@@ -264,9 +274,12 @@ test('capabilityWarnings: a text struct on a non-TEXT node is named, not silentl
   // applyTextProperties runs only for TEXT, so without this row the whole
   // struct vanishes with no reply to show for it.
   expect(
-    capabilityWarnings({ type: 'RECTANGLE' }, {
-      text: { content: 'hi' },
-    }),
+    capabilityWarnings(
+      { type: 'RECTANGLE' },
+      {
+        text: { content: 'hi' },
+      },
+    ),
   ).toEqual([
     'text ignored — not supported on a RECTANGLE node',
   ])
@@ -282,9 +295,14 @@ test('capabilityWarnings: B45 — path data patched onto a node that carries non
   // update_node's vectorPaths arm applies only where the node HAS the field.
   // Everywhere else the geometry has nowhere to go, and the drop is this row.
   expect(
-    capabilityWarnings({ type: 'RECTANGLE' }, {
-      vectorPaths: [{ windingRule: 'NONZERO', data: 'M0 0' }],
-    }),
+    capabilityWarnings(
+      { type: 'RECTANGLE' },
+      {
+        vectorPaths: [
+          { windingRule: 'NONZERO', data: 'M0 0' },
+        ],
+      },
+    ),
   ).toEqual([
     'vectorPaths ignored — not supported on a RECTANGLE node',
   ])
@@ -388,9 +406,7 @@ test('applySize: B46 — an instance sublayer names the instance it sits in', ()
   expect(warnings[0]).toContain(
     'sublayer of the instance "Card"',
   )
-  expect(warnings[0]).toContain(
-    'Resize the main component',
-  )
+  expect(warnings[0]).toContain('Resize the main component')
 })
 
 test('applySize: B46 — a flexible auto-layout axis is named with the sizing that owns it', () => {
@@ -423,9 +439,7 @@ test('applySize: B46 — a self-sizing text node names its autoResize', () => {
   // The advice names a field the surface HAS. `text.autoResize` is not one —
   // the write face emits no such key, so an agent following it would get an
   // unknown-key warning and no fix.
-  expect(warnings[0]).toContain(
-    'sizing:["FIXED","FIXED"]',
-  )
+  expect(warnings[0]).toContain('sizing:["FIXED","FIXED"]')
 })
 
 test('applySize: a refusal that throws degrades to one warning, keeping the rest of the patch', () => {
@@ -556,6 +570,130 @@ test('applySizeVerified: a pre-existing FILL axis still gets the pin advice', ()
   expect(warnings[0]).not.toContain('This patch set')
 })
 
+// ─── verifyCreatedSize (B61) ────────────────────────────────────────────────
+//
+// The create paths applied `size` and never looked. So one FRAME given
+// `size:[400,60]` and a `layout` came back 136 wide with no `warnings` key at
+// all, while `update_node` handed the SAME size to the SAME node, pinned it
+// FIXED, and had had words for the contradiction since B46. Two write paths
+// disagreeing about one field is bad; only one of them admitting it is worse —
+// the operator paid ~15 repair calls before a read-back caught it.
+//
+// The sentence has one author now, so create cannot say it differently from
+// update, or stop saying it while update still does.
+
+test('verifyCreatedSize: a size the node kept says nothing', () => {
+  const warnings: string[] = []
+  const node = sizeNode({ width: 400, height: 60 })
+  verifyCreatedSize(node, [400, 60], warnings)
+  expect(warnings).toEqual([])
+})
+
+test('verifyCreatedSize: a stated size hugged away by the creation default is named', () => {
+  // The B61 repro: `size` and `layout` on one FRAME, no `sizing` stated. The
+  // creation default (B29) hugs it, the width is discarded, and the advice is
+  // actionable because the caller never refused the pin.
+  const warnings: string[] = []
+  const node = sizeNode({
+    type: 'FRAME',
+    name: 'Row',
+    width: 136,
+    height: 60,
+    layoutSizingHorizontal: 'HUG',
+    layoutSizingVertical: 'FIXED',
+  })
+  verifyCreatedSize(node, [400, 60], warnings)
+  expect(warnings.length).toBe(1)
+  expect(warnings[0]).toContain('size not applied')
+  expect(warnings[0]).toContain('asked [400, 60]')
+  expect(warnings[0]).toContain('"Row" reads [136, 60]')
+  expect(warnings[0]).toContain(
+    'Auto-layout owns the width (layoutSizingHorizontal: HUG)',
+  )
+  expect(warnings[0]).toContain(
+    'Pin it with sizing:["FIXED","FIXED"]',
+  )
+})
+
+test('verifyCreatedSize: a spec that stated the HUG itself is told what it did', () => {
+  const warnings: string[] = []
+  const node = sizeNode({
+    type: 'FRAME',
+    width: 136,
+    height: 60,
+    layoutSizingHorizontal: 'HUG',
+    layoutSizingVertical: 'FIXED',
+  })
+  verifyCreatedSize(node, [400, 60], warnings, [
+    'HUG',
+    'FIXED',
+  ])
+  expect(warnings[0]).toContain(
+    'This patch set the width (layoutSizingHorizontal: HUG) itself',
+  )
+  expect(warnings[0]).toContain('the sizing wins')
+  expect(warnings[0]).not.toContain('Pin it with')
+})
+
+test('verifyCreatedSize: no stated size is not a request', () => {
+  const warnings: string[] = []
+  const node = sizeNode({ width: 136, height: 60 })
+  verifyCreatedSize(node, undefined, warnings)
+  expect(warnings).toEqual([])
+})
+
+test('verifyCreatedSize: a node with no readable width/height is not accused', () => {
+  const warnings: string[] = []
+  verifyCreatedSize({ type: 'SLOT' }, [400, 60], warnings)
+  expect(warnings).toEqual([])
+})
+
+test('verifyCreatedSize: it never resizes — the create path already applied the size', () => {
+  const warnings: string[] = []
+  let resizes = 0
+  const node = sizeNode({
+    width: 136,
+    height: 60,
+    resize() {
+      resizes += 1
+    },
+    resizeWithoutConstraints() {
+      resizes += 1
+    },
+  })
+  verifyCreatedSize(node, [400, 60], warnings)
+  expect(resizes).toBe(0)
+  expect(warnings.length).toBe(1)
+})
+
+test('create and update say the SAME sentence about the same node', () => {
+  // Wording parity, asserted rather than trusted: the two paths run the same
+  // author, so a change to one cannot leave the other behind.
+  const stated = ['FILL', 'FIXED']
+  const shape = {
+    type: 'FRAME',
+    name: 'Row',
+    layoutSizingHorizontal: 'FILL',
+    layoutSizingVertical: 'FIXED',
+  }
+  const fromUpdate: string[] = []
+  applySizeVerified(
+    sizeNode(shape, 'no'),
+    [60, 30],
+    fromUpdate,
+    { statedSizing: stated },
+  )
+  const fromCreate: string[] = []
+  verifyCreatedSize(
+    sizeNode(shape, 'no'),
+    [60, 30],
+    fromCreate,
+    stated,
+  )
+  expect(fromCreate).toEqual(fromUpdate)
+  expect(fromCreate.length).toBe(1)
+})
+
 // ─── statedPositionWarning (B35) ────────────────────────────────────────────
 
 const stacked = { layoutMode: 'VERTICAL' }
@@ -577,8 +715,14 @@ test('discardedPositionsWarning: B35 — the sweep repro is ONE warning naming b
   // child whose flow slot IS where it asked to be has nothing to report and is
   // not counted.
   const warning = discardedPositionsWarning(stacked, [
-    { position: [150, 90], node: { name: 'A', x: 0, y: 0 } },
-    { position: [10, 10], node: { name: 'B', x: 0, y: 20 } },
+    {
+      position: [150, 90],
+      node: { name: 'A', x: 0, y: 0 },
+    },
+    {
+      position: [10, 10],
+      node: { name: 'B', x: 0, y: 20 },
+    },
     { position: [0, 40], node: { name: 'C', x: 0, y: 40 } },
   ])
   expect(warning).toContain('2 stated positions ignored')
@@ -608,7 +752,10 @@ test('discardedPositionsWarning: T4 — fifty children cost one line and a count
 
 test('discardedPositionsWarning: one affected child still reads as the singular sentence', () => {
   const warning = discardedPositionsWarning(stacked, [
-    { position: [150, 90], node: { name: 'A', x: 0, y: 0 } },
+    {
+      position: [150, 90],
+      node: { name: 'A', x: 0, y: 0 },
+    },
     { position: [0, 40], node: { name: 'C', x: 0, y: 40 } },
   ])
   expect(warning).toBe(
@@ -624,7 +771,10 @@ test('discardedPositionsWarning: a level that lost nothing says nothing', () => 
   expect(
     discardedPositionsWarning(stacked, [
       { position: [0, 0], node: { name: 'A', x: 0, y: 0 } },
-      { position: undefined, node: { name: 'B', x: 9, y: 9 } },
+      {
+        position: undefined,
+        node: { name: 'B', x: 9, y: 9 },
+      },
     ]),
   ).toBeUndefined()
   expect(

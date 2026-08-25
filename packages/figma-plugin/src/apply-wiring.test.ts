@@ -251,6 +251,57 @@ describe('create_tree sizing order (B60)', () => {
   })
 })
 
+// B61 — the create paths owe the same answer update has given since B46, and
+// `verifyCreatedSize` is pure: it can be perfect while neither create path ever
+// calls it, and the reply then carries no `warnings` key at all — which is the
+// exact silence B61 is. WHERE it is called decides whether it is even true: a
+// parent judged before its subtree is built, or before its deferred FILL/HUG
+// collapse (B60), would report every hugging frame as a failure.
+describe('created-size verification wiring (B61)', () => {
+  it('judges a LEAF only after its sizing is written', () => {
+    expect(buildSingle).toContain('verifyCreatedSize(')
+    const theSizing = buildSingle.indexOf(
+      'applyPostAppendProperties(',
+    )
+    expect(theSizing).toBeGreaterThan(0)
+    expect(
+      buildSingle.indexOf('verifyCreatedSize('),
+    ).toBeGreaterThan(theSizing)
+  })
+
+  it('leaves a DEFERRED node to its caller', () => {
+    // Judging it here would measure the box between the node's own append and
+    // the children that decide it.
+    expect(buildSingle).toContain(
+      'opts?.deferSizing !== true',
+    )
+  })
+
+  it('judges a parent after the deferred collapse AND after its children', () => {
+    expect(treeBuilder).toContain('verifyCreatedSize(')
+    const theResize = treeBuilder.indexOf('applySizing(')
+    const theLoop = treeBuilder.indexOf(
+      'for (const childSpec of children',
+    )
+    expect(theResize).toBeGreaterThan(theLoop)
+    expect(
+      treeBuilder.indexOf('verifyCreatedSize('),
+    ).toBeGreaterThan(theResize)
+  })
+
+  it('hands it the spec’s own sizing, so a self-contradiction is named as one', () => {
+    // Without `spec.sizing` the message advises a pin the spec already refused.
+    for (const site of [buildSingle, treeBuilder]) {
+      const call = site.slice(
+        site.indexOf('verifyCreatedSize('),
+        site.indexOf('verifyCreatedSize(') + 200,
+      )
+      expect(call).toContain('spec.size')
+      expect(call).toContain('spec.sizing')
+    }
+  })
+})
+
 // B55 — reparent_node's position preservation is pure and unit-tested in
 // reparent-position.test.ts, which is exactly the blind spot above: the math
 // can be perfect while the case never calls it, and only a live reparent

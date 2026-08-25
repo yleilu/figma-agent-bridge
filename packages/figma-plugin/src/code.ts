@@ -37,7 +37,9 @@ import {
   applyGrids,
   capabilityWarnings,
   discardedPositionsWarning,
+  verifyCreatedSize,
   type Placement,
+  type SizeTarget,
 } from './apply-node-fields'
 import {
   applyStyleField,
@@ -1846,6 +1848,21 @@ const buildSingleNode = async (
     warnings ?? [],
   )
 
+  // B61 — did the stated `size` survive? A LEAF is finished here: its sizing is
+  // written and it has no subtree to change the box afterwards, so this is
+  // where the answer is true. A node whose sizing was DEFERRED (create_tree, a
+  // node with children) is judged by its caller, after the deferred collapse —
+  // judging it here would call every hugging frame a failure in the window
+  // between its own append and its children.
+  if (opts?.deferSizing !== true) {
+    verifyCreatedSize(
+      node as unknown as SizeTarget,
+      spec.size,
+      warnings,
+      spec.sizing,
+    )
+  }
+
   // THE load-bearing claim: the node is in its real parent and its
   // auto-layout sizing is set, so `hugs()` can decide and the reflow closure
   // is the true one. The POC measured both — the at-creation closure is
@@ -2102,6 +2119,15 @@ const createTreeNode = async (
     // asked for. Outside the `'appendChild' in node` guard on purpose: a node
     // that could not take the children it stated still has a sizing to honour.
     applySizing(node as FrameNode, spec.sizing, warnings)
+    // B61 — and only NOW is this node's box the one it will keep, so only now
+    // can the stated size be judged. A layout-bearing frame that stated both a
+    // size and a layout is hugged away here, silently, unless this says so.
+    verifyCreatedSize(
+      node as unknown as SizeTarget,
+      spec.size,
+      warnings,
+      spec.sizing,
+    )
   }
 
   if (childPlacements.length > 0) {
