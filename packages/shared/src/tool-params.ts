@@ -186,6 +186,42 @@ const SEARCH_UNKNOWN_KEY =
   'fields, profile, limit, cursor.'
 
 /**
+ * Every name `search`'s `fields` allow-list accepts (I58).
+ *
+ * Read off the NodeSpec schema itself, plus the two projections that exist only
+ * on a search row. Enumerating it by hand is what went wrong with the `full`
+ * profile, which fell eight fields behind NodeSpec while claiming to be all of
+ * it — a list that must name every key is a list that will drift.
+ *
+ * `characters` is a TEXT node's copy, which no NodeSpec field holds.
+ * `childCount` is how many children a result has, and it is the only way to
+ * rebuild a tree from the flat DFS list `search` returns — without it a
+ * document sweep tells you what exists and nothing about what contains what.
+ *
+ * An entry outside this set is REFUSED rather than dropped. A dropped field is
+ * indistinguishable from a field the node does not carry, so `fields:['id',
+ * 'childCount']` came back as bare ids and read exactly like a document where
+ * nothing has children (M22: no silent drops).
+ */
+export const SEARCH_FIELDS: ReadonlySet<string> = new Set([
+  ...Object.keys(partialNodeSpecSchema.shape),
+  'characters',
+  'childCount',
+])
+
+/** What an unrecognised `fields` entry is told, naming the entries. */
+export const searchFieldRejection = (
+  unknown: readonly string[],
+): string =>
+  'search does not project ' +
+  unknown.map(f => '`' + f + '`').join(', ') +
+  '. `fields` is an exact allow-list, so an entry it cannot supply would ' +
+  'come back missing and read as a node that does not carry it. The names ' +
+  'it takes are: ' +
+  [...SEARCH_FIELDS].sort().join(', ') +
+  '.'
+
+/**
  * Params for `search`: flat, paginated node search (Rule A).
  * `scope` selects where the plugin scans; the SERVER applies `match`
  * (the list mixin), `fields` projection, and the opaque cursor + `limit`.
@@ -227,6 +263,13 @@ export const searchParamsSchema = z
         'Scan-scope depth: how deep the plugin traverses each root. -1 (default) = whole subtree; 0 = root(s) only; N = N levels deep. Results stay a flat list.',
       ),
     ...listReadParamsSchema.shape,
+    // Same shape the mixin gives it, described where the vocabulary is known
+    // (I58). The names are checked in the handler rather than here, so a
+    // `batch` entry and a direct call are refused on the same terms as an MCP
+    // call.
+    fields: listReadParamsSchema.shape.fields.describe(
+      'Exact allow-list of fields per result — an entry outside the vocabulary is REFUSED, never dropped. Any NodeSpec field, plus `characters` (a TEXT node’s copy) and `childCount` (how many children the result has — the way to rebuild the tree from this flat list).',
+    ),
     // `profile` rides here rather than on listReadParamsSchema: the presets are
     // NodeSpec field sets, so they mean something for `search`'s node results and
     // nothing for a style or font list. Putting it on the shared list mixin would
