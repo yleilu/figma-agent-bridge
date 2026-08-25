@@ -27,8 +27,10 @@ import { importComponentByKeyWithDeadline } from './import-by-key'
 import { createFontLoader } from './font-cache'
 import { applyPointDetail } from './vector-points'
 import {
+  applyMinMax,
   applySize,
   applySizeVerified,
+  applySizing,
   applyStrokeGeometry,
   applyStrokeWeights,
   applyExportSettings,
@@ -895,23 +897,11 @@ const applyCommonProperties = async (
     )
   }
 
-  // Min/max sizing
-  if (spec.minWidth !== undefined)
-    (node as FrameNode).minWidth = spec.minWidth as
-      | number
-      | null
-  if (spec.maxWidth !== undefined)
-    (node as FrameNode).maxWidth = spec.maxWidth as
-      | number
-      | null
-  if (spec.minHeight !== undefined)
-    (node as FrameNode).minHeight = spec.minHeight as
-      | number
-      | null
-  if (spec.maxHeight !== undefined)
-    (node as FrameNode).maxHeight = spec.maxHeight as
-      | number
-      | null
+  // The four auto-layout size clamps are NOT applied here (B59). Figma judges
+  // them against the node's PARENT — "Can only set maxWidth on auto layout
+  // nodes and their children" — and on the create path a fresh node is still
+  // parented to the current page at this point. They belong to
+  // applyPostAppendProperties, beside the other parent-dependent writes.
 
   // Layout grids. The server writer converts grid atoms → COMPLETE Figma
   // LayoutGrid objects (via atomToGrid) and emits them as spec.grids; Figma's
@@ -983,6 +973,10 @@ const applyPostAppendProperties = (
   node: SceneNode,
   spec: Record<string, unknown>,
   warnings?: string[],
+  // `deferSizing: true` on the create_tree path, where the node's own FILL/HUG
+  // resize has to wait for its children (B60). Every other caller writes the
+  // sizing here, where it always has been.
+  opts?: { deferSizing?: boolean },
 ): void => {
   // These must be set AFTER appendChild to auto-layout parent. On update_node
   // the target is an arbitrary pre-existing node, so an incompatible context
@@ -990,27 +984,31 @@ const applyPostAppendProperties = (
   // T7: degrade with a warning and continue rather than throwing → {error},
   // matching the x/y warn-and-continue path.
 
-  // Sizing
-  if (spec.sizing !== undefined) {
-    const [h, v] = spec.sizing as [string, string]
-    try {
-      ;(node as FrameNode).layoutSizingHorizontal = h as
-        | 'FIXED'
-        | 'HUG'
-        | 'FILL'
-      ;(node as FrameNode).layoutSizingVertical = v as
-        | 'FIXED'
-        | 'HUG'
-        | 'FILL'
-    } catch (e) {
-      warnings?.push(
-        'sizing not applicable on this node (' +
-          node.type +
-          '): ' +
-          String(e),
-      )
-    }
+  // Sizing — see applySizing (apply-node-fields.ts). A FILL or HUG axis makes
+  // Figma RESIZE the node, so on a tree the caller applies it itself, once the
+  // node's children are in it and carry their constraints (B60).
+  if (opts?.deferSizing !== true) {
+    applySizing(node as FrameNode, spec.sizing, warnings)
   }
+
+  // The four auto-layout size clamps (B59). Here rather than on the common
+  // apply path because Figma accepts them only on an auto-layout frame or a
+  // direct child of one, and until the append above the node's parent was
+  // whatever page Figma auto-parented it to — which is how a TEXT node stating
+  // `maxWidth` inside an auto-layout frame failed a create whose END state was
+  // perfectly valid. A refusal here throws (the create rolls the tree back and
+  // answers one error envelope): post-append, the node is where the spec put
+  // it, so Figma is refusing the stated end state, not the timing.
+  applyMinMax(
+    node as FrameNode,
+    spec as {
+      minWidth?: unknown
+      maxWidth?: unknown
+      minHeight?: unknown
+      maxHeight?: unknown
+    },
+    warnings,
+  )
 
   // Layout positioning (ABSOLUTE)
   if (spec.layoutPositioning !== undefined) {
@@ -1552,6 +1550,10 @@ const buildSingleNode = async (
   // reads the position this child ended the level with rather than the one it
   // held before its siblings arrived.
   placed?: Placement[],
+  // B60. Passed through to applyPostAppendProperties: on the tree path the
+  // caller owns the sizing write, because only it knows when this node's
+  // children are in place.
+  opts?: { deferSizing?: boolean },
 ): Promise<SceneNode> => {
   const type = spec.type as string
   let node: SceneNode
@@ -1816,7 +1818,7 @@ const buildSingleNode = async (
   // child of a SLOT, which Figma rejects ("node must be an auto-layout frame
   // or a child of an auto-layout frame"), leaving the node FIXED with no
   // notice. A build then ships a node sized differently than it asked for.
-  applyPostAppendProperties(node, spec, warnings)
+  applyPostAppendProperties(node, spec, warnings, opts)
 
   // warn-on-no-op (T7, B35): the append just handed this node's x/y to the
   // parent's auto-layout, and the creation default (B29) is what put that
@@ -1864,6 +1866,7 @@ const createSingleNode = async (
   writer: string,
   warnings?: string[],
   placed?: Placement[],
+  opts?: { deferSizing?: boolean },
 ): Promise<SceneNode> => {
   let held: SceneNode | undefined
   const track = <T extends SceneNode>(node: T): T => {
@@ -1878,6 +1881,7 @@ const createSingleNode = async (
       track,
       warnings,
       placed,
+      opts,
     )
   } catch (err) {
     // `removed` guard: a node can already be gone (a throw from Figma's own
@@ -2025,32 +2029,54 @@ const createTreeNode = async (
   // above return before this point, so a clone-by-id of an existing
   // BOOLEAN_OPERATION / GROUP still works. Booleans are authored via boolean_op.
 
-  // Regular node: create, apply properties, append
+  // Children first (for FRAME, SECTION, etc.) — the node needs to know whether
+  // it has any BEFORE it is built, because a node that does keeps its stated
+  // size until they are in it (B60 below).
+  const children = spec.children as
+    | Record<string, unknown>[]
+    | undefined
+  const hasChildren =
+    Array.isArray(children) && children.length > 0
+
+  // Regular node: create, apply properties, append — and, when it has children,
+  // NOT its own sizing (B60). A `FILL` or `HUG` axis makes Figma RESIZE the
+  // node, and applied at its own append that resize lands before the node has
+  // any children: the ones that arrive afterwards are authored against a box
+  // that has already moved, and no constraint of theirs ever re-anchors them,
+  // because the resize that would have done it happened before they existed.
+  // Live: a `[296,140]` NONE-layout media frame ended 174 wide, and the
+  // MAX/MAX badge authored at x=238 read back at 183. A faithful re-anchor
+  // across the whole 296→174 collapse puts it at 116; 183 is what is left when
+  // the child moves only with the part of the collapse that happened after it
+  // existed. Its y drifted 106→198 on a frame whose stated and final height
+  // were both 140, which is what a box that was not the authored one looks
+  // like from the inside. So a parent keeps the size the spec stated while its
+  // subtree is built, and its collapse comes after — every change to the box
+  // then re-anchors the child, and MAX deltas telescope to the full 296→174.
+  // A LEAF defers nothing: its sizing is written where it always was, inside
+  // applyPostAppendProperties.
   const node = await createSingleNode(
     spec,
     parent,
     writer,
     warnings,
     placed,
+    { deferSizing: hasChildren },
   )
   // Pushed BEFORE the children recurse, so the order is root-first depth-first.
   created?.push(node.id)
 
-  // Recurse into children (for FRAME, SECTION, etc.)
-  const children = spec.children as
-    | Record<string, unknown>[]
-    | undefined
-  if (
-    children &&
-    children.length > 0 &&
-    'appendChild' in node
-  ) {
-    // B35 + T4: this level's children collect here and are reported ONCE, by
-    // the parent that placed them. Read after the loop, so the x/y each child
-    // is judged on is the one it ended the level with — an auto-layout that
-    // centres or space-betweens moves every earlier child as later ones arrive.
-    const childPlacements: Placement[] = []
-    for (const childSpec of children) {
+  // B35 + T4: this level's children collect here and are reported ONCE, by the
+  // parent that placed them. Read after the loop AND after this node's own
+  // resize, so the x/y each child is judged on is the one it ended the level
+  // with — an auto-layout that centres or space-betweens moves every earlier
+  // child as later ones arrive, and a FILL collapse re-anchors them all.
+  const childPlacements: Placement[] = []
+  if (hasChildren && 'appendChild' in node) {
+    for (const childSpec of children as Record<
+      string,
+      unknown
+    >[]) {
       await createTreeNode(
         childSpec,
         node as ParentNode,
@@ -2062,6 +2088,18 @@ const createTreeNode = async (
         childPlacements,
       )
     }
+  }
+
+  if (hasChildren) {
+    // The deferred FILL/HUG resize. Every child of this node is placed and
+    // carries its constraints now, so Figma re-anchors them as the box changes
+    // — which is exactly what a MAX/MAX child of a shrinking NONE-layout frame
+    // asked for. Outside the `'appendChild' in node` guard on purpose: a node
+    // that could not take the children it stated still has a sizing to honour.
+    applySizing(node as FrameNode, spec.sizing, warnings)
+  }
+
+  if (childPlacements.length > 0) {
     const discarded = discardedPositionsWarning(
       node,
       childPlacements,

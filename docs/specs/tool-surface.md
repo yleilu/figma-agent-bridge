@@ -285,6 +285,8 @@ Family-specific array envelopes (`create_tree`, `get_nodes`, `create_styles`,
 ### Ordering constraints (load-bearing, enforced server-side within one op)
 
 - Set `layoutSizing:FILL` / `layoutPositioning:ABSOLUTE` only **after** `appendChild` to an auto-layout parent → the server orders the property sets within one call.
+- Set `minWidth`/`maxWidth`/`minHeight`/`maxHeight` only **after** `appendChild`. Figma accepts a clamp on an auto-layout frame or on a direct child of one, and judges that against the node's real parent — so a create writes the clamps once the node is where the spec put it. A spec whose END state carries no auto-layout at all is refused, and the refusal names the field, the value and the node.
+- In `create_tree`, a node that states `children` keeps its stated `size` until they are built: its own `sizing` (the `FILL`/`HUG` resize) is applied **after** its subtree. A child is therefore placed at its authored position inside the box its position was authored against, and takes its `constraints` before any resize of that box — so the parent's later collapse re-anchors it instead of leaving it where nothing can.
 - `loadFontAsync` resolves **before** any `text.content`/`font` write → the server loads first.
 - `textAutoResize` set before `resize()`.
 

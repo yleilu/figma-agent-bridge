@@ -129,6 +129,128 @@ describe('UPDATE_COMPONENT slot-spec wiring', () => {
   })
 })
 
+// B59 / B60 — the two writes Figma judges against a node's PARENT. Both are
+// pure and unit-tested in apply-node-fields.test.ts, and both were wrong here:
+// a clamp applied while the fresh node was still parented to the page, and a
+// FILL collapse applied before the node had the children the collapse was
+// supposed to re-anchor. Only the ORDER in this file decides either one, and
+// only a live create would notice — the mock is a SERVER double and never runs
+// this code at all.
+//
+// Comments are stripped first: the prose right above each call site names the
+// very calls being ordered, and a scan that read its own explanation would
+// pass on a file that does nothing.
+const code = codeOf(callers)
+
+const between = (from: string, to: string): string => {
+  const start = code.indexOf(from)
+  const end = code.indexOf(to)
+  return start === -1 || end === -1
+    ? ''
+    : code.slice(start, end)
+}
+
+const commonApply = between(
+  'const applyCommonProperties = async (',
+  'const applyPostAppendProperties = (',
+)
+const postAppendApply = between(
+  'const applyPostAppendProperties = (',
+  'const setRangeProperty = (',
+)
+const buildSingle = between(
+  'const buildSingleNode = async (',
+  'const createSingleNode = async (',
+)
+const treeBuilder = between(
+  'const createTreeNode = async (',
+  'const applyVariableMeta = async (',
+)
+
+describe('min/max clamp wiring (B59)', () => {
+  it('actually found both appliers (liveness)', () => {
+    expect(commonApply.length).toBeGreaterThan(200)
+    expect(commonApply).toContain('applyLayout(')
+    expect(postAppendApply.length).toBeGreaterThan(200)
+    expect(postAppendApply).toContain('constraints')
+  })
+
+  it('never writes a clamp before the node has its real parent', () => {
+    // Figma answers "Can only set maxWidth on auto layout nodes and their
+    // children" — and until appendChild the parent is whatever page Figma
+    // auto-parented the fresh node to. Neither the helper nor a raw assign
+    // belongs on the pre-append path.
+    expect(commonApply).not.toContain('applyMinMax(')
+    for (const field of [
+      'minWidth',
+      'maxWidth',
+      'minHeight',
+      'maxHeight',
+    ]) {
+      expect(commonApply).not.toContain(field)
+    }
+  })
+
+  it('writes the clamps post-append, where the parent is the one the spec named', () => {
+    expect(postAppendApply).toContain('applyMinMax(')
+    // …and that applier only ever runs after the append.
+    expect(buildSingle.length).toBeGreaterThan(200)
+    const theAppend = buildSingle.indexOf(
+      'parent.appendChild(node)',
+    )
+    expect(theAppend).toBeGreaterThan(0)
+    expect(
+      buildSingle.indexOf('applyPostAppendProperties('),
+    ).toBeGreaterThan(theAppend)
+  })
+})
+
+describe('create_tree sizing order (B60)', () => {
+  it('actually found the tree builder (liveness)', () => {
+    expect(treeBuilder.length).toBeGreaterThan(200)
+    expect(treeBuilder).toContain('createSingleNode(')
+    expect(treeBuilder).toContain(
+      'for (const childSpec of children',
+    )
+  })
+
+  it('defers a parent’s own FILL/HUG resize while its subtree is built', () => {
+    // A FILL or HUG axis makes Figma resize the node. Applied at the node's
+    // own append — before its children exist — the collapse happens behind
+    // their back and no constraint of theirs is ever re-anchored by it. A LEAF
+    // defers nothing: it has no children to place, so its sizing stays exactly
+    // where every other caller writes it.
+    expect(postAppendApply).toContain('deferSizing')
+    expect(treeBuilder).toContain(
+      'deferSizing: hasChildren',
+    )
+  })
+
+  it('applies the deferred sizing AFTER the children are placed and constrained', () => {
+    const theLoop = treeBuilder.indexOf(
+      'for (const childSpec of children',
+    )
+    const theResize = treeBuilder.indexOf('applySizing(')
+    expect(theLoop).toBeGreaterThan(0)
+    expect(theResize).toBeGreaterThan(theLoop)
+    // …and the placement report is read after the resize, so the x/y it
+    // judges each child on is the one that child ended the level with.
+    expect(
+      treeBuilder.indexOf('discardedPositionsWarning('),
+    ).toBeGreaterThan(theResize)
+  })
+
+  it('leaves the child’s own constraints where they were: post-append, pre-resize', () => {
+    // The re-anchor Figma performs on the parent's collapse reads constraints
+    // that are already on the child. They are written by
+    // applyPostAppendProperties, which runs inside the child's own build.
+    expect(postAppendApply).toContain('spec.constraints')
+    expect(buildSingle).toContain(
+      'applyPostAppendProperties(',
+    )
+  })
+})
+
 // B55 — reparent_node's position preservation is pure and unit-tested in
 // reparent-position.test.ts, which is exactly the blind spot above: the math
 // can be perfect while the case never calls it, and only a live reparent
@@ -275,11 +397,14 @@ describe('UPDATE_COMPONENT delete-property wiring', () => {
 describe('applyLayout call-site wiring', () => {
   const applyCall = callers.slice(
     callers.indexOf('applyLayout(\n'),
-    callers.indexOf('// Min/max sizing'),
+    // The clamps used to close this block and moved to the post-append
+    // applier (B59); the grids are what follows the layout write now.
+    callers.indexOf('// Layout grids.'),
   )
 
   it('actually found the call (liveness)', () => {
     expect(applyCall.length).toBeGreaterThan(20)
+    expect(applyCall.length).toBeLessThan(1000)
     expect(applyCall).toContain('AppliedLayout')
   })
 

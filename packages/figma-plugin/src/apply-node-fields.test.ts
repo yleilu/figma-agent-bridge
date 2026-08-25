@@ -1,8 +1,10 @@
 import { expect, test } from 'bun:test'
 
 import {
+  applyMinMax,
   applySize,
   applySizeVerified,
+  applySizing,
   applyStrokeGeometry,
   applyStrokeWeights,
   applyExportSettings,
@@ -671,4 +673,301 @@ test('statedPositionWarning: a spec that stated no position is not accused of lo
       stacked,
     ),
   ).toBeUndefined()
+})
+
+// ─── applySizing (B60) ─────────────────────────────────────────────────────
+
+test('applySizing: writes both axes', () => {
+  const node = {
+    type: 'FRAME',
+    layoutSizingHorizontal: 'FIXED',
+    layoutSizingVertical: 'FIXED',
+  }
+  applySizing(node, ['FILL', 'HUG'])
+  expect(node.layoutSizingHorizontal).toBe('FILL')
+  expect(node.layoutSizingVertical).toBe('HUG')
+})
+
+test('applySizing: a spec that stated no sizing writes nothing', () => {
+  const node = {
+    type: 'FRAME',
+    layoutSizingHorizontal: 'FIXED',
+    layoutSizingVertical: 'FIXED',
+  }
+  applySizing(node, undefined)
+  expect(node.layoutSizingHorizontal).toBe('FIXED')
+  expect(node.layoutSizingVertical).toBe('FIXED')
+})
+
+test('applySizing: T7 — a refused FILL degrades to a warning, naming the type', () => {
+  // Figma's own refusal, on a node that is not the child of an auto-layout
+  // frame. The wording is the one the surface has always emitted.
+  const node = {
+    type: 'SLOT',
+    set layoutSizingHorizontal(_value: string) {
+      throw new Error(
+        'FILL can only be set on children of auto-layout frames',
+      )
+    },
+    layoutSizingVertical: 'FIXED',
+  }
+  const warnings: string[] = []
+  expect(() =>
+    applySizing(node, ['FILL', 'FILL'], warnings),
+  ).not.toThrow()
+  expect(warnings).toEqual([
+    'sizing not applicable on this node (SLOT): Error: FILL can only be set on children of auto-layout frames',
+  ])
+})
+
+// ─── B60: the end state a create_tree owes a constrained absolute child ─────
+//
+// The fault is an ORDER, so the contract has to be stated in arithmetic. The
+// fake below models the one slice of Figma's geometry B60 turns on: a
+// NONE-layout frame whose FILL axis makes its auto-layout parent resize it,
+// and a resize that re-anchors every child by its constraint pair (MIN keeps
+// the near edge where it is, MAX carries the far one).
+//
+// code.ts exports nothing and cannot be driven from a test, so what binds it
+// to this order is the source scan in apply-wiring.test.ts. This pair states
+// WHAT that order has to produce.
+
+/** Where a constraint puts a child after its parent's axis changed size. */
+const reanchor = (
+  pos: number,
+  before: number,
+  after: number,
+  rule: string,
+): number => (rule === 'MAX' ? pos + (after - before) : pos)
+
+type FakeChild = {
+  name: string
+  x: number
+  y: number
+  constraints: [string, string]
+}
+
+/**
+ * A NONE-layout frame in an auto-layout parent `innerWidth` wide. Setting its
+ * horizontal axis to FILL is what makes the parent resize it — the collapse
+ * B60 is about.
+ */
+const fillingFrame = (innerWidth: number) => {
+  const box = { width: 0, height: 0 }
+  const children: FakeChild[] = []
+  const resize = (width: number, height: number): void => {
+    for (const child of children) {
+      child.x = reanchor(
+        child.x,
+        box.width,
+        width,
+        child.constraints[0],
+      )
+      child.y = reanchor(
+        child.y,
+        box.height,
+        height,
+        child.constraints[1],
+      )
+    }
+    box.width = width
+    box.height = height
+  }
+  return {
+    type: 'FRAME',
+    name: 'media',
+    layoutMode: 'NONE',
+    children,
+    resize,
+    get width() {
+      return box.width
+    },
+    get height() {
+      return box.height
+    },
+    layoutSizingVertical: 'FIXED',
+    set layoutSizingHorizontal(value: string) {
+      if (value === 'FILL') {
+        resize(innerWidth, box.height)
+      }
+    },
+    get layoutSizingHorizontal() {
+      return box.width === innerWidth ? 'FILL' : 'FIXED'
+    },
+  }
+}
+
+test('B60 contract: the parent holds its AUTHORED box until its children are placed and constrained', () => {
+  const media = fillingFrame(174)
+  // applySize — the box the child's position was authored against.
+  media.resize(296, 140)
+  // appendChild + applyPostAppendProperties: the child lands at its stated
+  // position and takes its constraints, both while the box is still 296×140.
+  media.children.push({
+    name: 'badge',
+    x: 238,
+    y: 106,
+    constraints: ['MAX', 'MAX'],
+  })
+  // …and only now the FILL collapse, which re-anchors it.
+  applySizing(media, ['FILL', 'FIXED'])
+
+  expect(media.width).toBe(174)
+  // Shrunk axis: statedPos − delta (296 − 174 = 122).
+  expect(media.children[0].x).toBe(116)
+  // Unchanged axis: EXACTLY the stated position.
+  expect(media.children[0].y).toBe(106)
+})
+
+test('B60 fault: a collapse that happens before the child exists can never re-anchor it', () => {
+  const media = fillingFrame(174)
+  media.resize(296, 140)
+  // The order the create path used: a node's own sizing was applied at its
+  // append, and its children were built afterwards.
+  applySizing(media, ['FILL', 'FIXED'])
+  media.children.push({
+    name: 'badge',
+    x: 238,
+    y: 106,
+    constraints: ['MAX', 'MAX'],
+  })
+
+  // The stated position survives untouched — and lands outside a 174-wide
+  // clip, which is the displacement B60 reported.
+  expect(media.children[0].x).toBe(238)
+  expect(media.children[0].x).toBeGreaterThan(media.width)
+})
+
+// ─── applyMinMax (B59) ─────────────────────────────────────────────────────
+
+/**
+ * A node that answers the four clamps the way Figma does: the write is legal
+ * only on an auto-layout frame or on a DIRECT CHILD of one, and anywhere else
+ * it throws "Can only set maxWidth on auto layout nodes and their children".
+ */
+const clampNode = (opts: {
+  type: string
+  name?: string
+  layoutMode?: string
+  parentLayoutMode?: string
+}): Record<string, unknown> => {
+  const held: Record<string, unknown> = {}
+  const legal = (): boolean =>
+    (opts.layoutMode !== undefined &&
+      opts.layoutMode !== 'NONE') ||
+    (opts.parentLayoutMode !== undefined &&
+      opts.parentLayoutMode !== 'NONE')
+  const node: Record<string, unknown> = {
+    type: opts.type,
+    name: opts.name ?? '',
+  }
+  if (opts.layoutMode !== undefined) {
+    node.layoutMode = opts.layoutMode
+  }
+  for (const field of [
+    'minWidth',
+    'maxWidth',
+    'minHeight',
+    'maxHeight',
+  ]) {
+    Object.defineProperty(node, field, {
+      enumerable: true,
+      get: () => held[field],
+      set: (value: unknown) => {
+        if (!legal()) {
+          throw new Error(
+            'in set_' +
+              field +
+              ': Can only set ' +
+              field +
+              ' on auto layout nodes and their children',
+          )
+        }
+        held[field] = value
+      },
+    })
+  }
+  return node
+}
+
+test('applyMinMax: an auto-layout frame takes all four clamps', () => {
+  const node = clampNode({
+    type: 'FRAME',
+    name: 'Card',
+    layoutMode: 'VERTICAL',
+  })
+  applyMinMax(node, {
+    minWidth: 200,
+    maxWidth: 400,
+    minHeight: 80,
+    maxHeight: 600,
+  })
+  expect(node.minWidth).toBe(200)
+  expect(node.maxWidth).toBe(400)
+  expect(node.minHeight).toBe(80)
+  expect(node.maxHeight).toBe(600)
+})
+
+test('applyMinMax: a TEXT node inside an auto-layout parent takes maxWidth', () => {
+  // The B59 repro at the write that failed: a TEXT node is never an
+  // auto-layout node itself, so the only thing that can make this write legal
+  // is the auto-layout parent it is appended to.
+  const node = clampNode({
+    type: 'TEXT',
+    name: 'Body copy',
+    parentLayoutMode: 'VERTICAL',
+  })
+  const warnings: string[] = []
+  applyMinMax(node, { maxWidth: 420 }, warnings)
+  expect(node.maxWidth).toBe(420)
+  expect(warnings).toEqual([])
+})
+
+test('applyMinMax: the same TEXT still parented to the page is refused — the pre-append order, in one write', () => {
+  const node = clampNode({
+    type: 'TEXT',
+    name: 'Body copy',
+  })
+  expect(() =>
+    applyMinMax(node, { maxWidth: 420 }),
+  ).toThrow(/maxWidth 420 rejected on "Body copy"/)
+  expect(node.maxWidth).toBeUndefined()
+})
+
+test('applyMinMax: a NONE-layout frame under a NONE-layout parent is refused honestly', () => {
+  // Not a degrade: this spec's END state carries no auto-layout anywhere, so
+  // no order could make Figma accept it.
+  const node = clampNode({
+    type: 'FRAME',
+    name: 'media',
+    layoutMode: 'NONE',
+    parentLayoutMode: 'NONE',
+  })
+  expect(() =>
+    applyMinMax(node, { minWidth: 200 }),
+  ).toThrow(
+    /Figma accepts min\/max sizing only on an auto-layout frame or a direct child of one/,
+  )
+})
+
+test('applyMinMax: T7 — a node type that carries no clamp warns and continues', () => {
+  const node = { type: 'SLICE', name: 'Cut' }
+  const warnings: string[] = []
+  expect(() =>
+    applyMinMax(node, { maxWidth: 400 }, warnings),
+  ).not.toThrow()
+  expect(warnings).toEqual([
+    'maxWidth ignored — not supported on a SLICE node',
+  ])
+})
+
+test('applyMinMax: omission ≠ clear, and null IS a clear', () => {
+  const node = clampNode({
+    type: 'FRAME',
+    layoutMode: 'VERTICAL',
+  })
+  applyMinMax(node, { minWidth: 200, maxWidth: 400 })
+  applyMinMax(node, { maxWidth: null })
+  expect(node.minWidth).toBe(200)
+  expect(node.maxWidth).toBeNull()
 })

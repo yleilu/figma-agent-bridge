@@ -690,3 +690,133 @@ export const discardedPositionsWarning = (
     '.'
   )
 }
+
+// ─── post-append: the two writes that need a PARENT (B59, B60) ───────────────
+//
+// Everything above can be written to a node the instant Figma hands it over.
+// These two cannot: Figma judges both against the node's PARENT, and on the
+// create path a fresh node is parented to the current page until `appendChild`
+// runs. Applying them any earlier asks Figma about a parent the spec never
+// named.
+
+/** Structural subset the sizing applier writes to (the two auto-layout axes). */
+export type SizingTarget = Partial<{
+  type: unknown
+  layoutSizingHorizontal: unknown
+  layoutSizingVertical: unknown
+}>
+
+/**
+ * Apply `sizing: [horizontal, vertical]` — the auto-layout FIXED/HUG/FILL pair.
+ *
+ * Both axes go in ONE try, exactly as this write has always been made: Figma
+ * refuses `FILL` unless the node is a child of an auto-layout frame, and `HUG`
+ * unless the node is an auto-layout frame itself, and a refusal is a degrade
+ * (T7) rather than a lost node — the caller is told and the build continues.
+ *
+ * A FILL or HUG axis makes Figma RESIZE the node, which is why this applier
+ * exists as its own unit (B60). On the `create_tree` path the resize has to
+ * wait until the node's children are in it and their constraints are set,
+ * otherwise the collapse happens behind their back and no constraint ever
+ * re-anchors them. See `createTreeNode` in code.ts.
+ */
+export const applySizing = (
+  node: SizingTarget,
+  sizing: unknown,
+  warnings?: string[],
+): void => {
+  if (sizing === undefined) return
+  const [h, v] = sizing as [string, string]
+  try {
+    node.layoutSizingHorizontal = h
+    node.layoutSizingVertical = v
+  } catch (e) {
+    warnings?.push(
+      'sizing not applicable on this node (' +
+        typeName(node) +
+        '): ' +
+        String(e),
+    )
+  }
+}
+
+/** The four auto-layout size clamps, in the order a spec is scanned. */
+const CLAMP_FIELDS = [
+  'minWidth',
+  'maxWidth',
+  'minHeight',
+  'maxHeight',
+] as const
+
+/** Structural subset the clamp applier writes to. */
+export type MinMaxTarget = Partial<{
+  type: unknown
+  name: unknown
+  minWidth: unknown
+  maxWidth: unknown
+  minHeight: unknown
+  maxHeight: unknown
+}>
+
+/** The four flat clamp keys the writer emits (node-spec-writer.ts). */
+export type MinMaxSpec = {
+  minWidth?: unknown
+  maxWidth?: unknown
+  minHeight?: unknown
+  maxHeight?: unknown
+}
+
+/**
+ * Apply the four auto-layout size clamps (B59).
+ *
+ * Figma accepts a clamp only on an auto-layout frame or on a DIRECT CHILD of
+ * one — "Can only set maxWidth on auto layout nodes and their children" — so
+ * the answer depends on a parent, and until `appendChild` runs the parent is
+ * whatever page Figma auto-parented the fresh node to. Applied there, a
+ * perfectly valid tree threw: a TEXT node carrying `maxWidth` is never an
+ * auto-layout node itself, so the only thing that can make the write legal is
+ * the auto-layout parent it was about to be appended to.
+ *
+ * A refusal THROWS rather than warning, and that is deliberate. Reaching this
+ * applier post-append means the node is already where the spec put it, so a
+ * refusal says the stated END STATE is invalid — a clamp on a frame whose
+ * layout is NONE inside a parent whose layout is NONE is not a degrade, it is a
+ * spec Figma cannot build. The create path turns the throw into a rollback and
+ * one error envelope. The message names the field, the value and the node, so
+ * the caller does not have to guess which of a tree's nodes Figma refused.
+ */
+export const applyMinMax = (
+  node: MinMaxTarget,
+  spec: MinMaxSpec,
+  warnings?: string[],
+): void => {
+  for (const field of CLAMP_FIELDS) {
+    const value = spec[field]
+    if (value === undefined) continue
+    // T7 feature-detect: a node type that carries no clamp at all (a SLICE, a
+    // page-level target under update_node) is a no-op with a note, never a
+    // throw — there is no parent that could make the write legal.
+    if (!(field in node)) {
+      warnings?.push(
+        field +
+          ' ignored — not supported on a ' +
+          typeName(node) +
+          ' node',
+      )
+      continue
+    }
+    try {
+      node[field] = value
+    } catch (e) {
+      throw new Error(
+        field +
+          ' ' +
+          String(value) +
+          ' rejected on ' +
+          nodeLabel(node) +
+          ' — Figma accepts min/max sizing only on an auto-layout frame or a direct child of one: ' +
+          String(e),
+      )
+    }
+  }
+}
