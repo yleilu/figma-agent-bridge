@@ -1160,6 +1160,40 @@ describe('updateComponentParamsSchema (B3 add binding)', () => {
 // B30: a slot entry is `string | {name, …spec}` — the bare string stays valid
 // (back-compat), the object form carries the spec that makes the slot usable.
 // ---------------------------------------------------------------------------
+describe('updateComponentParamsSchema (I60 slot placement)', () => {
+  it('accepts parentId on a slot entry', () => {
+    const parsed = updateComponentParamsSchema.parse({
+      fileKey: 'fk',
+      componentId: 'c:1',
+      slots: [{ name: 'Body', parentId: 'N:7' }],
+    })
+    expect(
+      (parsed.slots![0] as { parentId?: string }).parentId,
+    ).toBe('N:7')
+  })
+
+  it('rejects a non-string parentId at the param boundary', () => {
+    // A known field of the wrong type is INVALID_PARAM before the plugin is
+    // contacted — the same rule every other slot field follows.
+    expect(() =>
+      updateComponentParamsSchema.parse({
+        fileKey: 'fk',
+        componentId: 'c:1',
+        slots: [{ name: 'Body', parentId: 7 }],
+      }),
+    ).toThrow()
+  })
+
+  it('says in the description where a slot can go, and what happens when it cannot', () => {
+    const text =
+      updateComponentParamsSchema.shape.slots.description ??
+      ''
+    expect(text).toContain('parentId')
+    expect(text).toContain('INSIDE this same component')
+    expect(text).toContain('component root')
+  })
+})
+
 describe('updateComponentParamsSchema (B30 slot entries)', () => {
   it('accepts bare-string slot names (back-compat)', () => {
     const parsed = updateComponentParamsSchema.parse({

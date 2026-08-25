@@ -1038,6 +1038,28 @@ describe('slotEntryToFigma — creation layout default', () => {
     expect(slotEntryToFigma('Body').sizing).toBeUndefined()
   })
 
+  // I60 — `parentId` is an INSTRUCTION to the slot loop, not a field of the
+  // slot. Left in the spec it would go through the write face as an unknown
+  // patch key and warn about the very thing the caller asked for.
+  it('carries parentId through to the plugin, without warning about it', () => {
+    const warnings: string[] = []
+    const out = slotEntryToFigma(
+      { name: 'Body', parentId: 'N:7', fills: ['#FFF'] },
+      warnings,
+    )
+    expect(out.parentId).toBe('N:7')
+    expect(warnings).toEqual([])
+  })
+
+  it('omits parentId entirely when the entry states none', () => {
+    expect('parentId' in slotEntryToFigma('Body')).toBe(
+      false,
+    )
+    expect(
+      'parentId' in slotEntryToFigma({ name: 'Body' }),
+    ).toBe(false)
+  })
+
   // B37 (live): `slots:[{name:'Extra', type:'FRAME', layout:{…},
   // children:[…]}]` created the slot WITH its layout and reported
   // `slotsCreated:['Extra']`, `warnings: []`. The type and the children were

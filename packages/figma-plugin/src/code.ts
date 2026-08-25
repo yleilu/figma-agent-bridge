@@ -55,7 +55,9 @@ import {
 } from './bind-wrappers'
 import {
   readSlotEntry,
+  slotParentRefusal,
   type SlotEntry,
+  type SlotParentNode,
 } from './slot-entries'
 import {
   fontsToLoad,
@@ -3991,6 +3993,39 @@ const handleCommand = async (
                   'created, but could not be named: ' +
                     String(e),
                 )
+              }
+              // I60 — where inside the component this slot goes. Done BEFORE
+              // the spec is applied, so the layout the spec asks for is written
+              // to a node that already sits under its real parent — the same
+              // reason B59 moved the clamps past the append.
+              const wantedParent = spec?.parentId
+              if (typeof wantedParent === 'string') {
+                const target =
+                  await resolveNodeId(wantedParent)
+                const refusal = slotParentRefusal(
+                  target as SlotParentNode | null,
+                  comp,
+                  wantedParent,
+                )
+                if (refusal !== undefined) {
+                  slotWarnings.push(refusal)
+                } else {
+                  try {
+                    ;(
+                      target as unknown as ParentNode
+                    ).appendChild(
+                      slot as unknown as SceneNode,
+                    )
+                  } catch (e) {
+                    slotWarnings.push(
+                      'parentId "' +
+                        wantedParent +
+                        '" refused the slot (' +
+                        String(e) +
+                        '); it stays at the component root',
+                    )
+                  }
+                }
               }
               if (spec) {
                 const slotNode =

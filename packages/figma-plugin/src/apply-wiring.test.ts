@@ -114,6 +114,40 @@ describe('UPDATE_COMPONENT slot-spec wiring', () => {
     ).toBeLessThan(slotLoop.indexOf('slot.name = name'))
   })
 
+  // I60 — the placement is pure (slot-entries.ts) and fully tested there, which
+  // is this file's whole subject: the check can be perfect while the loop never
+  // calls it, and a `parentId` would then be accepted, converted, sent, and
+  // dropped in silence. Only a live component would notice the slot at the root.
+  it('places the slot through the shared refusal check', () => {
+    expect(slotLoop).toContain('slotParentRefusal(')
+    expect(slotLoop).toContain('spec?.parentId')
+    expect(slotLoop).toContain('appendChild(')
+  })
+
+  it('moves the slot BEFORE its spec is applied', () => {
+    // A layout written to a node still at the component root is written against
+    // the wrong parent — the same order B59 had to fix for the clamps.
+    const thePlacement = slotLoop.indexOf(
+      'slotParentRefusal(',
+    )
+    const theSpec = slotLoop.indexOf(
+      'applyCommonProperties(',
+    )
+    expect(thePlacement).toBeGreaterThan(0)
+    expect(theSpec).toBeGreaterThan(thePlacement)
+  })
+
+  it('reports a refused placement to the slot’s OWN sink', () => {
+    // Attributed by name like every other slot note: N slots refused the same
+    // way would otherwise emit N identical strings.
+    const placement = slotLoop.slice(
+      slotLoop.indexOf('slotParentRefusal('),
+      slotLoop.indexOf('applyCommonProperties('),
+    )
+    expect(placement).toContain('slotWarnings')
+    expect(placement).not.toContain('ucWarnings')
+  })
+
   it('hands the appliers a LOCAL sink, so each degrade can name its slot', () => {
     // Pushing straight into the reply's `ucWarnings` would emit N identical
     // strings for N slots failing the same way — the spec promises the slot's
