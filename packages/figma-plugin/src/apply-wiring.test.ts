@@ -302,6 +302,38 @@ describe('created-size verification wiring (B61)', () => {
   })
 })
 
+// I59 — a gradient STOP binds through a VariableAlias, and the factory that
+// mints one is a DEP. `bind-wrappers.ts` is fully tested against a fake that
+// supplies it, so every one of those tests stays green on a `paintBindDeps()`
+// that hands over nothing — and live, every stop binding degrades to "the
+// literal colour is applied" with the token silently lost.
+describe('gradient-stop binding wiring (I59)', () => {
+  const paintDeps = between(
+    'const paintBindDeps = (',
+    'const wrapperBindDeps = (',
+  )
+
+  it('actually found the deps (liveness)', () => {
+    expect(paintDeps.length).toBeGreaterThan(100)
+    expect(paintDeps).toContain('setBoundVariableForPaint')
+  })
+
+  it('supplies the alias factory from the real Figma API', () => {
+    expect(paintDeps).toContain('createVariableAlias')
+    expect(paintDeps).toContain('figma.variables')
+  })
+
+  // `bind_variable` and the inline route share one deps builder, so the stop
+  // route cannot be present on one and missing on the other.
+  it('hands the SAME deps to the inline-wrapper binder', () => {
+    const wrapperDeps = between(
+      'const wrapperBindDeps = (',
+      'const readDepth = (',
+    )
+    expect(wrapperDeps).toContain('...paintBindDeps()')
+  })
+})
+
 // B55 — reparent_node's position preservation is pure and unit-tested in
 // reparent-position.test.ts, which is exactly the blind spot above: the math
 // can be perfect while the case never calls it, and only a live reparent

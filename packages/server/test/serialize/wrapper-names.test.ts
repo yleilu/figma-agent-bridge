@@ -151,6 +151,134 @@ describe('toNodeSpec — wrapper names (style/var render by name)', () => {
     expect(spec.fills?.[0]).not.toContain('VariableID')
   })
 
+  // I59 — a gradient's colours are per STOP, and Figma binds them there:
+  // `gradientStops[i].boundVariables.color`, independently of the paint. The
+  // reader dropped that entirely, so a two-token banner read back as two bare
+  // hexes and the next read-modify-write flattened it.
+  it('a bound gradient STOP renders its own var(Name), per stop', () => {
+    const raw: Record<string, unknown> = {
+      id: '1:2g',
+      name: 'Banner',
+      type: 'FRAME',
+      fills: [
+        {
+          type: 'GRADIENT_LINEAR',
+          gradientHandlePositions: [
+            { x: 0, y: 0.5 },
+            { x: 1, y: 0.5 },
+            { x: 0, y: 1 },
+          ],
+          gradientStops: [
+            {
+              position: 0,
+              color: { r: 1, g: 0, b: 170 / 255, a: 1 },
+              boundVariables: {
+                color: {
+                  id: 'VariableID:9:9',
+                  type: 'VARIABLE_ALIAS',
+                },
+              },
+            },
+            {
+              position: 1,
+              color: { r: 1, g: 1, b: 1, a: 1 },
+              boundVariables: {
+                color: {
+                  id: 'VariableID:9:10',
+                  type: 'VARIABLE_ALIAS',
+                },
+              },
+            },
+          ],
+        },
+      ],
+      bindingNames: {
+        variables: {
+          'VariableID:9:9': 'brand/violet',
+          'VariableID:9:10': 'brand/cyan',
+        },
+      },
+    }
+    const atom = toNodeSpec(raw, { depth: -1 })
+      .fills?.[0] as string
+    expect(atom).toContain('var(brand/violet)#FF00AA@0')
+    expect(atom).toContain('var(brand/cyan)#FFFFFF@100')
+    expect(atom).not.toContain('VariableID')
+    // The paint itself is unbound — a stop token is not a paint token, and
+    // wrapping the whole atom would claim one variable owns both ends.
+    expect(atom.startsWith('var(')).toBe(false)
+  })
+
+  it('leaves an unbound stop bare while its neighbour carries a token', () => {
+    const raw: Record<string, unknown> = {
+      id: '1:2h',
+      name: 'Half-bound',
+      type: 'FRAME',
+      fills: [
+        {
+          type: 'GRADIENT_RADIAL',
+          gradientStops: [
+            {
+              position: 0,
+              color: { r: 1, g: 0, b: 170 / 255, a: 1 },
+              boundVariables: {
+                color: {
+                  id: 'VariableID:9:9',
+                  type: 'VARIABLE_ALIAS',
+                },
+              },
+            },
+            {
+              position: 1,
+              color: { r: 0, g: 0, b: 0, a: 0 },
+            },
+          ],
+        },
+      ],
+      bindingNames: {
+        variables: { 'VariableID:9:9': 'brand/violet' },
+      },
+    }
+    const atom = toNodeSpec(raw, { depth: -1 })
+      .fills?.[0] as string
+    expect(atom).toContain('var(brand/violet)#FF00AA@0')
+    expect(atom).toContain('#00000000@100')
+    expect(atom.match(/var\(/g)).toHaveLength(1)
+  })
+
+  it('a stop whose variable name is unknown reads BARE, never by id', () => {
+    // Same rule the paint-level binding follows: an id is not a name a caller
+    // can write back, so an unresolvable binding is not rendered at all.
+    const raw: Record<string, unknown> = {
+      id: '1:2i',
+      name: 'Nameless',
+      type: 'FRAME',
+      fills: [
+        {
+          type: 'GRADIENT_LINEAR',
+          gradientStops: [
+            {
+              position: 0,
+              color: { r: 1, g: 0, b: 170 / 255, a: 1 },
+              boundVariables: {
+                color: {
+                  id: 'VariableID:missing',
+                  type: 'VARIABLE_ALIAS',
+                },
+              },
+            },
+          ],
+        },
+      ],
+      bindingNames: { variables: {} },
+    }
+    const atom = toNodeSpec(raw, { depth: -1 })
+      .fills?.[0] as string
+    expect(atom).not.toContain('var(')
+    expect(atom).not.toContain('VariableID')
+    expect(atom).toContain('#FF00AA@0')
+  })
+
   it('a non-paint field (radius) bound to a variable renders var(Name)<atom>', () => {
     // JSON_REST_V1's OWN vocabulary nests a corner-radius binding under
     // rectangleCornerRadii.RECTANGLE_TOP_LEFT_CORNER_RADIUS — NOT a flat

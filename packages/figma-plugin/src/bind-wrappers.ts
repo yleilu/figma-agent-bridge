@@ -32,6 +32,8 @@ export type WrapperBinding = {
   field: string
   /** Paint slot for an array field; absent means every paint in the array. */
   index?: number
+  /** Gradient STOP of the paint at `index`, for a per-stop token (I59). */
+  stop?: number
 }
 
 /** The apply_style field vocabulary. */
@@ -93,12 +95,120 @@ export type PaintBindDeps = {
     field: 'color',
     variable: unknown,
   ) => unknown
+  /**
+   * figma.variables.createVariableAlias — the only sanctioned way to write a
+   * gradient STOP's binding (I59).
+   *
+   * A stop is not a paint, so `setBoundVariableForPaint` cannot reach one.
+   * Figma carries the binding on the ColorStop itself
+   * (`boundVariables.color`), and the value it takes there is a VariableAlias
+   * this factory mints. Feature-detected like every other gated member: absent,
+   * the literal colour still lands and one warning says the token did not.
+   */
+  createVariableAlias?: (variable: unknown) => unknown
   /** figma.mixed — a paint array can be `mixed` on a multi-style text node. */
   mixed: unknown
 }
 
 const isSolid = (paint: unknown): boolean =>
   (paint as { type?: string } | null)?.type === 'SOLID'
+
+/** One gradient stop, as much of it as a binding touches. */
+type ColorStop = Record<string, unknown>
+
+const stopsOf = (paint: unknown): ColorStop[] | undefined => {
+  const stops = (
+    paint as { gradientStops?: unknown } | null
+  )?.gradientStops
+  return Array.isArray(stops)
+    ? (stops as ColorStop[])
+    : undefined
+}
+
+/**
+ * Bind ONE gradient stop's colour (I59).
+ *
+ * Figma will not tell you whether the runtime honoured this, so the write is
+ * READ BACK: a stop assigned with a `boundVariables.color` that is not there
+ * afterwards is a runtime that does not carry stop bindings, and the caller has
+ * to hear that rather than get a clean reply over a flat gradient. Every other
+ * degrade in this module is a feature-detect; this one can only be a verify.
+ */
+const bindGradientStop = (
+  node: BindTargetNode,
+  field: 'fills' | 'strokes',
+  paints: unknown[],
+  index: number,
+  stop: number,
+  variable: unknown,
+  deps: PaintBindDeps,
+  warnings: string[],
+): void => {
+  const where = field + '[' + index + '] stop ' + stop
+  const makeAlias = deps.createVariableAlias
+  if (typeof makeAlias !== 'function') {
+    warnings.push(
+      'createVariableAlias unavailable in this Figma version; ' +
+        where +
+        ' left unbound',
+    )
+    return
+  }
+  const stops = stopsOf(paints[index])
+  if (stops === undefined || stops[stop] === undefined) {
+    warnings.push(
+      where +
+        ' has no gradient stop to bind on ' +
+        node.type +
+        '; stop binding skipped',
+    )
+    return
+  }
+  const alias = makeAlias(variable)
+  try {
+    node[field] = paints.map((paint, i) => {
+      if (i !== index) return paint
+      return {
+        ...(paint as Record<string, unknown>),
+        gradientStops: stops.map((s, j) =>
+          j === stop
+            ? {
+                ...s,
+                boundVariables: {
+                  ...((s.boundVariables as
+                    | Record<string, unknown>
+                    | undefined) ?? {}),
+                  color: alias,
+                },
+              }
+            : s,
+        ),
+      }
+    })
+  } catch (e) {
+    warnings.push(
+      'binding ' + where + ' failed: ' + String(e),
+    )
+    return
+  }
+  // T7 — the verify. A runtime that drops the field accepts the assignment and
+  // says nothing, so the reply would report a token the file does not hold.
+  const landed = stopsOf(
+    (node[field] as unknown[] | undefined)?.[index],
+  )?.[stop]
+  const bound = (
+    landed?.boundVariables as
+      | { color?: unknown }
+      | undefined
+  )?.color
+  if (bound === undefined || bound === null) {
+    warnings.push(
+      where +
+        ' did not keep its variable binding — this Figma version does not bind ' +
+        'gradient stops; the literal colour is applied',
+    )
+  }
+}
 
 /**
  * Bind a variable to `fills` / `strokes`.
@@ -114,6 +224,8 @@ export const bindPaintField = (
   deps: PaintBindDeps,
   warnings: string[],
   index?: number,
+  /** The gradient stop to bind instead of the paint's own colour (I59). */
+  stop?: number,
 ): void => {
   if (!(field in node)) {
     warnings.push(
@@ -121,13 +233,6 @@ export const bindPaintField = (
         field +
         '" is not bindable on ' +
         node.type,
-    )
-    return
-  }
-  const setForPaint = deps.setBoundVariableForPaint
-  if (typeof setForPaint !== 'function') {
-    warnings.push(
-      'setBoundVariableForPaint unavailable in this Figma version; paint binding skipped',
     )
     return
   }
@@ -142,6 +247,40 @@ export const bindPaintField = (
     return
   }
   const paints = current as unknown[]
+  if (stop !== undefined) {
+    // A stop names one paint by construction — `linear(...)` stop 0 is
+    // meaningless without saying which fill it is a stop of.
+    if (index === undefined) {
+      warnings.push(
+        field +
+          ' stop ' +
+          stop +
+          ' names no paint; stop binding skipped',
+      )
+      return
+    }
+    bindGradientStop(
+      node,
+      field,
+      paints,
+      index,
+      stop,
+      variable,
+      deps,
+      warnings,
+    )
+    return
+  }
+  // Checked HERE rather than at the top: a stop binds through the ColorStop and
+  // never touches this setter, so it must not be refused for the absence of a
+  // member it does not use.
+  const setForPaint = deps.setBoundVariableForPaint
+  if (typeof setForPaint !== 'function') {
+    warnings.push(
+      'setBoundVariableForPaint unavailable in this Figma version; paint binding skipped',
+    )
+    return
+  }
   if (
     index !== undefined &&
     !isSolid(paints[index] ?? null)
@@ -374,6 +513,7 @@ const applyVarBinding = async (
         deps,
         sink,
         binding.index,
+        binding.stop,
       ),
     )
     return

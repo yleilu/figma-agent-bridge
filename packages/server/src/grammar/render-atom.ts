@@ -42,7 +42,8 @@ const renderArg = (arg: AtomArg): string => {
     case 'color':
       return arg.hex
     case 'stop':
-      return `${arg.hex}@${arg.position}`
+      // The stop's OWN wrapper (I59) — one gradient, one token per stop.
+      return `${renderWrapper(arg.wrapper)}${arg.hex}@${arg.position}`
     case 'tuple':
       return `[${arg.items.map(renderScalar).join(',')}]`
     default:

@@ -499,3 +499,133 @@ describe('write-face wrapper bindings — degrades (T7)', () => {
     ).toThrow(/has no value/)
   })
 })
+
+// ---------------------------------------------------------------------------
+// I59 — a gradient binds PER STOP
+// ---------------------------------------------------------------------------
+//
+// A gradient's colours are per stop, and so are its tokens: a two-colour banner
+// is two design-system decisions. The atom-level wrapper cannot express that —
+// one wrapper on `linear(...)` claims a single variable owns both ends — so the
+// stop is the one head argument that carries a wrapper of its own, and each one
+// becomes its own binding on the same paint.
+describe('write-face wrapper bindings — gradient stops (I59)', () => {
+  it('carries one binding per bound stop, naming the paint and the stop', () => {
+    const out = specToFigma({
+      fills: [
+        'linear(135, var(brand/violet)#7C3AED@0, var(brand/cyan)#22D3EE@100)',
+      ],
+    })
+    expect(out.bindings).toEqual([
+      {
+        kind: 'var',
+        name: 'brand/violet',
+        field: 'fills',
+        index: 0,
+        stop: 0,
+      },
+      {
+        kind: 'var',
+        name: 'brand/cyan',
+        field: 'fills',
+        index: 0,
+        stop: 1,
+      },
+    ])
+  })
+
+  it('applies the literal colours unchanged — binding is additive', () => {
+    const out = specToFigma({
+      fills: [
+        'linear(90, var(brand/violet)#7C3AED@0, #FFFFFF@100)',
+      ],
+    })
+    const paint = (
+      out.fills as {
+        gradientStops: { position: number }[]
+      }[]
+    )[0]
+    expect(paint.gradientStops).toHaveLength(2)
+    expect(paint.gradientStops[0].position).toBe(0)
+    expect(paint.gradientStops[1].position).toBe(1)
+    // Only the stop that names a variable binds.
+    expect(out.bindings).toEqual([
+      {
+        kind: 'var',
+        name: 'brand/violet',
+        field: 'fills',
+        index: 0,
+        stop: 0,
+      },
+    ])
+  })
+
+  it('numbers the stops of a linear gradient past its ANGLE argument', () => {
+    // `linear(135, …)` has the angle as arg 0; stop 0 is the first COLOUR.
+    // Numbering from the argument list would bind the wrong end of every
+    // linear gradient in the file.
+    const out = specToFigma({
+      fills: [
+        'linear(135, #FFFFFF@0, var(brand/cyan)#22D3EE@100)',
+      ],
+    })
+    expect(out.bindings).toEqual([
+      {
+        kind: 'var',
+        name: 'brand/cyan',
+        field: 'fills',
+        index: 0,
+        stop: 1,
+      },
+    ])
+  })
+
+  it('binds a stop on a strokes gradient too, by paint index', () => {
+    const out = specToFigma({
+      strokes: [
+        '#111111',
+        'radial(var(surface/glow)#FFFFFF@0, #00000000@100)',
+      ],
+    })
+    expect(out.bindings).toEqual([
+      {
+        kind: 'var',
+        name: 'surface/glow',
+        field: 'strokes',
+        index: 1,
+        stop: 0,
+      },
+    ])
+  })
+
+  it('a paint-level wrapper and a stop wrapper are different bindings', () => {
+    const out = specToFigma({
+      fills: [
+        'var(brand/base)#7C3AED',
+        'linear(0, var(brand/violet)#7C3AED@0, #FFFFFF@100)',
+      ],
+    })
+    expect(out.bindings).toEqual([
+      {
+        kind: 'var',
+        name: 'brand/base',
+        field: 'fills',
+        index: 0,
+      },
+      {
+        kind: 'var',
+        name: 'brand/violet',
+        field: 'fills',
+        index: 1,
+        stop: 0,
+      },
+    ])
+  })
+
+  it('an unbound gradient carries no bindings at all', () => {
+    const out = specToFigma({
+      fills: ['linear(135, #FF0000@0, #0000FF@100)'],
+    })
+    expect('bindings' in out).toBe(false)
+  })
+})

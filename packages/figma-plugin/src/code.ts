@@ -465,6 +465,18 @@ const paintBindDeps = () => ({
         }
       | undefined
   )?.setBoundVariableForPaint,
+  // I59 — a gradient STOP binds on the ColorStop, not through the paint
+  // setter, and the value it takes there is a VariableAlias this factory
+  // mints. Feature-detected like every other gated member (T7).
+  createVariableAlias: (
+    figma.variables as
+      | {
+          createVariableAlias?: (v: unknown) => unknown
+        }
+      | undefined
+  )?.createVariableAlias?.bind(figma.variables) as
+    | ((v: unknown) => unknown)
+    | undefined,
 })
 
 /** Everything the inline-wrapper binder needs: the two lookups + the paint deps. */

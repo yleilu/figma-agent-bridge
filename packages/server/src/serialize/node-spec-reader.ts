@@ -194,7 +194,12 @@ type RawPaint = {
   opacity?: number
   blendMode?: string
   color?: RawColor
-  gradientStops?: { position: number; color: RGBA }[]
+  gradientStops?: {
+    position: number
+    color: RGBA
+    /** I59 — a stop binds its OWN colour variable, independently of the paint. */
+    boundVariables?: { color?: RawBoundVariable }
+  }[]
   gradientTransform?: number[][]
   /** JSON_REST_V1 emits handles instead of gradientTransform. */
   gradientHandlePositions?: { x: number; y: number }[]
@@ -636,6 +641,23 @@ const paintLeaf = (
   const figma = rawToFigmaPaint(p)
   if (figma === null) {
     return null
+  }
+  // I59 — a gradient's colours are per STOP, and so are its tokens. The stop
+  // carries `boundVariables.color` (an id); the atom has to carry the NAME,
+  // because an id is not something a caller can write back. Resolved here,
+  // where the lookup lives, and handed to the renderer as a name.
+  if ('gradientStops' in figma) {
+    figma.gradientStops = figma.gradientStops.map(
+      (s, i) => {
+        const stopVar = variableNameFor(
+          p.gradientStops?.[i]?.boundVariables?.color?.id,
+          bindingNames,
+        )
+        return stopVar === undefined
+          ? s
+          : { ...s, varName: stopVar }
+      },
+    )
   }
   const atom = paintToAtom(figma)
   const varName = variableNameFor(
