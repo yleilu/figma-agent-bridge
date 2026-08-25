@@ -1067,6 +1067,20 @@ const layoutNumberLeaf = (
     ? value
     : wrapperFor(undefined, varName) + String(value)
 
+/**
+ * The layout struct for an auto-layout node, or undefined when it has none.
+ *
+ * A LAYOUTED node always states its gap, zero included (B63). JSON_REST_V1
+ * omits `itemSpacing` at 0, so the read used to drop the key entirely — and a
+ * gap that had been zeroed looked exactly like a gap nobody had ever set. Two
+ * probe rounds went that way: the geometry said 0, the read said nothing, and
+ * the destruction was invisible to everything except a width measurement. The
+ * same omission covers the two GRID gaps, so they state themselves too.
+ *
+ * `pad` keeps its own rule — an all-zero, unbound pad is still omitted — since
+ * four zeroes on every layouted node is noise, and a bound zero already
+ * survives.
+ */
 const layoutSpec = (
   raw: RawNode,
   bindingNames: BindingNames | undefined,
@@ -1113,20 +1127,14 @@ const layoutSpec = (
     if (cols !== undefined) {
       out.cols = cols
     }
-    const rowGap = num(raw.gridRowGap)
-    if (rowGap !== undefined) {
-      out.rowGap = layoutNumberLeaf(
-        rowGap,
-        layoutVarName(raw, bindingNames, 'gridRowGap'),
-      )
-    }
-    const colGap = num(raw.gridColumnGap)
-    if (colGap !== undefined) {
-      out.colGap = layoutNumberLeaf(
-        colGap,
-        layoutVarName(raw, bindingNames, 'gridColumnGap'),
-      )
-    }
+    out.rowGap = layoutNumberLeaf(
+      num(raw.gridRowGap) ?? 0,
+      layoutVarName(raw, bindingNames, 'gridRowGap'),
+    )
+    out.colGap = layoutNumberLeaf(
+      num(raw.gridColumnGap) ?? 0,
+      layoutVarName(raw, bindingNames, 'gridColumnGap'),
+    )
     if (pad !== undefined) {
       out.pad = pad
     }
@@ -1136,13 +1144,10 @@ const layoutSpec = (
   const out: LayoutSpec = {
     mode: mode === 'HORIZONTAL' ? 'H' : 'V',
   }
-  const gap = num(raw.itemSpacing)
-  if (gap !== undefined) {
-    out.gap = layoutNumberLeaf(
-      gap,
-      layoutVarName(raw, bindingNames, 'itemSpacing'),
-    )
-  }
+  out.gap = layoutNumberLeaf(
+    num(raw.itemSpacing) ?? 0,
+    layoutVarName(raw, bindingNames, 'itemSpacing'),
+  )
   if (pad !== undefined) {
     out.pad = pad
   }

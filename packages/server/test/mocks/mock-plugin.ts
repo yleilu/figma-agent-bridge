@@ -119,6 +119,44 @@ const mockVariableNameById = (
     : undefined)
 
 /**
+ * What a bound NUMBER variable resolves to on a node, by variable name.
+ *
+ * Binding does not decorate a field — it takes the field over. Figma re-reads
+ * the field through the variable, so whatever literal was there is replaced by
+ * the variable's value in the node's resolved mode: a live gap of 4 bound to
+ * `space/8` reads 8 afterwards (B44's own live note).
+ *
+ * `space/unset` models the variable this mock exists to make visible (B63): one
+ * whose collection has no value for the mode the node resolves in — because
+ * `create_variables` was given `valuesByMode` keyed to a mode the collection
+ * never had, and said so in a warning. Figma resolves it to the type's zero, so
+ * binding it ZEROES the gap. Nothing is broken and nothing warns; the geometry
+ * simply moves, which is why the read has to state a zero gap out loud.
+ */
+const MOCK_VARIABLE_VALUE: Record<string, number> = {
+  'space/8': 8,
+  'space/16': 16,
+  'space/24': 24,
+  'space/unset': 0,
+}
+
+const mockResolvedNumber = (name: string): number =>
+  MOCK_VARIABLE_VALUE[name] ?? 0
+
+/**
+ * A gap as JSON_REST_V1 carries it: absent when it is zero.
+ *
+ * REST spells a default by omission, and zero is the default for every gap. A
+ * mock that shipped a literal `itemSpacing: 0` would hand the reader something
+ * the real export never sends, and the read's own zero-handling would go
+ * untested — which is exactly the gap (B63) that let a zeroed gap look like a
+ * gap nobody ever set. `undefined` is dropped by the JSON that crosses the
+ * relay, so the key really does disappear.
+ */
+const restGap = (value: number): number | undefined =>
+  value === 0 ? undefined : value
+
+/**
  * The mock document's LOCAL STYLES — one fixture, read by `get_styles`, by the
  * binding resolver above, and by the styled-slot state below, so the mock
  * cannot disagree with itself about what a style holds.
@@ -500,6 +538,13 @@ export const createMockPlugin = (
     'gridColumnGap',
   ])
 
+  /** The three of them REST omits at zero (see `restGap`). */
+  const MOCK_GAP_FIELDS = new Set([
+    'itemSpacing',
+    'gridRowGap',
+    'gridColumnGap',
+  ])
+
   /** The export vocabulary for a layout mode the write face states. */
   const MOCK_LAYOUT_MODE: Record<string, string> = {
     H: 'HORIZONTAL',
@@ -531,7 +576,7 @@ export const createMockPlugin = (
         MOCK_LAYOUT_MODE[layout.mode] ?? 'NONE'
     }
     if (typeof layout.spacing === 'number') {
-      state.itemSpacing = layout.spacing
+      state.itemSpacing = restGap(layout.spacing)
     }
     if (Array.isArray(layout.padding)) {
       const [pt, pr, pb, pl] = layout.padding as number[]
@@ -541,10 +586,10 @@ export const createMockPlugin = (
       state.paddingLeft = pl
     }
     if (typeof layout.rowGap === 'number') {
-      state.gridRowGap = layout.rowGap
+      state.gridRowGap = restGap(layout.rowGap)
     }
     if (typeof layout.colGap === 'number') {
-      state.gridColumnGap = layout.colGap
+      state.gridColumnGap = restGap(layout.colGap)
     }
     appliedState.set(id, state)
   }
@@ -584,6 +629,14 @@ export const createMockPlugin = (
       const varId = `var:mock:${entry.name}`
       layoutBound[entry.field] = varId
       variables[varId] = entry.name
+      // The field now reads THROUGH the variable, so the literal that was
+      // there is gone (B63). Modelling only the binding would leave the mock
+      // saying a bind is free, which is the one thing the live artifact proved
+      // it is not.
+      const resolved = mockResolvedNumber(entry.name)
+      state[entry.field] = MOCK_GAP_FIELDS.has(entry.field)
+        ? restGap(resolved)
+        : resolved
     }
     state.layoutBoundVariables = layoutBound
     state.bindingNames = { ...names, variables }

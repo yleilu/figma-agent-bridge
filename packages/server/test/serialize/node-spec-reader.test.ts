@@ -334,7 +334,7 @@ describe('toNodeSpec — GRID layout read-back', () => {
     expect(spec.layout?.pad).toEqual([10, 20, 30, 40])
   })
 
-  it('GRID frame missing grid count/gap fields produces GRID mode with no counts/gaps', () => {
+  it('GRID frame missing grid count fields produces GRID mode with no counts — but states both gaps (B63)', () => {
     const gridRaw: Record<string, unknown> = {
       id: '10:3',
       name: 'Bare Grid',
@@ -345,8 +345,11 @@ describe('toNodeSpec — GRID layout read-back', () => {
     expect(spec.layout?.mode).toBe('GRID')
     expect(spec.layout?.rows).toBeUndefined()
     expect(spec.layout?.cols).toBeUndefined()
-    expect(spec.layout?.rowGap).toBeUndefined()
-    expect(spec.layout?.colGap).toBeUndefined()
+    // A count nobody set is genuinely absent. A GAP nobody set is ZERO, and
+    // JSON_REST_V1 spells zero by omission — so an omitted gap and a gap
+    // someone destroyed used to read identically.
+    expect(spec.layout?.rowGap).toBe(0)
+    expect(spec.layout?.colGap).toBe(0)
   })
 
   it('non-GRID layout (HORIZONTAL) is unaffected — no rows/cols emitted', () => {
@@ -361,6 +364,54 @@ describe('toNodeSpec — GRID layout read-back', () => {
     expect(spec.layout?.mode).toBe('H')
     expect(spec.layout).not.toHaveProperty('rows')
     expect(spec.layout).not.toHaveProperty('cols')
+  })
+
+  // B63 — a gap that was destroyed must not read like a gap nobody ever set.
+  // JSON_REST_V1 spells zero by omission, so the two arrived at the reader as
+  // the same thing: no `itemSpacing` key. The read dropped `gap` with it, and a
+  // frame whose spacing had just been zeroed came back looking untouched — the
+  // destruction was measurable only in the frame's width.
+  describe('a layouted node always states its gap', () => {
+    it('emits gap: 0 when the export omits itemSpacing', () => {
+      const spec = toNodeSpec(
+        {
+          id: '10:6',
+          name: 'Zeroed',
+          type: 'FRAME',
+          layoutMode: 'HORIZONTAL',
+        },
+        { depth: -1 },
+      )
+      expect(spec.layout?.gap).toBe(0)
+    })
+
+    it('keeps the var() wrapper on a bound zero', () => {
+      const spec = toNodeSpec(
+        {
+          id: '10:7',
+          name: 'Bound zero',
+          type: 'FRAME',
+          layoutMode: 'VERTICAL',
+          layoutBoundVariables: { itemSpacing: 'v:1' },
+          bindingNames: { variables: { 'v:1': 'space/0' } },
+        },
+        { depth: -1 },
+      )
+      expect(spec.layout?.gap).toBe('var(space/0)0')
+    })
+
+    it('says nothing about a node with no layout at all', () => {
+      const spec = toNodeSpec(
+        {
+          id: '10:8',
+          name: 'Plain',
+          type: 'FRAME',
+          layoutMode: 'NONE',
+        },
+        { depth: -1 },
+      )
+      expect(spec.layout).toBeUndefined()
+    })
   })
 
   it('round-trip: GRID spec → specToFigma writer → layout object contains grid keys', () => {
