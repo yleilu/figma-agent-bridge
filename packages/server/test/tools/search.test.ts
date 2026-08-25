@@ -669,3 +669,142 @@ describe('handleSearch — instancesOf reaches a variant family (B56)', () => {
     expect(await found('State blocks')).toEqual([])
   })
 })
+
+// ---------------------------------------------------------------------------
+// I58 — the `fields` vocabulary is honest about what it takes
+// ---------------------------------------------------------------------------
+//
+// `fields` is an EXACT allow-list, and an entry outside it was dropped without
+// a word. A dropped field looks exactly like a field the node does not carry,
+// so `fields:['id','childCount']` came back as bare ids and read as a document
+// where nothing has children — the caller draws the opposite conclusion from
+// the one the data supports. `childCount` was not in the vocabulary at all,
+// which is the same silence one step earlier: search returns a FLAT DFS list,
+// and that count is the only thing in it that says what contains what.
+describe('handleSearch — the fields vocabulary (I58)', () => {
+  const exportsById: Record<
+    string,
+    Record<string, unknown>
+  > = {
+    '1:1': {
+      id: '1:1',
+      name: 'Card',
+      type: 'FRAME',
+      children: [
+        { id: '1:2', name: 'Title', type: 'TEXT' },
+        { id: '1:3', name: 'Body', type: 'TEXT' },
+      ],
+    },
+    '1:2': { id: '1:2', name: 'Title', type: 'TEXT' },
+  }
+
+  const client = (sent?: Sent[]): ScopedFigmaClient => ({
+    fileKey: 'fk-test',
+    sendCommand: async (
+      command: string,
+      params?: Record<string, unknown>,
+    ) => {
+      sent?.push({ command, params })
+      if (command === COMMANDS.GET_NODES) {
+        return ((params?.nodeIds as string[]) ?? []).map(
+          id => exportsById[id],
+        )
+      }
+      return {
+        results: [
+          { id: '1:1', name: 'Card', type: 'FRAME' },
+          { id: '1:2', name: 'Title', type: 'TEXT' },
+        ],
+      }
+    },
+  })
+
+  it('refuses an entry it cannot supply, and names it', async () => {
+    const sent: Sent[] = []
+    const result = await handleSearch(
+      { fields: ['id', 'fillz'] },
+      client(sent),
+    )
+    const { text } = result.content[0]
+    expect(text).toContain('INVALID_PARAM')
+    expect(text).toContain('`fillz`')
+    // Refused BEFORE the scan: a rejected call must not cost a document walk.
+    expect(sent).toEqual([])
+  })
+
+  it('names every bad entry, not just the first', async () => {
+    const { text } = (
+      await handleSearch(
+        { fields: ['id', 'fillz', 'nmae'] },
+        client(),
+      )
+    ).content[0]
+    expect(text).toContain('`fillz`')
+    expect(text).toContain('`nmae`')
+  })
+
+  it('says what it does take', async () => {
+    const { text } = (
+      await handleSearch({ fields: ['fillz'] }, client())
+    ).content[0]
+    for (const known of [
+      'fills',
+      'characters',
+      'childCount',
+      'layout',
+    ]) {
+      expect(text).toContain(known)
+    }
+  })
+
+  it('lets every real NodeSpec field through', async () => {
+    // Derived from the schema, so a field added to NodeSpec is accepted here
+    // the day it exists — the `full` profile fell eight fields behind by being
+    // a hand-written list, and this vocabulary must not repeat that.
+    const result = await handleSearch(
+      {
+        fields: [
+          'id',
+          'name',
+          'type',
+          'layout',
+          'sizing',
+          'overrides',
+          'componentProperties',
+        ],
+      },
+      client(),
+    )
+    expect(result.content[0].text).not.toContain(
+      'INVALID_PARAM',
+    )
+  })
+
+  it('projects childCount so a flat list can be re-parented', async () => {
+    const out = YAML.parse(
+      (
+        await handleSearch(
+          { fields: ['id', 'childCount'] },
+          client(),
+        )
+      ).content[0].text,
+    ) as {
+      results: { id: string; childCount?: number }[]
+    }
+    expect(out.results).toEqual([
+      { id: '1:1', childCount: 2 },
+      { id: '1:2', childCount: 0 },
+    ])
+  })
+
+  it('leaves childCount off a result nobody asked it for', async () => {
+    const out = YAML.parse(
+      (await handleSearch({ profile: 'full' }, client()))
+        .content[0].text,
+    ) as { results: Record<string, unknown>[] }
+    // `full` is identity over the NodeSpec, and childCount is not one of its
+    // fields — putting it there would make search's full row disagree with
+    // get_node's for the same node.
+    expect('childCount' in out.results[0]).toBe(false)
+  })
+})

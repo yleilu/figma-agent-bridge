@@ -114,6 +114,40 @@ describe('UPDATE_COMPONENT slot-spec wiring', () => {
     ).toBeLessThan(slotLoop.indexOf('slot.name = name'))
   })
 
+  // I60 — the placement is pure (slot-entries.ts) and fully tested there, which
+  // is this file's whole subject: the check can be perfect while the loop never
+  // calls it, and a `parentId` would then be accepted, converted, sent, and
+  // dropped in silence. Only a live component would notice the slot at the root.
+  it('places the slot through the shared refusal check', () => {
+    expect(slotLoop).toContain('slotParentRefusal(')
+    expect(slotLoop).toContain('spec?.parentId')
+    expect(slotLoop).toContain('appendChild(')
+  })
+
+  it('moves the slot BEFORE its spec is applied', () => {
+    // A layout written to a node still at the component root is written against
+    // the wrong parent — the same order B59 had to fix for the clamps.
+    const thePlacement = slotLoop.indexOf(
+      'slotParentRefusal(',
+    )
+    const theSpec = slotLoop.indexOf(
+      'applyCommonProperties(',
+    )
+    expect(thePlacement).toBeGreaterThan(0)
+    expect(theSpec).toBeGreaterThan(thePlacement)
+  })
+
+  it('reports a refused placement to the slot’s OWN sink', () => {
+    // Attributed by name like every other slot note: N slots refused the same
+    // way would otherwise emit N identical strings.
+    const placement = slotLoop.slice(
+      slotLoop.indexOf('slotParentRefusal('),
+      slotLoop.indexOf('applyCommonProperties('),
+    )
+    expect(placement).toContain('slotWarnings')
+    expect(placement).not.toContain('ucWarnings')
+  })
+
   it('hands the appliers a LOCAL sink, so each degrade can name its slot', () => {
     // Pushing straight into the reply's `ucWarnings` would emit N identical
     // strings for N slots failing the same way — the spec promises the slot's
@@ -248,6 +282,89 @@ describe('create_tree sizing order (B60)', () => {
     expect(buildSingle).toContain(
       'applyPostAppendProperties(',
     )
+  })
+})
+
+// B61 — the create paths owe the same answer update has given since B46, and
+// `verifyCreatedSize` is pure: it can be perfect while neither create path ever
+// calls it, and the reply then carries no `warnings` key at all — which is the
+// exact silence B61 is. WHERE it is called decides whether it is even true: a
+// parent judged before its subtree is built, or before its deferred FILL/HUG
+// collapse (B60), would report every hugging frame as a failure.
+describe('created-size verification wiring (B61)', () => {
+  it('judges a LEAF only after its sizing is written', () => {
+    expect(buildSingle).toContain('verifyCreatedSize(')
+    const theSizing = buildSingle.indexOf(
+      'applyPostAppendProperties(',
+    )
+    expect(theSizing).toBeGreaterThan(0)
+    expect(
+      buildSingle.indexOf('verifyCreatedSize('),
+    ).toBeGreaterThan(theSizing)
+  })
+
+  it('leaves a DEFERRED node to its caller', () => {
+    // Judging it here would measure the box between the node's own append and
+    // the children that decide it.
+    expect(buildSingle).toContain(
+      'opts?.deferSizing !== true',
+    )
+  })
+
+  it('judges a parent after the deferred collapse AND after its children', () => {
+    expect(treeBuilder).toContain('verifyCreatedSize(')
+    const theResize = treeBuilder.indexOf('applySizing(')
+    const theLoop = treeBuilder.indexOf(
+      'for (const childSpec of children',
+    )
+    expect(theResize).toBeGreaterThan(theLoop)
+    expect(
+      treeBuilder.indexOf('verifyCreatedSize('),
+    ).toBeGreaterThan(theResize)
+  })
+
+  it('hands it the spec’s own sizing, so a self-contradiction is named as one', () => {
+    // Without `spec.sizing` the message advises a pin the spec already refused.
+    for (const site of [buildSingle, treeBuilder]) {
+      const call = site.slice(
+        site.indexOf('verifyCreatedSize('),
+        site.indexOf('verifyCreatedSize(') + 200,
+      )
+      expect(call).toContain('spec.size')
+      expect(call).toContain('spec.sizing')
+    }
+  })
+})
+
+// I59 — a gradient STOP binds through a VariableAlias, and the factory that
+// mints one is a DEP. `bind-wrappers.ts` is fully tested against a fake that
+// supplies it, so every one of those tests stays green on a `paintBindDeps()`
+// that hands over nothing — and live, every stop binding degrades to "the
+// literal colour is applied" with the token silently lost.
+describe('gradient-stop binding wiring (I59)', () => {
+  const paintDeps = between(
+    'const paintBindDeps = (',
+    'const wrapperBindDeps = (',
+  )
+
+  it('actually found the deps (liveness)', () => {
+    expect(paintDeps.length).toBeGreaterThan(100)
+    expect(paintDeps).toContain('setBoundVariableForPaint')
+  })
+
+  it('supplies the alias factory from the real Figma API', () => {
+    expect(paintDeps).toContain('createVariableAlias')
+    expect(paintDeps).toContain('figma.variables')
+  })
+
+  // `bind_variable` and the inline route share one deps builder, so the stop
+  // route cannot be present on one and missing on the other.
+  it('hands the SAME deps to the inline-wrapper binder', () => {
+    const wrapperDeps = between(
+      'const wrapperBindDeps = (',
+      'const readDepth = (',
+    )
+    expect(wrapperDeps).toContain('...paintBindDeps()')
   })
 })
 

@@ -186,6 +186,42 @@ const SEARCH_UNKNOWN_KEY =
   'fields, profile, limit, cursor.'
 
 /**
+ * Every name `search`'s `fields` allow-list accepts (I58).
+ *
+ * Read off the NodeSpec schema itself, plus the two projections that exist only
+ * on a search row. Enumerating it by hand is what went wrong with the `full`
+ * profile, which fell eight fields behind NodeSpec while claiming to be all of
+ * it — a list that must name every key is a list that will drift.
+ *
+ * `characters` is a TEXT node's copy, which no NodeSpec field holds.
+ * `childCount` is how many children a result has, and it is the only way to
+ * rebuild a tree from the flat DFS list `search` returns — without it a
+ * document sweep tells you what exists and nothing about what contains what.
+ *
+ * An entry outside this set is REFUSED rather than dropped. A dropped field is
+ * indistinguishable from a field the node does not carry, so `fields:['id',
+ * 'childCount']` came back as bare ids and read exactly like a document where
+ * nothing has children (M22: no silent drops).
+ */
+export const SEARCH_FIELDS: ReadonlySet<string> = new Set([
+  ...Object.keys(partialNodeSpecSchema.shape),
+  'characters',
+  'childCount',
+])
+
+/** What an unrecognised `fields` entry is told, naming the entries. */
+export const searchFieldRejection = (
+  unknown: readonly string[],
+): string =>
+  'search does not project ' +
+  unknown.map(f => '`' + f + '`').join(', ') +
+  '. `fields` is an exact allow-list, so an entry it cannot supply would ' +
+  'come back missing and read as a node that does not carry it. The names ' +
+  'it takes are: ' +
+  [...SEARCH_FIELDS].sort().join(', ') +
+  '.'
+
+/**
  * Params for `search`: flat, paginated node search (Rule A).
  * `scope` selects where the plugin scans; the SERVER applies `match`
  * (the list mixin), `fields` projection, and the opaque cursor + `limit`.
@@ -227,6 +263,13 @@ export const searchParamsSchema = z
         'Scan-scope depth: how deep the plugin traverses each root. -1 (default) = whole subtree; 0 = root(s) only; N = N levels deep. Results stay a flat list.',
       ),
     ...listReadParamsSchema.shape,
+    // Same shape the mixin gives it, described where the vocabulary is known
+    // (I58). The names are checked in the handler rather than here, so a
+    // `batch` entry and a direct call are refused on the same terms as an MCP
+    // call.
+    fields: listReadParamsSchema.shape.fields.describe(
+      'Exact allow-list of fields per result — an entry outside the vocabulary is REFUSED, never dropped. Any NodeSpec field, plus `characters` (a TEXT node’s copy) and `childCount` (how many children the result has — the way to rebuild the tree from this flat list).',
+    ),
     // `profile` rides here rather than on listReadParamsSchema: the presets are
     // NodeSpec field sets, so they mean something for `search`'s node results and
     // nothing for a style or font list. Putting it on the shared list mixin would
@@ -278,10 +321,23 @@ export const setSelectionParamsSchema = strictParams({
 // Write tools — structure (delete / focus)
 // ---------------------------------------------------------------------------
 
-/** Params for `delete_node`: remove a node from the document. */
+/**
+ * Params for `delete_node`: remove a node from the document.
+ *
+ * A PAGE is a valid target, and saying so is the point of the description below
+ * (I57): scratch pages are the normal by-product of a build, and an agent that
+ * does not know this tool removes one leaves them behind or reaches for a page
+ * tool that does not exist. The M4 guard governs — the last page cannot go, and
+ * deleting the CURRENT page moves the session to a neighbour first and reports
+ * where it landed.
+ */
 export const deleteNodeParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
-  nodeId: z.string().describe('ID of the node to delete.'),
+  nodeId: z
+    .string()
+    .describe(
+      'ID of the node to delete. A PAGE id is a valid target — this is how a scratch page is cleaned up. Two guards: the LAST remaining page is refused, and deleting the CURRENT page switches the session to a neighbouring page first, then reports the new `currentPageId`.',
+    ),
 })
 
 /**
@@ -1342,7 +1398,7 @@ export const updateComponentParamsSchema = strictParams({
     .array(slotEntrySchema)
     .optional()
     .describe(
-      "Slots to CREATE inside this component. Each entry becomes a new empty SLOT node (named accordingly) that instances fill per-screen. An entry is either a bare NAME, or `{name, ...spec}` where the spec is update_node's own patch with `name` required — every field it accepts is accepted here, in the same atom grammar (inline var()/style() wrappers included), and applied to the fresh slot. `fills`, `sizing` and `size` are the ones that make a slot usable in one call, since a created slot is born 100×100 FIXED with an opaque #FFFFFF fill — but `radius`, `opacity`, `strokes`, `effects` and the rest land too. An entry that names no `layout` — a bare name included — is created as a vertical auto-layout stack, and a `size` it stated is pinned FIXED so the stack cannot hug it away; pass `layout:{mode:'NONE'}` (or any other layout) to choose otherwise. T7-gated: degrades with a warning if createSlot is unavailable; a field the SLOT cannot take is named in warnings[] (attributed to the slot) while the slot is still created, named, and given its other fields.",
+      "Slots to CREATE inside this component. Each entry becomes a new empty SLOT node (named accordingly) that instances fill per-screen. An entry is either a bare NAME, or `{name, ...spec}` where the spec is update_node's own patch with `name` required — every field it accepts is accepted here, in the same atom grammar (inline var()/style() wrappers included), and applied to the fresh slot. `fills`, `sizing` and `size` are the ones that make a slot usable in one call, since a created slot is born 100×100 FIXED with an opaque #FFFFFF fill — but `radius`, `opacity`, `strokes`, `effects` and the rest land too. An entry that names no `layout` — a bare name included — is created as a vertical auto-layout stack, and a `size` it stated is pinned FIXED so the stack cannot hug it away; pass `layout:{mode:'NONE'}` (or any other layout) to choose otherwise. An entry may also carry `parentId` — a node INSIDE this same component that can have children — and the slot is moved there after it is created; a target that is missing, outside the component, or unable to hold children leaves the slot at the component root and warns saying which. T7-gated: degrades with a warning if createSlot is unavailable; a field the SLOT cannot take is named in warnings[] (attributed to the slot) while the slot is still created, named, and given its other fields.",
     ),
 })
 

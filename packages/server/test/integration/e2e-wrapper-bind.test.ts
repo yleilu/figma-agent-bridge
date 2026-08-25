@@ -412,7 +412,11 @@ describe('inline wrapper bindings e2e (I39)', () => {
       )
 
       const after = await readLayout()
-      expect(after.layout.gap).toBe('var(space/8)12')
+      // 8, not 12: binding does not decorate the gap, it takes it over. The
+      // field reads through the variable from here on, so the literal that was
+      // there is replaced by the variable's value — the mock was modelling a
+      // free bind until B63 showed what a bind really costs.
+      expect(after.layout.gap).toBe('var(space/8)8')
     })
 
     it('writing the read emission back verbatim keeps the binding', async () => {
@@ -554,6 +558,92 @@ describe('inline wrapper bindings e2e (I39)', () => {
       'var(',
     )
     expect(Number(plainSpec.layout?.gap)).toBe(8)
+  })
+
+  // ── B63: a bind that resolves to nothing zeroes the gap, OUT LOUD ─────────
+  //
+  // Reported as "bind_variable zeroes the gap". It does — and the bind path is
+  // not the reason. A `create_variables` call keyed its `valuesByMode` to a
+  // mode the new collection never had, so the value was skipped (with a
+  // warning) and the FLOAT resolved to its zero. Binding it then moved the gap
+  // to 0, exactly as binding any variable moves the gap to that variable's
+  // value.
+  //
+  // What made it a DEFECT rather than an operator error is the read: the gap
+  // was 0, JSON_REST_V1 spells 0 by omission, and the read dropped the key —
+  // so the destroyed geometry was invisible and only a width measurement
+  // caught it. A layouted node now states its gap whatever it is.
+  describe('a bind that resolves to zero (B63)', () => {
+    const readLayoutOf = async (): Promise<{
+      mode: string
+      gap?: unknown
+    }> => {
+      const read = await handleGetNode(
+        { nodeId: '1:42', profile: 'layout' },
+        scoped,
+      )
+      return (
+        YAML.parse(read.content[0].text) as {
+          layout: { mode: string; gap?: unknown }
+        }
+      ).layout
+    }
+
+    it('says gap: 0 rather than saying nothing', async () => {
+      expect((await readLayoutOf()).gap).toBe(12)
+
+      await handleBindVariable(
+        {
+          nodeId: '1:42',
+          field: 'itemSpacing',
+          variableId: 'var:mock:space/unset',
+        },
+        scoped,
+      )
+
+      // The token is visible AND the number it resolved to is visible. Before
+      // this fix the whole key was absent and the row read like a frame that
+      // simply never had a gap.
+      expect((await readLayoutOf()).gap).toBe(
+        'var(space/unset)0',
+      )
+    })
+
+    it('a clear leaves the zero behind — the literal is not recoverable', async () => {
+      await handleBindVariable(
+        {
+          nodeId: '1:42',
+          field: 'itemSpacing',
+          variableId: 'var:mock:space/unset',
+        },
+        scoped,
+      )
+      await handleBindVariable(
+        {
+          nodeId: '1:42',
+          field: 'itemSpacing',
+          clear: true,
+        },
+        scoped,
+      )
+      // Unbinding keeps the value the field currently resolves to, which is
+      // the zero. The 12 is gone for good, and the read says so.
+      expect((await readLayoutOf()).gap).toBe(0)
+    })
+
+    it('a variable that HAS a value moves the gap to it', async () => {
+      await handleBindVariable(
+        {
+          nodeId: '1:42',
+          field: 'itemSpacing',
+          variableId: 'var:mock:space/24',
+        },
+        scoped,
+      )
+      expect((await readLayoutOf()).gap).toBe(
+        'var(space/24)24',
+      )
+    })
   })
 
   it('bind_variable refuses to clear a paint binding, and says why', async () => {

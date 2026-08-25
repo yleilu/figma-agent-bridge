@@ -130,6 +130,21 @@ const TABLE: { group: string; atom: string }[] = [
   { group: 'var radius', atom: 'var(radius/medium)8' },
   { group: 'var scalar', atom: 'var(token/x)0.5' },
   { group: 'var color', atom: 'var(color/blue)#3B82F6' },
+  // I59 — a gradient's colours are per STOP, and so are its tokens. The
+  // atom-level wrapper cannot say this: one wrapper on `linear(...)` claims a
+  // single variable owns both ends of a two-colour banner.
+  {
+    group: 'var gradient stop',
+    atom: 'linear(135, var(brand/violet)#7C3AED@0, var(brand/cyan)#22D3EE@100)',
+  },
+  {
+    group: 'var gradient stop, one bound one not',
+    atom: 'linear(90, var(brand/violet)#7C3AED@0, #FFFFFF@100)',
+  },
+  {
+    group: 'var gradient stop on a radial',
+    atom: 'radial(var(surface/glow)#FFFFFF@0, #00000000@100)',
+  },
 ]
 
 describe('round-trip: renderAtom(parseAtom(s)) === s', () => {

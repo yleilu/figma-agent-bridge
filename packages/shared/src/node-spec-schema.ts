@@ -266,6 +266,20 @@ export const NODE_SPEC_PATCH_KEYS: ReadonlySet<string> =
 // it (T7) rather than have zod strip it silently.
 export const slotSpecSchema = partialNodeSpecSchema.extend({
   name: z.string(),
+  /**
+   * Where inside the component the slot goes (I60).
+   *
+   * `createSlot()` takes no argument and drops the slot at the component's
+   * root. A real component puts its slot inside something — a card's body, a
+   * row's trailing cell — so every nested slot cost a second `reparent_node`
+   * call, and until it landed the component was laid out wrong.
+   *
+   * The target must be a node inside this same component that can have
+   * children. Anything else leaves the slot at the root and says why: a slot
+   * silently parked somewhere the caller did not ask for is worse than one
+   * still at the root, because only the second is where the caller can find it.
+   */
+  parentId: z.string().optional(),
 })
 
 /** A slot entry: a bare name (back-compat) or a name plus its spec. */

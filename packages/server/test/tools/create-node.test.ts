@@ -390,3 +390,88 @@ describe('handleCreateNode (rebuilt — single NodeSpec)', () => {
     )
   })
 })
+
+// ---------------------------------------------------------------------------
+// B61 (live-gate follow-up) — a create_node degrade has to be READABLE
+// ---------------------------------------------------------------------------
+//
+// create_node answered the same kind of news in two channels: the plugin's own
+// degrades rode in the JSON body (formatMutationResult stringifies the whole
+// reply), while the server's conversion notes were appended as loose `Warning:`
+// prose after it. So half the list was data and half was text, and which half
+// a caller got depended on where the loss happened.
+//
+// The sibling defect on create_tree is what B61's live gate hit: the plugin
+// reported a stated size hugged away and the structured reply said nothing.
+// Both faces now answer as update_node always has — one list, in `warnings[]`.
+describe('create_node degrades reach the caller (B61)', () => {
+  const bodyOf = (text: string): Record<string, unknown> =>
+    JSON.parse(text) as Record<string, unknown>
+
+  const HUGGED =
+    'size not applied — asked [400, 60], "b61x" reads [136, 60].' +
+    ' Auto-layout owns the width (layoutSizingHorizontal: HUG).'
+
+  it('puts the plugin’s warning in the structured reply', async () => {
+    const result = await handleCreateNode(
+      { spec: { type: 'FRAME', name: 'b61x' } },
+      stubClient({
+        reply: {
+          id: 'created:1',
+          name: 'b61x',
+          type: 'FRAME',
+          warnings: [HUGGED],
+        },
+      }),
+    )
+    expect(bodyOf(result.content[0].text).warnings).toEqual(
+      [HUGGED],
+    )
+  })
+
+  it('merges the server’s own notes into the SAME list, never into prose', async () => {
+    const result = await handleCreateNode(
+      {
+        spec: {
+          type: 'FRAME',
+          name: 'b61x',
+          // A var() on a per-corner radius has no binding route — the write
+          // face warns and applies the literal.
+          radius: 'var(radius/md)[8,8,0,0]',
+        },
+      },
+      stubClient({
+        reply: {
+          id: 'created:1',
+          name: 'b61x',
+          type: 'FRAME',
+          warnings: [HUGGED],
+        },
+      }),
+    )
+    const { text } = result.content[0]
+    const warnings = bodyOf(text).warnings as string[]
+    expect(warnings).toHaveLength(2)
+    expect(warnings[0]).toBe(HUGGED)
+    expect(warnings[1]).toContain('per-corner radius')
+    // One channel: no trailing prose, and nothing said twice.
+    expect(text).not.toContain('Warning: ')
+    expect(text.split('per-corner radius')).toHaveLength(2)
+  })
+
+  it('stays clean when nothing degraded', async () => {
+    const result = await handleCreateNode(
+      { spec: { type: 'FRAME', name: 'plain' } },
+      stubClient({
+        reply: {
+          id: 'created:1',
+          name: 'plain',
+          type: 'FRAME',
+        },
+      }),
+    )
+    const { text } = result.content[0]
+    expect(text).not.toContain('Warning')
+    expect('warnings' in bodyOf(text)).toBe(false)
+  })
+})

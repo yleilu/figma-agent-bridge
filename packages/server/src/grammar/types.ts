@@ -33,7 +33,23 @@ export type Attrs = Record<string, AttrValue>
 export type AtomArg =
   | { kind: 'scalar'; value: string | number | boolean }
   | { kind: 'color'; hex: string }
-  | { kind: 'stop'; hex: string; position: number }
+  | {
+      kind: 'stop'
+      hex: string
+      position: number
+      /**
+       * `var(brand/violet)#7C3AED@0` — a gradient STOP carries its own binding
+       * (I59).
+       *
+       * The atom-level wrapper cannot express this. It names one source for the
+       * whole value, and a gradient's colours are per stop: a two-stop banner is
+       * two tokens, and wrapping the `linear(...)` atom would claim one variable
+       * owns both. So a stop is the one argument that takes a wrapper of its
+       * own, and it is a `var()` only — a style names a whole paint slot and
+       * there is nothing for it to own one stop of.
+       */
+      wrapper?: Wrapper
+    }
   | { kind: 'tuple'; items: (string | number)[] }
 
 /**

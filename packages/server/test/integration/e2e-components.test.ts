@@ -728,7 +728,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
     // …and a bare name is exactly `{name}`: the created slot takes the
     // creation layout default (B29) and keeps Figma's own born size, so what
     // an entry still has to say is the fill.
-    expect(spec.layout).toEqual({ mode: 'V' })
+    expect(spec.layout).toEqual({ mode: 'V', gap: 0 })
     expect(spec.sizing).toEqual(['FIXED', 'FIXED'])
   })
 
@@ -825,7 +825,7 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
     >
     expect(spec.size).toEqual([320, 480])
     expect(spec.sizing).toEqual(['FIXED', 'FIXED'])
-    expect(spec.layout).toEqual({ mode: 'V' })
+    expect(spec.layout).toEqual({ mode: 'V', gap: 0 })
   })
 
   it('B30 (T7): each degrade names ITS slot — two failing the same way are told apart', async () => {

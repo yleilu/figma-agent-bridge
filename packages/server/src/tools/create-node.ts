@@ -99,26 +99,37 @@ export const handleCreateNode = async (
       COMMANDS.CREATE_NODE,
       { spec: payload, parentId },
       { warnings },
-    )) as { error?: string } | null
+    )) as {
+      error?: string
+      warnings?: string[]
+    } | null
 
     const mutation = formatMutationResult(
       result,
       'Failed to create node.',
     )
-    if (warnings.length === 0) {
+    // (If the mutation errored, formatMutationResult already returned the error
+    // envelope — do not muddy it with the warning notes.)
+    if (warnings.length === 0 || isErrorResult(mutation)) {
       return mutation
     }
-    // Append the warnings to a SUCCESSFUL mutation result. (If the mutation
-    // errored, formatMutationResult already returned the error envelope — do
-    // not muddy it with the warning notes.)
-    if (isErrorResult(mutation)) {
-      return mutation
-    }
-    const warningText = warnings
-      .map(w => `Warning: ${w}`)
-      .join('\n')
+    // ONE list, in the reply's structured `warnings[]`, the way update_node has
+    // always done it. The plugin's degrades already rode there — the server's
+    // own notes were appended as loose `Warning:` prose after the JSON, so one
+    // tool answered the same kind of news in two different channels and a
+    // caller reading the reply as data saw only half of it (B61).
     return textResult(
-      `${mutation.content[0].text}\n\n${warningText}`,
+      JSON.stringify(
+        {
+          ...result,
+          warnings: [
+            ...(result?.warnings ?? []),
+            ...warnings,
+          ],
+        },
+        null,
+        2,
+      ),
     )
   } catch (err) {
     return toolError(err)

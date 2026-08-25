@@ -944,7 +944,11 @@ export const slotEntryToFigma = (
   if (typeof entry === 'string') {
     return { name: entry, layout: defaultCreateLayout() }
   }
-  const { name, ...rest } = entry
+  // `parentId` is an INSTRUCTION to the slot loop, not a field of the slot
+  // (I60), so it is taken off before the spec is converted — leaving it in
+  // `rest` would send it through the write face as an unknown patch key and
+  // warn about the very thing the caller asked for.
+  const { name, parentId, ...rest } = entry
   const local: string[] = []
   // Every entry creates a SLOT, whatever it says — so the struct a SLOT cannot
   // carry is dropped here on the same terms as a create, with the bindings it
@@ -956,7 +960,11 @@ export const slotEntryToFigma = (
     local,
   )
   const converted = specToFigma(carried, local)
-  const payload: FigmaWritePayload = { ...converted, name }
+  const payload: FigmaWritePayload = {
+    ...converted,
+    name,
+    ...(typeof parentId === 'string' ? { parentId } : {}),
+  }
   // The created slot takes the same creation defaults a created FRAME takes,
   // and on the same terms: only when the entry states no layout of its own,
   // and the size it stated is pinned so the layout cannot hug it away.

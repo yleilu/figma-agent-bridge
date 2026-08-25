@@ -25,6 +25,7 @@ import type {
 } from '@figma-agent-bridge/shared/node-spec'
 import {
   atomToStroke,
+  parseAtom,
   tokenize,
   type Wrapper,
 } from '../grammar'
@@ -47,6 +48,15 @@ export type WrapperBinding = {
   name: string
   field: string
   index?: number
+  /**
+   * Which gradient STOP of the paint at `index` this binds (I59).
+   *
+   * Absent for every other binding, including a solid paint's — a solid has one
+   * colour and the paint IS the slot. A gradient's colours are per stop, so a
+   * two-stop banner is two bindings on one paint, and only the stop number
+   * tells them apart.
+   */
+  stop?: number
   /**
    * SERVER-SIDE ONLY — true when this style OWNS its field (the reference form
    * on one of the four styleable array fields), rather than wrapping a literal
@@ -196,6 +206,8 @@ export const collectWrapperBindings = (
     index?: number,
     /** The reference form's resolved list — a style that OWNS its field. */
     rideAlong?: string[],
+    /** The gradient stop this binds, for a per-stop token (I59). */
+    stop?: number,
   ): void => {
     if (wrapper === undefined) {
       return
@@ -218,7 +230,7 @@ export const collectWrapperBindings = (
       wrapper.kind === 'var' &&
       index !== undefined &&
       INDEXED_VAR_FIELDS.has(route)
-    const key = `${wrapper.kind}:${route}:${indexed ? index : ''}`
+    const key = `${wrapper.kind}:${route}:${indexed ? index : ''}:${stop ?? ''}`
     if (seen.has(key)) {
       return
     }
@@ -228,10 +240,50 @@ export const collectWrapperBindings = (
       name: wrapper.name,
       field: route,
       ...(indexed ? { index } : {}),
+      ...(stop !== undefined ? { stop } : {}),
       ...(rideAlong !== undefined
         ? { owns: true, rideAlong }
         : {}),
     })
+  }
+
+  /**
+   * Every gradient STOP of one paint atom that names a variable (I59).
+   *
+   * A gradient's colours are per stop, so the atom-level wrapper cannot say
+   * what a two-token banner needs — `linear(...)` wrapped once would claim one
+   * variable owns both ends of it. The stops carry their own, and each becomes
+   * its own binding on the same paint.
+   *
+   * A malformed atom is not this scan's error to raise, exactly as `wrapperOf`
+   * explains: the field's converter parses the same string a moment later and
+   * reports it with the message that field deserves.
+   */
+  const addStopBindings = (
+    field: StyledField,
+    atom: string | number | undefined,
+    index: number,
+  ): void => {
+    if (typeof atom !== 'string') {
+      return
+    }
+    let ast
+    try {
+      ast = parseAtom(atom)
+    } catch {
+      return
+    }
+    if (ast.kind !== 'head') {
+      return
+    }
+    let stopIndex = 0
+    for (const arg of ast.args) {
+      if (arg.kind !== 'stop') {
+        continue
+      }
+      add(field, arg.wrapper, index, undefined, stopIndex)
+      stopIndex += 1
+    }
   }
 
   // The four styleable ARRAY fields. A REFERENCE is one binding for the whole
@@ -252,9 +304,11 @@ export const collectWrapperBindings = (
       )
       return
     }
-    value.atoms.forEach((atom, i) =>
-      add(field, wrapperOf(atom), i),
-    )
+    value.atoms.forEach((atom, i) => {
+      add(field, wrapperOf(atom), i)
+      // …and each of that paint's own gradient stops (I59).
+      addStopBindings(field, atom, i)
+    })
   }
   addStyled('fills')
   addStyled('strokes')

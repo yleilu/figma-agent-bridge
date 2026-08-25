@@ -48,13 +48,42 @@ const rgbToHex = (inner: string): string => {
   return base
 }
 
+const STOP_RE =
+  /^(#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?)@(-?\d+(?:\.\d+)?)$/
+
+/**
+ * `var(brand/violet)` on the front of a gradient stop, peeled off (I59).
+ *
+ * The wrapper is normally an atom-level channel, parsed once by `tokenize`. A
+ * gradient is the one atom whose colours are PER ARGUMENT — a two-stop banner
+ * is two tokens — so the stop is the one argument that carries its own. Matched
+ * here rather than routed through `tokenize`, because `tokenize` reads a whole
+ * atom (wrapper, body, trailing `{…}`) and a stop is a fragment of one.
+ *
+ * `style()` is deliberately not accepted: a style names a whole paint slot, and
+ * there is no such thing as a style that owns one stop of a gradient. Such a
+ * prefix falls through to the scalar branch, where it reads as the malformed
+ * argument it is.
+ */
+const STOP_VAR_RE = /^var\(([^)]*)\)(.*)$/
+
 /** Parse a single head argument. */
 const parseArg = (raw: string): AtomArg => {
   const v = raw.trim()
-  // gradient stop: #color@percent
-  const stopMatch = v.match(
-    /^(#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?)@(-?\d+(?:\.\d+)?)$/,
-  )
+  // gradient stop: [var(Name)] #color@percent
+  const varMatch = v.match(STOP_VAR_RE)
+  if (varMatch !== null) {
+    const inner = varMatch[2].trim().match(STOP_RE)
+    if (inner !== null) {
+      return {
+        kind: 'stop',
+        hex: inner[1].toUpperCase(),
+        position: Number(inner[2]),
+        wrapper: { kind: 'var', name: varMatch[1] },
+      }
+    }
+  }
+  const stopMatch = v.match(STOP_RE)
   if (stopMatch !== null) {
     return {
       kind: 'stop',

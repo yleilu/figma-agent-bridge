@@ -122,6 +122,7 @@ tail lives, so the core stays short.
 |---|---|
 | solid | `#3B82F6` · `#3B82F680` · `solid(#3B82F6)` · `solid(rgb(0,0,0))` · `rgba(59,130,246,0.5)` |
 | linear gradient | `linear(135, #FF0000@0, #00FF00@50, #0000FF@100)` |
+| gradient stop, bound | `linear(135, var(brand/violet)#7C3AED@0, var(brand/cyan)#22D3EE@100)` |
 | radial gradient | `radial(#FFFFFF@0, #00000000@100)` |
 | angular gradient | `angular(#FF0000@0, #00FF00@33, #0000FF@66)` |
 | diamond gradient | `diamond(#FF0000@0, #0000FF@100)` |
@@ -535,6 +536,17 @@ tool-surface design).
   independently, exactly as paints bind by index; a `style()` owns the whole field,
   so on the four array fields it replaces the array rather than sitting inside one
   (**A styled field is a reference, not a list**).
+
+  **A gradient binds per STOP.** A gradient's colours are per stop and so are its
+  tokens — a two-colour banner is two design-system decisions — so the stop is the
+  one head argument that carries a wrapper of its own:
+  `linear(135, var(brand/violet)#7C3AED@0, var(brand/cyan)#22D3EE@100)`. The
+  atom-level wrapper cannot say this; one wrapper on `linear(...)` would claim a
+  single variable owns both ends. Only `var()` applies — a style names a whole
+  paint slot and there is nothing for it to own one stop of — and an unbound stop
+  stays bare beside a bound neighbour. Figma carries the binding on the ColorStop
+  (`gradientStops[i].boundVariables.color`); where a runtime does not, the literal
+  colour lands and one `warnings[]` entry names the stop it could not bind (T7).
 
   Everywhere else a wrapper still resolves to its literal and reports one
   `warnings[]` entry, so a write is never silent about the half it could not do.

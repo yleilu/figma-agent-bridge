@@ -25,6 +25,10 @@
 // had to skip a candidate it could not read (T7).
 
 import { COMMANDS } from '@figma-agent-bridge/shared'
+import {
+  SEARCH_FIELDS,
+  searchFieldRejection,
+} from '@figma-agent-bridge/shared/tool-params'
 import type {
   Match,
   Profile,
@@ -111,6 +115,21 @@ const CANDIDATE_FIELDS = new Set([
   'size',
   'characters',
 ])
+
+/**
+ * How many children a result has — a search-only projection (I58).
+ *
+ * `search` returns a FLAT list in DFS order, and a flat list of ids says what
+ * exists while saying nothing about what contains what. `childCount` is the one
+ * field that lets a caller rebuild the tree, and it was not in the vocabulary
+ * at all: asking for it dropped it silently, so a document sweep read exactly
+ * like a document where nothing has children.
+ *
+ * It rides over from the hydrated NodeSpec rather than from the scan row: the
+ * reader turns each child into an IdStub at `depth: 0`, so the count is exact
+ * and costs nothing beyond the fetch `fields` already forces.
+ */
+const CHILD_COUNT = 'childCount'
 
 /**
  * The field names a selector asks for: the explicit list, the profile's set, or
@@ -224,6 +243,22 @@ export const handleSearch = async (
   client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
   try {
+    // I58 — an entry `fields` cannot supply is REFUSED, before anything is
+    // scanned. Dropping it silently is the same failure B50 was: a field that
+    // never appears reads as a field the node does not carry, and the caller
+    // draws the opposite conclusion from the one the data supports. Checked
+    // here rather than in the schema so a `batch` entry and a direct call are
+    // held to the same vocabulary as an MCP call.
+    const unknownFields = (params.fields ?? []).filter(
+      f => !SEARCH_FIELDS.has(f),
+    )
+    if (unknownFields.length > 0) {
+      return errorEnvelope(
+        'INVALID_PARAM',
+        searchFieldRejection(unknownFields),
+      )
+    }
+
     // The plugin scans the scope and returns flat candidate nodes (it does NOT
     // match/project/paginate — that is the server's job below). `depth` bounds
     // the scan SCOPE (descent depth) only; it is forwarded verbatim and
@@ -331,6 +366,16 @@ export const handleSearch = async (
         carried.characters = (
           candidate as Record<string, unknown>
         ).characters
+      }
+      // Only when it was asked for BY NAME (I58). `profile:'full'` is identity
+      // over the NodeSpec, and `childCount` is not one of its fields — adding
+      // it there would put a key in every full result that `get_node` does not
+      // emit for the same node.
+      if (
+        params.fields?.includes(CHILD_COUNT) === true &&
+        spec !== undefined
+      ) {
+        carried[CHILD_COUNT] = spec.children?.length ?? 0
       }
       const source: NodeSpec =
         spec === undefined

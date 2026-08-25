@@ -504,3 +504,247 @@ test('clearNodeField names a field Figma refuses to clear', () => {
   expect(warnings).toHaveLength(1)
   expect(warnings[0]).toContain('itemSpacing')
 })
+
+// ─── gradient stops (I59) ────────────────────────────────────────────────────
+//
+// A gradient's colours are per stop, and Figma binds them there: the ColorStop
+// carries `boundVariables.color`, and the only sanctioned way to write one is a
+// VariableAlias from `createVariableAlias`. `setBoundVariableForPaint` cannot
+// reach a stop at all — it binds the PAINT — so this is a second route, not a
+// parameter of the first, and it degrades on its own terms.
+//
+// The fake models the real constraint on both sides: `createVariableAlias`
+// mints the alias object, and a runtime that does not carry stop bindings
+// ACCEPTS the assignment and drops the field, which is why the write is read
+// back rather than trusted.
+
+const alias = (variable: unknown): unknown => ({
+  type: 'VARIABLE_ALIAS',
+  id: (variable as { id: string }).id,
+})
+
+const gradient = (stops: Record<string, unknown>[]) => ({
+  type: 'GRADIENT_LINEAR',
+  gradientStops: stops,
+})
+
+const stop = (position: number) => ({
+  position,
+  color: { r: 1, g: 1, b: 1, a: 1 },
+})
+
+const stopOf = (
+  node: { fills: unknown[] },
+  paint: number,
+  index: number,
+): Record<string, unknown> =>
+  (
+    node.fills[paint] as {
+      gradientStops: Record<string, unknown>[]
+    }
+  ).gradientStops[index]
+
+test('a var() stop binding binds THAT stop and leaves its neighbour alone', async () => {
+  const node = {
+    type: 'FRAME',
+    fills: [gradient([stop(0), stop(1)])],
+  }
+  const warnings: string[] = []
+  await applyWrapperBindings(
+    node,
+    [
+      {
+        kind: 'var',
+        name: 'surface/2',
+        field: 'fills',
+        index: 0,
+        stop: 1,
+      },
+    ],
+    deps({ createVariableAlias: alias }),
+    warnings,
+  )
+  expect(warnings).toEqual([])
+  expect(stopOf(node, 0, 1).boundVariables).toEqual({
+    color: { type: 'VARIABLE_ALIAS', id: 'VariableID:1:2' },
+  })
+  expect(stopOf(node, 0, 0).boundVariables).toBeUndefined()
+  // The colour itself is untouched — binding is additive.
+  expect(stopOf(node, 0, 1).color).toEqual({
+    r: 1,
+    g: 1,
+    b: 1,
+    a: 1,
+  })
+})
+
+test('two stops of one paint bind independently', async () => {
+  const node = {
+    type: 'FRAME',
+    fills: [gradient([stop(0), stop(1)])],
+  }
+  const warnings: string[] = []
+  await applyWrapperBindings(
+    node,
+    [
+      {
+        kind: 'var',
+        name: 'surface/2',
+        field: 'fills',
+        index: 0,
+        stop: 0,
+      },
+      {
+        kind: 'var',
+        name: 'surface/2',
+        field: 'fills',
+        index: 0,
+        stop: 1,
+      },
+    ],
+    deps({ createVariableAlias: alias }),
+    warnings,
+  )
+  expect(warnings).toEqual([])
+  // The second binding must not undo the first: each write rebuilds the array
+  // from the CURRENT stops, not from the ones the call started with.
+  expect(stopOf(node, 0, 0).boundVariables).toBeDefined()
+  expect(stopOf(node, 0, 1).boundVariables).toBeDefined()
+})
+
+test('a stop binding does NOT need setBoundVariableForPaint', async () => {
+  // It binds through the ColorStop. Refusing it for the absence of a member it
+  // never uses would make a whole gradient unbindable on a runtime that only
+  // lacks the paint setter.
+  const node = {
+    type: 'FRAME',
+    fills: [gradient([stop(0)])],
+  }
+  const warnings: string[] = []
+  await applyWrapperBindings(
+    node,
+    [
+      {
+        kind: 'var',
+        name: 'surface/2',
+        field: 'fills',
+        index: 0,
+        stop: 0,
+      },
+    ],
+    deps({
+      createVariableAlias: alias,
+      setBoundVariableForPaint: undefined,
+    }),
+    warnings,
+  )
+  expect(warnings).toEqual([])
+  expect(stopOf(node, 0, 0).boundVariables).toBeDefined()
+})
+
+test('T7 — a runtime without createVariableAlias degrades to the literal and says so', async () => {
+  const node = {
+    type: 'FRAME',
+    fills: [gradient([stop(0)])],
+  }
+  const warnings: string[] = []
+  await applyWrapperBindings(
+    node,
+    [
+      {
+        kind: 'var',
+        name: 'surface/2',
+        field: 'fills',
+        index: 0,
+        stop: 0,
+      },
+    ],
+    deps({ createVariableAlias: undefined }),
+    warnings,
+  )
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain('createVariableAlias')
+  expect(warnings[0]).toContain('var(surface/2)')
+  // The colour is still there — a missing binding never costs the write.
+  expect(stopOf(node, 0, 0).color).toBeDefined()
+})
+
+test('T7 — a runtime that silently DROPS the stop binding is caught by the read-back', async () => {
+  // The dangerous shape: the assignment is accepted, the field is not kept,
+  // and nothing throws. Without the verify the reply would report a token the
+  // file does not hold.
+  const stops = [stop(0)]
+  const node = {
+    type: 'FRAME',
+    get fills(): unknown[] {
+      return [gradient(stops)]
+    },
+    set fills(_v: unknown[]) {
+      // Accepts and discards, exactly as an older runtime does.
+    },
+  }
+  const warnings: string[] = []
+  await applyWrapperBindings(
+    node,
+    [
+      {
+        kind: 'var',
+        name: 'surface/2',
+        field: 'fills',
+        index: 0,
+        stop: 0,
+      },
+    ],
+    deps({ createVariableAlias: alias }),
+    warnings,
+  )
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain(
+    'does not bind gradient stops',
+  )
+})
+
+test('a stop index the paint does not have is named, not silently skipped', async () => {
+  const node = {
+    type: 'FRAME',
+    fills: [gradient([stop(0)])],
+  }
+  const warnings: string[] = []
+  await applyWrapperBindings(
+    node,
+    [
+      {
+        kind: 'var',
+        name: 'surface/2',
+        field: 'fills',
+        index: 0,
+        stop: 4,
+      },
+    ],
+    deps({ createVariableAlias: alias }),
+    warnings,
+  )
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain('no gradient stop')
+})
+
+test('a stop on a SOLID paint is named, not silently skipped', async () => {
+  const node = { type: 'FRAME', fills: [solid(0)] }
+  const warnings: string[] = []
+  await applyWrapperBindings(
+    node,
+    [
+      {
+        kind: 'var',
+        name: 'surface/2',
+        field: 'fills',
+        index: 0,
+        stop: 0,
+      },
+    ],
+    deps({ createVariableAlias: alias }),
+    warnings,
+  )
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain('no gradient stop')
+})

@@ -37,7 +37,9 @@ import {
   applyGrids,
   capabilityWarnings,
   discardedPositionsWarning,
+  verifyCreatedSize,
   type Placement,
+  type SizeTarget,
 } from './apply-node-fields'
 import {
   applyStyleField,
@@ -53,7 +55,9 @@ import {
 } from './bind-wrappers'
 import {
   readSlotEntry,
+  slotParentRefusal,
   type SlotEntry,
+  type SlotParentNode,
 } from './slot-entries'
 import {
   fontsToLoad,
@@ -71,6 +75,11 @@ import {
   type ExportedHost,
   type ScanFailure,
 } from './search-candidates'
+import {
+  messageOf,
+  scanFrom,
+  UNREADABLE_NODE,
+} from './search-scan'
 import {
   createNodeResolver,
   declareDegradedRead,
@@ -458,6 +467,18 @@ const paintBindDeps = () => ({
         }
       | undefined
   )?.setBoundVariableForPaint,
+  // I59 — a gradient STOP binds on the ColorStop, not through the paint
+  // setter, and the value it takes there is a VariableAlias this factory
+  // mints. Feature-detected like every other gated member (T7).
+  createVariableAlias: (
+    figma.variables as
+      | {
+          createVariableAlias?: (v: unknown) => unknown
+        }
+      | undefined
+  )?.createVariableAlias?.bind(figma.variables) as
+    | ((v: unknown) => unknown)
+    | undefined,
 })
 
 /** Everything the inline-wrapper binder needs: the two lookups + the paint deps. */
@@ -1841,6 +1862,21 @@ const buildSingleNode = async (
     warnings ?? [],
   )
 
+  // B61 — did the stated `size` survive? A LEAF is finished here: its sizing is
+  // written and it has no subtree to change the box afterwards, so this is
+  // where the answer is true. A node whose sizing was DEFERRED (create_tree, a
+  // node with children) is judged by its caller, after the deferred collapse —
+  // judging it here would call every hugging frame a failure in the window
+  // between its own append and its children.
+  if (opts?.deferSizing !== true) {
+    verifyCreatedSize(
+      node as unknown as SizeTarget,
+      spec.size,
+      warnings,
+      spec.sizing,
+    )
+  }
+
   // THE load-bearing claim: the node is in its real parent and its
   // auto-layout sizing is set, so `hugs()` can decide and the reflow closure
   // is the true one. The POC measured both — the at-creation closure is
@@ -2097,6 +2133,15 @@ const createTreeNode = async (
     // asked for. Outside the `'appendChild' in node` guard on purpose: a node
     // that could not take the children it stated still has a sizing to honour.
     applySizing(node as FrameNode, spec.sizing, warnings)
+    // B61 — and only NOW is this node's box the one it will keep, so only now
+    // can the stated size be judged. A layout-bearing frame that stated both a
+    // size and a layout is hugged away here, silently, unless this says so.
+    verifyCreatedSize(
+      node as unknown as SizeTarget,
+      spec.size,
+      warnings,
+      spec.sizing,
+    )
   }
 
   if (childPlacements.length > 0) {
@@ -3133,134 +3178,37 @@ const handleCommand = async (
         collectVariableId ||
         collectCharacters
 
-      // id → its entry in `scanned`, which is also the dedup set.
-      const seen = new Map<string, number>()
-      // One entry per scanned node, in DFS order. `subtreeEnd` closes the
-      // node's own range (`[index, subtreeEnd)`), which is what makes "replace
-      // everything under this node" a slice rather than a second traversal.
-      type Scanned = {
-        node: SceneNode
-        id: string
-        levelsLeft: number
-        /** Index of the node this one was reached THROUGH, -1 for a root. */
-        parentIndex: number
-        subtreeEnd: number
-      }
-      const scanned: Scanned[] = []
-
       // What the scan could not read, named rather than thrown (T7). A node
       // written into a component SLOT keeps its pre-append id, so the handles
-      // below it carry addresses composed from a stale id and throw on every
-      // property read — `in get_name: The node … does not exist`. One of those
-      // in a document-wide scan used to kill the whole search; then it became a
+      // below it carry addresses composed from a stale id and refuse — `in
+      // get_children: The node … does not exist`. One of those in a
+      // document-wide scan used to kill the whole search; then it became a
       // warning, which still LOST the node (B48). Now the failure names the
       // node it was reached THROUGH, and that node's export supplies the whole
       // subtree (the repair pass after the candidate loop). A warning is what
       // is left when even that cannot be done.
       const skipped: string[] = []
-      const messageOf = (err: unknown): string =>
-        err instanceof Error ? err.message : String(err)
       // Even the id in a warning has to be read defensively: a stale handle
       // answers NOTHING, its own id included.
-      const UNREADABLE = '(unreadable node)'
       const idOf = (node: BaseNode): string => {
         try {
           return node.id
         } catch {
-          return UNREADABLE
+          return UNREADABLE_NODE
         }
       }
 
-      // What the export may be able to repair — see repairScan for the shape.
-      // A -1 host means nothing covers it: a scan ROOT is not in `scanned`, so
-      // a failure directly under one stays a warning.
-      const failures: ScanFailure[] = []
-
-      // Depth-bounded DFS collector. `levelsLeft < 0` is treated as unlimited
-      // (the -1 / scan-all default); each descent decrements it.
-      const collect = (
-        node: SceneNode,
-        levelsLeft: number,
-        parentIndex: number,
-      ): void => {
-        // `node.id` is the FIRST touch of the node, so it is inside the guard
-        // like every other read — a throw here would lose the whole scan, and
-        // a node that cannot even be identified cannot be deduped, addressed
-        // or returned.
-        let id: string
-        try {
-          id = node.id
-        } catch (err) {
-          failures.push({
-            at: -1,
-            host: parentIndex,
-            message:
-              'search: skipped ' +
-              UNREADABLE +
-              ': ' +
-              messageOf(err),
-          })
-          return
-        }
-        // A node reachable two ways (overlapping selection roots) is listed
-        // ONCE but still descended from the deeper request, exactly as before.
-        const already = seen.get(id)
-        const fresh = already === undefined
-        const index = fresh ? scanned.length : already
-        if (fresh) {
-          seen.set(id, index)
-          scanned.push({
-            node,
-            id,
-            levelsLeft,
-            parentIndex,
-            subtreeEnd: index + 1,
-          })
-        }
-        if (levelsLeft !== 0) {
-          let children: readonly SceneNode[] = []
-          try {
-            if ('children' in node) {
-              children = (node as ChildrenMixin).children
-            }
-          } catch (err) {
-            // Descending is itself a read of the node, so an unreachable
-            // container throws HERE rather than in the enrichment below. Its
-            // subtree cannot be reached through it — but THIS node reads, so
-            // its own export can still describe what is under it.
-            failures.push({
-              at: index,
-              host: index,
-              message:
-                'search: skipped the children of ' +
-                id +
-                ': ' +
-                messageOf(err),
-            })
-            children = []
-          }
-          for (const child of children) {
-            collect(child, levelsLeft - 1, index)
-          }
-        }
-        // Only the FIRST visit owns the range. A second, deeper visit appends
-        // its finds after it, and widening the range to swallow them would let
-        // one host supersede nodes that are not under it.
-        if (fresh) {
-          scanned[index].subtreeEnd = scanned.length
-        }
-      }
-
+      // The nodes the walk starts from. For a container root (page / node
+      // subtree) the root itself is level 0, so its direct children are level
+      // 1: a page root is not a candidate (we want its descendants), so the
+      // descent starts at each child and depth=0 yields the page's immediate
+      // children. For `selection` the selected nodes ARE level 0.
+      const starts: SceneNode[] = []
       if (scope === 'selection') {
-        // The selected nodes are level 0; their subtrees descend from there.
         for (const sel of figma.currentPage.selection) {
-          collect(sel, scanDepth, -1)
+          starts.push(sel)
         }
       } else {
-        // For container roots (page / node subtree) the root itself is level 0,
-        // so its direct children are level 1. A page root is not a candidate
-        // (we want its descendants); start the descent from each child at the
-        // requested depth so depth=0 yields the page's immediate children.
         for (const root of roots) {
           // A root is a node too: listing its children reads it, so a root
           // that has gone stale degrades like any other node instead of
@@ -3269,7 +3217,7 @@ const handleCommand = async (
             if ('children' in root) {
               for (const child of (root as ChildrenMixin)
                 .children) {
-                collect(child, scanDepth, -1)
+                starts.push(child)
               }
             }
           } catch (err) {
@@ -3282,6 +3230,16 @@ const handleCommand = async (
           }
         }
       }
+
+      // The walk itself lives in search-scan.ts, where it can be run against a
+      // fake document — `code.ts` cannot be imported outside Figma, and B62
+      // was a one-word defect in this recursion that nothing could see. A -1
+      // host there means nothing covers the failure: a scan START has no
+      // ancestor in `scanned`, so a failure on one stays a warning.
+      const { scanned, failures } = scanFrom(
+        starts,
+        scanDepth,
+      )
 
       // Enrich the flat candidate list. The base candidate (id/name/type/size)
       // is cheap and always present; the reverse-lookup metadata + characters
@@ -4035,6 +3993,39 @@ const handleCommand = async (
                   'created, but could not be named: ' +
                     String(e),
                 )
+              }
+              // I60 — where inside the component this slot goes. Done BEFORE
+              // the spec is applied, so the layout the spec asks for is written
+              // to a node that already sits under its real parent — the same
+              // reason B59 moved the clamps past the append.
+              const wantedParent = spec?.parentId
+              if (typeof wantedParent === 'string') {
+                const target =
+                  await resolveNodeId(wantedParent)
+                const refusal = slotParentRefusal(
+                  target as SlotParentNode | null,
+                  comp,
+                  wantedParent,
+                )
+                if (refusal !== undefined) {
+                  slotWarnings.push(refusal)
+                } else {
+                  try {
+                    ;(
+                      target as unknown as ParentNode
+                    ).appendChild(
+                      slot as unknown as SceneNode,
+                    )
+                  } catch (e) {
+                    slotWarnings.push(
+                      'parentId "' +
+                        wantedParent +
+                        '" refused the slot (' +
+                        String(e) +
+                        '); it stays at the component root',
+                    )
+                  }
+                }
               }
               if (spec) {
                 const slotNode =

@@ -41,11 +41,26 @@ export type FigmaGradientPaint = {
     | 'GRADIENT_RADIAL'
     | 'GRADIENT_ANGULAR'
     | 'GRADIENT_DIAMOND'
-  gradientStops: { position: number; color: RGBA }[]
+  gradientStops: GradientStop[]
   gradientTransform: Transform
   opacity?: number
   visible?: boolean
   blendMode?: string
+}
+
+/**
+ * One gradient stop, plus the NAME of the variable bound to its colour (I59).
+ *
+ * Figma carries the binding as `boundVariables.color` — an id — on the stop
+ * itself. `varName` is that id already resolved, because this module renders
+ * atoms and an id is not a name a caller can write back. The reader fills it
+ * in; a stop with no binding simply leaves it undefined and reads as the plain
+ * `#hex@pos` it always did.
+ */
+export type GradientStop = {
+  position: number
+  color: RGBA
+  varName?: string
 }
 
 export type FigmaImagePaint = {
@@ -695,6 +710,16 @@ const paintToAst = (p: FigmaPaint): AtomAST => {
         kind: 'stop',
         hex: rgbaToHex(s.color),
         position: Math.round(s.position * 100),
+        // I59 — the stop's own token, so a read-modify-write re-binds it
+        // instead of flattening a two-token gradient to two hexes.
+        ...(s.varName !== undefined
+          ? {
+              wrapper: {
+                kind: 'var' as const,
+                name: s.varName,
+              },
+            }
+          : {}),
       })
     }
     // Non-trivial geometry (skew, non-uniform scale) rides on {tf=...} — a

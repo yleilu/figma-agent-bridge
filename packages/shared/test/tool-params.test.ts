@@ -993,6 +993,34 @@ describe('groupNodesParamsSchema', () => {
 
 // recordFeedbackParamsSchema
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// deleteNodeParamsSchema — the PAGE power is written down (I57)
+// ---------------------------------------------------------------------------
+//
+// delete_node has always removed a PAGE, guards and all. The description said
+// only "ID of the node to delete", so the capability existed and nothing
+// announced it: an agent that had made a scratch page either left it in the
+// file or went looking for a delete_page tool that does not exist. The
+// description IS the interface for a tool an agent cannot read the source of,
+// so it is asserted like any other contract.
+describe('deleteNodeParamsSchema', () => {
+  const nodeIdDescription = (): string =>
+    deleteNodeParamsSchema.shape.nodeId.description ?? ''
+
+  it('says a PAGE id is a valid target', () => {
+    expect(nodeIdDescription()).toContain('PAGE')
+  })
+
+  it('names both guards, so neither is a surprise', () => {
+    const text = nodeIdDescription()
+    // The refusal…
+    expect(text).toContain('LAST')
+    // …and the side effect that is not a refusal.
+    expect(text).toContain('CURRENT')
+    expect(text).toContain('currentPageId')
+  })
+})
+
 describe('recordFeedbackParamsSchema', () => {
   it('accepts a valid bug report', () => {
     const parsed = recordFeedbackParamsSchema.parse({
@@ -1132,6 +1160,40 @@ describe('updateComponentParamsSchema (B3 add binding)', () => {
 // B30: a slot entry is `string | {name, …spec}` — the bare string stays valid
 // (back-compat), the object form carries the spec that makes the slot usable.
 // ---------------------------------------------------------------------------
+describe('updateComponentParamsSchema (I60 slot placement)', () => {
+  it('accepts parentId on a slot entry', () => {
+    const parsed = updateComponentParamsSchema.parse({
+      fileKey: 'fk',
+      componentId: 'c:1',
+      slots: [{ name: 'Body', parentId: 'N:7' }],
+    })
+    expect(
+      (parsed.slots![0] as { parentId?: string }).parentId,
+    ).toBe('N:7')
+  })
+
+  it('rejects a non-string parentId at the param boundary', () => {
+    // A known field of the wrong type is INVALID_PARAM before the plugin is
+    // contacted — the same rule every other slot field follows.
+    expect(() =>
+      updateComponentParamsSchema.parse({
+        fileKey: 'fk',
+        componentId: 'c:1',
+        slots: [{ name: 'Body', parentId: 7 }],
+      }),
+    ).toThrow()
+  })
+
+  it('says in the description where a slot can go, and what happens when it cannot', () => {
+    const text =
+      updateComponentParamsSchema.shape.slots.description ??
+      ''
+    expect(text).toContain('parentId')
+    expect(text).toContain('INSIDE this same component')
+    expect(text).toContain('component root')
+  })
+})
+
 describe('updateComponentParamsSchema (B30 slot entries)', () => {
   it('accepts bare-string slot names (back-compat)', () => {
     const parsed = updateComponentParamsSchema.parse({
