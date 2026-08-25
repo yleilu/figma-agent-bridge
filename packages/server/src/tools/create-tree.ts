@@ -162,10 +162,9 @@ const shapeReply = (
   ) {
     return result
   }
-  // `warnings` is pulled out and dropped here on purpose: the caller has
-  // already merged it into the shared list that gets rendered as `Warning:`
-  // lines. Leaving it in `rest` would spread it into the JSON body too and
-  // report every degrade twice.
+  // `warnings` is pulled out here and put back by the CALLER, which owns the
+  // merged list. It must not be spread from `rest` as well, or every degrade
+  // would be reported twice.
   const {
     id,
     name,
@@ -231,27 +230,46 @@ export const handleCreateTree = async (
     // Plugin-side degrades (T7) join the server's own lossy-conversion notes in
     // ONE list. The plugin can only degrade at write time — a `sizing:['FILL',…]`
     // Figma refuses on a child of a SLOT, an x/y the auto-layout parent
-    // overwrites — and the caller sees a single reply for the whole subtree, so
-    // if these are not merged here they are lost.
-    if (Array.isArray(result?.warnings)) {
-      warnings.push(...result.warnings)
-    }
+    // overwrites, a stated size auto-layout hugged away (B61) — and the caller
+    // sees a single reply for the whole subtree, so if these are not merged
+    // here they are lost. The plugin's come FIRST, as they do on update_node:
+    // they describe what happened to the document, the server's describe what
+    // was wrong with the request.
+    const fromPlugin = Array.isArray(result?.warnings)
+      ? result.warnings
+      : []
 
+    // shapeReply may add one of its own (a plugin that reported no ids).
+    const shaped = shapeReply(result, warnings)
+    const allWarnings = [...fromPlugin, ...warnings]
     const mutation = formatMutationResult(
-      shapeReply(result, warnings),
+      shaped,
       'Failed to create tree.',
     )
-    // Append any lossy-conversion warnings to a SUCCESSFUL result. (On error,
-    // formatMutationResult already returned the error envelope — leave it
-    // clean.)
-    if (warnings.length === 0 || isErrorResult(mutation)) {
+    // (On error, formatMutationResult already returned the error envelope —
+    // leave it clean.)
+    if (
+      allWarnings.length === 0 ||
+      isErrorResult(mutation)
+    ) {
       return mutation
     }
-    const warningText = warnings
-      .map(w => `Warning: ${w}`)
-      .join('\n')
+    // The degrades go in the reply's STRUCTURED `warnings[]`, the way
+    // update_node has always put them — one concept, one surface. They used to
+    // be appended as loose `Warning:` prose after the JSON, and B61's live gate
+    // is what that cost: the plugin reported the discarded size, the JSON body
+    // said nothing, and a caller reading the reply as data saw a clean build.
+    // create_tree is the path that builds whole screens, so it is the worst
+    // one to have had a second, weaker channel.
     return textResult(
-      `${mutation.content[0].text}\n\n${warningText}`,
+      JSON.stringify(
+        {
+          ...(shaped as Record<string, unknown>),
+          warnings: allWarnings,
+        },
+        null,
+        2,
+      ),
     )
   } catch (err) {
     return toolError(err)

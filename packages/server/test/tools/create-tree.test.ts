@@ -466,16 +466,20 @@ describe('handleCreateTree reply shape — {root, ids[]}', () => {
         },
       }),
     )
-    const [json, ...rest] =
-      result.content[0].text.split('\n\n')
-    const data = JSON.parse(json) as Record<string, unknown>
+    const data = JSON.parse(
+      result.content[0].text,
+    ) as Record<string, unknown>
     expect(data.root).toEqual({
       id: 'created:1',
       name: 'Card',
       type: 'FRAME',
     })
     expect(data.ids).toEqual(['created:1'])
-    expect(rest.join('\n')).toContain('Warning')
+    // In the reply's own `warnings[]`, not in prose after it (B61).
+    expect(data.warnings).toHaveLength(1)
+    expect((data.warnings as string[])[0]).toContain(
+      'reported no created ids',
+    )
   })
 
   it('keeps a plugin {error} an error (no root, no ids)', async () => {
@@ -503,7 +507,7 @@ describe('handleCreateTree reply shape — {root, ids[]}', () => {
 // <error>`) — a stub that invents its own format tests nothing about the
 // production path.
 describe('handleCreateTree — plugin-reported degrades', () => {
-  it('surfaces a plugin warning as a Warning: line', async () => {
+  it('surfaces a plugin warning in the reply’s own warnings[]', async () => {
     const result = await handleCreateTree(
       {
         tree: {
@@ -524,15 +528,18 @@ describe('handleCreateTree — plugin-reported degrades', () => {
         },
       }),
     )
-    const [json, ...rest] =
-      result.content[0].text.split('\n\n')
-    expect(rest.join('\n')).toContain(
-      'Warning: sizing not applicable',
-    )
-    // Reported ONCE: the plugin's array is merged into the rendered warning
-    // list, not also spread into the JSON body.
-    const data = JSON.parse(json) as Record<string, unknown>
-    expect(data.warnings).toBeUndefined()
+    const { text } = result.content[0]
+    const data = JSON.parse(text) as Record<string, unknown>
+    expect(data.warnings).toEqual([
+      'sizing not applicable on this node (FRAME): Error: FILL can only be set on children of auto-layout frames',
+    ])
+    // Reported ONCE, and as DATA. It used to be loose `Warning:` prose after
+    // the JSON, which is how B61's live gate saw a clean build on a subtree
+    // whose root had just had its stated size hugged away.
+    expect(
+      text.split('sizing not applicable'),
+    ).toHaveLength(2)
+    expect(text).not.toContain('Warning: ')
     expect(data.ids).toEqual(['created:1', 'created:2'])
   })
 
@@ -555,5 +562,127 @@ describe('handleCreateTree — plugin-reported degrades', () => {
       }),
     )
     expect(result.content[0].text).not.toContain('Warning:')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// B61 (live-gate follow-up) — a create_tree degrade has to be READABLE
+// ---------------------------------------------------------------------------
+//
+// The B61 warning fired in the plugin and the live probe still saw nothing.
+// `shapeReply` pulled `warnings` OUT of the JSON body and the handler appended
+// it as loose `Warning:` prose after the JSON — so every T7 degrade a subtree
+// build produces (a refused FILL on a slot child, B35's discarded child
+// positions, B61's discarded size) left the structured reply looking clean.
+//
+// `update_node` says the rule in its own source: merge into the reply's
+// structured `warnings[]`, "one concept, one surface … rather than appending
+// loose text". create_tree was the one write path that did the other thing, and
+// it is the path that builds whole screens.
+//
+// This is the class the earlier tests missed: every one of them asserted the
+// warning reached a `string[]` SINK. None asserted it reached the CALLER.
+describe('create_tree degrades reach the caller (B61)', () => {
+  const withPluginWarnings = async (
+    pluginWarnings: string[],
+  ): Promise<{
+    text: string
+    body: { warnings?: string[]; root?: unknown }
+  }> => {
+    const result = await handleCreateTree(
+      {
+        tree: {
+          type: 'FRAME',
+          name: 'b61x',
+          size: [400, 60],
+          layout: { mode: 'H', gap: 16 },
+          children: [
+            { type: 'RECTANGLE', size: [60, 30] },
+            { type: 'RECTANGLE', size: [60, 30] },
+          ],
+        },
+      },
+      stubClient({
+        reply: {
+          id: 'created:1',
+          name: 'b61x',
+          type: 'FRAME',
+          ids: ['created:1', 'created:2', 'created:3'],
+          warnings: pluginWarnings,
+        },
+      }),
+    )
+    const { text } = result.content[0]
+    return {
+      text,
+      body: JSON.parse(text.split('\n\nWarning:')[0]) as {
+        warnings?: string[]
+      },
+    }
+  }
+
+  const B61_NOTE =
+    'size not applied — asked [400, 60], "b61x" reads [136, 60].' +
+    ' Auto-layout owns the width (layoutSizingHorizontal: HUG).' +
+    ' Pin it with sizing:["FIXED","FIXED"].'
+
+  it('puts the plugin’s warning in the structured reply, not only in prose', async () => {
+    const { body } = await withPluginWarnings([B61_NOTE])
+    expect(body.warnings).toEqual([B61_NOTE])
+  })
+
+  it('keeps the root and ids beside it', async () => {
+    const { body } = await withPluginWarnings([B61_NOTE])
+    expect(body.root).toEqual({
+      id: 'created:1',
+      name: 'b61x',
+      type: 'FRAME',
+    })
+    expect((body as { ids?: string[] }).ids).toHaveLength(3)
+  })
+
+  it('reports each degrade ONCE — never in the body and the prose both', async () => {
+    const { text } = await withPluginWarnings([B61_NOTE])
+    expect(text.split('size not applied')).toHaveLength(2)
+  })
+
+  it('merges the server’s own conversion notes into the same list', async () => {
+    // One concept, one surface: a lossy conversion on the write face and a
+    // plugin-side degrade are the same kind of news to the caller.
+    const result = await handleCreateTree(
+      {
+        tree: {
+          type: 'FRAME',
+          name: 'b61y',
+          // A var() on a per-corner radius has no binding route — the write
+          // face warns and applies the literal.
+          radius: 'var(radius/md)[8,8,0,0]',
+          children: [{ type: 'RECTANGLE', size: [4, 4] }],
+        },
+      },
+      stubClient({
+        reply: {
+          id: 'created:1',
+          name: 'b61y',
+          type: 'FRAME',
+          ids: ['created:1', 'created:2'],
+          warnings: [B61_NOTE],
+        },
+      }),
+    )
+    const body = JSON.parse(
+      result.content[0].text.split('\n\nWarning:')[0],
+    ) as { warnings?: string[] }
+    expect(body.warnings).toHaveLength(2)
+    expect(body.warnings?.[0]).toBe(B61_NOTE)
+    expect(body.warnings?.[1]).toContain(
+      'per-corner radius',
+    )
+  })
+
+  it('stays clean when nothing degraded', async () => {
+    const { body, text } = await withPluginWarnings([])
+    expect('warnings' in body).toBe(false)
+    expect(text).not.toContain('Warning:')
   })
 })
