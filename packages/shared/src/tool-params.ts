@@ -321,10 +321,23 @@ export const setSelectionParamsSchema = strictParams({
 // Write tools — structure (delete / focus)
 // ---------------------------------------------------------------------------
 
-/** Params for `delete_node`: remove a node from the document. */
+/**
+ * Params for `delete_node`: remove a node from the document.
+ *
+ * A PAGE is a valid target, and saying so is the point of the description below
+ * (I57): scratch pages are the normal by-product of a build, and an agent that
+ * does not know this tool removes one leaves them behind or reaches for a page
+ * tool that does not exist. The M4 guard governs — the last page cannot go, and
+ * deleting the CURRENT page moves the session to a neighbour first and reports
+ * where it landed.
+ */
 export const deleteNodeParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
-  nodeId: z.string().describe('ID of the node to delete.'),
+  nodeId: z
+    .string()
+    .describe(
+      'ID of the node to delete. A PAGE id is a valid target — this is how a scratch page is cleaned up. Two guards: the LAST remaining page is refused, and deleting the CURRENT page switches the session to a neighbouring page first, then reports the new `currentPageId`.',
+    ),
 })
 
 /**

@@ -993,6 +993,34 @@ describe('groupNodesParamsSchema', () => {
 
 // recordFeedbackParamsSchema
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// deleteNodeParamsSchema — the PAGE power is written down (I57)
+// ---------------------------------------------------------------------------
+//
+// delete_node has always removed a PAGE, guards and all. The description said
+// only "ID of the node to delete", so the capability existed and nothing
+// announced it: an agent that had made a scratch page either left it in the
+// file or went looking for a delete_page tool that does not exist. The
+// description IS the interface for a tool an agent cannot read the source of,
+// so it is asserted like any other contract.
+describe('deleteNodeParamsSchema', () => {
+  const nodeIdDescription = (): string =>
+    deleteNodeParamsSchema.shape.nodeId.description ?? ''
+
+  it('says a PAGE id is a valid target', () => {
+    expect(nodeIdDescription()).toContain('PAGE')
+  })
+
+  it('names both guards, so neither is a surprise', () => {
+    const text = nodeIdDescription()
+    // The refusal…
+    expect(text).toContain('LAST')
+    // …and the side effect that is not a refusal.
+    expect(text).toContain('CURRENT')
+    expect(text).toContain('currentPageId')
+  })
+})
+
 describe('recordFeedbackParamsSchema', () => {
   it('accepts a valid bug report', () => {
     const parsed = recordFeedbackParamsSchema.parse({
