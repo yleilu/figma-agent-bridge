@@ -195,6 +195,16 @@ When the region already holds an instance and you only need to point it somewher
 
 ## 5. Slots in practice
 
+**An instance is sealed except its slots.** The only place an instance
+can receive new children is a SLOT. So any region of a master that must
+receive content later — a header's trailing end, a card's action area —
+needs a slot (or a property-gated child) in the MASTER, at authoring
+time. A region without one is closed forever in every instance, and the
+content ends up parked in whatever slot exists — the observed failure: a
+header-row button the brief named, built into the body slot, because the
+master's header had no slot and no property and the placed instances
+could never grow one.
+
 - **Slots are created by `update_component`, not by `create_node`.** A `create_node` with
   `type: 'SLOT'` gives you a FRAME placeholder and a warning saying so; the real slot comes
   from the `slots` param.

@@ -216,7 +216,34 @@ paint in `strokes[]` — which is where the token you care about lives anyway.
 
 ---
 
-## Binding variables and applying styles
+## Gradient borders, and gradients that carry tokens
+
+**A gradient border is a gradient stroke — never a box-in-a-box.** The
+padded-wrapper form (a gradient-filled outer frame with a solid inner
+panel) costs a node, forces concentric-radius math on the inner corner,
+and kinks the corner when that math is skipped. Paint the outline
+instead:
+
+```json
+{
+  "strokes": ["linear(135, var(brand/violet)#7C5CFF@0, var(brand/cyan)#22D3EE@100)"],
+  "stroke": "stroke(2, {align=INSIDE})",
+  "radius": "var(radius/xl)20"
+}
+```
+
+One node, one radius, and the paint follows every corner by
+construction.
+
+**Gradient stops bind to tokens — bind them by default.** Each stop
+takes the same `var()` wrapper a solid paint does:
+`linear(135, var(brand/violet)#7C5CFF@0, var(brand/cyan)#22D3EE@100)`.
+The read-back returns the wrappers, and a bare hex inside a gradient is
+an unbound literal exactly as it is on a solid. Reserve a paint **style**
+for a gradient that is itself a named, reused thing (`Gradient/Hero`) —
+the style owns the whole field (`fills: "style(Gradient/Hero)"`), one
+home for the recipe; the stop bindings ride inside the style's own
+definition.
 
 **The wrapper is the write.** An inline `var(Name)value` / `style(Name)value` atom
 applies the literal **and then** binds by name — one call, no id lookup:

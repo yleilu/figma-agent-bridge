@@ -83,6 +83,17 @@ Two peer tools carry repeating items. Choose by what must happen on resize:
   rows) are not expressible on the surface yet. Until then, compose spanning
   shells from nested H/V frames and use grid for the uniform regions.
 
+## 5b. Concentric radii
+
+A rounded box inside a rounded box needs a smaller inner radius: **inner
+= outer − the inset between them.** Outer 20 with a 2px rim needs inner
+18. The token scale does not override geometry — take the off-scale
+literal knowingly (the same "knowingly" the binding splits use). This
+governs every box-in-box: cards inside cards, rings, focus outlines.
+For borders specifically, prefer the gradient-stroke recipe
+(`mechanics.md`, *Gradient borders*) — a stroke follows the outline and
+removes the inner radius entirely.
+
 ## 6. Slot sizing
 
 The modeling half of slots is `components.md` §5. The sizing half:
