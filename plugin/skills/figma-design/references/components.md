@@ -50,33 +50,57 @@ they were meant to be one thing.
 
 ---
 
-## 2. What must be a component
+## 2. What must be a component — the litmus
 
-Model as a component, before placement:
+Run four questions on every construction. ANY yes makes it a component,
+created before placement (§1). All four no let it stay a frame — and you
+write the four NOs down (the census, SKILL.md).
 
-- **Anything that repeats** — rows, list items, cards, feed entries, chips, badges, buttons,
-  nav items.
-- **Anything with named states** — the states are the variant axis (§3), and a thing that has
-  states has them whether or not you model them.
-- **Containers and shells that repeat across screens** — sidebar, app shell, top nav,
-  chart-card chrome, modal frame. A shell is instanced per screen for exactly the reason a row
-  is instanced per item: it is the same thing appearing many times. Six screens sharing a
-  sidebar is six instances of one sidebar component, not six sidebars.
+- **Q0 — Block.** Is it a screen-level block — a direct child of a
+  screen's content region? Then it is a component, even at one
+  occurrence. No judgment here: blocks and shells repeat by role across
+  screens and products, and the reviewer checks this in one sweep.
+- **Q1 — Reuse.** Can it be reused, and is the reuse worth it? The reuse
+  is worth it when ANY of these holds:
+  - **Propagation** — a later change to it should reach every copy.
+  - **Next screen** — the product's next screen could plausibly carry it.
+  - **Workbench** — someone would take it alone: export it as a PNG for
+    development, drag an instance to squeeze-test its sizing without
+    dragging the whole screen, hand it off as one unit.
+- **Q2 — States.** Does it carry states — hover, active, selected,
+  disabled, loading, or variant looks?
+- **Q3 — Role or asset.** Is it a pattern the web has a name for —
+  banner, dialog, toast, pagination, breadcrumb, tab bar, close control?
+  Or is it an icon, logo, glyph, or identity mark? **Assets are
+  components always, no questions asked.**
 
-**A brief's component inventory is a floor, not a ceiling.** The strongest observed failure
-was not ignorance of components — it was scope: the one shell the brief happened to name got
-componentized, and the two it didn't name were hand-built seven times each. If a thing repeats
-and the brief is silent about it, it is still a component. Decide from the design, not from the
-list. This rule has a mechanism that makes it run when attention is spent: **the
-screen-boundary census** (SKILL.md, *Workflow spine*) — before every screen after the first,
-list each construction that now exists twice and name its master; a repeat with no master is
-a stop.
+Worked against real cases: a hero banner passes Q0 (and Q1 propagation,
+Q3) at one occurrence. A close control passes Q3 — the asset clause, not
+a repeat count. A chart's plot interior fails all four and stays a frame.
 
-**Role earns component status too — repetition is only the common case.** Identity assets
-(a brand logo) and standard UI patterns (pagination, breadcrumb, tab bar) are components
-at **one** occurrence: their role in the design system is the reason, not their count. A
-pagination bar whose buttons are all instances while the bar itself stays a loose FRAME
-is the observed failure — the pattern is the component, not just its parts.
+**Two decisions, not one.** The litmus decides component-or-frame. WHERE
+the master lives is the placement rule (SKILL.md, *Organize the file*): a
+master one screen consumes sits beside that screen; a shared master sits
+on the design-system page. A one-off block is a cheap local component —
+cost is answered by placement, never by skipping the litmus.
+
+**The cost counterweight.** Model minimally. A plain component beats a
+variant set until a second state is real. A slot beats an axis for an
+open occupant (§4). Never add an axis or property for a state nobody
+named — a wrong abstraction costs more than the duplication it replaced.
+
+**The undecided case.** When a construction's final shape is genuinely
+unknown, leave it a frame and re-run the litmus at the screen boundary.
+One hard exception: never park an undecided piece inside a SLOT — §1's
+refusal makes promotion impossible there.
+
+**A brief's component inventory is a floor, not a ceiling.** The
+strongest observed failures were scope: the things the brief happened to
+name got masters, and the things it did not name — a banner named only
+in the screens section, a close control named nowhere — stayed frames.
+The litmus decides from the design, never from the list. The mechanism
+that makes it run is the census (SKILL.md): pass 1 walks the BRIEF, so a
+one-occurrence role is caught where a repeat count is blind.
 
 If a `figma-bridge-prefs` skill is installed it may raise this — up to _everything placed on a
 page is an instance_. Defer to it when it does; this file is the floor.

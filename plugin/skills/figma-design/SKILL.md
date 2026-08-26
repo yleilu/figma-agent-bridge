@@ -273,6 +273,7 @@ A default order, not a mandate — adapt to the request:
    scales).
 2. **Styles** — map tokens to text styles, effect styles.
 3. **Components** — build master components; add variants via `combine_variants`.
+   Before the first master, run the component census, pass 1 (below).
    Complex components (tables, data grids, calendars) go **last** — model them on paper
    first (`references/components.md`).
 4. **Layout** — auto-layout is the default, and the tool's default too: every created
@@ -288,10 +289,23 @@ A default order, not a mandate — adapt to the request:
 5. **Content** — populate text, images, instance overrides.
 6. **Verify** — `export` + read-back; check token bindings and instance types.
 
-### The screen-boundary census
+### The component census — two passes, both written
 
-Before assembling every screen after the first, stop and write a census in your
-progress narration — three columns, one row per repeated element:
+**Pass 1 — at the components stage, walk the BRIEF.** Before the first
+master: list every block and every interactive element the brief names.
+For each, decide component or frame with the litmus (`references/components.md`
+§2) and write the decision down — three columns, in your progress narration
+AND as a `context` note on the design-system page:
+
+| Element (from the brief) | Decision | Why (Q0/Q1/Q2/Q3 — or the four NOs) |
+
+A frame decision with no written NOs is a stop. A repeat count cannot see
+a one-occurrence role; the brief walk can — the banner and the close
+control live in the brief even when no repetition ever happens.
+
+**Pass 2 — at every screen boundary, walk the REPEATS.** Before assembling
+every screen after the first, stop and write a census in your progress
+narration — three columns, one row per repeated element:
 
 | Element (by construction, not content) | Seen where | Master |
 

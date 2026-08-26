@@ -151,6 +151,14 @@ Findings:
 copy. Signature + corroborator is strong evidence, never proof — report what matched and
 let the human judge.
 
+### The block litmus (Q0)
+
+Every direct child of a screen's content region — the `block/*` class —
+must read back `type: INSTANCE`. A block-level FRAME with no master is a
+`warning` naming Q0 (`figma-design` components.md §2): blocks are
+components even at one occurrence. The design-system page missing its
+census `context` note is a `nit`.
+
 ---
 
 ## Dimension 2 — Consistency
