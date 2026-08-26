@@ -249,8 +249,14 @@ what a paint or effect entry carries internally.)
   position**, because Figma holds each padding side as its own field:
   `pad: [var(space/8)8, 16, var(space/8)8, 16]` binds top and bottom and leaves left
   and right literal. A read emits every wrapper it finds, an all-zero `pad` included
-  when a side is bound (dropping it would drop the binding sitting on it), and writing
-  that struct back applies the number **and** re-establishes the binding. A `style()`
+  when a side is bound (dropping it would drop the binding sitting on it), and **a
+  layouted node always emits `gap` (and both grid gaps), `0` included** — a zeroed gap
+  can never read as unset. Writing
+  that struct back applies the number **and** re-establishes the binding.
+  **One pair is refused at every write door:** `align: ["SPACE_BETWEEN", …]` with a
+  **variable-bound** `gap` is self-contradictory (space-between means Figma owns the
+  spacing); the error names the recovery (`bind_variable {clear: true}` on the gap,
+  then write), and a literal gap beside SPACE_BETWEEN is fine. A `style()`
   on a spacing scalar finds no route and warns — a style cannot own one — and a
   spacing leaf that states no number is `INVALID_PARAM`, canonical spelling in the
   message.
