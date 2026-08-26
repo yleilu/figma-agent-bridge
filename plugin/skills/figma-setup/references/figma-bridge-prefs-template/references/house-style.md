@@ -61,6 +61,14 @@ floor.
 - **A zero or neutral delta renders muted** — no arrow, no `+`. Keep the sentiment colours
   and the arrow for real movement, so a flat number reads as flat at a glance.
 
+## Icons (Material-derived defaults; edit to taste)
+
+- **Family:** 16 / 20 / 24 / 32 px; home size 24.
+- **Live area:** 20×20 inside the 24 box — a 2px inviolable rim.
+- **Stroke:** 2 at 24, round caps, 2px silhouette corner radius.
+- **Ink coverage:** ≈80% of the box.
+- **Keylines:** square 18 · circle 20 · portrait 16×20 · landscape 20×16.
+
 ## Naming convention
 
 - Descriptive PascalCase / Title-Case names.

@@ -280,3 +280,28 @@ cannot be re-promoted (§1): the fix is a rebuild, not an edit.
 
 One row anatomy with a `Type` variant axis beats five row components, and beats one row with
 five booleans by both of §3's arguments.
+
+---
+
+## 7. Icons
+
+An icon is a component (§2 Q3 — assets always), built as a **frame
+wrapping the vector, never a bare vector**. The frame carries the family
+size; the empty rim inside it is part of the icon; the frame is what
+exports and what instances swap. Discipline, not numbers:
+
+- **Ink stays inside the live area.** The outer rim is inviolable — it
+  is the icon's built-in breathing room, so icons never crowd what sits
+  beside them.
+- **One set, one stroke voice.** Same stroke weight, same caps, same
+  corner treatment in every glyph of a set — a set should look like one
+  hand drew it.
+- **Snap ink to whole pixels.** Off-pixel coordinates blur at render.
+  Whole numbers in the vector geometry, always.
+- **Center by eye, not by box.** An asymmetric glyph (a play triangle)
+  sits nudged off mathematical center until it looks centered. An
+  optically chosen off-center position is correct, not drift.
+
+The concrete numbers — the size family, the live-area split, the stroke
+weight, the keyline proportions — are a house value
+(`figma-bridge-prefs`, house-style *Icons*).
