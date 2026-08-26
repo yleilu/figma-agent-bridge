@@ -233,15 +233,19 @@ context note** — load it before writing or repairing one.
 
 ## Workflow spine
 
-A default order, not a mandate — adapt to the request:
+The ORDER is a default, not a mandate — adapt it to the request (an edit task
+starts at step 5). **Two artifacts inside it are not adaptable — they are gates:**
+the census (step 3) and the binding sweep (step 6). A build that skips either is
+not done, whatever it looks like.
 
 1. **Tokens** — establish or reuse variable collections (color, spacing, typography
    scales).
 2. **Styles** — map tokens to text styles, effect styles.
 3. **Components** — build master components; add variants via `combine_variants`.
-   Before the first master, run the component census, pass 1 (below).
-   Complex components (tables, data grids, calendars) go **last** — model them on paper
-   first (`references/components.md`).
+   **GATE: the first `create_component` call is illegal until census pass 1 exists**
+   — the written table in your narration AND the `context` note on the design-system
+   page (below). Complex components (tables, data grids, calendars) go **last** —
+   model them on paper first (`references/components.md`).
 4. **Layout** — auto-layout is the default, and the tool's default too: every created
    FRAME and SLOT is a vertical stack unless you opt out with `layout: {mode: 'NONE'}`.
    State `layout` yourself for direction, gap, and padding — and state `sizing` with it,
@@ -254,6 +258,10 @@ A default order, not a mandate — adapt to the request:
    any, comes from `figma-bridge-prefs`.
 5. **Content** — populate text, images, instance overrides.
 6. **Verify** — `export` + read-back; check token bindings and instance types.
+   **GATE: the build is not reportable as done until the binding sweep has run and
+   its RATES are stated in your report** — "N of M token-valued paints bound, N of M
+   text nodes styled, every file-defined style applied ≥1×" (Verification
+   discipline). A build that looks right and is unbound is a failed build.
 
 ### The component census — two passes, both written
 

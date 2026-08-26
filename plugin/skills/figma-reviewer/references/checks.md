@@ -45,9 +45,12 @@ binds as it lands, so a bare value equal to a token is a skipped binding, not a 
 limit.
 
 **Measure the rate, don't just list offenders.** When more than 25% of the target's
-token-valued paints carry no wrapper, add **one** summary finding stating the measured
-binding rate (`N of M token-valued paints are bound`) alongside the per-node findings —
-a scatter of individual warnings understates a systematic miss.
+token-valued paints carry no wrapper, the summary finding stating the measured binding
+rate (`N of M token-valued paints are bound`) is a **blocker**, not a warning — a
+systematic binding miss defeats the design system while looking correct (two builds
+proved it invisible to every visual check). Below that rate, per-node findings carry
+the severities above. **A style or token the BUILD ITSELF defined and applied to zero
+nodes is a `blocker` on its own** — self-inconsistency, no house number needed.
 
 ### Spacing tokens
 
@@ -151,13 +154,19 @@ Findings:
 copy. Signature + corroborator is strong evidence, never proof — report what matched and
 let the human judge.
 
-### The block litmus (Q0)
+### The block litmus (Q0) and the census gate
 
 Every direct child of a screen's content region — the `block/*` class —
 must read back `type: INSTANCE`. A block-level FRAME with no master is a
 `warning` naming Q0 (`figma-design` components.md §2): blocks are
-components even at one occurrence. The design-system page missing its
-census `context` note is a `nit`.
+components even at one occurrence.
+
+**The census gate (S49).** A build that created components MUST carry the
+census artifact: the `context` note on the design-system page holding the
+pass-1 decision table. Missing on any build with ≥1 created master →
+**`blocker`** (was a nit; two consecutive full builds skipped the census
+and both structural fails traced to it). A single-screen edit task that
+created no masters is exempt.
 
 ---
 
