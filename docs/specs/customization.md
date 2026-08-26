@@ -33,8 +33,8 @@ a user who spends one interview with `figma-setup` gets their house style applie
 **and** review.
 
 **The partition (from [[figma-bridge/docs/principles|P1]]).** A shipped skill carries only
-**tool usage** and a **basic level of the two universal professional practices**
-(design-system-first, component-first). **Everything else is a preference** and lives in the
+**tool usage** and a **basic level of the three universal professional practices — the pillars**
+(design-system-first, component-first, everything-responsive). **Everything else is a preference** and lives in the
 user skill `figma-bridge-prefs`: all concrete values, and any stricter-than-basic standard.
 
 **Non-goals.**
@@ -57,7 +57,7 @@ flowchart TB
     end
     subgraph Shipped["Plugin layer - shipped skills"]
         U["Tool usage (mechanics)"]
-        B["Basic floor: design-system-first + component-first"]
+        B["Basic floor: the three pillars — design-system-first + component-first + everything-responsive"]
     end
     subgraph UserSkill["Plugin layer - user skill (NOT shipped)"]
         P["figma-bridge-prefs: strict levels + concrete values + all other taste"]
@@ -72,24 +72,41 @@ flowchart TB
 | Bucket                          | Home                              | Examples                                                                                            |
 | ------------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------- |
 | **Tool usage**                  | shipped `figma-design`            | mechanics, exact call patterns, limits to route around                                              |
-| **Basic professional practice** | shipped `figma-design`            | the _basic level_ of design-system-first + component-first                                          |
-| **Preference**                  | `figma-bridge-prefs` (user skill) | all concrete values (tokens, scale, type ramp, naming), and the _strict level_ of the two practices |
+| **Basic professional practice** | shipped `figma-design`            | the _basic level_ of the three pillars: design-system-first + component-first + everything-responsive |
+| **Preference**                  | `figma-bridge-prefs` (user skill) | all concrete values (tokens, scale, type ramp, naming, breakpoints, icon grid), and the _strict level_ of the three pillars |
 
-The discriminator for **why the two practices may ship a default at all** (and a brand colour or
+The discriminator for **why the three pillars may ship a default at all** (and a brand colour or
 spacing scale may not): **a preference ships a default only if it has a universally-defensible
-floor.** Design-system-first and component-first do — a _mild_ "prefer systematic design" baseline
-no professional objects to. A brand colour or spacing scale has no universal default; any default
+floor.** The three pillars do — a _mild_ "prefer systematic design / reuse / responsive" baseline
+no professional objects to (everything-responsive's floor is directional too: masters hug,
+text wraps, squeeze-check before done — no number in any of it). A brand colour or spacing scale has no universal default; any default
 there imposes one team's taste on all, so it ships nothing. This is the P1 rule, applied. The
 same test seems to admit accessibility — "text should be legible" is likewise
-universally-defensible — yet a11y still ships nothing, because the two practices are
+universally-defensible — yet a11y still ships nothing, because the pillars are
 construction **discipline** (a directional "prefer systematic design" is actionable with no
 number), whereas an accessibility check is **inert without a concrete threshold** (you cannot
 flag contrast without a ratio), so it behaves like every other concrete value (tokens / scale /
 ramp) and ships nothing, not like a process floor.
 
+### 2.1 The layer law (2026-08-26)
+
+The bucket table above, stated as law, with the fourth bucket named:
+
+- The plugin skill carries **tool knowledge + the three pillars + the agent working
+  contract** (the always-on obligations: verify, census, narrate).
+- The prefs skill carries **preferences, numbers, and house taste**.
+- **Patterns ship nowhere.** A design pattern — a card-header arrangement, a list-item
+  layout, a separator convention — becomes a fixture line, a prefs entry, or dissolves
+  into an existing rule. It never enters a shipped skill.
+
+Three structural rules follow: one concern one skill, one fact one home (a second
+statement becomes a pointer); a SKILL.md body carries only always-on content; every
+reference earns a named load trigger. The audit that enforces all of this is the
+`plugin-reviewer` skill (user-side), run after any batch of skill edits.
+
 ## 3. The two levels
 
-The same two practices appear in **both** layers at **different levels**. The shipped skill holds
+The same three pillars appear in **both** layers at **different levels**. The shipped skill holds
 the **basic** level (the floor a non-customizing user gets); the `figma-bridge-prefs` template
 ships the **strict** level. Absent `figma-bridge-prefs`, the basic floor is the default; present,
 it **raises the level** and supplies concrete values.
@@ -97,7 +114,8 @@ it **raises the level** and supplies concrete values.
 |                         | **Basic — shipped `figma-design`** (default when no prefs)                                                                                                   | **Strict — `figma-bridge-prefs` template** (opt-in)                                                                                      |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | **Design-system-first** | _Reactive:_ if a design system exists, adopt & extend it; don't duplicate; use an existing token/style over a raw literal. Blank file → offer, don't impose. | _Proactive:_ always establish tokens/styles first, even for a one-off; never place a raw value that could be a token; every value bound. |
-| **Component-first**     | Reuse an existing component before creating; a meaningfully repeated element _can_ become a component.                                                       | Any element used ≥2× **must** be a component; prefer variants over duplicates; never detach; name by role.                               |
+| **Component-first**     | The four-question litmus (repeats / states / role-or-asset / screen-level block) decides component-or-frame; reuse before create; the census makes it run.    | _Everything placed on a page is an instance_; prefer variants over duplicates; never detach; name by role.                               |
+| **Everything responsive** | Nothing FIXED without a reason; masters hug, instances fill; text wraps; floors on containers; squeeze-check before done.                                   | Every component survives any width; min/max contract required on text-bearing masters; house breakpoint widths and measure cap.          |
 
 These are **defaults**, not hard floors — a user may tune them in any direction (e.g. relax
 design-system-first for a throwaway mockup). The **hard, non-overridable** floor is separate
@@ -114,10 +132,10 @@ the user's own skills directory (§8) and is the SSOT for that user's/team's pre
 skill loads only the concern it consumes):
 
 - `SKILL.md` — thin: the precedence declaration (§7) + pointers to the references below.
-- `references/house-style.md` — the strict levels of design-system-first / component-first, plus
-  concrete values (tokens, spacing scale, type ramp, naming, file organization — the page scheme
-  and where masters sit — and data display, how a delta or a status renders). Consumed by
-  `figma-design`.
+- `references/house-style.md` — the strict levels of the three pillars (design-system-first /
+  component-first / everything-responsive), plus concrete values (tokens, spacing scale, type
+  ramp, breakpoint widths, the icon grid, naming, file organization — the page scheme and where
+  masters sit — and data display, how a delta or a status renders). Consumed by `figma-design`.
 - `references/review-standards.md` — the house scale / token set / type ramp the reviewer checks
   against (§9). Consumed by `figma-reviewer`.
 
