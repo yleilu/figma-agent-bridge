@@ -100,8 +100,9 @@ Run the **figma-reviewer skill** as a self-check before calling the build done.
 Pass the session `fileKey` (and the just-built target's node id) into the invocation —
 alongside the already-established design-system context — so the reviewer targets the
 right file and does not re-resolve or mis-target.
-The figma-reviewer skill checks six dimensions: design-system adherence, consistency,
-accessibility, layout and structure hygiene, fidelity to intent, and naming & context.
+The figma-reviewer skill checks seven dimensions: design-system adherence, consistency,
+accessibility, layout and structure hygiene, fidelity to intent, naming & context, and
+responsiveness.
 
 Emit the standardized report:
 

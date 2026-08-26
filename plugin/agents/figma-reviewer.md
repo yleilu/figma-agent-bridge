@@ -12,7 +12,7 @@ model: sonnet # default; escalate to opus for large or complex reviews (many fra
 # figma-reviewer agent
 
 A dedicated subagent that performs a **design review** — reads a target frame or selection,
-checks it against six quality dimensions using the `figma-reviewer` skill, emits a
+checks it against seven quality dimensions using the `figma-reviewer` skill, emits a
 standardized report, and then offers to apply fixes. A `figma-designer` self-review does
 **not** dispatch this agent — the designer has no dispatch tool, so it runs the
 `figma-reviewer` **skill** in-session; this agent is the on-request review path.
@@ -39,7 +39,7 @@ Sonnet handles most reviews. Escalate to opus when:
 Before checking any dimension, build a faithful picture of the target:
 
 0. **Load the review basis.** Load **both** `figma-design` — the basic design doctrine
-   (design-system-first, component-first, the naming floor), whose review-relevant doctrine is
+   (the three pillars — design-system-first, component-first, everything-responsive — and the naming floor), whose review-relevant doctrine is
    delivered in the skill body on load (its references are pure build mechanics — do not read
    them) — and, if a skill of that **exact** name is available, `figma-bridge-prefs`, reading
    its `references/review-standards.md` for the concrete house scale / tokens / ramp / naming
