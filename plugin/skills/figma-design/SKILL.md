@@ -12,7 +12,7 @@ version: 0.5.0
 
 # figma-design skill
 
-Purpose: teach **how to operate** the 61-tool surface well. This skill deliberately
+Purpose: teach **how to operate** the full tool surface well. This skill deliberately
 does not encode visual taste or a house style — _how the outcome looks is the user's
 to specify, per request_. Principles and mechanics age well; baked aesthetics don't.
 The skill covers the full surface: create, inspect, and edit (including the current
@@ -334,7 +334,7 @@ After any build or edit:
      costs the plugin a per-candidate lookup besides. **Unused is not prunable:** delete
      only what this build created and nothing else references, and _flag_ anything older
      for the human — a delete breaks every binding that pointed at it and nothing warns
-     you (**Limits**). Promote what the build hand-rolled twice.
+     you (`references/mechanics.md`, **Limits**). Promote what the build hand-rolled twice.
    - **Structure** — collapse a single-child wrapper that decorates nothing, give siblings
      distinct names, keep an instance named for what it instances. Redundant nesting and
      orphan / hidden nodes are mechanical checks in the `figma-reviewer` skill (its
