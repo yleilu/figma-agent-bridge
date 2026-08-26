@@ -234,19 +234,24 @@ context note** — load it before writing or repairing one.
 ## Workflow spine
 
 The ORDER is a default, not a mandate — adapt it to the request (an edit task
-starts at step 5). **Two artifacts inside it are not adaptable — they are gates:**
-the census (step 3) and the binding sweep (step 6). A build that skips either is
-not done, whatever it looks like.
+starts at step 6). **Two artifacts inside it are not adaptable — they are gates:**
+the census (step 3, a step of its own) and the binding sweep's closing block
+(step 7). A build that skips either is not done, whatever it looks like.
 
 1. **Tokens** — establish or reuse variable collections (color, spacing, typography
    scales).
 2. **Styles** — map tokens to text styles, effect styles.
-3. **Components** — build master components; add variants via `combine_variants`.
-   **GATE: the first `create_component` call is illegal until census pass 1 exists**
-   — the written table in your narration AND the `context` note on the design-system
-   page (below). Complex components (tables, data grids, calendars) go **last** —
-   model them on paper first (`references/components.md`).
-4. **Layout** — auto-layout is the default, and the tool's default too: every created
+3. **Census** — a step of its own, with an artifact. Run component census pass 1
+   (below) and produce BOTH outputs before moving on: the decision table posted in
+   your progress narration, and the same table written as a `context` note on the
+   design-system page. These outputs are the only way into step 4.
+4. **Components** — **ENTRY TICKET: this step OPENS by posting the census table** —
+   your first narration line here restates it (or names the DS-page note carrying
+   it). A components stage that opens any other way is out of order; go back to
+   step 3. Build master components; add variants via `combine_variants`. Complex
+   components (tables, data grids, calendars) go **last** — model them on paper
+   first (`references/components.md`).
+5. **Layout** — auto-layout is the default, and the tool's default too: every created
    FRAME and SLOT is a vertical stack unless you opt out with `layout: {mode: 'NONE'}`.
    State `layout` yourself for direction, gap, and padding — and state `sizing` with it,
    or the stack hugs a stated `size` away (`references/mechanics.md`, **Fixed-size
@@ -256,16 +261,16 @@ not done, whatever it looks like.
    never hand-matched `x` offsets. Sizing doctrine — which axis FILLs, where floors
    live, wrap vs grid — is `references/responsive.md`. The concrete spacing scale, if
    any, comes from `figma-bridge-prefs`.
-5. **Content** — populate text, images, instance overrides.
-6. **Verify** — `export` + read-back; check token bindings and instance types.
-   **GATE: the build is not reportable as done until the binding sweep has run and
-   its RATES are stated in your report** — "N of M token-valued paints bound, N of M
-   text nodes styled, every file-defined style applied ≥1×" (Verification
-   discipline). A build that looks right and is unbound is a failed build.
+6. **Content** — populate text, images, instance overrides.
+7. **Verify** — `export` + read-back; check token bindings and instance types.
+   **CLOSING BLOCK: your final report ENDS with the rates** — "N of M token-valued
+   paints bound · N of M text nodes styled · every file-defined style applied ≥1×"
+   (Verification discipline). A report without the closing block is not a report; a
+   build that looks right and is unbound is a failed build.
 
 ### The component census — two passes, both written
 
-**Pass 1 — at the components stage, walk the BRIEF.** Before the first
+**Pass 1 — step 3, a step of its own: walk the BRIEF.** Before the first
 master: list every block and every interactive element the brief names.
 For each, decide component or frame with the litmus (`references/components.md`
 §2) and write the decision down — three columns, in your progress narration
