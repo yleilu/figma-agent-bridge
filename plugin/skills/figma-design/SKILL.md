@@ -22,13 +22,11 @@ selection). There is no create-only vs. edit split.
 
 ## Address the file first
 
-Call `status()`; read the target file's `fileKey` from `joined[]` (or `available[]` on a
-cold start — the server auto-joins an available file on first use) and pass it on **every**
-subsequent file-tool call. If several files are joined and the target is ambiguous, **ask —
-never guess.** (`connect` / `status` are the session pair — neither requires a per-call
-`fileKey`; `connect` takes one only to choose which file to pair with.) Full multi-file /
-error model:
-`figma-connection`.
+Call `status()`; read the target file's `fileKey` from `joined[]` and pass it on
+**every** subsequent file-tool call. If several files are joined and the target is
+ambiguous, **ask — never guess.** The full addressing doctrine — the session pair,
+multi-file driving, and every error response — is `figma-connection`; load it on any
+addressing or connection question.
 
 ---
 
@@ -208,8 +206,9 @@ The concrete page set and grid spacing, if any, come from `figma-bridge-prefs`.
 
 ## Data coherence
 
-A rendered number is a claim. These are correctness, not taste — they hold with or
-without a design system:
+The truth half of pillar 1: one source of truth governs **data** the way it governs
+tokens. A rendered number is a claim. These are correctness, not taste — they hold
+with or without a design system:
 
 - **One dataset drives related and repeated content.** One price table, one precision per
   asset: the same record shows the same number everywhere it appears. A figure invented
@@ -224,44 +223,11 @@ without a design system:
 
 ## Context — the hidden note
 
-`context` is a round-trippable markdown note stored on a node: the non-derivable _why_ a
-structural read can't give — purpose, role, status, constraints, links. Write it with
-`create_node` / `update_node` (the `context` field); read it back in full on `get_node`
-/ `get_nodes`, or as a compact `contextSummary` (the frontmatter slice) on `inspect` /
-`search` / `get_components`.
-
-**Author it in this shape** — frontmatter scalars, then fixed body sections (one shown):
-
-```markdown
----
-purpose: Primary checkout CTA — sole entry to checkout
-role: button/primary
-status: stable
-updated: agent · 2026-07-08
----
-
-## Constraints
-
-Token-bound (do not restyle) · text localized · width fluid
-```
-
-- **Frontmatter** — `purpose` (required by convention: what it is and what it's _for_),
-  `role` (design-system label like `button/primary`), `status` (`draft` | `stable` |
-  `deprecated`, default `stable`), `updated` (provenance — `agent · <date>`). All but
-  `purpose` are optional.
-- **Body** — the three fixed sections `## Constraints`, `## Links`, `## Notes`, in that
-  order. Skip any you have nothing for; don't invent new headings.
-- **Keep it to one screen of _why_** — a ~600-character soft budget. Past that you're
-  writing docs: link out via `## Links` instead. The hard cap is 2 KB; a write over it
-  is rejected with a clean size error.
-
-One boundary to respect:
-
-- **Over-cap writes are read-only.** The raw `set_plugin_data(figmabridge/context, …)`
-  escape hatch is unopinionated and can store a value above the 2 KB cap. Such a value
-  reads back faithfully but is **read-only** — a full-spec write-back through
-  `update_node` is rejected with the size error. Trim to ≤ 2 KB, or omit `context`
-  (omitting preserves the stored value) to edit the rest of the node.
+`context` is a round-trippable markdown note stored on a node: the non-derivable
+_why_ a structural read can't give — purpose, role, status, constraints, links.
+Write meaningful notes on masters and load-bearing frames. The authoring shape,
+the size budget, and the over-cap boundary are `references/mechanics.md`, **The
+context note** — load it before writing or repairing one.
 
 ---
 
@@ -386,23 +352,11 @@ silently with a wrong result — file a bug via the `figma-feedback` skill.
 
 ## Wrapping up — offer the feedback review
 
-The gate is raised by the **main agent** (`AskUserQuestion` only works at the top level),
-but the trigger flows through the whole chain — and covers both ways work reaches you:
-
-- **You built directly** (this skill is loaded): when you finish and report the result to
-  the user, if **this task recorded new friction**, offer the **end-of-work review** — the
-  fixed three-way gate from the `figma-feedback` skill.
-- **A `figma-designer` / `figma-reviewer` subagent built** (it loaded this skill; the main
-  agent may not): the subagent records friction and **flags it in its report back** —
-  "recorded N tool-friction items — invoke the figma-feedback skill and present its fixed
-  end-of-work gate verbatim." Act on that flag: load `figma-feedback` and run the gate.
-
-Either way the gate files the **whole pending backlog** in one batch (new items plus anything
-deferred earlier). Trigger only on **new friction this task** — if nothing new was recorded,
-say nothing, even if an older backlog exists (it rides along the next time friction is filed;
-a purely-deferred backlog may linger, which is acceptable). This is an **optional courtesy,
-not a required step:** offer it once as you wrap up, never mid-build, never twice. If the
-moment isn't right, skip it. Don't nag.
+When you finish and report the result, and **this task recorded new tool friction**
+(your own `record_feedback`, or a subagent's report flagging it), load the
+`figma-feedback` skill and run its end-of-work review. The gate's shape, batch
+semantics, and etiquette are that skill's alone — offer it once as you wrap up,
+never mid-build; if nothing new was recorded, say nothing.
 
 ---
 
@@ -416,6 +370,7 @@ The calls that get wrong most often are documented with exact patterns in
 - binding a token — the inline wrapper, or the `bind_variable` / `apply_style` retrofit
 - combining variants
 - adding a shadow, glow, or blur; importing an SVG; filling a slot; drawing a divider
+- writing or repairing a node's `context` note
 
 The atom value formats (color, font, gradient, effect, stroke, sizing, constraints)
 are in `references/grammar.md`. Load it when writing or reading any atom value.
@@ -432,23 +387,11 @@ component, slot, or text block.
 
 ## Limits (know before hitting them)
 
-- `update_component`'s `add` entries bind a TEXT property to a text node **only when
-  you pass `targetNodeId`** — done that way, the bind is real: `set_instance` on that
-  property genuinely updates the instance's rendered text (verified live). Omit
-  `targetNodeId` and the property is added unbound — `set_instance` is then inert, and
-  the compound-id override path is the fallback (see `references/mechanics.md`).
-- `delete_variables` removes variables by id **and** whole collections (deleting a
-  collection cascades its variables); `delete_styles` removes local styles by id or by
-  name + type. Prefer reuse over delete-and-recreate: a delete breaks every binding that
-  pointed at that token or style, and nothing warns you.
-- `get_node` on a rotated node returns its **own unrotated** `size`, but a `position`
-  taken from the axis-aligned **bounding box** — different rectangles, so never mix the
-  two into one geometry calculation (`references/mechanics.md`, **Rotated nodes**).
-- `get_node` may return an invalid profile for nodes that are partially outside the
-  canvas — handle gracefully.
-
-When a limit blocks a task, record it via the `figma-feedback` skill (proposals or
-bugs, as appropriate) and continue with the best available workaround.
+The tool limits — unbound TEXT properties, deletes breaking bindings, rotated-node
+geometry, off-canvas reads — live in `references/mechanics.md`, **Limits**. Load it
+before working around anything surprising. When a limit blocks a task, record it via
+the `figma-feedback` skill (proposals or bugs, as appropriate) and continue with the
+best available workaround.
 
 ## User preferences
 

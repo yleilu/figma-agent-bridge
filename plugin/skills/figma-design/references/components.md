@@ -217,8 +217,9 @@ could never grow one.
 - **The entry carries a full spec.** `slots: [{name, …spec}]` where the spec is `update_node`'s
   own patch with `name` required: `layout`, `fills`, `size`, `sizing`, `radius`, inline `var()`
   wrappers and a `style(Name)` reference on a whole styleable field all land in the same call.
-  Worth knowing: a fresh slot is born 100×100 with an opaque `#FFFFFF` fill, so state
-  `fills: []` unless white is what you meant.
+  Worth knowing: a fresh slot is born with defaults of its own (`mechanics.md`,
+  **A write into a slot is read back, then trusted** — the sizes and the opaque
+  fill live there), so state `fills: []` unless white is what you meant.
 
 ```json
 {

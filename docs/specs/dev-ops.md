@@ -738,6 +738,13 @@ reverts it when the test ends.
 
 **Every release PR is expected to carry a label.** The label is a statement, not a requirement: an
 unlabelled release still resolves to a patch, and the pipeline computes the same number either way.
+
+**Release-PR review checklist — the shipped spec snapshots.** The plugin ships
+`plugin/skills/figma-design/references/grammar.md` as a self-contained copy of
+`docs/specs/expression-formats.md` (the spec does not ship). A release that changed the
+expression grammar must carry the matching snapshot update — the 2026-08-26 audit found the
+snapshot missing a shipped capability (gradient-stop bindings) one batch after it landed.
+Check the pair moves together on every release PR that touches the grammar.
 What differs is what a reviewer can read. `release:patch` says the compatibility question was asked
 and answered — this release breaks nothing. Silence answers nothing, and an unlabelled release is
 indistinguishable from one nobody thought about, which is precisely the failure below. That is why

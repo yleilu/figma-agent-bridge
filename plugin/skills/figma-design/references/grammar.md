@@ -69,7 +69,7 @@ Figma rejects lands the node, drops that one field, and reports Figma's own erro
 | Variant | Form |
 |---|---|
 | solid | `#3B82F6` · `#3B82F680` · `solid(#3B82F6)` · `rgba(59,130,246,0.5)` |
-| linear gradient | `linear(135, #FF0000@0, #00FF00@50, #0000FF@100)` |
+| linear gradient | `linear(135, #FF0000@0, #00FF00@50, #0000FF@100)` — a stop may carry a binding: `linear(135, var(brand/violet)#7C5CFF@0, var(brand/cyan)#22D3EE@100)` |
 | radial gradient | `radial(#FFFFFF@0, #00000000@100)` |
 | angular gradient | `angular(#FF0000@0, #00FF00@33, #0000FF@66)` |
 | diamond gradient | `diamond(#FF0000@0, #0000FF@100)` |
@@ -81,8 +81,12 @@ Notes:
 - `solid()` is optional — a bare hex color is a solid paint.
 - Color: `#RRGGBB`, `#RRGGBBAA` (hex always **uppercase, 6 or 8 chars**, no
   shorthand); `rgb(r,g,b)`, `rgba(r,g,b,a)` (a = 0–1) accepted on write.
-- Gradient stops: `#color@percent`. Angle is **linear-only** (first arg). Radial,
-  angular, diamond carry no angle; non-trivial geometry goes in `{tf=[a,b,c,d,e,f]}`.
+- Gradient stops: `#color@percent`, optionally wrapper-bound —
+  `var(Name)#color@percent` binds that stop's color to the named variable on write,
+  and a read emits the wrapper per stop. A name that resolves to nothing degrades to
+  the literal with a warning naming the stop, like every `var()`. Angle is
+  **linear-only** (first arg). Radial, angular, diamond carry no angle; non-trivial
+  geometry goes in `{tf=[a,b,c,d,e,f]}`.
 - `image(url)` is write-only sugar — reads always emit `image(HASH)`.
 - `{…}` keys for any paint: `op=` (paint opacity), `blend=` (blend mode),
   `vis=false` (hidden). Image/video extras: `scale=` (FILL/FIT/CROP/TILE), `rot=`,
@@ -231,10 +235,10 @@ what a paint or effect entry carries internally.)
   missing token costs a binding, never the write. Binding is **by name** only; an
   id inside a wrapper is not accepted. (A styled-field **reference** has no literal
   to keep, so there an unresolvable name is an error instead — next section.)
-- **Where a wrapper binds:** `fills[]`, `strokes[]`, a **uniform** `stroke(…)`
-  weight, a **uniform** `radius`, and the layout spacing scalars — `layout.gap` (with
-  its GRID spellings `rowGap` / `colGap`) and each of the four `layout.pad` sides —
-  for `var()`; `fills`, `strokes`, `effects`,
+- **Where a wrapper binds:** `fills[]`, `strokes[]`, **gradient stops** (per stop,
+  inside the gradient head), a **uniform** `stroke(…)` weight, a **uniform**
+  `radius`, and the layout spacing scalars — `layout.gap` (with its GRID spellings
+  `rowGap` / `colGap`) and each of the four `layout.pad` sides — for `var()`; `fills`, `strokes`, `effects`,
   `grids` (as the whole field) and `text.font` for `style()`; `text.color` for both.
   Anywhere else the literal still lands and a warning names what could not be bound
   — including the three the grammar splits finer than Figma's binding surface does:

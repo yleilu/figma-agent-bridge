@@ -166,8 +166,8 @@ path aimed at a node type that carries none is named in `warnings[]`, not swallo
 
 ## A write into a slot is read back, then trusted
 
-**The problem.** A slot arrives with defaults of its own — a vertical stack, 100×100,
-an opaque `#FFFFFF` fill (`components.md` §5) — so a write into one lands _on top of_
+**The problem.** A slot arrives with defaults of its own — a vertical stack, born
+100×100 with an opaque `#FFFFFF` fill — so a write into one lands _on top of_
 them rather than replacing them, and `sizing` / `size` are where the request and the
 result part company most often: send a row `["FILL", "HUG"]` into a container that
 cannot grant a fill and the `FILL` is simply not there on the read-back, while
@@ -425,6 +425,44 @@ name". Prefer `update_variables` / `update_styles` over a delete + create.
 
 ---
 
+## The context note
+
+`context` is written with `create_node` / `update_node` (the `context` field); read
+back in full on `get_node` / `get_nodes`, or as a compact `contextSummary` (the
+frontmatter slice) on `inspect` / `search` / `get_components`.
+
+**Author it in this shape** — frontmatter scalars, then fixed body sections (one shown):
+
+```markdown
+---
+purpose: Primary checkout CTA — sole entry to checkout
+role: button/primary
+status: stable
+updated: agent · 2026-07-08
+---
+
+## Constraints
+
+Token-bound (do not restyle) · text localized · width fluid
+```
+
+- **Frontmatter** — `purpose` (required by convention: what it is and what it's _for_),
+  `role` (design-system label like `button/primary`), `status` (`draft` | `stable` |
+  `deprecated`, default `stable`), `updated` (provenance — `agent · <date>`). All but
+  `purpose` are optional.
+- **Body** — the three fixed sections `## Constraints`, `## Links`, `## Notes`, in that
+  order. Skip any you have nothing for; don't invent new headings.
+- **Keep it to one screen of _why_** — a ~600-character soft budget. Past that you're
+  writing docs: link out via `## Links` instead. The hard cap is 2 KB; a write over it
+  is rejected with a clean size error.
+- **Over-cap writes are read-only.** The raw `set_plugin_data(figmabridge/context, …)`
+  escape hatch is unopinionated and can store a value above the 2 KB cap. Such a value
+  reads back faithfully but is **read-only** — a full-spec write-back through
+  `update_node` is rejected with the size error. Trim to ≤ 2 KB, or omit `context`
+  (omitting preserves the stored value) to edit the rest of the node.
+
+---
+
 ## Combining variants — `combine_variants`
 
 To create a component set (variants), build each variant as a separate component
@@ -490,6 +528,14 @@ _is_ the proof the bind landed. Narrowing profiles (`minimal`, `layout`, `style`
 **If you truly need it unbound** (or already have a component whose TEXT property was
 added without `targetNodeId`), fall back to the compound-id override path described
 above.
+
+### Deletes break bindings
+
+`delete_variables` removes variables by id **and** whole collections (deleting a
+collection cascades its variables); `delete_styles` removes local styles by id or by
+name + type. A delete breaks every binding that pointed at the token or style, and
+nothing warns you — prefer `update_variables` / `update_styles` over
+delete-and-recreate (the rebind rule above).
 
 ### Rotated nodes — the size is true, the position is the bounding box
 

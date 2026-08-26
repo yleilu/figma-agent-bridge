@@ -28,7 +28,9 @@ file-addressed call — the server never guesses which file (B3).
   asks you to choose — **ASK, never retry with a guessed fileKey.**
 - **`DISCONNECTED`** = no plugin for that file (open/reopen it).
 - **`INCOMPATIBLE`** = plugin↔server version skew (reconnecting won't help — update the
-  older side; see below).
+  **stale** side; see below. Version order is not build recency: after a version
+  renumber the lower number can be the newer build, so diagnose by which side was
+  actually rebuilt, never by comparing the two numbers).
 
 _(`connect` / `status` and the machine-global feedback and GitHub-auth tools are the
 exceptions — they take no per-call `fileKey`.)_
@@ -60,10 +62,10 @@ old build until someone updates it.
 the user installed:
 
 - **Claude Code plugin (the usual case).** In this order: refresh the marketplace, update
-  the plugin, reload or restart Claude Code, then **ask the agent to run the `figma-setup`
-  skill** — it replaces the payload's contents at
-  `~/.figma-agent-bridge/figma-plugin/`. Run `figma-setup` before the plugin is updated and
-  the host reloaded and it just re-copies the old version.
+  the plugin, reload or restart Claude Code, then **run the `figma-setup` skill** — it
+  replaces the payload's contents at the path it reports (the copy mechanics are
+  `figma-setup` Part 1's). Run `figma-setup` before the plugin is updated and the host
+  reloaded and it just re-copies the old version.
 - **From a clone.** Pull, rebuild the Figma plugin (`bun run build:plugin`), and reopen it —
   the import points into `packages/figma-plugin/`, which the build rewrites in place.
 - **Hand-imported release archive.** Download `figma-plugin.zip` from the GitHub release at
@@ -84,8 +86,10 @@ the server side.
 
 ## Less common: stale server
 
-If the plugin version is **newer** than the server (the error names the server as stale),
-it is the **server side** that has to move forward. There is no binary to refresh — the
+If the **server** is the stale side — it was not rebuilt/reinstalled when the plugin
+was (do not trust the numeric comparison alone; the error's "older side" wording
+assumes version order equals build recency, which a renumber breaks) — then the
+server side has to move forward. There is no binary to refresh — the
 server is a JavaScript bundle run with `bun`, shipped inside whatever installed it:
 
 - **Claude Code plugin:** the server bundle and the plugin metadata are the same package,
