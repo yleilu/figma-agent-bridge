@@ -829,9 +829,16 @@ const dropUnsupportedStructs = (
  * `SLOT` is listed because create_node accepts the type (the plugin builds a
  * FRAME placeholder for it); real slots are minted by update_component and go
  * through slotEntryToFigma below.
+ *
+ * `COMPONENT` joined when the create faces learned to mint a master (I69). A
+ * master is the container this default was written for — a component that is
+ * not an auto-layout frame is the one every design-system pillar tells the
+ * agent not to build — and the type was simply not creatable before, so nothing
+ * that already ships lands differently.
  */
 const LAYOUT_DEFAULT_TYPES: ReadonlySet<string> = new Set([
   'FRAME',
+  'COMPONENT',
   'SLOT',
 ])
 

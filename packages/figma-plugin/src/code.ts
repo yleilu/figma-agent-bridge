@@ -1914,6 +1914,21 @@ const buildSingleNode = async (
       node = instance
       break
     }
+    case 'COMPONENT': {
+      // I69 — a master, minted in place. Nothing else here: a ComponentNode is
+      // a frame in every respect this builder cares about (it takes children,
+      // layout, sizing and constraints), so it walks the SAME path a FRAME
+      // walks from here down — applyCommonProperties, appendChild,
+      // applyPostAppendProperties, and on the tree path the deferred
+      // sizing → repinFixedSize → verifyCreatedSize order a container needs.
+      // A create path that built its own shortcut would be the one that
+      // silently skipped B60/B69/B61.
+      //
+      // Component PROPERTIES and SLOT promotion stay update_component's: they
+      // edit a master that already exists, and both need the master's id.
+      node = figma.createComponent()
+      break
+    }
     // NOTE (issue #3): the TEXT_PATH case was removed here. figma.createTextPath
     // is a real API but its fields (vectorNodeId/startSegment/startPosition) were
     // never specced/wired, so the server now rejects type:'TEXT_PATH' up front

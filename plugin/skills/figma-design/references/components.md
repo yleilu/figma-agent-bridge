@@ -18,8 +18,12 @@ The moment you know a thing repeats, or that it carries named states, create the
 **first** and place instances after. Never build one, copy it five times, and promote
 something later.
 
-- **Author the master once** — `create_node` / `create_tree` the anatomy, then
-  `create_component({nodeId, name})` on it.
+- **Author the master once** — one `create_tree` whose root is `type: "COMPONENT"`. The
+  master and its whole anatomy arrive in a single call; `create_component` is for
+  promoting a node that is **already** on the canvas.
+- **A master cannot contain a master.** Figma has no nested masters, and the write face
+  refuses one before it creates anything. Build the inner part as its own master and place
+  an `INSTANCE` of it inside the outer one.
 - **Place instances** — one per occurrence:
 
 ```json

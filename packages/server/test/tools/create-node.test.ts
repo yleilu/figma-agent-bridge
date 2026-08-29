@@ -294,6 +294,27 @@ describe('handleCreateNode (rebuilt — single NodeSpec)', () => {
     expect(sent).toHaveLength(1)
   })
 
+  // I69: COMPONENT joins CREATABLE_TYPES, which create_node and create_tree
+  // SHARE — the two create faces have accepted exactly the same node types
+  // since issue #2, and one type they disagreed about would be the first.
+  // create_node's COMPONENT is an EMPTY master (children are create_tree's, as
+  // they are for every other type); the master with a body is create_tree's.
+  it('accepts COMPONENT and forwards it (an empty master)', async () => {
+    const sent: Sent[] = []
+    await handleCreateNode(
+      { spec: { type: 'COMPONENT', name: 'Button' } },
+      stubClient({ sent }),
+    )
+    expect(sent).toHaveLength(1)
+    const spec = sent[0].params?.spec as Record<
+      string,
+      unknown
+    >
+    expect(spec.type).toBe('COMPONENT')
+    // The stack default reaches a master as it reaches a frame.
+    expect(spec.layout).toEqual({ mode: 'V' })
+  })
+
   // B36 (live, node 298:7544): a RECTANGLE with `fills:["#888888"]` and a
   // `text` struct whose colour carried `var(probe/cyan)`. The struct was
   // dropped silently and its binding — which routes through `fills` — landed
