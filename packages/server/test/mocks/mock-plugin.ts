@@ -1976,12 +1976,28 @@ export const createMockPlugin = (
           }
           break
         }
+        // I65 — a `scope:'page'` naming NO page falls back to the current one
+        // and says which it chose (search-page-scope.ts). This mock's current
+        // page is `0:1` / "Page 1", so the fallback lands on the same tree the
+        // explicit `0:1` scan returns. Modelled BEFORE the not-found guard,
+        // exactly as the real plugin resolves it before the lookup — otherwise
+        // `undefined` would still reach that guard and reproduce the defect.
+        const namedPage = cmd.params?.pageId as
+          | string
+          | undefined
+        const pageFallback =
+          searchScope === 'page' &&
+          (namedPage === undefined || namedPage === '')
+        const scopeNote = pageFallback
+          ? 'search: scope "page" named no pageId, so the CURRENT page "Page 1" (0:1) was scanned. Pass pageId to scan a different page, or scope:"document" to scan them all.'
+          : undefined
         if (
           searchScope === 'page' &&
-          !knownPages.has(cmd.params?.pageId as string)
+          !pageFallback &&
+          !knownPages.has(namedPage as string)
         ) {
           result = {
-            error: 'Page not found: ' + cmd.params?.pageId,
+            error: 'Page not found: ' + namedPage,
           }
           break
         }
@@ -2103,6 +2119,11 @@ export const createMockPlugin = (
             }
             return candidate
           }),
+          // I65 — the page the tool chose, on the same warnings[] channel the
+          // real plugin uses, and omitted when the caller named the page.
+          ...(scopeNote !== undefined
+            ? { warnings: [scopeNote] }
+            : {}),
         }
         break
       }

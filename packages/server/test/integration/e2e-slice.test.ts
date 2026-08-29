@@ -862,6 +862,55 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(text).not.toContain('results: []')
   })
 
+  // 11a-2 — I65: `scope:'page'` naming NO page scans the CURRENT page and
+  // SAYS which one. It used to answer "Page not found: undefined" — the
+  // missing id forwarded as it arrived and printed back as if the caller had
+  // typed it. The neighbouring `inspect({pageId?})` already means the current
+  // page, and two sibling reads meaning two different things by "this page" is
+  // the T1 failure.
+  it('search scope=page without a pageId scans the current page and names it (I65)', async () => {
+    const result = await handleSearch(
+      { scope: 'page' },
+      scoped,
+    )
+    const { text } = result.content[0]
+    const out = JSON.parse(text) as {
+      results: { id: string }[]
+      warnings?: string[]
+    }
+    expect(text).not.toContain('Page not found')
+    expect(text).not.toContain('undefined')
+    // The same tree the explicit current-page scan returns.
+    expect(out.results).toHaveLength(4)
+    const note = (out.warnings ?? []).find(w =>
+      w.includes('scope "page" named no pageId'),
+    )
+    expect(note).toBeDefined()
+    expect(note).toContain('0:1')
+
+    // Control: a page the caller DID name is scanned with no note at all —
+    // the fallback fires only when the tool had to choose.
+    const named = await handleSearch(
+      { scope: 'page', pageId: '0:1' },
+      scoped,
+    )
+    const namedOut = JSON.parse(named.content[0].text) as {
+      warnings?: string[]
+    }
+    expect(namedOut.warnings).toBeUndefined()
+  })
+
+  it('search still refuses a pageId that names nothing (I65 control)', async () => {
+    const result = await handleSearch(
+      { scope: 'page', pageId: 'nope:9' },
+      scoped,
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+    }
+    expect(data.error).toContain('Page not found: nope:9')
+  })
+
   // 11b — B2: depth bounds the scan SCOPE across the relay. depth=0 keeps only
   // the page's level-0 node (Card); the default scans the whole subtree (4).
   it('search depth bounds the scan scope across the relay', async () => {

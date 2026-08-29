@@ -68,6 +68,7 @@ import {
   duplicateVariableWarning,
   ambiguousCollectionError,
 } from './variable-collection-target'
+import { resolvePageScope } from './search-page-scope'
 import {
   readSlotEntry,
   slotParentRefusal,
@@ -3237,6 +3238,18 @@ const handleCommand = async (
     case COMMANDS.SEARCH: {
       const scope = (params.scope as string) || 'document'
 
+      // I65 — a `scope:'page'` that names no page used to answer
+      // "Page not found: undefined": the missing id was forwarded as it
+      // arrived and printed back as if the caller had typed it. The
+      // neighbouring `inspect({pageId?})` already means the CURRENT page when
+      // the id is omitted, and two sibling reads meaning two different things
+      // by "this page" is the T1 failure. The choice is stated in the reply's
+      // warnings[] — a scope the tool picked is a fact the caller has to see.
+      const pageScope = resolvePageScope(
+        params.pageId as string | undefined,
+        figma.currentPage,
+      )
+
       // Collect the root subtrees to scan based on scope. (selection scope
       // builds its candidates directly below — no shared root.)
       const roots: (BaseNode & ChildrenMixin)[] = []
@@ -3253,12 +3266,18 @@ const handleCommand = async (
         }
         roots.push(target as BaseNode & ChildrenMixin)
       } else if (scope === 'page') {
+        if (pageScope.pageId === undefined) {
+          return {
+            error:
+              'search: scope "page" needs a pageId — this document exposes no current page to fall back to.',
+          }
+        }
         const pageNode = await figma.getNodeByIdAsync(
-          params.pageId as string,
+          pageScope.pageId,
         )
         if (!pageNode || pageNode.type !== 'PAGE') {
           return {
-            error: 'Page not found: ' + params.pageId,
+            error: 'Page not found: ' + pageScope.pageId,
           }
         }
         roots.push(pageNode as PageNode)
@@ -3332,6 +3351,11 @@ const handleCommand = async (
       // subtree (the repair pass after the candidate loop). A warning is what
       // is left when even that cannot be done.
       const skipped: string[] = []
+      // I65 — the page the tool chose, said first: it explains every row
+      // below it, so it belongs above the per-node degrades.
+      if (scope === 'page' && pageScope.note !== undefined) {
+        skipped.push(pageScope.note)
+      }
       // Even the id in a warning has to be read defensively: a stale handle
       // answers NOTHING, its own id included.
       const idOf = (node: BaseNode): string => {
