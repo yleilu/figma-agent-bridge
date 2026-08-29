@@ -1686,6 +1686,106 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     )
   })
 
+  // 25c — I63: a collection NAME the file already carries EXTENDS that
+  // collection rather than forking a same-named duplicate, and the reply says
+  // which of the two it did. The mock models the real plugin's resolution
+  // (variable-collection-target.ts): `existing` is one collection, `forked` is
+  // two, and `existing` already holds `held/token`.
+  it('create_variables EXTENDS an existing collection and says so (I63)', async () => {
+    const result = await handleCreateVariables(
+      {
+        collection: 'existing',
+        variables: [
+          {
+            name: 'sem/accent',
+            type: 'COLOR',
+            valuesByMode: { Light: '#FF0000' },
+          },
+        ],
+      },
+      scoped,
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      collectionId: string
+      warnings: string[]
+      variables: { name: string }[]
+    }
+    // The SAME collection, not a second one.
+    expect(out.collectionId).toBe('col:existing')
+    expect(out.variables[0].name).toBe('sem/accent')
+    expect(
+      out.warnings.some(w =>
+        w.includes('existing collection "existing"'),
+      ),
+    ).toBe(true)
+  })
+
+  it('create_variables skips a variable name the target collection already holds (I63)', async () => {
+    const result = await handleCreateVariables(
+      {
+        collection: 'existing',
+        variables: [
+          {
+            name: 'held/token',
+            type: 'COLOR',
+            valuesByMode: { Light: '#FF0000' },
+          },
+        ],
+      },
+      scoped,
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      variables: { name: string }[]
+      warnings: string[]
+    }
+    expect(out.variables).toHaveLength(0)
+    expect(
+      out.warnings.some(w =>
+        w.includes('update_variables'),
+      ),
+    ).toBe(true)
+  })
+
+  it('create_variables REFUSES a collection name several collections carry (I63)', async () => {
+    const result = await handleCreateVariables(
+      {
+        collection: 'forked',
+        variables: [
+          {
+            name: 'sem/accent',
+            type: 'COLOR',
+            valuesByMode: { Light: '#FF0000' },
+          },
+        ],
+      },
+      scoped,
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      error?: string
+    }
+    expect(out.error).toContain('collectionId')
+  })
+
+  it('create_variables reports an unknown collectionId, never falling back (I63)', async () => {
+    const result = await handleCreateVariables(
+      {
+        collectionId: 'col:404',
+        variables: [
+          {
+            name: 'sem/accent',
+            type: 'COLOR',
+            valuesByMode: { Light: '#FF0000' },
+          },
+        ],
+      },
+      scoped,
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      error?: string
+    }
+    expect(out.error).toContain('col:404')
+  })
+
   // 26 — update_variables: addMode + a COLOR value edit, parsed from hex.
   it('update_variables forwards addModes + a parsed COLOR value edit over the relay', async () => {
     const result = await handleUpdateVariables(

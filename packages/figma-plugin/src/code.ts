@@ -62,6 +62,12 @@ import {
   type VariableLike,
 } from './variable-shadowing'
 import {
+  resolveCollectionTarget,
+  extendedCollectionWarning,
+  duplicateVariableWarning,
+  ambiguousCollectionError,
+} from './variable-collection-target'
+import {
   readSlotEntry,
   slotParentRefusal,
   type SlotEntry,
@@ -5889,12 +5895,18 @@ const handleCommand = async (
       }
     }
 
-    // create_variables: create a collection (+ optional extra modes), then its
-    // variables with per-mode values. The server has already CONVERTED COLOR
-    // values to {r,g,b,a}; FLOAT/STRING/BOOLEAN pass through. valuesByMode is
-    // keyed by mode NAME — resolved to mode ids against the collection's modes
+    // create_variables: address a collection, then add variables to it with
+    // per-mode values. The server has already CONVERTED COLOR values to
+    // {r,g,b,a}; FLOAT/STRING/BOOLEAN pass through. valuesByMode is keyed by
+    // mode NAME — resolved to mode ids against the TARGET collection's modes
     // (an unknown mode name is reported as a warning, never throws). T7:
     // feature-detect createVariableCollection / createVariable / setValueForMode.
+    //
+    // I63 — the call used to call createVariableCollection unconditionally, so
+    // a second call with the same name forked a duplicate and said nothing.
+    // The target is now resolved first (variable-collection-target.ts): an
+    // existing name EXTENDS its collection and says so, an ambiguous name is
+    // refused, and only an unused name creates.
     case COMMANDS.CREATE_VARIABLES: {
       const vars = figma.variables as VariablesAPI & {
         createVariableCollection?: (
@@ -5921,29 +5933,121 @@ const handleCommand = async (
       // will not enumerate simply reports no shadows.
       const existingVariables =
         await localVariablesSnapshot()
-      // T7: the collection-level factory failing is a genuine failure (nothing
-      // to return) → {error}, not a degrade.
-      let collection: VariableCollection
-      try {
-        collection = vars.createVariableCollection(
-          params.collection as string,
-        )
-      } catch (e) {
+      // I63 — which collection this call means, decided before anything is
+      // made. The enumeration is the same one the shadow snapshot already
+      // read, so it costs no extra round trip.
+      const existingCollections = Object.entries(
+        existingVariables.collectionNames,
+      ).map(([id, name]) => ({ id, name }))
+      const target = resolveCollectionTarget(
+        {
+          collectionId: params.collectionId as
+            | string
+            | undefined,
+          collection: params.collection as
+            | string
+            | undefined,
+        },
+        existingCollections,
+      )
+      if (target.kind === 'unaddressed') {
         return {
           error:
-            'createVariableCollection failed for "' +
-            String(params.collection) +
-            '": ' +
-            String(e),
+            'create_variables needs a collection: pass `collection` (a name) ' +
+            'or `collectionId` (an exact address).',
+        }
+      }
+      if (target.kind === 'missing') {
+        return {
+          error: 'Collection not found: ' + target.id,
+        }
+      }
+      if (target.kind === 'ambiguous') {
+        return {
+          error: ambiguousCollectionError(
+            target.name,
+            target.ids,
+          ),
         }
       }
       const warnings: string[] = []
+      // T7: the collection-level factory failing is a genuine failure (nothing
+      // to return) → {error}, not a degrade. An EXTEND makes nothing, so it
+      // has no factory to fail — it resolves the handle it was given.
+      let collection: VariableCollection
+      if (target.kind === 'create') {
+        try {
+          collection = vars.createVariableCollection(
+            target.name,
+          )
+        } catch (e) {
+          return {
+            error:
+              'createVariableCollection failed for "' +
+              target.name +
+              '": ' +
+              String(e),
+          }
+        }
+      } else {
+        const held =
+          await figma.variables.getVariableCollectionByIdAsync(
+            target.id,
+          )
+        if (!held) {
+          return {
+            error: 'Collection not found: ' + target.id,
+          }
+        }
+        collection = held
+        warnings.push(
+          extendedCollectionWarning(
+            collection.name,
+            collection.id,
+          ),
+        )
+      }
+      const extending = target.kind === 'extend'
 
-      // Build the mode NAME → modeId map. The collection starts with one
+      // Build the mode NAME → modeId map. A NEW collection starts with one
       // default mode; the first requested mode renames it, the rest are added.
+      //
+      // An EXTEND never renames (I63). The collection's modes already carry
+      // values for every variable in it, so renaming the first one to whatever
+      // this call happens to list would rewrite the meaning of data this call
+      // did not write. A mode the collection lacks is ADDED; one it already
+      // has is simply used.
       const requestedModes =
         (params.modes as string[] | undefined) ?? []
-      if (requestedModes.length > 0) {
+      const modeNamesNow = (): string[] =>
+        collection.modes.map(m => m.name)
+      const addOneMode = (modeName: string): void => {
+        if (typeof collection.addMode === 'function') {
+          try {
+            collection.addMode(modeName)
+          } catch (e) {
+            warnings.push(
+              'addMode failed for "' +
+                modeName +
+                '": ' +
+                String(e),
+            )
+          }
+        } else {
+          warnings.push(
+            'addMode unavailable in this Figma version; mode "' +
+              modeName +
+              '" not added',
+          )
+        }
+      }
+      if (requestedModes.length > 0 && extending) {
+        for (const modeName of requestedModes) {
+          if (!modeNamesNow().includes(modeName)) {
+            addOneMode(modeName)
+          }
+        }
+      } else if (requestedModes.length > 0) {
         if (typeof collection.renameMode === 'function') {
           // T7: a duplicate/invalid rename degrades to a warning rather than
           // throwing the whole call into {error}.
@@ -5971,29 +6075,25 @@ const handleCommand = async (
           )
         }
         for (const modeName of requestedModes.slice(1)) {
-          if (typeof collection.addMode === 'function') {
-            try {
-              collection.addMode(modeName)
-            } catch (e) {
-              warnings.push(
-                'addMode failed for "' +
-                  modeName +
-                  '": ' +
-                  String(e),
-              )
-            }
-          } else {
-            warnings.push(
-              'addMode unavailable in this Figma version; mode "' +
-                modeName +
-                '" not added',
-            )
-          }
+          addOneMode(modeName)
         }
       }
       const modeByName: Record<string, string> = {}
       for (const m of collection.modes) {
         modeByName[m.name] = m.modeId
+      }
+      // I63 — the names the TARGET collection already holds. A second variable
+      // of one name inside one collection makes the name ambiguous in the very
+      // scope Figma says it is unique in, so the create is skipped and named
+      // rather than made.
+      const heldNames = new Set<string>()
+      for (const v of existingVariables.variables) {
+        if (
+          typeof v.name === 'string' &&
+          v.variableCollectionId === collection.id
+        ) {
+          heldNames.add(v.name)
+        }
       }
 
       const inVars =
@@ -6015,6 +6115,16 @@ const handleCommand = async (
             'createVariable unavailable; variable "' +
               spec.name +
               '" not created',
+          )
+          continue
+        }
+        // I63 — the fork, one level down. Skipped and named, never made.
+        if (heldNames.has(spec.name)) {
+          warnings.push(
+            duplicateVariableWarning(
+              spec.name,
+              collection.name,
+            ),
           )
           continue
         }
@@ -6045,12 +6155,16 @@ const handleCommand = async (
           spec.name,
           existingVariables.variables,
           existingVariables.collectionNames,
+          // I63 — the TARGET collection is never its own shadow. On the extend
+          // path the target's variables are in the snapshot, so without this a
+          // name held elsewhere in the same collection would report itself.
+          collection.id,
         )
         if (shadows.length > 0) {
           warnings.push(
             createShadowWarning(
               spec.name,
-              params.collection as string,
+              collection.name,
               shadows,
             ),
           )

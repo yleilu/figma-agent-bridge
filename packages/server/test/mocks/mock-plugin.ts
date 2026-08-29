@@ -3535,9 +3535,39 @@ export const createMockPlugin = (
       // target id prefixed `missing:` models alias-target-not-found (the SHARED
       // per-variable apply path's T7 degrade — warned, never thrown).
       case 'create_variables': {
-        const collectionName = cmd.params
-          ?.collection as string
-        if (collectionName.startsWith('err:')) {
+        const collectionName = cmd.params?.collection as
+          | string
+          | undefined
+        const collectionAddr = cmd.params?.collectionId as
+          | string
+          | undefined
+        // I63 — the real plugin resolves the target BEFORE it makes anything
+        // (variable-collection-target.ts). The mock models the three answers
+        // that change the reply: an unknown id is a miss, an ambiguous name is
+        // refused, and a name a collection already carries EXTENDS it. The
+        // document it models: one collection `col:existing` named `existing`
+        // holding `held/token`, plus two forks both named `forked`.
+        if (collectionAddr !== undefined) {
+          if (collectionAddr !== 'col:existing') {
+            error = `Collection not found: ${collectionAddr}`
+            break
+          }
+        } else if (collectionName === undefined) {
+          error =
+            'create_variables needs a collection: pass `collection` (a name) or `collectionId` (an exact address).'
+          break
+        } else if (collectionName === 'forked') {
+          error =
+            'more than one variable collection is named "forked" in this file (col:f1, col:f2), so the name addresses none of them. Pass collectionId to say which one to extend, or delete_variables the forks first.'
+          break
+        }
+        const extending =
+          collectionAddr !== undefined ||
+          collectionName === 'existing'
+        if (
+          collectionName !== undefined &&
+          collectionName.startsWith('err:')
+        ) {
           error = `createVariableCollection failed for "${collectionName}"`
           break
         }
@@ -3556,14 +3586,28 @@ export const createMockPlugin = (
         const reqModes =
           (cmd.params?.modes as string[] | undefined) ?? []
         // The default mode is renamed to reqModes[0] when given, else 'Mode 1'.
-        const modeNames =
-          reqModes.length > 0 ? reqModes : ['Mode 1']
+        // An EXTEND renames nothing (I63): the existing mode `Light` stays and
+        // a requested mode it lacks is appended.
+        const modeNames = extending
+          ? [
+              'Light',
+              ...reqModes.filter(m => m !== 'Light'),
+            ]
+          : reqModes.length > 0
+            ? reqModes
+            : ['Mode 1']
         const warnings: string[] = []
+        if (extending) {
+          warnings.push(
+            `create_variables added these variables to the existing collection "existing" (col:existing) instead of creating a second one with the same name. Pass collectionId to target a collection exactly, or a different \`collection\` name to start a new one.`,
+          )
+        }
         // Mirror the real plugin's T7 renameMode-unavailable warning: a
         // collection name prefixed `norename:` models renameMode being absent,
         // so the default mode keeps its name and a warning rides back.
         if (
-          collectionName.startsWith('norename:') &&
+          collectionName?.startsWith('norename:') ===
+            true &&
           reqModes.length > 0
         ) {
           warnings.push(
@@ -3575,6 +3619,15 @@ export const createMockPlugin = (
           if (v.name.startsWith('degrade:')) {
             warnings.push(
               `setValueForMode failed for variable "${v.name}"; value not set`,
+            )
+            return
+          }
+          // I63 — a name the TARGET collection already holds is skipped and
+          // named, never created a second time. The modelled `existing`
+          // collection holds `held/token`.
+          if (extending && v.name === 'held/token') {
+            warnings.push(
+              `variable "${v.name}" already exists in "existing" and was NOT created again — a second variable of the same name in one collection makes the name ambiguous. Change its value with update_variables, or create it under a different name.`,
             )
             return
           }
@@ -3594,7 +3647,9 @@ export const createMockPlugin = (
           created.push({ id: `var:${i + 1}`, name: v.name })
         })
         result = {
-          collectionId: 'col:new',
+          collectionId: extending
+            ? 'col:existing'
+            : 'col:new',
           modes: modeNames.map((name, i) => ({
             modeId: `m${i + 1}`,
             name,
