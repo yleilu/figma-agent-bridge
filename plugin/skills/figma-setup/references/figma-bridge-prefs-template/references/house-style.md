@@ -2,8 +2,9 @@
 name: figma-bridge-prefs/house-style
 description: >-
   Load when building or editing — this user's strict design-system-first /
-  component-first level and concrete tokens, scale, ramp, naming, file
-  organization, accessibility affordances, and data-display conventions.
+  component-first / everything-responsive level and concrete tokens, scale,
+  ramp, naming, file organization, accessibility affordances, and
+  data-display conventions.
 ---
 
 # House style
@@ -82,6 +83,8 @@ floor.
   here.
 - **One page per screen or flow**, named for the screen (`Dashboard`, `Checkout`), with the
   blocks that screen alone consumes sitting beside it.
+- **No standing extra pages** — no scratch page, no archive page. A build creates only the
+  design-system page and the screen pages.
 - **Master grid:** masters laid out left to right with 100 px gutters, grouped by family (all
   `Button/*` on one row, all `Card/*` on the next).
 - Page names follow the naming convention above; no page keeps a Figma default.
