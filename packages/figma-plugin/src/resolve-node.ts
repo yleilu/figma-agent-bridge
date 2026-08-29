@@ -144,14 +144,22 @@ export const declareDegradedRead = (
   }
 }
 
-/** What a row says when only the export could describe it. */
-export const slicedReadMessage = (
-  nodeId: string,
-): string =>
+/**
+ * What a row says when only the export could describe it.
+ *
+ * Two callers, one loss, one wording. `readNodeDocument` slices a WHOLE read
+ * out of an ancestor export; `collectOne` (enrich-nodes.ts) reaches one node
+ * the live walk stopped short of, inside an otherwise live read (B41). The
+ * node is served the same way in both, so it says the same thing — the id
+ * names which node, and the reader never has to learn two spellings of one
+ * fact.
+ */
+export const slicedReadMessage = (nodeId: string): string =>
   'no live handle answered ' +
   nodeId +
-  '; this node is served from its ancestor instance’s export, without the ' +
-  'fields only a live read can supply'
+  '; this node is served from an ancestor’s export, without the ' +
+  'fields only a live read can supply — style() names, context, text runs, ' +
+  'vector geometry and the unrotated size'
 
 export type ResolveDeps = {
   /** `figma.getNodeByIdAsync`, which only ever answers a PLAIN id reliably. */
@@ -181,14 +189,15 @@ export type NodeResolver = {
    *
    * Throws on the budget, for the same reason `resolve` does.
    */
-  exportedNode: (nodeId: string) => Promise<RawNode | undefined>
+  exportedNode: (
+    nodeId: string,
+  ) => Promise<RawNode | undefined>
 }
 
 export const createNodeResolver = (
   deps: ResolveDeps,
 ): NodeResolver => {
-  const maxExports =
-    deps.maxExports ?? MAX_INSTANCE_EXPORTS
+  const maxExports = deps.maxExports ?? MAX_INSTANCE_EXPORTS
   // instance id → its paired index. The PROMISE is cached, not the result, so
   // concurrent entries of one `get_nodes` share a single export.
   const indexes = new Map<
@@ -204,8 +213,7 @@ export const createNodeResolver = (
    * INSTANCES rather than ids.
    */
   const overBudget = (instanceId: string): boolean =>
-    !indexes.has(instanceId) &&
-    indexes.size >= maxExports
+    !indexes.has(instanceId) && indexes.size >= maxExports
 
   const indexFor = (
     instanceId: string,
