@@ -46,7 +46,8 @@ user skill `figma-bridge-prefs`: all concrete values, and any stricter-than-basi
   — [[figma-bridge/docs/specs/claude-plugin|claude-plugin.md]] §5.1. That write carries no
   preferences and is out of scope here; see §5.)
 - **No new tool.** This is a skills/template layer over the existing surface.
-- **The dev/test instance** used to exercise this layer is not shipped and is out of scope here.
+- **The dev/test instance** used to exercise this layer is not shipped. On a dev checkout it is a
+  symlink onto the template, never a copy — §6 "Dev mode".
 
 ## 2. The layered model
 
@@ -178,6 +179,22 @@ guidance. The `template_version` (§9) lives in the template `SKILL.md` frontmat
 
 **Content.** The **strict level** of design-system-first / component-first (§3) plus concrete
 starter values (a spacing scale, a token set, a type ramp) — the user's editable starting point.
+
+**Dev mode — the instance is a symlink.** A real user gets a **copy** on the initial install and
+owns it from that moment (§5, §9). A dev checkout inverts this: the local `figma-bridge-prefs` is a
+real directory holding **entry-level symlinks onto this template** (`SKILL.md → SKILL.md.tmpl`,
+`references → references/`), never a copy. Editing the template IS testing it — the dev machine
+always runs the latest example, and the example is exactly what users install. Two consequences:
+
+- Every local prefs edit on a dev checkout is a **shipped-example edit**. The template carries no
+  user-specific provenance, no temporary markers, and no personal values — only defensible defaults
+  an installing user would accept as-is.
+- `figma-setup` must never copy, tailor, or update over a symlinked instance — the symlink marks a
+  dev checkout, and a wholesale copy would write **through** the link into the template itself (the
+  guard lives in figma-setup Part 2).
+
+A directory-level symlink is impossible by design: the template ships `SKILL.md.tmpl` precisely so
+it can never be globbed as a live skill, which is why dev mode links the two entries individually.
 
 **Safety contract on the template.**
 

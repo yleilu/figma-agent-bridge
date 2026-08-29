@@ -179,6 +179,13 @@ shipped by the plugin, and `figma-setup` is the _only_ path that writes it —
 see `docs/specs/customization.md` §5 in the repo (not shipped) for the
 full model of how the overlay reaches the build loop and overrides upward.
 
+**Dev-checkout guard.** If the destination already exists and is — or
+contains — a **symlink** into a figma-bridge repo checkout, STOP. That is the
+dev machine, where the template is tested in place through the link
+(`customization.md` §6 "Dev mode"). Never copy, tailor, or update over it: a
+wholesale copy would write **through** the link into the shipped template
+itself.
+
 ### Scope selection — user vs project
 
 Two places `figma-bridge-prefs` can live:

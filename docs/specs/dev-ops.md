@@ -351,6 +351,20 @@ prevents. It is the complement of the build fingerprint
 ([[figma-bridge/docs/specs/version-handshake|version-handshake.md]], I62), which catches a stale
 BUNDLE and is silent for a tree-runner by design.
 
+**The dev prefs instance is a symlink** ([[figma-bridge/docs/specs/customization|customization.md]]
+§6 "Dev mode"). The checkout's `.claude/skills/figma-bridge-prefs/` is a real directory holding two
+entry-level symlinks onto the shipped template:
+
+```
+SKILL.md   -> ../../../plugin/skills/figma-setup/references/figma-bridge-prefs-template/SKILL.md.tmpl
+references -> ../../../plugin/skills/figma-setup/references/figma-bridge-prefs-template/references
+```
+
+Editing the template is testing it live, and users always install the latest example. The whole
+directory cannot be one symlink — the template deliberately ships `SKILL.md.tmpl`, never `SKILL.md`,
+so it can never be globbed as a live skill. `figma-setup` refuses to copy or update over a symlinked
+instance (its dev-checkout guard).
+
 ### 3.7 Not offered
 
 Enumerated so the boundary is explicit:
