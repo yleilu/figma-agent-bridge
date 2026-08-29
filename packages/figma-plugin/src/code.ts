@@ -37,6 +37,7 @@ import {
   applyGrids,
   capabilityWarnings,
   discardedPositionsWarning,
+  repinFixedSize,
   verifyCreatedSize,
   type Placement,
   type SizeTarget,
@@ -2192,6 +2193,17 @@ const createTreeNode = async (
     // asked for. Outside the `'appendChild' in node` guard on purpose: a node
     // that could not take the children it stated still has a sizing to honour.
     applySizing(node as FrameNode, spec.sizing, warnings)
+    // B69 — and FIXED freezes the box the hug just produced, it does not
+    // restore the one the spec stated. So the stated size goes back on, on the
+    // axes the caller explicitly pinned. Between the sizing and the verify on
+    // purpose: the pin is what makes the resize stick, and the verify has to
+    // judge the box this node actually ends with.
+    repinFixedSize(
+      node as unknown as SizeTarget,
+      spec.size,
+      spec.sizing,
+      warnings,
+    )
     // B61 — and only NOW is this node's box the one it will keep, so only now
     // can the stated size be judged. A layout-bearing frame that stated both a
     // size and a layout is hugged away here, silently, unless this says so.

@@ -671,6 +671,41 @@ describe('CREATE_VARIABLES shadow-name wiring', () => {
   })
 })
 
+// B69 — the deferred collapse is an ORDER, and the order is the fix. Nothing
+// but a live create_tree can tell that `repinFixedSize` moved after the sizing
+// and before the verify: the helper's own tests pass wherever it is called
+// from, and a call site that drifted one line up would silently restore the
+// pre-hug box and then let the hug eat it again.
+const deferredCollapse = ((): string => {
+  const from = callers.indexOf(
+    'The deferred FILL/HUG resize.',
+  )
+  const to = callers.indexOf('childPlacements.length', from)
+  return from === -1 || to === -1
+    ? ''
+    : callers.slice(from, to)
+})()
+
+describe('create_tree deferred-sizing wiring', () => {
+  it('actually found the collapse (liveness)', () => {
+    expect(deferredCollapse.length).toBeGreaterThan(200)
+    expect(deferredCollapse).toContain('applySizing(')
+  })
+
+  it('re-applies the stated size AFTER the sizing and BEFORE the verify', () => {
+    const sizing = deferredCollapse.indexOf('applySizing(')
+    const repin = deferredCollapse.indexOf(
+      'repinFixedSize(',
+    )
+    const verify = deferredCollapse.indexOf(
+      'verifyCreatedSize(',
+    )
+    expect(sizing).toBeGreaterThanOrEqual(0)
+    expect(repin).toBeGreaterThan(sizing)
+    expect(verify).toBeGreaterThan(repin)
+  })
+})
+
 describe('inline var() value-mismatch wiring', () => {
   it('hands the binder the shadow lookup it reports with', () => {
     // `variableShadows` is optional on the deps, so a dropped wiring degrades

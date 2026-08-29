@@ -537,6 +537,66 @@ export const verifyCreatedSize = (
   }
 }
 
+/**
+ * Put back the stated size on the axes an explicit FIXED pinned (B69).
+ *
+ * `sizing` and `size` are two halves of one instruction, and on the create_tree
+ * path they used to land in an order that lost the second half. A node with
+ * children DEFERS its sizing (B60): the frame keeps the box the spec stated
+ * while its subtree is built, the auto-layout default hugs it as children
+ * arrive, and `applySizing` then writes FIXED — which FREEZES THE CURRENT BOX
+ * rather than restoring the stated one. Nothing re-applied the size, so it
+ * survived only when the hug happened to land on it.
+ *
+ * That is why the defect looked child-count-dependent. One child hugged a
+ * 300-wide frame to 40; two children hugged the same shape to the 400 the spec
+ * asked for, and the second read as a clean pass. The child count changes the
+ * hug width, and the hug width is what was being kept.
+ *
+ * PER AXIS, and only where the caller SAID FIXED. A HUG or FILL axis is a
+ * caller's decision to let the layout choose, and a stated size beside it is
+ * the contradiction `verifyCreatedSize` reports — not something to overrule.
+ *
+ * Warns rather than throws: this is a repair on a node that already exists,
+ * and `verifyCreatedSize` runs straight after to judge the outcome either way.
+ */
+export const repinFixedSize = (
+  node: SizeTarget,
+  size: unknown,
+  sizing: unknown,
+  warnings?: string[],
+): void => {
+  if (size === undefined || !Array.isArray(sizing)) return
+  const [statedW, statedH] = size as [unknown, unknown]
+  const [horizontal, vertical] = sizing as [
+    unknown,
+    unknown,
+  ]
+  const pinW =
+    horizontal === 'FIXED' && typeof statedW === 'number'
+  const pinH =
+    vertical === 'FIXED' && typeof statedH === 'number'
+  if (!pinW && !pinH) return
+  const actual = measured(node)
+  if (actual === undefined) return
+  const wantW = pinW ? (statedW as number) : actual[0]
+  const wantH = pinH ? (statedH as number) : actual[1]
+  if (near(actual[0], wantW) && near(actual[1], wantH)) {
+    return
+  }
+  if (typeof node.resize !== 'function') return
+  try {
+    node.resize(wantW, wantH)
+  } catch (e) {
+    warnings?.push(
+      'size not re-applied after the deferred sizing on ' +
+        nodeLabel(node) +
+        ': ' +
+        String(e),
+    )
+  }
+}
+
 const noResizeWarning = (
   node: SizeTarget,
   warnings?: string[],
