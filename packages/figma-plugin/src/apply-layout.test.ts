@@ -578,3 +578,67 @@ test('B58: a dropped grid count is named on a runtime that supports GRID', () =>
   expect(warnings).toHaveLength(1)
   expect(warnings[0]).toContain('gridRowCount')
 })
+
+// ─── The count no-op guard (live 2026-08-29) ─────────────────────────────────
+// Figma's count setter throws "Cannot delete occupied row/column" on an axis a
+// child SPANS — even when the written value equals the current one. The fake
+// setter models that: it throws on EVERY write, so only a skipped write passes.
+
+test('a count the frame already holds is not re-written — the setter throws on a span-occupied axis', () => {
+  const frame = makeGridFrame()
+  applyLayout(frame, { mode: 'GRID', rows: 3, cols: 3 })
+  let rowWrites = 0
+  Object.defineProperty(frame, 'gridRowCount', {
+    get: () => 3,
+    set: () => {
+      rowWrites++
+      throw new Error(
+        'Cannot set grid row count: Cannot delete occupied row/column',
+      )
+    },
+  })
+  applyLayout(frame, { mode: 'GRID', rows: 3, cols: 4 })
+  expect(rowWrites).toBe(0)
+  expect(frame.gridColumnCount).toBe(4)
+})
+
+test('a CHANGED count still writes — a genuine shrink stays a loud refusal', () => {
+  const frame = makeGridFrame()
+  applyLayout(frame, { mode: 'GRID', rows: 3, cols: 3 })
+  Object.defineProperty(frame, 'gridRowCount', {
+    get: () => 3,
+    set: () => {
+      throw new Error(
+        'Cannot set grid row count: Cannot delete occupied row/column',
+      )
+    },
+  })
+  expect(() =>
+    applyLayout(frame, { mode: 'GRID', rows: 2, cols: 3 }),
+  ).toThrow(/occupied/)
+})
+
+test('a mode the frame already holds is not re-written — GRID→GRID re-init throws on a row-spanned grid', () => {
+  const frame = makeGridFrame()
+  applyLayout(frame, { mode: 'GRID', rows: 3, cols: 3 })
+  let modeWrites = 0
+  Object.defineProperty(frame, 'layoutMode', {
+    get: () => 'GRID',
+    set: () => {
+      modeWrites++
+      throw new Error(
+        'Cannot set grid row count: Cannot delete occupied row/column',
+      )
+    },
+  })
+  applyLayout(frame, { mode: 'GRID', rows: 3, cols: 4 })
+  expect(modeWrites).toBe(0)
+  expect(frame.gridColumnCount).toBe(4)
+})
+
+test('a CHANGED mode still writes', () => {
+  const frame = makeFrame()
+  frame.layoutMode = 'HORIZONTAL'
+  applyLayout(frame, { mode: 'V' })
+  expect(frame.layoutMode).toBe('VERTICAL')
+})

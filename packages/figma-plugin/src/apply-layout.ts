@@ -129,12 +129,17 @@ const intentsOf = (
   frame: LayoutTarget,
   layout: AppliedLayout,
 ): Intent[] => {
-  const out: Intent[] = [
-    {
-      field: 'layoutMode',
-      value: layoutModeOf(layout.mode),
-    },
-  ]
+  const out: Intent[] = []
+  const targetMode = layoutModeOf(layout.mode)
+  // A mode the frame already holds is skipped, not re-written: Figma's
+  // layoutMode setter re-initializes the grid on a GRID→GRID write and throws
+  // "Cannot delete occupied row/column" when a child SPANS rows (live-proven
+  // 2026-08-29 — retracking the dashboard shell). Same law as the count guard
+  // below and the cell anchor guard: what a read handed back must write back
+  // as a no-op. A CHANGED mode always writes.
+  if (frame.layoutMode !== targetMode) {
+    out.push({ field: 'layoutMode', value: targetMode })
+  }
   if (layout.spacing !== undefined) {
     out.push({
       field: 'itemSpacing',
@@ -175,9 +180,26 @@ const intentsOf = (
         ['gridColumnGap', layout.colGap],
       ]
     for (const [field, value] of grid) {
-      if (value !== undefined && field in frame) {
-        out.push({ field, value })
+      if (value === undefined || !(field in frame)) {
+        continue
       }
+      // A COUNT the frame already holds is skipped, not re-written: Figma's
+      // count setter throws "Cannot delete occupied row/column" on an axis a
+      // child SPANS — even at the unchanged value (live-proven 2026-08-29 on
+      // the dashboard shell). A read-modify-write that hands rows/cols back
+      // must be a no-op, the same law the cell anchor guard follows. A
+      // CHANGED count still writes, so a genuine shrink into occupied tracks
+      // stays a loud refusal.
+      if (
+        (field === 'gridRowCount' ||
+          field === 'gridColumnCount') &&
+        (frame as unknown as Record<string, unknown>)[
+          field
+        ] === value
+      ) {
+        continue
+      }
+      out.push({ field, value })
     }
   }
   return out
