@@ -8,30 +8,54 @@ import {
 } from './bind-wrappers'
 
 // A stand-in for figma.variables.setBoundVariableForPaint: returns a NEW paint
-// carrying the binding, exactly as the real API does (it never mutates).
-//
-// AND IT DOES NOT KEEP THE PAINT'S OPACITY — which is B68. The bind re-resolves
-// the paint's colour through the variable, and a SolidPaint keeps its alpha in
-// `opacity`, so the channel the write stated is gone. Reproduced live three
-// times: `fills:['var(x)#22D3EE{op=0.2}']` applied clean, warned about
-// nothing, read back `var(x)#22D3EE`, and rendered opaque — while the plain
-// `#FF0000{op=0.2}` beside it kept its alpha.
-//
-// The fake models the OUTCOME, which is what the reproductions pin, not the
-// mechanism inside Figma, which they do not. A paint that never stated an
-// opacity is unaffected either way.
+// carrying the binding, exactly as the real API does (it never mutates), and
+// KEEPING the paint's opacity — live-proven 2026-08-29 (before.op=0.5,
+// bound.op=0.5). The B68 drop lives in the paints SETTER, not here; see
+// paintSetterNode below.
 const bindPaint = (
   paint: unknown,
   field: 'color',
   variable: unknown,
-): unknown => {
-  const { opacity: _dropped, ...rest } = paint as {
-    opacity?: number
-  }
+): unknown => ({
+  ...(paint as object),
+  boundVariables: {
+    [field]: { id: (variable as { id: string }).id },
+  },
+})
+
+// The paints SETTER models the live drop (B68, live-proven 2026-08-29):
+// assigning a paint that TRANSITIONS from unbound to colour-bound resets its
+// opacity to 1, while re-assigning an already-bound paint keeps whatever
+// opacity it carries. A plain-object node can never reproduce that — the drop
+// happens on assignment, so only an accessor can model it.
+const paintSetterNode = (
+  initial: Record<string, unknown>[],
+) => {
+  let stored = initial
   return {
-    ...rest,
-    boundVariables: {
-      [field]: { id: (variable as { id: string }).id },
+    type: 'FRAME',
+    get fills() {
+      return stored
+    },
+    set fills(next: Record<string, unknown>[]) {
+      stored = next.map((p, i) => {
+        const wasBound = !!(
+          stored[i] as
+            | { boundVariables?: { color?: unknown } }
+            | undefined
+        )?.boundVariables?.color
+        const isBound = !!(
+          p as { boundVariables?: { color?: unknown } }
+        )?.boundVariables?.color
+        if (
+          isBound &&
+          !wasBound &&
+          typeof p.opacity === 'number'
+        ) {
+          return { ...p, opacity: 1 }
+        }
+        return p
+      })
     },
   }
 }
@@ -115,10 +139,9 @@ test('a var() paint binding with no index binds every SOLID paint (the bind_vari
 // ─── B68: the bind keeps the paint's stated opacity ──────────────────────────
 
 test('a var() paint binding keeps the opacity the write stated', async () => {
-  const node = {
-    type: 'FRAME',
-    fills: [{ ...solid(0), opacity: 0.2 }],
-  }
+  const node = paintSetterNode([
+    { ...solid(0), opacity: 0.2 },
+  ])
   const warnings: string[] = []
   await applyWrapperBindings(
     node,
@@ -142,13 +165,10 @@ test('a var() paint binding keeps the opacity the write stated', async () => {
 })
 
 test('the bind_variable core (no index) keeps every paint its own opacity', async () => {
-  const node = {
-    type: 'FRAME',
-    fills: [
-      { ...solid(0), opacity: 0.2 },
-      { ...solid(1), opacity: 0.9 },
-    ],
-  }
+  const node = paintSetterNode([
+    { ...solid(0), opacity: 0.2 },
+    { ...solid(1), opacity: 0.9 },
+  ])
   const warnings: string[] = []
   await applyWrapperBindings(
     node,
@@ -165,7 +185,7 @@ test('the bind_variable core (no index) keeps every paint its own opacity', asyn
 })
 
 test('a paint that stated no opacity gains none — the bind is left alone', async () => {
-  const node = { type: 'FRAME', fills: [solid(0)] }
+  const node = paintSetterNode([solid(0)])
   const warnings: string[] = []
   await applyWrapperBindings(
     node,

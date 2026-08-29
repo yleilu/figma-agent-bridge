@@ -127,34 +127,49 @@ const isSolid = (paint: unknown): boolean =>
  * Give a freshly bound paint back the opacity the write stated (B68).
  *
  * A `var()` binds the COLOUR of a paint. It does not say anything about how
- * opaque that paint is, and `{op=}` is the only thing that does. The bind
- * re-resolves the paint's colour through the variable and does not carry the
- * stated opacity across, so `fills:['var(brand/cyan)#22D3EE{op=0.2}']` applied
- * clean, warned about nothing, and rendered fully opaque — the plain
- * `#FF0000{op=0.2}` beside it kept its alpha, which is what made the loss look
- * like the grammar's fault rather than the binding's.
+ * opaque that paint is, and `{op=}` is the only thing that does. The drop is
+ * NOT in `setBoundVariableForPaint` — its returned paint keeps the stated
+ * opacity (live-proven 2026-08-29: before.op=0.5, bound.op=0.5). It is the
+ * paints SETTER: assigning a paint that transitions from unbound to
+ * colour-bound resets its opacity to 1, while re-assigning an already-bound
+ * paint keeps whatever opacity it carries. So the restore has to be a SECOND
+ * assignment, after the binding is stored: patch the opacity onto the bound
+ * paints Figma just normalized, and write them again. The binding survives
+ * that write — a bound→bound assignment does not reset.
  *
- * Only a STATED opacity is restored. A paint that carried none before the bind
- * gets none after it: this puts back what the caller asked for, and never
- * invents a value Figma is entitled to choose.
+ * Only a STATED opacity is restored, and only where the setter did not keep
+ * it. A paint that carried none before the bind gets none after it: this puts
+ * back what the caller asked for, and never invents a value Figma is entitled
+ * to choose.
  */
-const keepStatedOpacity = (
-  before: unknown,
-  bound: unknown,
-): unknown => {
-  const stated = (before as { opacity?: unknown } | null)
-    ?.opacity
-  if (typeof stated !== 'number') {
-    return bound
+const restoreStatedOpacity = (
+  node: BindTargetNode,
+  field: 'fills' | 'strokes',
+  statedOps: unknown[],
+  index?: number,
+): void => {
+  const stored = node[field]
+  if (!Array.isArray(stored)) {
+    return
   }
-  const kept = (bound as { opacity?: unknown } | null)
-    ?.opacity
-  if (kept === stated) {
-    return bound
-  }
-  return {
-    ...(bound as Record<string, unknown>),
-    opacity: stated,
+  let drifted = false
+  const patched = (
+    stored as Record<string, unknown>[]
+  ).map((p, i) => {
+    const stated = statedOps[i]
+    if (
+      (index !== undefined && i !== index) ||
+      !isSolid(p) ||
+      typeof stated !== 'number' ||
+      p.opacity === stated
+    ) {
+      return p
+    }
+    drifted = true
+    return { ...p, opacity: stated }
+  })
+  if (drifted) {
+    node[field] = patched
   }
 }
 
@@ -345,14 +360,15 @@ export const bindPaintField = (
     return
   }
   try {
+    const statedOps = paints.map(
+      p => (p as { opacity?: unknown } | null)?.opacity,
+    )
     node[field] = paints.map((paint, i) =>
       (index === undefined || i === index) && isSolid(paint)
-        ? keepStatedOpacity(
-            paint,
-            setForPaint(paint, 'color', variable),
-          )
+        ? setForPaint(paint, 'color', variable)
         : paint,
     )
+    restoreStatedOpacity(node, field, statedOps, index)
   } catch (e) {
     warnings.push(
       'binding ' +
