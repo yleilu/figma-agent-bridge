@@ -224,6 +224,28 @@ export const nodeSpecSchema: z.ZodType<NodeSpec> = z.lazy(
 export const nodeSpecOrStubSchema: z.ZodType<NodeSpecOrStub> =
   z.lazy(() => z.union([nodeSpecSchema, idStubSchema]))
 
+/**
+ * `create_node`'s spec: every NodeSpec field EXCEPT `children` (I67).
+ *
+ * `create_node` builds ONE node and has since M2. Its param schema nonetheless
+ * advertised a fully recursive `children` array, which the handler then
+ * stripped with a post-hoc warning — twelve recordings of agents building a
+ * tree, reading a success, and finding one node. A schema is the first thing
+ * an agent reads, so an advertised-and-ignored field is the most expensive
+ * documentation there is.
+ *
+ * Subtraction on the ADVERTISED shape only. It stays PASSTHROUGH so a caller
+ * who sends `children` anyway still reaches the handler and is still told —
+ * dropping the key at the schema boundary would trade a misleading invitation
+ * for a silent drop, which is the same failure pointed the other way.
+ *
+ * `nodeSpecSchema` keeps its recursive `children`: it is the READ shape, and
+ * `NodeSpec` is what every reader emits.
+ */
+export const createNodeSpecSchema = z
+  .object({ ...nodeSpecBase })
+  .passthrough()
+
 // partialNodeSpecSchema — every field optional (for update_node, where a
 // supplied field is replaced wholesale and an omitted field is left
 // untouched). `type` is optional here (a patch need not restate it), and so is
@@ -251,6 +273,23 @@ export const partialNodeSpecSchema = z
  */
 export const NODE_SPEC_PATCH_KEYS: ReadonlySet<string> =
   new Set(Object.keys(partialNodeSpecSchema.shape))
+
+/**
+ * `update_node`'s patch: the partial NodeSpec minus `children` (I67).
+ *
+ * `update_node` has never moved a node's children — structure moves through
+ * `create_node`/`create_tree` and `reparent_node` — yet `children` sat in the
+ * advertised patch shape and was dropped in silence, which is worse than
+ * `create_node`'s post-hoc warning was.
+ *
+ * `partialNodeSpecSchema` itself is left intact on purpose. It is the source
+ * `NODE_SPEC_PATCH_KEYS` and `search`'s `SEARCH_FIELDS` are both derived from,
+ * and `search fields:['children']` is a legitimate projection over a hydrated
+ * row. `.omit()` preserves the passthrough setting, so a straggler still
+ * arrives and is still named (`childrenIgnoredWarnings`).
+ */
+export const updateNodePatchSchema =
+  partialNodeSpecSchema.omit({ children: true })
 
 // slotSpecSchema — one `update_component` slot entry in its object form (B30):
 // the slot's NAME plus the spec applied to the freshly created slot. A fresh

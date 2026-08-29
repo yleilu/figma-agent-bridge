@@ -30,10 +30,11 @@ import { FEEDBACK_CATEGORIES } from './feedback'
 import { strictParams } from './strict-params'
 import { identityHeadersSchema } from './identity-headers'
 import {
-  nodeSpecSchema,
+  createNodeSpecSchema,
   partialNodeSpecSchema,
   slotEntrySchema,
   treeNodeSpecSchema,
+  updateNodePatchSchema,
 } from './node-spec-schema'
 import {
   treeReadParamsSchema,
@@ -672,8 +673,8 @@ export const duplicatePageParamsSchema = strictParams({
 export const updateNodeParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeId: z.string().describe('ID of the node to update.'),
-  patch: partialNodeSpecSchema.describe(
-    'Partial NodeSpec. Only supplied fields are replaced; omitted fields are left unchanged.',
+  patch: updateNodePatchSchema.describe(
+    'Partial NodeSpec. Only supplied fields are replaced; omitted fields are left unchanged. It carries no `children`: structure moves through create_node / create_tree / reparent_node, never through a patch (I67).',
   ),
 })
 
@@ -687,7 +688,7 @@ export const updateNodeParamsSchema = strictParams({
  */
 export const createNodeParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
-  spec: nodeSpecSchema.describe(
+  spec: createNodeSpecSchema.describe(
     'The NodeSpec to create. Its `type` selects the Figma node kind. A FRAME that names no `layout` is created as a vertical auto-layout stack, and a `size` it stated is pinned FIXED so the stack cannot hug it away; pass `layout:{mode:"NONE"}` for an absolutely-positioned frame, or any other `layout` to choose your own (then `sizing` is yours to state too).',
   ),
   parentId: z

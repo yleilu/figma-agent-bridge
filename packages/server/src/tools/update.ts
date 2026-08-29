@@ -12,6 +12,7 @@ import type { NodeSpecPatch } from '@figma-agent-bridge/shared/node-spec'
 import type { ScopedFigmaClient } from '../figma-client'
 import {
   specToFigma,
+  childrenIgnoredWarnings,
   oneWayClampWarnings,
   unknownPatchKeyWarnings,
 } from '../serialize/node-spec-writer'
@@ -41,6 +42,11 @@ export const handleUpdateNode = async (
     // A key the write face does not know is DROPPED, not applied — say so
     // rather than reporting a success that moved nothing (T7).
     warnings.push(...unknownPatchKeyWarnings(patch, spec))
+    // I67 — `children` is off the advertised patch shape, and the schema is
+    // passthrough so a straggler reaches us instead of being stripped. It
+    // needs its own sentence: it IS a NodeSpec field, so the unknown-key
+    // wording would contradict the grammar the caller read.
+    warnings.push(...childrenIgnoredWarnings(patch))
     // B57 — a min/max write (or clear) destroys the size it overwrites and
     // Figma restores nothing. The apply is faithful; the silence was not.
     warnings.push(...oneWayClampWarnings(patch))

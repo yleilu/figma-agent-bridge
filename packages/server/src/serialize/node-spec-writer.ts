@@ -377,6 +377,29 @@ export const unknownPatchKeyWarnings = (
   return out
 }
 
+/**
+ * What a patch carrying `children` is told (I67).
+ *
+ * `children` is off `update_node`'s advertised patch shape now, and the schema
+ * is passthrough precisely so a straggler still ARRIVES here rather than being
+ * dropped at the boundary. It cannot ride `unknownPatchKeyWarnings`: that
+ * function tests `NODE_SPEC_PATCH_KEYS`, which is derived from
+ * `partialNodeSpecSchema` — the shape `search`'s field vocabulary also comes
+ * from, and one `search fields:['children']` is legitimate. So the key gets its
+ * own sentence, and that sentence names the tools that DO move structure.
+ */
+export const childrenIgnoredWarnings = (
+  patch: object,
+): string[] =>
+  'children' in patch
+    ? [
+        'key `children` was ignored — update_node patches ONE node and never ' +
+          'its contents. Build children with create_node / create_tree ' +
+          'parented to this node, or move existing ones in with ' +
+          'reparent_node.',
+      ]
+    : []
+
 /** The four auto-layout size clamps, in the order a patch is scanned (B57). */
 const CLAMP_KEYS = [
   'minWidth',
