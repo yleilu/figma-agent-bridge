@@ -117,7 +117,7 @@ flagged `UNDOCUMENTED` — treat them as feature-detect-only (degrade gracefully
 |------|------------------------|---------------|-------|
 | `BOOLEAN` | works | `true` / `false` | Toggle child visibility |
 | `TEXT` | works | any string | Text override |
-| `INSTANCE_SWAP` | works | valid component key (non-empty) | Swap child instance |
+| `INSTANCE_SWAP` | works | component NODE ID (non-empty); `update_component` also accepts a key | Swap child instance |
 | `SLOT` | works | `''` | **UNDOCUMENTED** — content slot |
 | `VARIANT` | ComponentSet only | — | Lives on ComponentSetNode, not ComponentNode |
 

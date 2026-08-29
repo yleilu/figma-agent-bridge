@@ -19,8 +19,10 @@ import {
   type Placeable,
 } from './reparent-position'
 import {
+  instanceSwapKey,
   resolvePropertyKey,
   undeletedMessage,
+  unresolvedSwapKeyMessage,
   type PropertyDefs,
 } from './component-properties'
 import { importComponentByKeyWithDeadline } from './import-by-key'
@@ -1050,6 +1052,71 @@ const applyCommonProperties = async (
   }
 }
 
+/**
+ * A published KEY → the component it names, within a deadline.
+ *
+ * A published key may belong to a COMPONENT or a COMPONENT_SET — Figma has a
+ * separate importer per kind and the key itself does not say which. Both run
+ * concurrently, first fulfilment wins, and a set resolves to its
+ * defaultVariant, because you instance a variant and never the set itself
+ * (expression-formats.md). Sequential would not work: the wrong importer HANGS
+ * rather than rejecting (import-by-key.ts), so a catch-and-fall-back never
+ * reaches the second one.
+ *
+ * Module-level because two callers need it — `create_node`'s INSTANCE arm and
+ * `update_component`'s INSTANCE_SWAP default (B70).
+ */
+const importComponentKey = (
+  key: string,
+): Promise<ComponentNode> =>
+  importComponentByKeyWithDeadline(key, {
+    component: k => figma.importComponentByKeyAsync(k),
+    set: k => figma.importComponentSetByKeyAsync(k),
+  })
+
+/**
+ * The node id an INSTANCE_SWAP `defaultValue` names (B70).
+ *
+ * Local first, and the order is not an optimisation. `importComponentByKeyAsync`
+ * NEVER SETTLES on the key of a local unpublished component (import-by-key.ts),
+ * so the commonest case in a working file — a component you just made — would
+ * stall for the whole deadline before falling back. A document scan answers it
+ * at once, and the import is left for the keys only a library can resolve.
+ *
+ * An unresolvable key is passed through UNCHANGED with a warning. Figma then
+ * refuses it in its own words, on the existing catch, and the caller sees both
+ * halves: what this could not resolve, and what Figma made of it.
+ */
+const resolveSwapDefault = async (
+  property: string,
+  type: unknown,
+  defaultValue: unknown,
+  warnings: string[],
+): Promise<unknown> => {
+  const key = instanceSwapKey(type, defaultValue)
+  if (key === undefined) return defaultValue
+  const local = figma.root
+    .findAllWithCriteria({
+      types: ['COMPONENT', 'COMPONENT_SET'],
+    })
+    .find(
+      n =>
+        (n as ComponentNode | ComponentSetNode).key === key,
+    )
+  if (local !== undefined) {
+    return local.type === 'COMPONENT_SET'
+      ? ((local as ComponentSetNode).defaultVariant?.id ??
+          local.id)
+      : local.id
+  }
+  try {
+    return (await importComponentKey(key)).id
+  } catch {
+    warnings.push(unresolvedSwapKeyMessage(property, key))
+    return defaultValue
+  }
+}
+
 const applyPostAppendProperties = (
   node: SceneNode,
   spec: Record<string, unknown>,
@@ -1723,14 +1790,7 @@ const buildSingleNode = async (
       // itself (expression-formats.md). Sequential would not work — the
       // wrong importer HANGS rather than rejecting (see import-by-key.ts),
       // so a catch-and-fall-back never reaches the second one.
-      const importByKey = (
-        key: string,
-      ): Promise<ComponentNode> =>
-        importComponentByKeyWithDeadline(key, {
-          component: k =>
-            figma.importComponentByKeyAsync(k),
-          set: k => figma.importComponentSetByKeyAsync(k),
-        })
+      const importByKey = importComponentKey
       // Resolve the main component. Two paths:
       //   1. REMOTE (compRef.remote===true AND key present): prefer
       //      importComponentByKeyAsync(key) first — the local id is a
@@ -3785,10 +3845,18 @@ const handleCommand = async (
       if (addProps) {
         for (const p of addProps) {
           try {
+            // B70 — an INSTANCE_SWAP default is a component NODE ID, and this
+            // surface documented the KEY. Both spellings are accepted; a key
+            // is resolved here, before Figma ever sees it.
             const canonicalId = comp.addComponentProperty(
               p.name,
               p.type as ComponentPropertyType,
-              p.defaultValue,
+              (await resolveSwapDefault(
+                p.name,
+                p.type,
+                p.defaultValue,
+                ucWarnings,
+              )) as string | boolean,
             )
             if (p.targetNodeId) {
               // Resolve the binding after adding the property.
@@ -3881,8 +3949,19 @@ const handleCommand = async (
             } = {}
             if (p.newName !== undefined)
               opts.name = p.newName
-            if (p.defaultValue !== undefined)
-              opts.defaultValue = p.defaultValue
+            if (p.defaultValue !== undefined) {
+              // B70, the same currency one door over. An edit states no type,
+              // so it is read off the definition the property already has —
+              // and a property this component does not define resolves to no
+              // type, which resolves nothing and lets Figma word the refusal.
+              opts.defaultValue = (await resolveSwapDefault(
+                p.name,
+                comp.componentPropertyDefinitions?.[p.name]
+                  ?.type,
+                p.defaultValue,
+                ucWarnings,
+              )) as string | boolean
+            }
             comp.editComponentProperty(p.name, opts)
           } catch (e) {
             ucWarnings.push(

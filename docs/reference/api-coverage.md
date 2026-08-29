@@ -235,7 +235,7 @@ Total: 18 types for Figma Design + 1 asset pipeline.
 | Component `documentationLinks` | DocumentationLink[] | 📌 M5 | External docs |
 | `addComponentProperty` (BOOLEAN) | `addComponentProperty(name, 'BOOLEAN', default)` | 📌 M5 | Toggle visibility |
 | `addComponentProperty` (TEXT) | `addComponentProperty(name, 'TEXT', default)` | 📌 M5 | Text overrides |
-| `addComponentProperty` (INSTANCE_SWAP) | `addComponentProperty(name, 'INSTANCE_SWAP', default)` | 📌 M5 | Slot swapping — requires valid component key as default (empty string errors) |
+| `addComponentProperty` (INSTANCE_SWAP) | `addComponentProperty(name, 'INSTANCE_SWAP', default)` | 📌 M5 | Slot swapping — the default is a component NODE ID (B70; `preferredValues` is the field that takes keys). `update_component` accepts a key and resolves it. An empty string errors. |
 | `addComponentProperty` (SLOT) | `addComponentProperty(name, 'SLOT', '')` | 📌 M5 | **Undocumented** — confirmed working via runtime introspection |
 | `createSlot` | `component.createSlot(childName)` | 📌 M5 | **Undocumented** — creates slot from child frame |
 | `editComponentProperty` | `editComponentProperty(name, options)` | 📌 M5 | Modify properties |
@@ -477,6 +477,6 @@ Verified by inspecting the live `figma` global object in the Figma plugin sandbo
 |------|----------------------|-------|
 | `BOOLEAN` | ✅ works | `addComponentProperty('name', 'BOOLEAN', true)` |
 | `TEXT` | ✅ works | `addComponentProperty('name', 'TEXT', 'default')` |
-| `INSTANCE_SWAP` | ❌ needs valid default | Errors with empty string default — needs a valid component key |
+| `INSTANCE_SWAP` | ❌ needs valid default | Errors with empty string default — needs a component NODE ID (B70; a key is resolved for you by `update_component`) |
 | `VARIANT` | ❌ ComponentSet only | "Can only add variant property to a component set" |
 | `SLOT` | ✅ works (undocumented) | `addComponentProperty('name', 'SLOT', '')` |

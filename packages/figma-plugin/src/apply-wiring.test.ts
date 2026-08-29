@@ -706,6 +706,47 @@ describe('create_tree deferred-sizing wiring', () => {
   })
 })
 
+// B70 — the mock accepts any string for an INSTANCE_SWAP defaultValue, so a
+// headless test of the whole path proves nothing about the currency Figma
+// wants. `instanceSwapKey` is pure and covered; that it is REACHED on both
+// arms of update_component is what only a scan can hold.
+const updateComponentCase = ((): string => {
+  const from = callers.indexOf(
+    'case COMMANDS.UPDATE_COMPONENT',
+  )
+  const to = callers.indexOf(
+    'case COMMANDS.COMBINE_VARIANTS',
+    from,
+  )
+  return from === -1 || to === -1
+    ? ''
+    : callers.slice(from, to)
+})()
+
+describe('INSTANCE_SWAP default currency wiring', () => {
+  it('actually found the case (liveness)', () => {
+    expect(updateComponentCase.length).toBeGreaterThan(200)
+    expect(updateComponentCase).toContain(
+      'addComponentProperty(',
+    )
+  })
+
+  it('resolves the default on BOTH arms — add and edit', () => {
+    const calls =
+      updateComponentCase.split('resolveSwapDefault(')
+        .length - 1
+    expect(calls).toBe(2)
+  })
+
+  it('resolves BEFORE Figma sees the value', () => {
+    expect(
+      updateComponentCase.indexOf('resolveSwapDefault('),
+    ).toBeLessThan(
+      updateComponentCase.indexOf('editComponentProperty('),
+    )
+  })
+})
+
 describe('inline var() value-mismatch wiring', () => {
   it('hands the binder the shadow lookup it reports with', () => {
     // `variableShadows` is optional on the deps, so a dropped wiring degrades

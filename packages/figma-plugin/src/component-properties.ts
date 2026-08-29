@@ -93,3 +93,56 @@ export const undeletedMessage = (key: string): string =>
   `component property "${key}" is still defined after deleteComponentProperty — ` +
   'Figma refused the removal (a SLOT property and a variant property of a set ' +
   'are the known cases). Remove it from the component panel in Figma.'
+
+/**
+ * A NODE ID, as Figma spells one: `<page>:<local>`.
+ *
+ * Deliberately not the compound `I…;…` form. An INSTANCE_SWAP default names a
+ * MAIN component, and a main component is a plain top-level node — a compound
+ * id names an instance sublayer, which can never be one.
+ */
+const NODE_ID = /^\d+:\d+$/
+
+/**
+ * The component KEY an INSTANCE_SWAP `defaultValue` names, or undefined when it
+ * already names a node id (B70).
+ *
+ * Figma wants a NODE ID here — `addComponentProperty('Icon','INSTANCE_SWAP',
+ * '2:22')` — while `preferredValues`, one field over in the same definition,
+ * wants KEYS. Two currencies, one property, and this surface documented the
+ * wrong one: `get_components` returns a `key`, the skill says to pass it, and
+ * Figma rejects it. Five reports across two eras say the same thing.
+ *
+ * A key is the only handle that survives a file boundary, so the documented
+ * workflow is worth keeping. Both spellings are accepted and the key is
+ * resolved for the caller — the same courtesy `swap_component` already extends
+ * to its own main-component reference.
+ *
+ * Shape-based rather than length-based on purpose. A key is 40 hex characters
+ * TODAY; the contract that will not move is that a node id has a colon between
+ * two integers, and anything that is not one has to be resolved before Figma
+ * sees it.
+ */
+export const instanceSwapKey = (
+  type: unknown,
+  defaultValue: unknown,
+): string | undefined =>
+  type === 'INSTANCE_SWAP' &&
+  typeof defaultValue === 'string' &&
+  defaultValue !== '' &&
+  !NODE_ID.test(defaultValue)
+    ? defaultValue
+    : undefined
+
+/** What an INSTANCE_SWAP default says when its key names nothing (B70). */
+export const unresolvedSwapKeyMessage = (
+  name: string,
+  key: string,
+): string =>
+  'property "' +
+  name +
+  '": the INSTANCE_SWAP default "' +
+  key +
+  '" is not a node id, and no component in this file or library carries that ' +
+  'key. Figma takes a component NODE ID here. The value was passed through ' +
+  'unchanged, so the error below is Figma’s own.'

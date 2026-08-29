@@ -174,17 +174,19 @@ Two mechanisms, chosen by whether the set of occupants is open:
     {
       "name": "HeaderControl",
       "type": "INSTANCE_SWAP",
-      "defaultValue": "<componentKey>",
+      "defaultValue": "<componentNodeId>",
       "targetNodeId": "<childInstanceId>"
     }
   ]
 }
 ```
 
-Then per instance: `set_instance({instanceId, properties: {HeaderControl: '<componentKey>'}})`.
-Two things to get right: `defaultValue` is a **component key** (the `key` field on
-`get_components` results), and an empty string is rejected — unlike a SLOT property, whose
-default is `""`. And `targetNodeId` is what makes the property real: omit it and the property
+Then per instance: `set_instance({instanceId, properties: {HeaderControl: '<componentNodeId>'}})`.
+Two things to get right: an INSTANCE_SWAP value is a **component node id** (the `id` field on
+`get_components` results — not the `key`, which is what `preferredValues` takes and what the
+docs used to say here), and an empty string is rejected — unlike a SLOT property, whose
+default is `""`. `update_component` accepts a `key` in `defaultValue` and resolves it for you;
+`set_instance` does not, so give that one the id. And `targetNodeId` is what makes the property real: omit it and the property
 is added **unbound**, `set_instance` on it is inert, and a `warnings[]` entry says exactly
 that.
 

@@ -1364,7 +1364,7 @@ export const componentPropertyDefSchema = z.object({
   defaultValue: z
     .union([z.string(), z.boolean()])
     .describe(
-      'Default value (boolean for BOOLEAN, string for TEXT, component key for INSTANCE_SWAP, "" for SLOT).',
+      'Default value (boolean for BOOLEAN, string for TEXT, "" for SLOT). INSTANCE_SWAP takes a component NODE ID — a `key` is accepted too and resolved for you, but Figma itself stores the id.',
     ),
   targetNodeId: z
     .string()
