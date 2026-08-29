@@ -58,6 +58,26 @@
 // the unrotated size, `style()` names — stay lost, and the `readError` on that
 // node says so rather than letting the gap pass as a clean read.
 //
+// A MISSING `style()` WRAPPER IS ALWAYS ATTRIBUTABLE (B41). The export carries
+// no style id at all — proven live, 2026-07-31 — so the wrapper is a live-only
+// field and there is no export half to fall back on the way variables have one.
+// Two roads therefore end at a bare literal, and until B41 both were silent:
+//
+//   no live half   — the walk never reached this node, so it has no throw of
+//                    its own to report. `collectOne` declares the export served
+//                    it (`slicedReadMessage`).
+//   no style NAME  — the node states a styleId and the resolver cannot name it,
+//                    so no wrapper can be rendered (`unnamedStyleMessage`).
+//                    Only when the resolver EXISTS: a runtime without one (T7)
+//                    names no style at all, and a declaration on every styled
+//                    node is noise, not attribution.
+//
+// Neither can be repaired here. Both are declared, because a read that returns
+// a bare literal where a style is bound invites a write that DETACHES it, and
+// an unstyled node and an unresolvable one must not look alike. Whether a live
+// handle answers is session state (resolve-node.ts), which is the whole of
+// B41's nondeterminism: the same node read twice was styled and unstyled.
+//
 // Nodes are seen STRUCTURALLY (`LiveNode`) rather than as `BaseNode` so this is
 // testable without a Figma runtime — the same reason `omitMixed` takes
 // `figma.mixed` as an argument.
@@ -81,6 +101,7 @@ import {
   type NodePair,
   type RawNode,
 } from './canonical-ids'
+import { slicedReadMessage } from './resolve-node'
 
 export type { LiveNode, RawNode }
 
@@ -425,6 +446,25 @@ export const styleIdsOf = (
   return out
 }
 
+/**
+ * What a node says when it IS styled and the read cannot name the style (B41).
+ *
+ * Exported so the message has ONE author, the `exportBudgetMessage` rule.
+ *
+ * The distinction matters more than it looks. A node with no style and a node
+ * whose style could not be named read IDENTICALLY — both come back as a plain
+ * list of literals — and writing that list back detaches the style on the
+ * second one. So the second one says which fields it could not name.
+ */
+export const unnamedStyleMessage = (
+  fields: readonly string[],
+): string =>
+  'this node binds a style on ' +
+  fields.join(', ') +
+  ', and the read could not name it. Those fields come back as plain ' +
+  'literals, with no style() wrapper. A write of those literals DETACHES ' +
+  'the style.'
+
 /** Every distinct variable id this node binds, on any field. */
 export const variableIdsOf = (node: LiveNode): string[] => {
   const bound = node.boundVariables
@@ -519,6 +559,12 @@ type Pending = {
  * node with an unusable live handle has, and it is where the read face reads
  * the binding id from anyway — so the names still resolve and the wrapper
  * survives (B41).
+ *
+ * A node with NO live half is the one case that has no throw to report: the
+ * walk stopped above it, so nothing here failed and everything live-only is
+ * missing anyway. It says so (B41) — a silent thin row is the outcome this
+ * whole module exists to prevent, and `readNodeDocument` already words the
+ * identical loss the identical way when a WHOLE read is served from an export.
  */
 const collectOne = (
   pair: NodePair,
@@ -534,7 +580,7 @@ const collectOne = (
     return {
       node: undefined,
       id,
-      patch: {},
+      patch: { readError: slicedReadMessage(id) },
       styleIds: {},
       variableIds: exportedIds,
     }
@@ -647,6 +693,27 @@ export const collectPatches = async (
       if (name !== undefined) {
         styles[gramField] = name
       }
+    }
+    // A styleId the resolver could not name (B41). The wrapper cannot be
+    // rendered, so the read declares WHICH field lost it rather than emitting
+    // a literal that reads as an unstyled node. A failure already named on
+    // this node is more specific and is never overwritten.
+    //
+    // Only when the runtime HAS the resolver. An absent one (T7) names no
+    // style anywhere, so the loss is uniform across the read and there is
+    // nothing per node to attribute — the flood would drown the real signal,
+    // which is one node degrading where its siblings did not.
+    const unnamedStyles =
+      deps.getStyleName === undefined
+        ? []
+        : Object.keys(p.styleIds).filter(
+            gramField => styles[gramField] === undefined,
+          )
+    if (
+      unnamedStyles.length > 0 &&
+      p.patch.readError === undefined
+    ) {
+      p.patch.readError = unnamedStyleMessage(unnamedStyles)
     }
     const variables: Record<string, string> = {}
     for (const id of p.variableIds) {

@@ -797,6 +797,38 @@ describe('handleSearch — the fields vocabulary (I58)', () => {
     ])
   })
 
+  // B64 — the vocabulary is derived from the NodeSpec schema, and `context`
+  // rides in on that derivation. A search row never carries it: the reader
+  // deletes it post-projection and attaches the capped `contextSummary`
+  // instead. So the tool accepted a name it could never honour, and refused
+  // the name it always emits.
+  it('refuses `context`, and says which field a row carries instead', async () => {
+    const sent: Sent[] = []
+    const { text } = (
+      await handleSearch(
+        { fields: ['context'] },
+        client(sent),
+      )
+    ).content[0]
+    expect(text).toContain('INVALID_PARAM')
+    expect(text).toContain('`context`')
+    expect(text).toContain('contextSummary')
+    expect(text).toContain('get_node')
+    // Refused before the scan, like every other bad entry — the old accept
+    // paid for a whole document walk plus a 50-node hydration to return {}.
+    expect(sent).toEqual([])
+  })
+
+  it('takes `contextSummary` — the name a row actually carries', async () => {
+    const { text } = (
+      await handleSearch(
+        { fields: ['id', 'contextSummary'] },
+        client(),
+      )
+    ).content[0]
+    expect(text).not.toContain('INVALID_PARAM')
+  })
+
   it('leaves childCount off a result nobody asked it for', async () => {
     const out = YAML.parse(
       (await handleSearch({ profile: 'full' }, client()))

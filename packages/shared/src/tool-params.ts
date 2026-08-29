@@ -186,6 +186,20 @@ const SEARCH_UNKNOWN_KEY =
   'fields, profile, limit, cursor.'
 
 /**
+ * NodeSpec keys a SEARCH ROW cannot carry, whatever the schema shape says.
+ *
+ * `context` is the only one (B64). It is a genuine, round-trippable NodeSpec
+ * field on the WRITE face, so `partialNodeSpecSchema` is right to hold it —
+ * and every bounded reader deletes it after projection and attaches the capped
+ * `contextSummary` instead (self-describing-nodes.md). `fields:['context']`
+ * was therefore accepted, paid for a document walk and a 50-node hydration,
+ * and returned one empty object per result.
+ */
+const SEARCH_UNPROJECTABLE: ReadonlySet<string> = new Set([
+  'context',
+])
+
+/**
  * Every name `search`'s `fields` allow-list accepts (I58).
  *
  * Read off the NodeSpec schema itself, plus the two projections that exist only
@@ -202,12 +216,36 @@ const SEARCH_UNKNOWN_KEY =
  * indistinguishable from a field the node does not carry, so `fields:['id',
  * 'childCount']` came back as bare ids and read exactly like a document where
  * nothing has children (M22: no silent drops).
+ *
+ * SUBTRACTION, NOT A HAND-WRITTEN LIST (B64). Deriving from the schema is what
+ * keeps the vocabulary from drifting, and it is also how a key the read face
+ * can never emit got in. So the derivation stays and the exceptions are named
+ * — one place, with the reason attached.
  */
-export const SEARCH_FIELDS: ReadonlySet<string> = new Set([
-  ...Object.keys(partialNodeSpecSchema.shape),
-  'characters',
-  'childCount',
-])
+export const SEARCH_FIELDS: ReadonlySet<string> = new Set(
+  [
+    ...Object.keys(partialNodeSpecSchema.shape),
+    'characters',
+    'childCount',
+    // The name a row actually carries. `context` is capped to a
+    // `contextSummary` on every bounded reader (self-describing-nodes.md), so
+    // refusing this name while emitting the field was the same lie as
+    // accepting `context` and deleting it — pointed the other way.
+    'contextSummary',
+  ].filter(f => !SEARCH_UNPROJECTABLE.has(f)),
+)
+
+/**
+ * What a rejected entry is told about `context` (B64).
+ *
+ * Naming the substitute is the whole point. "search does not project
+ * `context`" on its own is baffling next to a `get_node` that returns it, and
+ * a caller who reads that has no idea the note is still reachable.
+ */
+const CONTEXT_REDIRECT =
+  ' `context` is a real NodeSpec field, but a bounded reader carries the ' +
+  'capped `contextSummary` in its place — ask for that here, or ask ' +
+  'get_node / get_nodes for the note in full.'
 
 /** What an unrecognised `fields` entry is told, naming the entries. */
 export const searchFieldRejection = (
@@ -219,7 +257,8 @@ export const searchFieldRejection = (
   'come back missing and read as a node that does not carry it. The names ' +
   'it takes are: ' +
   [...SEARCH_FIELDS].sort().join(', ') +
-  '.'
+  '.' +
+  (unknown.includes('context') ? CONTEXT_REDIRECT : '')
 
 /**
  * Params for `search`: flat, paginated node search (Rule A).
@@ -268,7 +307,7 @@ export const searchParamsSchema = z
     // `batch` entry and a direct call are refused on the same terms as an MCP
     // call.
     fields: listReadParamsSchema.shape.fields.describe(
-      'Exact allow-list of fields per result — an entry outside the vocabulary is REFUSED, never dropped. Any NodeSpec field, plus `characters` (a TEXT node’s copy) and `childCount` (how many children the result has — the way to rebuild the tree from this flat list).',
+      'Exact allow-list of fields per result — an entry outside the vocabulary is REFUSED, never dropped. Any NodeSpec field except `context`, plus `characters` (a TEXT node’s copy), `childCount` (how many children the result has — the way to rebuild the tree from this flat list) and `contextSummary` (the capped note a search row carries; ask get_node for the note in full).',
     ),
     // `profile` rides here rather than on listReadParamsSchema: the presets are
     // NodeSpec field sets, so they mean something for `search`'s node results and
@@ -1325,7 +1364,7 @@ export const componentPropertyDefSchema = z.object({
   defaultValue: z
     .union([z.string(), z.boolean()])
     .describe(
-      'Default value (boolean for BOOLEAN, string for TEXT, component key for INSTANCE_SWAP, "" for SLOT).',
+      'Default value (boolean for BOOLEAN, string for TEXT, "" for SLOT). INSTANCE_SWAP takes a component NODE ID — a `key` is accepted too and resolved for you, but Figma itself stores the id.',
     ),
   targetNodeId: z
     .string()

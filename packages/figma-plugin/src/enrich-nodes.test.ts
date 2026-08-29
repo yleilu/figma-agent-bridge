@@ -727,6 +727,9 @@ describe('collectPatches — one bad node costs one node (B31)', () => {
     expect('bindingNames' in patches.get('root')!).toBe(
       false,
     )
+    // …and the lost name is declared, not passed off as an unstyled node
+    // (B41). The resolver EXISTS here — it is one id it could not answer.
+    expect(patches.get('root')?.readError).toContain('fill')
   })
 })
 
@@ -1039,6 +1042,123 @@ describe('enrichDocument — the alias subtree (B41)', () => {
     // instead of on the root as an id the caller cannot find (I48).
     expect(label.readError).toContain('does not exist')
     expect('readErrors' in doc).toBe(false)
+  })
+
+  // B41 — the style() wrapper is a LIVE-ONLY field (the export carries no
+  // style id at all, proven live 2026-07-31). So a node the live walk never
+  // reached loses its wrapper, and until now it lost it SILENTLY: the read
+  // came back looking complete and one field short. Whether a handle answers
+  // is session state, which is the whole of B41's nondeterminism.
+  //
+  // The fix cannot restore the name. It can make the absence ATTRIBUTABLE:
+  // every node the export alone described says so, on the node that suffered
+  // it.
+  it('declares the export-served node the live walk never reached', async () => {
+    // The chip's own handle reads. Its LABEL refuses `children`, so the walk
+    // never reaches the grandchild below it — that node has no live half at
+    // all, and no throw of its own to report.
+    const label: LiveNode = {
+      id: 'I298:7519;298:7510',
+      type: 'FRAME',
+    }
+    Object.defineProperty(label, 'children', {
+      get() {
+        throw new Error(
+          'in get_children: The node with id "I298:7519;298:7510" does not exist',
+        )
+      },
+      enumerable: true,
+      configurable: true,
+    })
+    const chip = node(
+      { id: '298:7519', type: 'INSTANCE' },
+      [label],
+    )
+    const doc: Record<string, unknown> = {
+      id: CANON,
+      type: 'INSTANCE',
+      children: [
+        {
+          id: CANON + ';298:7510',
+          type: 'FRAME',
+          children: [
+            {
+              id: CANON + ';298:7510;298:7511',
+              type: 'TEXT',
+              fills: [
+                {
+                  type: 'SOLID',
+                  color: { r: 0.13, g: 0.83, b: 0.93 },
+                  boundVariables: {
+                    color: {
+                      id: VAR,
+                      type: 'VARIABLE_ALIAS',
+                    },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+
+    await enrichDocument(chip, doc, -1, named)
+
+    const frame = (
+      doc.children as Record<string, unknown>[]
+    )[0]
+    const text = (
+      frame.children as Record<string, unknown>[]
+    )[0]
+    // The var() half still lands — the export carries the binding id.
+    expect(text.bindingNames).toEqual({
+      variables: { [VAR]: 'probe/cyan' },
+    })
+    // …and the style() half, which the export CANNOT carry, is declared
+    // missing rather than passed off as a node that has no style.
+    expect(text.readError).toContain(
+      CANON + ';298:7510;298:7511',
+    )
+    expect(text.readError).toContain('export')
+  })
+
+  it('declares a style it cannot name — a bare literal is not "unstyled"', async () => {
+    // The node IS styled. The name resolver cannot say what the style is
+    // called, so no style() wrapper can be rendered — and writing the bare
+    // literal back would DETACH the style. The read has to say so.
+    const patches = await collectPatches(
+      node({
+        id: 'root',
+        type: 'RECTANGLE',
+        fillStyleId: 'S:gone',
+        textStyleId: 'S:also-gone',
+      }),
+      undefined,
+      0,
+      deps({ getStyleName: async () => undefined }),
+    )
+    const patch = patches.get('root')
+    expect('bindingNames' in patch!).toBe(false)
+    expect(patch?.readError).toContain('fill')
+    expect(patch?.readError).toContain('text')
+  })
+
+  it('says nothing extra when every style resolves', async () => {
+    const patches = await collectPatches(
+      node({
+        id: 'root',
+        type: 'RECTANGLE',
+        fillStyleId: 'S:glow',
+      }),
+      undefined,
+      0,
+      named,
+    )
+    expect(patches.get('root')?.bindingNames).toEqual({
+      styles: { fill: 'Glow/Accent' },
+    })
+    expect('readError' in patches.get('root')!).toBe(false)
   })
 
   it('control: a clone, whose ids already agree, is unchanged', async () => {

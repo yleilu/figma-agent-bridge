@@ -8,9 +8,11 @@
 
 import { describe, expect, it } from 'bun:test'
 import {
+  instanceSwapKey,
   propertyName,
   resolvePropertyKey,
   undeletedMessage,
+  unresolvedSwapKeyMessage,
 } from './component-properties'
 
 const defs = {
@@ -91,5 +93,56 @@ describe('undeletedMessage', () => {
     const m = undeletedMessage('Plot area#453:65')
     expect(m).toContain('Plot area#453:65')
     expect(m).toContain('SLOT')
+  })
+})
+
+// B70 — `addComponentProperty(name,'INSTANCE_SWAP',default)` takes a component
+// NODE ID, while `preferredValues` in the same definition takes KEYS. This
+// surface documented the key: `get_components` returns one, the skill says to
+// pass it, and Figma rejects it. Five reports, two eras, one currency error.
+describe('instanceSwapKey', () => {
+  const KEY = '8a3b1c9d2e4f5061728394a5b6c7d8e9f0a1b2c3'
+
+  it('reads a component key as a key', () => {
+    expect(instanceSwapKey('INSTANCE_SWAP', KEY)).toBe(KEY)
+  })
+
+  it('leaves a node id alone — it is already what Figma wants', () => {
+    expect(
+      instanceSwapKey('INSTANCE_SWAP', '2:22'),
+    ).toBeUndefined()
+    expect(
+      instanceSwapKey('INSTANCE_SWAP', '453:63'),
+    ).toBeUndefined()
+  })
+
+  it('never touches another property type', () => {
+    expect(instanceSwapKey('TEXT', KEY)).toBeUndefined()
+    expect(instanceSwapKey('SLOT', KEY)).toBeUndefined()
+    expect(instanceSwapKey('BOOLEAN', true)).toBeUndefined()
+  })
+
+  it('has nothing to resolve for an empty or non-string default', () => {
+    expect(
+      instanceSwapKey('INSTANCE_SWAP', ''),
+    ).toBeUndefined()
+    expect(
+      instanceSwapKey('INSTANCE_SWAP', undefined),
+    ).toBeUndefined()
+  })
+
+  it('treats a COMPOUND id as a key, not an id', () => {
+    // `I…;…` names an instance sublayer, which can never be a main component,
+    // so passing it through would send Figma a value it cannot use.
+    expect(
+      instanceSwapKey('INSTANCE_SWAP', 'I2:22;3:4'),
+    ).toBe('I2:22;3:4')
+  })
+
+  it('names an unresolvable key and says the value went through unchanged', () => {
+    const m = unresolvedSwapKeyMessage('Icon', KEY)
+    expect(m).toContain('Icon')
+    expect(m).toContain(KEY)
+    expect(m).toContain('node id')
   })
 })

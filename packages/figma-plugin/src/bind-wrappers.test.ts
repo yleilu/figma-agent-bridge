@@ -8,7 +8,10 @@ import {
 } from './bind-wrappers'
 
 // A stand-in for figma.variables.setBoundVariableForPaint: returns a NEW paint
-// carrying the binding, exactly as the real API does (it never mutates).
+// carrying the binding, exactly as the real API does (it never mutates), and
+// KEEPING the paint's opacity — live-proven 2026-08-29 (before.op=0.5,
+// bound.op=0.5). The B68 drop lives in the paints SETTER, not here; see
+// paintSetterNode below.
 const bindPaint = (
   paint: unknown,
   field: 'color',
@@ -19,6 +22,43 @@ const bindPaint = (
     [field]: { id: (variable as { id: string }).id },
   },
 })
+
+// The paints SETTER models the live drop (B68, live-proven 2026-08-29):
+// assigning a paint that TRANSITIONS from unbound to colour-bound resets its
+// opacity to 1, while re-assigning an already-bound paint keeps whatever
+// opacity it carries. A plain-object node can never reproduce that — the drop
+// happens on assignment, so only an accessor can model it.
+const paintSetterNode = (
+  initial: Record<string, unknown>[],
+) => {
+  let stored = initial
+  return {
+    type: 'FRAME',
+    get fills() {
+      return stored
+    },
+    set fills(next: Record<string, unknown>[]) {
+      stored = next.map((p, i) => {
+        const wasBound = !!(
+          stored[i] as
+            | { boundVariables?: { color?: unknown } }
+            | undefined
+        )?.boundVariables?.color
+        const isBound = !!(
+          p as { boundVariables?: { color?: unknown } }
+        )?.boundVariables?.color
+        if (
+          isBound &&
+          !wasBound &&
+          typeof p.opacity === 'number'
+        ) {
+          return { ...p, opacity: 1 }
+        }
+        return p
+      })
+    },
+  }
+}
 
 const VAR_SURFACE = { id: 'VariableID:1:2' }
 
@@ -94,6 +134,193 @@ test('a var() paint binding with no index binds every SOLID paint (the bind_vari
     type: 'IMAGE',
     imageHash: 'h',
   })
+})
+
+// ─── B68: the bind keeps the paint's stated opacity ──────────────────────────
+
+test('a var() paint binding keeps the opacity the write stated', async () => {
+  const node = paintSetterNode([
+    { ...solid(0), opacity: 0.2 },
+  ])
+  const warnings: string[] = []
+  await applyWrapperBindings(
+    node,
+    [
+      {
+        kind: 'var',
+        name: 'surface/2',
+        field: 'fills',
+        index: 0,
+      },
+    ],
+    deps(),
+    warnings,
+  )
+  expect(warnings).toEqual([])
+  expect(node.fills[0]).toEqual({
+    ...solid(0),
+    opacity: 0.2,
+    boundVariables: { color: { id: 'VariableID:1:2' } },
+  })
+})
+
+test('the bind_variable core (no index) keeps every paint its own opacity', async () => {
+  const node = paintSetterNode([
+    { ...solid(0), opacity: 0.2 },
+    { ...solid(1), opacity: 0.9 },
+  ])
+  const warnings: string[] = []
+  await applyWrapperBindings(
+    node,
+    [{ kind: 'var', name: 'surface/2', field: 'fills' }],
+    deps(),
+    warnings,
+  )
+  expect(warnings).toEqual([])
+  expect(
+    node.fills.map(
+      f => (f as { opacity?: number }).opacity,
+    ),
+  ).toEqual([0.2, 0.9])
+})
+
+test('a paint that stated no opacity gains none — the bind is left alone', async () => {
+  const node = paintSetterNode([solid(0)])
+  const warnings: string[] = []
+  await applyWrapperBindings(
+    node,
+    [
+      {
+        kind: 'var',
+        name: 'surface/2',
+        field: 'fills',
+        index: 0,
+      },
+    ],
+    deps(),
+    warnings,
+  )
+  expect(warnings).toEqual([])
+  expect('opacity' in (node.fills[0] as object)).toBe(false)
+})
+
+// ─── B66: the token a name resolved to contradicts the literal beside it ─────
+
+const CYAN = { r: 34 / 255, g: 211 / 255, b: 238 / 255 }
+const RED = { r: 1, g: 0, b: 0 }
+
+const shadowDeps = (
+  value: Record<string, unknown>,
+  shadows: string[] = [],
+) =>
+  deps({
+    variableByName: async (name: string) =>
+      name === 'brand/primary'
+        ? { id: 'VariableID:9:9', valuesByMode: value }
+        : null,
+    variableShadows: async () => shadows,
+  })
+
+test('B66 — a var() whose token does not hold the stated colour says so, naming the other collection', async () => {
+  const node = {
+    type: 'FRAME',
+    fills: [{ type: 'SOLID', color: CYAN }],
+  }
+  const warnings: string[] = []
+  await applyWrapperBindings(
+    node,
+    [
+      {
+        kind: 'var',
+        name: 'brand/primary',
+        field: 'fills',
+        index: 0,
+      },
+    ],
+    shadowDeps({ light: { ...RED, a: 1 } }, ['Legacy']),
+    warnings,
+  )
+  expect(warnings.length).toBe(1)
+  expect(warnings[0]).toContain('var(brand/primary)')
+  expect(warnings[0]).toContain('"Legacy"')
+  // The binding still lands — this is a warning, never a refusal (T7).
+  expect(
+    (node.fills[0] as { boundVariables?: unknown })
+      .boundVariables,
+  ).toBeDefined()
+})
+
+test('B66 — a token that DOES hold the stated colour is silent', async () => {
+  const node = {
+    type: 'FRAME',
+    fills: [{ type: 'SOLID', color: CYAN }],
+  }
+  const warnings: string[] = []
+  await applyWrapperBindings(
+    node,
+    [
+      {
+        kind: 'var',
+        name: 'brand/primary',
+        field: 'fills',
+        index: 0,
+      },
+    ],
+    shadowDeps({ light: { ...CYAN, a: 1 } }, ['Legacy']),
+    warnings,
+  )
+  expect(warnings).toEqual([])
+})
+
+test('B66 — a scalar field is compared the same way', async () => {
+  const node = {
+    type: 'FRAME',
+    cornerRadius: 8,
+    setBoundVariable: () => {},
+  }
+  const warnings: string[] = []
+  await applyWrapperBindings(
+    node,
+    [
+      {
+        kind: 'var',
+        name: 'brand/primary',
+        field: 'cornerRadius',
+      },
+    ],
+    shadowDeps({ light: 16 }),
+    warnings,
+  )
+  expect(warnings.length).toBe(1)
+  expect(warnings[0]).toContain('var(brand/primary)')
+  // No shadow to blame, so the message does not invent one.
+  expect(warnings[0]).not.toContain('also defined in')
+})
+
+test('B66 — a runtime that exposes no mode values accuses nobody', async () => {
+  const node = {
+    type: 'FRAME',
+    fills: [{ type: 'SOLID', color: CYAN }],
+  }
+  const warnings: string[] = []
+  await applyWrapperBindings(
+    node,
+    [
+      {
+        kind: 'var',
+        name: 'brand/primary',
+        field: 'fills',
+        index: 0,
+      },
+    ],
+    deps({
+      variableByName: async () => ({
+        id: 'VariableID:9:9',
+      }),
+    }),
+    warnings,
+  )
+  expect(warnings).toEqual([])
 })
 
 test('a var() scalar binding goes through setBoundVariable with the handler field', async () => {

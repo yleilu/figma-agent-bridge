@@ -18,6 +18,16 @@
 // keep the module free of the Figma runtime, so it is unit-testable with a
 // plain fake node.
 
+import {
+  bindMismatchWarning,
+  holdsValue,
+  otherCollectionsHolding,
+  statedFromPaint,
+  statedFromScalar,
+  type StatedValue,
+  type VariableLike,
+} from './variable-shadowing'
+
 /** A node as far as binding is concerned: a type name plus loose fields. */
 export type BindTargetNode = {
   type: string
@@ -113,10 +123,62 @@ export type PaintBindDeps = {
 const isSolid = (paint: unknown): boolean =>
   (paint as { type?: string } | null)?.type === 'SOLID'
 
+/**
+ * Give a freshly bound paint back the opacity the write stated (B68).
+ *
+ * A `var()` binds the COLOUR of a paint. It does not say anything about how
+ * opaque that paint is, and `{op=}` is the only thing that does. The drop is
+ * NOT in `setBoundVariableForPaint` — its returned paint keeps the stated
+ * opacity (live-proven 2026-08-29: before.op=0.5, bound.op=0.5). It is the
+ * paints SETTER: assigning a paint that transitions from unbound to
+ * colour-bound resets its opacity to 1, while re-assigning an already-bound
+ * paint keeps whatever opacity it carries. So the restore has to be a SECOND
+ * assignment, after the binding is stored: patch the opacity onto the bound
+ * paints Figma just normalized, and write them again. The binding survives
+ * that write — a bound→bound assignment does not reset.
+ *
+ * Only a STATED opacity is restored, and only where the setter did not keep
+ * it. A paint that carried none before the bind gets none after it: this puts
+ * back what the caller asked for, and never invents a value Figma is entitled
+ * to choose.
+ */
+const restoreStatedOpacity = (
+  node: BindTargetNode,
+  field: 'fills' | 'strokes',
+  statedOps: unknown[],
+  index?: number,
+): void => {
+  const stored = node[field]
+  if (!Array.isArray(stored)) {
+    return
+  }
+  let drifted = false
+  const patched = (
+    stored as Record<string, unknown>[]
+  ).map((p, i) => {
+    const stated = statedOps[i]
+    if (
+      (index !== undefined && i !== index) ||
+      !isSolid(p) ||
+      typeof stated !== 'number' ||
+      p.opacity === stated
+    ) {
+      return p
+    }
+    drifted = true
+    return { ...p, opacity: stated }
+  })
+  if (drifted) {
+    node[field] = patched
+  }
+}
+
 /** One gradient stop, as much of it as a binding touches. */
 type ColorStop = Record<string, unknown>
 
-const stopsOf = (paint: unknown): ColorStop[] | undefined => {
+const stopsOf = (
+  paint: unknown,
+): ColorStop[] | undefined => {
   const stops = (
     paint as { gradientStops?: unknown } | null
   )?.gradientStops
@@ -298,11 +360,15 @@ export const bindPaintField = (
     return
   }
   try {
+    const statedOps = paints.map(
+      p => (p as { opacity?: unknown } | null)?.opacity,
+    )
     node[field] = paints.map((paint, i) =>
       (index === undefined || i === index) && isSolid(paint)
         ? setForPaint(paint, 'color', variable)
         : paint,
     )
+    restoreStatedOpacity(node, field, statedOps, index)
   } catch (e) {
     warnings.push(
       'binding ' +
@@ -424,11 +490,88 @@ export type WrapperBindDeps = PaintBindDeps & {
   variableByName: (
     name: string,
   ) => Promise<{ id: string } | null>
+  /**
+   * The OTHER collections holding this name, for the B66 report.
+   *
+   * Optional, and absent means "no shadow to name": the mismatch is still
+   * reported, without an explanation it cannot substantiate.
+   */
+  variableShadows?: (name: string) => Promise<string[]>
   /** Resolve a LOCAL style by name within one category. */
   styleByName: (
     name: string,
     category: StyleCategory,
   ) => Promise<{ id: string } | null>
+}
+
+/**
+ * The literal this write already put on the field the binding is about to take
+ * over (B66).
+ *
+ * Read from the NODE rather than carried on the wire, and read HERE rather than
+ * in the binding cores, because that is what scopes the check to the inline
+ * route. `var(brand/primary)#22D3EE` states a literal and a token in one atom;
+ * `bind_variable` states only a token, and comparing a node's current value
+ * against a variable there would accuse every binding that legitimately changes
+ * it. The two share `bindPaintField` / `bindNodeField`; only this caller has an
+ * atom behind it.
+ */
+const statedLiteral = (
+  node: BindTargetNode,
+  binding: WrapperBinding,
+): StatedValue | undefined => {
+  try {
+    if (PAINT_FIELDS.has(binding.field)) {
+      // A stop binding names a colour nested inside a gradient, which is not
+      // the paint's own value — nothing here to compare.
+      if (
+        binding.index === undefined ||
+        binding.stop !== undefined
+      ) {
+        return undefined
+      }
+      const paints = node[binding.field]
+      return Array.isArray(paints)
+        ? statedFromPaint(paints[binding.index])
+        : undefined
+    }
+    return statedFromScalar(node[binding.field])
+  } catch {
+    // A field that refuses to be read gives no evidence, which is not the
+    // same as evidence of a mismatch.
+    return undefined
+  }
+}
+
+/**
+ * Report a token whose value contradicts the literal written beside it (B66).
+ *
+ * A warning, never a refusal (T7): the binding lands either way, and the caller
+ * is told what the node will actually render.
+ */
+const warnOnValueMismatch = async (
+  node: BindTargetNode,
+  binding: WrapperBinding,
+  variable: unknown,
+  deps: WrapperBindDeps,
+  warnings: string[],
+): Promise<void> => {
+  const stated = statedLiteral(node, binding)
+  if (stated === undefined) return
+  if (
+    holdsValue(variable as VariableLike, stated) !==
+    'differs'
+  ) {
+    return
+  }
+  let shadows: string[] = []
+  try {
+    shadows =
+      (await deps.variableShadows?.(binding.name)) ?? []
+  } catch {
+    // The explanation is optional; the mismatch is not.
+  }
+  warnings.push(bindMismatchWarning(binding.name, shadows))
 }
 
 /**
@@ -504,6 +647,15 @@ const applyVarBinding = async (
     return
   }
   const resolved = variable
+  // BEFORE the bind: the field still holds the literal this same write applied,
+  // and after the bind it holds whatever the token resolves to (B66).
+  await warnOnValueMismatch(
+    node,
+    binding,
+    resolved,
+    deps,
+    warnings,
+  )
   if (PAINT_FIELDS.has(binding.field)) {
     await attributed(label, warnings, sink =>
       bindPaintField(
@@ -572,9 +724,20 @@ const applyStyleBinding = async (
 
 type Named = { id: string; name: string }
 
+/** A variable carries the two extra fields shadowing has to see (B66). */
+type NamedVariable = Named & VariableLike
+
 export type BindingLookupLoaders = {
   /** figma.variables.getLocalVariablesAsync (absent ⇒ unavailable). */
-  listVariables?: () => Promise<Named[]>
+  listVariables?: () => Promise<NamedVariable[]>
+  /**
+   * figma.variables.getLocalVariableCollectionsAsync — turns the collection id
+   * on a variable into a name a caller recognises (B66).
+   *
+   * Optional: without it a shadow is named by its collection ID, which is
+   * poorer and still true. The report never depends on it.
+   */
+  listCollections?: () => Promise<Named[]>
   /** figma.getLocalPaintStylesAsync & friends, by category. */
   listStyles?: Partial<
     Record<StyleCategory, () => Promise<Named[]>>
@@ -598,14 +761,18 @@ export type BindingLookupLoaders = {
 export const createBindingLookups = (
   loaders: BindingLookupLoaders,
 ) => {
-  let variables: Map<string, Named> | null = null
+  let variables: Map<string, NamedVariable> | null = null
+  // Every local variable, in enumeration order — the raw list the first-wins
+  // map is built from, kept so a shadow can be named (B66).
+  let allVariables: NamedVariable[] = []
+  let collectionNames: Record<string, string> | null = null
   const styles = new Map<
     StyleCategory,
     Map<string, Named>
   >()
 
   const loadVariables = async (): Promise<
-    Map<string, Named>
+    Map<string, NamedVariable>
   > => {
     const list = loaders.listVariables
     if (typeof list !== 'function') {
@@ -613,8 +780,9 @@ export const createBindingLookups = (
         'getLocalVariablesAsync unavailable in this Figma version',
       )
     }
-    const byName = new Map<string, Named>()
-    for (const v of await list()) {
+    const byName = new Map<string, NamedVariable>()
+    allVariables = await list()
+    for (const v of allVariables) {
       // First wins: two variables can share a name across collections, and a
       // later one must not silently replace the one already answered.
       if (!byName.has(v.name)) {
@@ -626,11 +794,46 @@ export const createBindingLookups = (
 
   const variableByName = async (
     name: string,
-  ): Promise<Named | null> => {
+  ): Promise<NamedVariable | null> => {
     if (variables === null) {
       variables = await loadVariables()
     }
     return variables.get(name) ?? null
+  }
+
+  /**
+   * The OTHER collections holding `name` (B66).
+   *
+   * Cheap by construction: the variable scan is already cached, and the
+   * collection names are loaded once, on the first shadow report — a clean
+   * write never asks for them.
+   */
+  const variableShadows = async (
+    name: string,
+  ): Promise<string[]> => {
+    const chosen = await variableByName(name)
+    if (chosen === null) return []
+    if (collectionNames === null) {
+      collectionNames = {}
+      const list = loaders.listCollections
+      if (typeof list === 'function') {
+        try {
+          for (const c of await list()) {
+            collectionNames[c.id] = c.name
+          }
+        } catch {
+          // T7 — a collection this runtime will not enumerate is named by id.
+        }
+      }
+    }
+    return otherCollectionsHolding(
+      name,
+      allVariables,
+      collectionNames,
+      typeof chosen.variableCollectionId === 'string'
+        ? chosen.variableCollectionId
+        : undefined,
+    )
   }
 
   const loadStyles = async (
@@ -667,8 +870,15 @@ export const createBindingLookups = (
 
   const reset = (): void => {
     variables = null
+    allVariables = []
+    collectionNames = null
     styles.clear()
   }
 
-  return { variableByName, styleByName, reset }
+  return {
+    variableByName,
+    variableShadows,
+    styleByName,
+    reset,
+  }
 }

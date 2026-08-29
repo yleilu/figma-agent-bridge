@@ -621,3 +621,140 @@ describe('SEARCH live-candidate component ref wiring', () => {
     expect(liveCandidateRef).toContain('instancesOfSet')
   })
 })
+
+// B66 — the same blind spot as the slot loop. `variable-shadowing.ts` is pure
+// and fully tested, and every one of its tests stays green with the call site
+// deleted. Only a live file holding two collections with one name would notice,
+// which is exactly the situation the warning exists for.
+const createVariablesCase = ((): string => {
+  const from = callers.indexOf(
+    'case COMMANDS.CREATE_VARIABLES',
+  )
+  const to = callers.indexOf(
+    'case COMMANDS.UPDATE_VARIABLES',
+    from,
+  )
+  return from === -1 || to === -1
+    ? ''
+    : callers.slice(from, to)
+})()
+
+describe('CREATE_VARIABLES shadow-name wiring', () => {
+  it('actually found the case (liveness)', () => {
+    expect(createVariablesCase.length).toBeGreaterThan(200)
+    expect(createVariablesCase).toContain(
+      'createVariableCollection',
+    )
+  })
+
+  it('reports a created name another collection already holds', () => {
+    expect(createVariablesCase).toContain(
+      'otherCollectionsHolding(',
+    )
+    expect(createVariablesCase).toContain(
+      'createShadowWarning(',
+    )
+  })
+
+  it('snapshots the file BEFORE the collection exists', () => {
+    // Taken afterwards, the new collection's own variables are in the list and
+    // every created name shadows itself.
+    expect(
+      createVariablesCase.indexOf(
+        'localVariablesSnapshot()',
+      ),
+    ).toBeLessThan(
+      createVariablesCase.indexOf(
+        'vars.createVariableCollection(',
+      ),
+    )
+  })
+})
+
+// B69 — the deferred collapse is an ORDER, and the order is the fix. Nothing
+// but a live create_tree can tell that `repinFixedSize` moved after the sizing
+// and before the verify: the helper's own tests pass wherever it is called
+// from, and a call site that drifted one line up would silently restore the
+// pre-hug box and then let the hug eat it again.
+const deferredCollapse = ((): string => {
+  const from = callers.indexOf(
+    'The deferred FILL/HUG resize.',
+  )
+  const to = callers.indexOf('childPlacements.length', from)
+  return from === -1 || to === -1
+    ? ''
+    : callers.slice(from, to)
+})()
+
+describe('create_tree deferred-sizing wiring', () => {
+  it('actually found the collapse (liveness)', () => {
+    expect(deferredCollapse.length).toBeGreaterThan(200)
+    expect(deferredCollapse).toContain('applySizing(')
+  })
+
+  it('re-applies the stated size AFTER the sizing and BEFORE the verify', () => {
+    const sizing = deferredCollapse.indexOf('applySizing(')
+    const repin = deferredCollapse.indexOf(
+      'repinFixedSize(',
+    )
+    const verify = deferredCollapse.indexOf(
+      'verifyCreatedSize(',
+    )
+    expect(sizing).toBeGreaterThanOrEqual(0)
+    expect(repin).toBeGreaterThan(sizing)
+    expect(verify).toBeGreaterThan(repin)
+  })
+})
+
+// B70 — the mock accepts any string for an INSTANCE_SWAP defaultValue, so a
+// headless test of the whole path proves nothing about the currency Figma
+// wants. `instanceSwapKey` is pure and covered; that it is REACHED on both
+// arms of update_component is what only a scan can hold.
+const updateComponentCase = ((): string => {
+  const from = callers.indexOf(
+    'case COMMANDS.UPDATE_COMPONENT',
+  )
+  const to = callers.indexOf(
+    'case COMMANDS.COMBINE_VARIANTS',
+    from,
+  )
+  return from === -1 || to === -1
+    ? ''
+    : callers.slice(from, to)
+})()
+
+describe('INSTANCE_SWAP default currency wiring', () => {
+  it('actually found the case (liveness)', () => {
+    expect(updateComponentCase.length).toBeGreaterThan(200)
+    expect(updateComponentCase).toContain(
+      'addComponentProperty(',
+    )
+  })
+
+  it('resolves the default on BOTH arms — add and edit', () => {
+    const calls =
+      updateComponentCase.split('resolveSwapDefault(')
+        .length - 1
+    expect(calls).toBe(2)
+  })
+
+  it('resolves BEFORE Figma sees the value', () => {
+    expect(
+      updateComponentCase.indexOf('resolveSwapDefault('),
+    ).toBeLessThan(
+      updateComponentCase.indexOf('editComponentProperty('),
+    )
+  })
+})
+
+describe('inline var() value-mismatch wiring', () => {
+  it('hands the binder the shadow lookup it reports with', () => {
+    // `variableShadows` is optional on the deps, so a dropped wiring degrades
+    // to a mismatch warning that names no collection — green everywhere, and
+    // half the message gone.
+    expect(callers).toContain(
+      'variableShadows: bindingLookups.variableShadows',
+    )
+    expect(callers).toContain('listCollections:')
+  })
+})

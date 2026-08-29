@@ -23,7 +23,6 @@ import {
   errorEnvelope,
   synthKey,
   protocolMismatch,
-  compareMajorMinor,
   requireFile,
   toolError,
   pluginError,
@@ -196,22 +195,11 @@ describe('synthKey', () => {
   })
 })
 
-describe('compareMajorMinor', () => {
-  it('orders numerically, not lexically', () => {
-    // '0.10' sorts BELOW '0.9' as a string but is the newer version.
-    expect(
-      compareMajorMinor('0.10.0', '0.9.0'),
-    ).toBeGreaterThan(0)
-    expect(
-      compareMajorMinor('0.9.0', '0.10.0'),
-    ).toBeLessThan(0)
-    expect(compareMajorMinor('1.2.9', '1.2.0')).toBe(0)
-    expect(
-      compareMajorMinor('2.0.0', '1.9.0'),
-    ).toBeGreaterThan(0)
-  })
-})
-
+// The message used to pick a stale side by comparing the two numbers. A
+// version RENUMBER breaks that inference — the lower number was the newer
+// build — and the message stated the wrong verdict as a fact, which cost a live
+// diagnosis. The mismatch is the fact; which side is stale is not something
+// two version strings can answer.
 describe('protocolMismatch', () => {
   const [maj, min] = APP_VERSION.split('.').map(Number)
   const older =
@@ -222,22 +210,43 @@ describe('protocolMismatch', () => {
     expect(protocolMismatch(`${maj}.${min}.99`)).toBeNull()
   })
 
-  it('names the PLUGIN as stale when the plugin is older', () => {
+  it('names both versions, whichever way the numbers run', () => {
+    for (const reported of [older, newer]) {
+      const msg = protocolMismatch(reported) ?? ''
+      expect(msg).toContain(reported)
+      expect(msg).toContain(APP_VERSION)
+    }
+  })
+
+  it('never names a stale side — the numbers cannot tell', () => {
+    for (const reported of [older, newer, undefined]) {
+      const msg = protocolMismatch(reported) ?? ''
+      expect(msg).not.toContain('the older side')
+      expect(msg).not.toContain('it is the older')
+    }
+  })
+
+  it('says the same thing whichever side reports the higher number', () => {
+    // The one assertion the old wording could not pass: the advice is the
+    // same because the evidence is the same.
+    const fromOlder = (
+      protocolMismatch(older) ?? ''
+    ).replace(older, 'X')
+    const fromNewer = (
+      protocolMismatch(newer) ?? ''
+    ).replace(newer, 'X')
+    expect(fromOlder).toBe(fromNewer)
+  })
+
+  it('points at the side that was not rebuilt, and says why order is no guide', () => {
     const msg = protocolMismatch(older) ?? ''
-    expect(msg).toContain('update the Figma plugin')
-    expect(msg).not.toContain('update the MCP server')
+    expect(msg).toContain('not rebuilt')
+    expect(msg).toContain('build recency')
   })
 
-  it('names the SERVER as stale when the plugin is newer', () => {
-    const msg = protocolMismatch(newer) ?? ''
-    expect(msg).toContain('update the MCP server')
-    expect(msg).not.toContain('update the Figma plugin')
-  })
-
-  it('names the PLUGIN as stale when it reports no version', () => {
+  it('still reports a plugin that names no version', () => {
     const msg = protocolMismatch(undefined) ?? ''
     expect(msg).toContain("'(none)'")
-    expect(msg).toContain('update the Figma plugin')
   })
 })
 

@@ -11,6 +11,7 @@ import {
   applyGrids,
   capabilityWarnings,
   discardedPositionsWarning,
+  repinFixedSize,
   statedPositionWarning,
   verifyCreatedSize,
 } from './apply-node-fields'
@@ -409,6 +410,57 @@ test('applySize: B46 — an instance sublayer names the instance it sits in', ()
   expect(warnings[0]).toContain('Resize the main component')
 })
 
+// B67 — the no-op detector compares the OUTCOME against the REQUEST, so a
+// refusal and a success look identical when the node already reads the numbers
+// that were asked for. An agent that resized an instance sublayer to the size
+// it already had got `warnings: []` and learned the wrong lesson: that this
+// target class takes a resize.
+test('applySize: B67 — a resize that proved nothing on an instance sublayer says so', () => {
+  const warnings: string[] = []
+  const node = sizeNode(
+    {
+      width: 60,
+      height: 30,
+      parent: {
+        type: 'FRAME',
+        name: 'Row',
+        parent: { type: 'INSTANCE', name: 'Card' },
+      },
+    },
+    'no',
+  )
+  applySizeVerified(node, [60, 30], warnings)
+  expect(warnings.length).toBe(1)
+  expect(warnings[0]).toContain('size not verified')
+  expect(warnings[0]).toContain(
+    'sublayer of the instance "Card"',
+  )
+  expect(warnings[0]).toContain('already read [60, 30]')
+})
+
+test('applySize: B67 — a resize that CHANGED the size proves itself, instance or not', () => {
+  const warnings: string[] = []
+  const node = sizeNode(
+    {
+      parent: { type: 'INSTANCE', name: 'Card' },
+    },
+    'yes',
+  )
+  applySizeVerified(node, [60, 30], warnings)
+  expect(node.width).toBe(60)
+  // The write moved the node, so nothing is unproven and nothing is said.
+  expect(warnings).toEqual([])
+})
+
+test('applySize: B67 — a coincidental match outside an instance is not accused', () => {
+  const warnings: string[] = []
+  const node = sizeNode({ width: 60, height: 30 }, 'no')
+  applySizeVerified(node, [60, 30], warnings)
+  // No instance ancestor: nothing here silently refuses a resize, so there is
+  // no doubt to report and a warning would be noise on every idempotent write.
+  expect(warnings).toEqual([])
+})
+
 test('applySize: B46 — a flexible auto-layout axis is named with the sizing that owns it', () => {
   const warnings: string[] = []
   const node = sizeNode(
@@ -664,6 +716,111 @@ test('verifyCreatedSize: it never resizes — the create path already applied th
   verifyCreatedSize(node, [400, 60], warnings)
   expect(resizes).toBe(0)
   expect(warnings.length).toBe(1)
+})
+
+// ─── repinFixedSize (B69) ───────────────────────────────────────────────────
+//
+// A create_tree FRAME stating size:[300,60], sizing:['FIXED','FIXED'] and a
+// horizontal layout came back [40, 60] with one child and [400, 60] with two.
+// Child count is not the cause — the HUG WIDTH is, and the child count is what
+// changes it. The deferred collapse (B60) lets the frame hug while its subtree
+// is built, and `FIXED` then freezes whatever box the hug produced. The stated
+// size is never re-applied, so it only survives when the hug happens to land
+// on it.
+
+test('repinFixedSize: an explicit FIXED restores the stated size the hug ate', () => {
+  const warnings: string[] = []
+  let asked: [number, number] | undefined
+  const node = sizeNode({
+    type: 'FRAME',
+    name: 'Row',
+    width: 40,
+    height: 60,
+    layoutSizingHorizontal: 'FIXED',
+    layoutSizingVertical: 'FIXED',
+    resize(w: number, h: number) {
+      asked = [w, h]
+      node.width = w
+      node.height = h
+    },
+  })
+  repinFixedSize(
+    node,
+    [300, 60],
+    ['FIXED', 'FIXED'],
+    warnings,
+  )
+  expect(asked).toEqual([300, 60])
+  expect(node.width).toBe(300)
+  expect(warnings).toEqual([])
+})
+
+test('repinFixedSize: pins only the axis the caller said FIXED', () => {
+  const warnings: string[] = []
+  let asked: [number, number] | undefined
+  const node = sizeNode({
+    type: 'FRAME',
+    width: 40,
+    height: 88,
+    resize(w: number, h: number) {
+      asked = [w, h]
+    },
+  })
+  repinFixedSize(
+    node,
+    [300, 60],
+    ['FIXED', 'HUG'],
+    warnings,
+  )
+  // The width is the caller's number; the height is what the hug decided, and
+  // this must not undo a HUG the caller asked for.
+  expect(asked).toEqual([300, 88])
+})
+
+test('repinFixedSize: a sizing that pins nothing resizes nothing', () => {
+  let resizes = 0
+  const node = sizeNode({
+    width: 40,
+    height: 60,
+    resize() {
+      resizes += 1
+    },
+  })
+  repinFixedSize(node, [300, 60], ['HUG', 'FILL'])
+  repinFixedSize(node, [300, 60], undefined)
+  repinFixedSize(node, undefined, ['FIXED', 'FIXED'])
+  expect(resizes).toBe(0)
+})
+
+test('repinFixedSize: a node already at the stated size is left alone', () => {
+  let resizes = 0
+  const node = sizeNode({
+    width: 300,
+    height: 60,
+    resize() {
+      resizes += 1
+    },
+  })
+  repinFixedSize(node, [300, 60], ['FIXED', 'FIXED'])
+  expect(resizes).toBe(0)
+})
+
+test('repinFixedSize: a refusal is named, never thrown', () => {
+  const warnings: string[] = []
+  const node = sizeNode(
+    { type: 'FRAME', width: 40, height: 60 },
+    'throw',
+  )
+  expect(() =>
+    repinFixedSize(
+      node,
+      [300, 60],
+      ['FIXED', 'FIXED'],
+      warnings,
+    ),
+  ).not.toThrow()
+  expect(warnings.length).toBe(1)
+  expect(warnings[0]).toContain('size')
 })
 
 test('create and update say the SAME sentence about the same node', () => {
