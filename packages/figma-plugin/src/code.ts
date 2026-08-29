@@ -6008,21 +6008,41 @@ const handleCommand = async (
       const existingVariables =
         await localVariablesSnapshot()
       // I63 — which collection this call means, decided before anything is
-      // made. The enumeration is the same one the shadow snapshot already
-      // read, so it costs no extra round trip.
+      // made. The name lookup runs over the enumeration the shadow snapshot
+      // already read, so it costs no extra round trip.
       const existingCollections = Object.entries(
         existingVariables.collectionNames,
       ).map(([id, name]) => ({ id, name }))
+      // An ID, though, is resolved AUTHORITATIVELY and not from that snapshot.
+      // localVariablesSnapshot degrades to `{}` on a runtime that will not
+      // enumerate (the T7 path B66 relies on), and answering "Collection not
+      // found" for a perfectly good id because the listing was empty would be
+      // a false refusal — the exact failure shape this batch removes.
+      const addressedId = params.collectionId as
+        | string
+        | undefined
+      const heldById =
+        addressedId === undefined
+          ? null
+          : await figma.variables.getVariableCollectionByIdAsync(
+              addressedId,
+            )
+      const known =
+        heldById !== null &&
+        !existingCollections.some(c => c.id === heldById.id)
+          ? [
+              ...existingCollections,
+              { id: heldById.id, name: heldById.name },
+            ]
+          : existingCollections
       const target = resolveCollectionTarget(
         {
-          collectionId: params.collectionId as
-            | string
-            | undefined,
+          collectionId: addressedId,
           collection: params.collection as
             | string
             | undefined,
         },
-        existingCollections,
+        known,
       )
       if (target.kind === 'unaddressed') {
         return {
@@ -6064,10 +6084,15 @@ const handleCommand = async (
           }
         }
       } else {
+        // Reuse the handle the id path already resolved; the NAME path still
+        // has to ask, because a snapshot entry is a name and an id, not a
+        // collection.
         const held =
-          await figma.variables.getVariableCollectionByIdAsync(
-            target.id,
-          )
+          heldById !== null && heldById.id === target.id
+            ? heldById
+            : await figma.variables.getVariableCollectionByIdAsync(
+                target.id,
+              )
         if (!held) {
           return {
             error: 'Collection not found: ' + target.id,
