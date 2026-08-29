@@ -36,15 +36,13 @@ floor.
 - Every text-bearing master carries a min/max width contract.
 - Text measure cap: 420 px at 14 px body (scale with the ramp).
 - Breakpoint widths: 390 / 768 / 1200 / 1440 (edit to taste).
-- Collections: wrap when the column count should answer the width; grid when rows and
-  columns must hold alignment.
-- Device layer: variable modes when the plan allows multi-mode collections; otherwise
-  per-screen tokens carrying the mode values.
 
 ## Concrete values
 
 - **Spacing scale:** 4, 8, 12, 16, 24, 32, 48, 64 (px).
 - **Type ramp:** 12, 14, 16, 20, 24, 32 (px).
+  (The scale and the ramp are **mirrored in `review-standards.md`** — the reviewer measures
+  against its copy. Edit both together.)
 - **Corner radius:** 4, 8, 12, 9999 (pill).
 - **Token starter set (colour roles):** `bg`, `surface`, `text`, `text-muted`,
   `primary`, `primary-contrast`, `border`.

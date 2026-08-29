@@ -14,6 +14,8 @@ These **add stricter house checks** on top of the reviewer's floor.
 
 - **Spacing:** 4, 8, 12, 16, 24, 32, 48, 64 (px) — flag spacing off this scale.
 - **Type ramp:** 12, 14, 16, 20, 24, 32 (px) — flag type off this ramp.
+  (These two lists are **mirrors of `house-style.md` §Concrete values** — the builder reads
+  that copy. Edit both together.)
 
 ## Naming standard (stricter than the floor)
 

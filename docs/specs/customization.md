@@ -234,6 +234,9 @@ not guaranteed. So the load path is explicit, not incidental:
 
 **Precedence — override upward, within a hard floor.**
 
+- **A brief outranks the preferences.** An explicit value in the brief being built from (its own
+  tokens, scale, scope) is the client speaking; `figma-bridge-prefs` governs what the brief leaves
+  unsaid. This was every build's practiced behavior — stated here so it is a rule, not a habit.
 - `figma-bridge-prefs` **wins on taste, policy, and defaults**: it raises the level of
   design-system-first / component-first, supplies the concrete values, **and sets the accessibility
   thresholds** (the template ships WCAG AA as the default). Absent it, the shipped basic floor is
