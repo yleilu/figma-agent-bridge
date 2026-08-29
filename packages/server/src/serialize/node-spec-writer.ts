@@ -62,6 +62,7 @@
 import type {
   NodeSpec,
   NodeSpecPatch,
+  GridCellSpec,
   LayoutSpec,
   NumberAtom,
   SlotEntry,
@@ -82,6 +83,7 @@ import {
 } from '../grammar'
 import { ToolError } from '../errors'
 import { collectWrapperBindings } from './wrapper-bindings'
+import { parseTrack } from './grid-track'
 import { readStyledFields } from './styled-fields'
 
 export type FigmaWritePayload = Record<string, unknown>
@@ -254,17 +256,19 @@ const convertLayout = (
   if (layout.wrap !== undefined) {
     out.wrap = layout.wrap
   }
-  // GRID-mode keys (M12). Emit only when present (pure-emit contract).
-  // T7 handler-side validation: warn when grid keys appear on a non-GRID mode
-  // (they are a silent no-op on H/V/NONE).
+  // GRID-mode keys (M12; track sizes I56). Emit only when present (pure-emit
+  // contract). T7 handler-side validation: warn when grid keys appear on a
+  // non-GRID mode (they are a silent no-op on H/V/NONE).
   const hasGridKeys =
     layout.rows !== undefined ||
     layout.cols !== undefined ||
     layout.rowGap !== undefined ||
-    layout.colGap !== undefined
+    layout.colGap !== undefined ||
+    layout.rowSizes !== undefined ||
+    layout.colSizes !== undefined
   if (hasGridKeys && layout.mode !== 'GRID' && warnings) {
     warnings.push(
-      `layout: rows/cols/rowGap/colGap keys are GRID-only but mode is '${layout.mode}' — keys ignored`,
+      `layout: rows/cols/rowGap/colGap/rowSizes/colSizes keys are GRID-only but mode is '${layout.mode}' — keys ignored`,
     )
   }
   if (layout.rows !== undefined) {
@@ -278,6 +282,54 @@ const convertLayout = (
   }
   if (layout.colGap !== undefined) {
     out.colGap = layoutNumber(layout.colGap, 'colGap')
+  }
+  // Per-track sizing (I56). Each atom is READ HERE rather than passed to the
+  // plugin as a string: the plugin's applier writes Figma objects, and a
+  // grammar the plugin had to re-parse would be a second parser of one
+  // spelling. A track that cannot be read names its own index.
+  if (layout.rowSizes !== undefined) {
+    out.rowSizes = layout.rowSizes.map((atom, i) =>
+      parseTrack(atom, `rowSizes[${i}]`),
+    )
+  }
+  if (layout.colSizes !== undefined) {
+    out.colSizes = layout.colSizes.map((atom, i) =>
+      parseTrack(atom, `colSizes[${i}]`),
+    )
+  }
+  return out
+}
+
+/**
+ * A grid child's `cell`, emitted member by member (I56).
+ *
+ * Plain pass-through, because every member is already the value Figma takes —
+ * an index and a span are numbers, and an alignment is one of Figma's own four
+ * words. The SHAPE and the bounds are the schema's (`gridCellSchema`); WHERE
+ * the members land is the plugin's (`grid-cell.ts`), because only the plugin
+ * knows whether this node's parent is a grid at all.
+ *
+ * Pure-emit like every other converter: a member the spec did not state is not
+ * a member this writes, so a patch that moves a span leaves the anchor alone.
+ */
+const convertCell = (
+  cell: GridCellSpec,
+): Record<string, unknown> => {
+  const out: Record<string, unknown> = {}
+  if (cell.row !== undefined) {
+    out.row = cell.row
+  }
+  if (cell.col !== undefined) {
+    out.col = cell.col
+  }
+  if (cell.rowSpan !== undefined) {
+    out.rowSpan = cell.rowSpan
+  }
+  if (cell.colSpan !== undefined) {
+    out.colSpan = cell.colSpan
+  }
+  if (cell.align !== undefined) {
+    out.align = cell.align
   }
   return out
 }
@@ -499,6 +551,9 @@ export const specToFigma = (
   // ── layout ───────────────────────────────────────────────────────────────
   if (spec.layout !== undefined) {
     out.layout = convertLayout(spec.layout, warnings, where)
+  }
+  if (spec.cell !== undefined) {
+    out.cell = convertCell(spec.cell)
   }
   if (spec.sizing !== undefined) {
     out.sizing = spec.sizing
@@ -829,9 +884,16 @@ const dropUnsupportedStructs = (
  * `SLOT` is listed because create_node accepts the type (the plugin builds a
  * FRAME placeholder for it); real slots are minted by update_component and go
  * through slotEntryToFigma below.
+ *
+ * `COMPONENT` joined when the create faces learned to mint a master (I69). A
+ * master is the container this default was written for — a component that is
+ * not an auto-layout frame is the one every design-system pillar tells the
+ * agent not to build — and the type was simply not creatable before, so nothing
+ * that already ships lands differently.
  */
 const LAYOUT_DEFAULT_TYPES: ReadonlySet<string> = new Set([
   'FRAME',
+  'COMPONENT',
   'SLOT',
 ])
 

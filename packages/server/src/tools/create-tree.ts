@@ -116,6 +116,84 @@ export const convertTree = (
   return converted
 }
 
+// ─── I69 — no nested masters ─────────────────────────────────────────────────
+
+/**
+ * Refuse a COMPONENT nested inside another COMPONENT (I69).
+ *
+ * Figma has one master per component and no master inside a master. A tree that
+ * states one cannot be built, and the question is only WHERE the caller learns
+ * that. It is answered HERE, on the write face, because the answer is a
+ * property of the SUBMITTED TREE alone: no read of the document can change it,
+ * the walk costs no round trip, and a tree refused before its first node is a
+ * tree that never half-built. The plugin's append refusal stays as the backstop
+ * for the case this cannot see — a tree rooted at `parentId` that is itself
+ * already inside a master.
+ *
+ * A COMPONENT is legal ANYWHERE ELSE in the tree, at any depth. Masters live
+ * inside frames and sections all the time — that is how a library page is
+ * organised — so the rule is about the ancestor CHAIN, not about the root.
+ *
+ * `{ ref }` is followed into the pool, because where a ref is USED is what
+ * decides its legality: one pool entry may be a sibling of a master in one
+ * place and a child of one in another. `refStack` stops a cyclic pool; the
+ * cycle itself is the plugin's error to report, and this guard must only decline
+ * to hang before the walk gets there.
+ *
+ * `{ id }` is exempt. A clone-by-id of a COMPONENT creates an INSTANCE (the
+ * plugin's clone path), which is legal inside a master, and the type of an id
+ * this face has never seen is not knowable here anyway.
+ */
+export const assertNoNestedComponent = (
+  spec: TreeNodeSpec,
+  refs?: RefPool,
+  // The enclosing master's name, or undefined while outside one.
+  enclosing?: string,
+  refStack: readonly string[] = [],
+): void => {
+  if (isCloneNode(spec)) {
+    return
+  }
+  if (isRefNode(spec)) {
+    const target = refs?.[spec.ref]
+    if (
+      target === undefined ||
+      refStack.includes(spec.ref)
+    ) {
+      return
+    }
+    assertNoNestedComponent(target, refs, enclosing, [
+      ...refStack,
+      spec.ref,
+    ])
+    return
+  }
+  const node = spec as NodeSpec & {
+    children?: TreeNodeSpec[]
+  }
+  const label = node.name ?? node.type
+  if (
+    node.type === 'COMPONENT' &&
+    enclosing !== undefined
+  ) {
+    throw new Error(
+      `Cannot create the COMPONENT "${label}" inside the COMPONENT ` +
+        `"${enclosing}": Figma has no nested masters. Build "${label}" as its ` +
+        'own master — a sibling in this tree, or its own create_tree call — ' +
+        'and place it here as an INSTANCE of it ' +
+        "(`{type:'INSTANCE', component:{id:'<the master's id>'}}`, or the " +
+        '`{id}` clone marker, which also creates an instance). To leave a ' +
+        'fillable hole in this master instead, add a slot with ' +
+        'update_component({slots}).',
+    )
+  }
+  const inside =
+    node.type === 'COMPONENT' ? label : enclosing
+  for (const child of node.children ?? []) {
+    assertNoNestedComponent(child, refs, inside, refStack)
+  }
+}
+
 /** Convert every entry of the ref-pool to its converted payload form. */
 const convertRefs = (
   refs: RefPool,
@@ -200,6 +278,10 @@ export const handleCreateTree = async (
 ): Promise<ToolResult> => {
   try {
     const warnings: string[] = []
+    // Before the first conversion: a nested master is a whole-tree property,
+    // and a refusal that arrives after half the payload is built has already
+    // cost the caller the round trip it was meant to save (I69).
+    assertNoNestedComponent(tree, refs)
     const convertedTree = convertTree(tree, warnings)
     const convertedRefs =
       refs !== undefined

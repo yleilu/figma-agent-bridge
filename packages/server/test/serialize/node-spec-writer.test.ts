@@ -318,6 +318,88 @@ describe('specToFigma — layout', () => {
     expect(warnings.length).toBeGreaterThan(0)
     expect(warnings[0]).toMatch(/rows|GRID/i)
   })
+
+  // I56 — per-track sizing. Uniform tracks are the grid a wrap layout could
+  // already do; a dashboard shell needs a 240px sidebar column beside a
+  // fractional content column.
+  it('GRID rowSizes/colSizes parse to Figma GridTrackSize objects', () => {
+    const result = specToFigma({
+      layout: {
+        mode: 'GRID',
+        rows: 2,
+        cols: 2,
+        rowSizes: ['64px', '1fr'],
+        colSizes: ['240px', '1fr'],
+      },
+    })
+    const layout = result.layout as Record<string, unknown>
+    expect(layout.rowSizes).toEqual([
+      { type: 'FIXED', value: 64 },
+      { type: 'FLEX', value: 1 },
+    ])
+    expect(layout.colSizes).toEqual([
+      { type: 'FIXED', value: 240 },
+      { type: 'FLEX', value: 1 },
+    ])
+  })
+
+  it('names the offending track when one cannot be read', () => {
+    expect(() =>
+      specToFigma({
+        layout: {
+          mode: 'GRID',
+          colSizes: ['240px', 'wide'],
+        },
+      }),
+    ).toThrow(/colSizes\[1\]/)
+  })
+
+  it('counts the track keys as GRID-only too', () => {
+    const warnings: string[] = []
+    specToFigma(
+      {
+        layout: {
+          mode: 'V',
+          rowSizes: ['1fr'],
+        } as never,
+      },
+      warnings,
+    )
+    expect(warnings.length).toBeGreaterThan(0)
+    expect(warnings[0]).toMatch(/GRID/i)
+  })
+})
+
+// I56 — the child half of the grid grammar. The parent declares the tracks;
+// the child declares which cell it takes and how far it reaches.
+describe('specToFigma — cell (grid child placement)', () => {
+  it('passes the whole cell struct through', () => {
+    const result = specToFigma({
+      cell: {
+        row: 0,
+        col: 0,
+        colSpan: 3,
+        align: ['MIN', 'CENTER'],
+      },
+    })
+    expect(result.cell).toEqual({
+      row: 0,
+      col: 0,
+      colSpan: 3,
+      align: ['MIN', 'CENTER'],
+    })
+  })
+
+  it('emits only the members the spec stated (pure emit)', () => {
+    const result = specToFigma({ cell: { rowSpan: 2 } })
+    expect(result.cell).toEqual({ rowSpan: 2 })
+  })
+
+  it('emits nothing for a spec that names no cell', () => {
+    expect('cell' in specToFigma({ opacity: 1 })).toBe(
+      false,
+    )
+  })
 })
 
 describe('specToFigma — text', () => {

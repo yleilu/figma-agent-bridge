@@ -295,9 +295,7 @@ describe('handleBatch', () => {
     expect(out.results[0].ok).toBe(true)
     expect(
       (out.results[0].warnings ?? []).some(w =>
-        w.includes(
-          'rows/cols/rowGap/colGap keys are GRID-only',
-        ),
+        w.includes('keys are GRID-only'),
       ),
     ).toBe(true)
   })

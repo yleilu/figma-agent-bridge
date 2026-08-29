@@ -10,6 +10,11 @@ import {
   type AppliedLayout,
 } from './apply-layout'
 import {
+  applyGridCell,
+  type GridCell,
+  type GridCellTarget,
+} from './grid-cell'
+import {
   bindFieldConflict,
   updateLayoutConflict,
   type GapConflictNode,
@@ -1211,6 +1216,17 @@ const applyPostAppendProperties = (
     }
   }
 
+  // Grid cell (I56) — anchor, spans, in-cell align. POST-append and BEFORE the
+  // size verify, for two reasons: the parent this node belongs to is what
+  // decides whether a cell means anything at all (grid-cell.ts checks it), and
+  // a span changes the box, so a verify that ran first would judge a size the
+  // node was about to leave.
+  applyGridCell(
+    node as unknown as GridCellTarget,
+    spec.cell as GridCell | undefined,
+    warnings,
+  )
+
   // isMask / maskType — applied POST-append (mask clips siblings; node must be
   // parented first so Figma resolves the sibling context correctly).
   // Feature-detect with 'isMask' in node (not all nodes support masking).
@@ -1912,6 +1928,21 @@ const buildSingleNode = async (
         }
       }
       node = instance
+      break
+    }
+    case 'COMPONENT': {
+      // I69 — a master, minted in place. Nothing else here: a ComponentNode is
+      // a frame in every respect this builder cares about (it takes children,
+      // layout, sizing and constraints), so it walks the SAME path a FRAME
+      // walks from here down — applyCommonProperties, appendChild,
+      // applyPostAppendProperties, and on the tree path the deferred
+      // sizing → repinFixedSize → verifyCreatedSize order a container needs.
+      // A create path that built its own shortcut would be the one that
+      // silently skipped B60/B69/B61.
+      //
+      // Component PROPERTIES and SLOT promotion stay update_component's: they
+      // edit a master that already exists, and both need the master's id.
+      node = figma.createComponent()
       break
     }
     // NOTE (issue #3): the TEXT_PATH case was removed here. figma.createTextPath

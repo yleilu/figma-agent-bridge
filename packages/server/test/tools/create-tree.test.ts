@@ -15,6 +15,7 @@ import { describe, expect, it } from 'bun:test'
 import {
   handleCreateTree,
   convertTree,
+  assertNoNestedComponent,
 } from '@figma-agent-bridge/server/tools/create-tree'
 import { COMMANDS } from '@figma-agent-bridge/shared'
 import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
@@ -684,5 +685,179 @@ describe('create_tree degrades reach the caller (B61)', () => {
     const { body, text } = await withPluginWarnings([])
     expect('warnings' in body).toBe(false)
     expect(text).not.toContain('Warning:')
+  })
+})
+
+// ─── I69 — a component master is built in place ──────────────────────────────
+//
+// Building N masters used to cost 2N+ round-trips: create_tree refused
+// `type:'COMPONENT'`, so every master was a create_tree for the body plus a
+// create_component to promote it. A tree node of `type:'COMPONENT'` now creates
+// the master itself, children included.
+//
+// The one shape Figma has no room for is a master inside a master. That is
+// refused on the WRITE FACE, before a node is created, because it is a property
+// of the SUBMITTED TREE alone — no document read can change the answer, and a
+// tree that dies half-built is the failure create_tree is specified never to
+// have.
+
+describe('I69 — COMPONENT in create_tree', () => {
+  it('converts a COMPONENT node instead of rejecting the type', () => {
+    const out = convertTree({
+      type: 'COMPONENT',
+      name: 'Button',
+      children: [
+        {
+          type: 'TEXT',
+          text: {
+            content: 'Go',
+            font: 'font(Inter,Bold,16)',
+          },
+        },
+      ],
+    })
+    expect(out.type).toBe('COMPONENT')
+    expect(out.name).toBe('Button')
+    expect(
+      (out.children as Record<string, unknown>[])[0].type,
+    ).toBe('TEXT')
+  })
+
+  it('gives a COMPONENT the same creation default a FRAME gets', () => {
+    // A master is the container the stack default was written for. It states no
+    // layout, so it stacks; it stated a size, so the size is pinned against the
+    // hug the stack would otherwise apply (B29).
+    const out = convertTree({
+      type: 'COMPONENT',
+      name: 'Button',
+      size: [200, 48],
+      children: [{ type: 'RECTANGLE', size: [8, 8] }],
+    })
+    expect(out.layout).toEqual({ mode: 'V' })
+    expect(out.sizing).toEqual(['FIXED', 'FIXED'])
+  })
+
+  it('refuses a COMPONENT nested inside a COMPONENT, naming the way through', () => {
+    expect(() =>
+      assertNoNestedComponent({
+        type: 'COMPONENT',
+        name: 'Card',
+        children: [
+          {
+            type: 'FRAME',
+            name: 'Body',
+            children: [
+              { type: 'COMPONENT', name: 'Badge' },
+            ],
+          },
+        ],
+      }),
+    ).toThrow(/no nested masters/i)
+  })
+
+  it('names both the inner master and the master that encloses it', () => {
+    let message = ''
+    try {
+      assertNoNestedComponent({
+        type: 'COMPONENT',
+        name: 'Card',
+        children: [{ type: 'COMPONENT', name: 'Badge' }],
+      })
+    } catch (err) {
+      message = (err as Error).message
+    }
+    expect(message).toContain('Badge')
+    expect(message).toContain('Card')
+    // The way through: an INSTANCE of a master built elsewhere.
+    expect(message).toContain('INSTANCE')
+  })
+
+  it('allows an INSTANCE child inside a COMPONENT', () => {
+    expect(() =>
+      assertNoNestedComponent({
+        type: 'COMPONENT',
+        name: 'Card',
+        children: [
+          {
+            type: 'INSTANCE',
+            component: { id: '1:2' },
+          },
+          { id: '1:99' },
+        ],
+      }),
+    ).not.toThrow()
+  })
+
+  it('allows sibling COMPONENTs under a plain FRAME', () => {
+    expect(() =>
+      assertNoNestedComponent({
+        type: 'FRAME',
+        name: 'Library',
+        children: [
+          { type: 'COMPONENT', name: 'A' },
+          { type: 'COMPONENT', name: 'B' },
+        ],
+      }),
+    ).not.toThrow()
+  })
+
+  it('follows a { ref } into the pool: a COMPONENT ref used inside a COMPONENT refuses', () => {
+    expect(() =>
+      assertNoNestedComponent(
+        {
+          type: 'COMPONENT',
+          name: 'Card',
+          children: [{ ref: 'badge' }],
+        },
+        { badge: { type: 'COMPONENT', name: 'Badge' } },
+      ),
+    ).toThrow(/no nested masters/i)
+  })
+
+  it('allows the same COMPONENT ref used outside a COMPONENT', () => {
+    expect(() =>
+      assertNoNestedComponent(
+        {
+          type: 'FRAME',
+          name: 'Library',
+          children: [{ ref: 'badge' }],
+        },
+        { badge: { type: 'COMPONENT', name: 'Badge' } },
+      ),
+    ).not.toThrow()
+  })
+
+  it('does not recurse forever on a cyclic ref pool', () => {
+    // The plugin owns the cycle error; this guard must simply not hang before
+    // the walk gets there.
+    expect(() =>
+      assertNoNestedComponent(
+        { type: 'FRAME', children: [{ ref: 'a' }] },
+        {
+          a: { type: 'FRAME', children: [{ ref: 'b' }] },
+          b: { type: 'FRAME', children: [{ ref: 'a' }] },
+        },
+      ),
+    ).not.toThrow()
+  })
+
+  it('handleCreateTree refuses a nested master before any node is created', async () => {
+    const sent: Sent[] = []
+    const result = await handleCreateTree(
+      {
+        tree: {
+          type: 'COMPONENT',
+          name: 'Card',
+          children: [{ type: 'COMPONENT', name: 'Badge' }],
+        },
+      },
+      stubClient({ sent }),
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toMatch(/no nested masters/i)
+    expect(sent).toHaveLength(0)
   })
 })

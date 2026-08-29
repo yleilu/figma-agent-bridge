@@ -43,6 +43,13 @@ const CHILDREN_WARNING =
 // fields (vectorNodeId/startSegment/startPosition) were never specced/wired, so it
 // is honest-rejected here pending the spec-completeness phase — see
 // docs/deferred-capabilities.md.
+//
+// COMPONENT is here (I69). `figma.createComponent()` mints a master directly, so
+// building one no longer needs a body plus a `create_component` promotion — the
+// 2N+ round-trips a design system used to cost. COMPONENT_SET is NOT: a variant
+// set is made by combining existing components, which is a different operation
+// with a different tool. A master INSIDE a master is refused on the write face
+// (create-tree.ts) — Figma has no nested masters.
 export const CREATABLE_TYPES = [
   'FRAME',
   'RECTANGLE',
@@ -55,6 +62,7 @@ export const CREATABLE_TYPES = [
   'SECTION',
   'SLICE',
   'INSTANCE',
+  'COMPONENT',
   'SLOT',
 ] as const
 

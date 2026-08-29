@@ -76,12 +76,20 @@ Two peer tools carry repeating items. Choose by what must happen on resize:
   retracks a live grid and every child follows. Use grid when rows AND
   columns must stay aligned, or when a layout must hold its shape while it
   squeezes.
+- **Size the tracks that must not flex.** `rowSizes` / `colSizes` take one
+  atom per track — `240px` for a sidebar that holds its width, `1fr` for
+  content that takes the rest, `hug` for a track that sizes to what is in
+  it. A grid whose tracks are all `1fr` is a grid of equal columns; state
+  the sizes when they are not.
+- **Span the shell, do not nest it.** A child's `cell` says where it sits
+  and how far it reaches: `{row: 0, col: 0, colSpan: 3}` is a header across
+  every column, `{row: 1, col: 0, rowSpan: 2}` a sidebar down the rest. The
+  classic app shell is ONE grid frame with three spanning children — not a
+  stack of nested H/V frames, which have to be re-nested every time the
+  shell changes.
 - Pick wrap when the column count should answer the width. Pick grid when
   the structure is the design. They compose: a grid shell can hold a wrap
   region.
-- Tool note: cell SPANS (a header across all columns, a sidebar down two
-  rows) are not expressible on the surface yet. Until then, compose spanning
-  shells from nested H/V frames and use grid for the uniform regions.
 
 ## 5b. Concentric radii
 

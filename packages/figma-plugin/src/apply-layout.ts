@@ -35,6 +35,12 @@
 // figma `FrameNode` is structurally assignable to it) so it stays free of the
 // figma runtime and is independently unit-testable with a plain fake node.
 
+/** One grid track, as the server's `parseTrack` emits it (Figma's GridTrackSize). */
+export type AppliedTrack = {
+  type: 'FLEX' | 'FIXED' | 'HUG'
+  value?: number
+}
+
 /** The exact layout shape the server's `convertLayout` emits. */
 export type AppliedLayout = {
   mode: 'H' | 'V' | 'NONE' | 'GRID'
@@ -50,6 +56,10 @@ export type AppliedLayout = {
   rowGap?: number
   /** Grid column gap in px (GRID mode only). */
   colGap?: number
+  /** Per-row track sizes, top to bottom (GRID mode only, I56). */
+  rowSizes?: AppliedTrack[]
+  /** Per-column track sizes, left to right (GRID mode only, I56). */
+  colSizes?: AppliedTrack[]
 }
 
 /** Structural subset of FrameNode this applier writes to. */
@@ -78,6 +88,11 @@ export type LayoutTarget = {
   gridColumnCount?: number
   gridRowGap?: number
   gridColumnGap?: number
+  // Per-track sizing (I56). Also optional, also feature-detected: a runtime
+  // with the counts but not the tracks is a real intermediate — the two
+  // capabilities landed in different Figma releases.
+  gridRowSizes?: AppliedTrack[]
+  gridColumnSizes?: AppliedTrack[]
 }
 
 /** One Figma field this call means to set, and the value it means to set it to. */
@@ -114,12 +129,17 @@ const intentsOf = (
   frame: LayoutTarget,
   layout: AppliedLayout,
 ): Intent[] => {
-  const out: Intent[] = [
-    {
-      field: 'layoutMode',
-      value: layoutModeOf(layout.mode),
-    },
-  ]
+  const out: Intent[] = []
+  const targetMode = layoutModeOf(layout.mode)
+  // A mode the frame already holds is skipped, not re-written: Figma's
+  // layoutMode setter re-initializes the grid on a GRID→GRID write and throws
+  // "Cannot delete occupied row/column" when a child SPANS rows (live-proven
+  // 2026-08-29 — retracking the dashboard shell). Same law as the count guard
+  // below and the cell anchor guard: what a read handed back must write back
+  // as a no-op. A CHANGED mode always writes.
+  if (frame.layoutMode !== targetMode) {
+    out.push({ field: 'layoutMode', value: targetMode })
+  }
   if (layout.spacing !== undefined) {
     out.push({
       field: 'itemSpacing',
@@ -160,9 +180,26 @@ const intentsOf = (
         ['gridColumnGap', layout.colGap],
       ]
     for (const [field, value] of grid) {
-      if (value !== undefined && field in frame) {
-        out.push({ field, value })
+      if (value === undefined || !(field in frame)) {
+        continue
       }
+      // A COUNT the frame already holds is skipped, not re-written: Figma's
+      // count setter throws "Cannot delete occupied row/column" on an axis a
+      // child SPANS — even at the unchanged value (live-proven 2026-08-29 on
+      // the dashboard shell). A read-modify-write that hands rows/cols back
+      // must be a no-op, the same law the cell anchor guard follows. A
+      // CHANGED count still writes, so a genuine shrink into occupied tracks
+      // stays a loud refusal.
+      if (
+        (field === 'gridRowCount' ||
+          field === 'gridColumnCount') &&
+        (frame as unknown as Record<string, unknown>)[
+          field
+        ] === value
+      ) {
+        continue
+      }
+      out.push({ field, value })
     }
   }
   return out
@@ -188,6 +225,129 @@ const held = (actual: unknown, want: string | number) =>
     ? typeof actual === 'number' &&
       Math.abs(actual - want) < 0.01
     : actual === want
+
+// ─── per-track sizing (I56) ───────────────────────────────────────────────────
+//
+// ⚠️ THE MECHANISM IS DOCUMENTED, NOT LIVE-CONFIRMED.
+//
+// `gridRowSizes` returns an array of `GridTrackSize` objects, and Figma's own
+// example mutates one IN PLACE — `frame.gridRowSizes[0].type = 'FIXED'` — then
+// reads the new value back off the frame. That only works if the entries are
+// LIVE handles. If the runtime hands back a detached snapshot, the mutation
+// lands on a copy and the frame keeps its old tracks, silently: the exact shape
+// of failure this campaign already met once, where the real effect happens at
+// assignment time and a headless green proves nothing.
+//
+// So both mechanisms are used, in the order the docs put them. The entries are
+// mutated first; the tracks are read back; and only if a track did not hold is
+// the WHOLE array assigned (the property is writable in the typings). A track
+// that survives neither is NAMED. Whichever runtime Figma turns out to be, the
+// caller is told the truth about what landed.
+
+/** Whether a track holds what was asked. HUG carries no size to compare. */
+const trackHeld = (
+  actual: AppliedTrack | undefined,
+  want: AppliedTrack,
+): boolean => {
+  if (actual?.type !== want.type) {
+    return false
+  }
+  if (want.type === 'HUG' || want.value === undefined) {
+    return true
+  }
+  return (
+    typeof actual.value === 'number' &&
+    Math.abs(actual.value - want.value) < 0.01
+  )
+}
+
+/** The tracks a frame currently reports on one axis, or [] when it reports none. */
+const tracksOf = (
+  frame: LayoutTarget,
+  field: 'gridRowSizes' | 'gridColumnSizes',
+): AppliedTrack[] => {
+  const raw = (frame as unknown as Record<string, unknown>)[
+    field
+  ]
+  return Array.isArray(raw) ? (raw as AppliedTrack[]) : []
+}
+
+/**
+ * Size the tracks of one axis, and prove each one landed.
+ *
+ * The COUNT is not touched here — `gridRowCount` is an intent above, and a
+ * track list is a description of tracks that already exist. Naming more tracks
+ * than the grid has is therefore a caller error worth its own sentence: the
+ * ones that fit are still applied, because dropping the whole list over one
+ * extra entry would lose work the caller can use.
+ */
+const applyTracks = (
+  frame: LayoutTarget,
+  field: 'gridRowSizes' | 'gridColumnSizes',
+  key: 'rowSizes' | 'colSizes',
+  want: AppliedTrack[],
+  warnings?: string[],
+): void => {
+  const tracks = tracksOf(frame, field)
+  if (tracks.length !== want.length) {
+    warnings?.push(
+      `applyLayout: \`${key}\` names ${want.length} track(s) but the grid has ` +
+        `${tracks.length} — the first ${Math.min(tracks.length, want.length)} ` +
+        'were applied. Set `rows`/`cols` to the track count you mean.',
+    )
+  }
+  const n = Math.min(tracks.length, want.length)
+  for (let i = 0; i < n; i += 1) {
+    tracks[i].type = want[i].type
+    if (
+      want[i].type !== 'HUG' &&
+      want[i].value !== undefined
+    ) {
+      tracks[i].value = want[i].value
+    }
+  }
+
+  // Read back. A snapshot runtime loses every write above, so the retry is the
+  // OTHER mechanism (assign the whole array), not the same one again.
+  const after = tracksOf(frame, field)
+  const missed = want
+    .slice(0, n)
+    .some((track, i) => !trackHeld(after[i], track))
+  if (missed) {
+    try {
+      ;(frame as unknown as Record<string, unknown>)[
+        field
+      ] = after.map((track, i) =>
+        i < n
+          ? {
+              type: want[i].type,
+              ...(want[i].type !== 'HUG' &&
+              want[i].value !== undefined
+                ? { value: want[i].value }
+                : {}),
+            }
+          : track,
+      )
+    } catch {
+      // A read-only getter refuses the assignment. The per-track report below
+      // is the answer either way, so there is nothing to say twice here.
+    }
+  }
+
+  const final = tracksOf(frame, field)
+  for (let i = 0; i < n; i += 1) {
+    if (!trackHeld(final[i], want[i])) {
+      warnings?.push(
+        `applyLayout: \`${key}[${i}]\` did not hold — asked for ` +
+          `${want[i].type}${want[i].value !== undefined ? ` ${want[i].value}` : ''}, ` +
+          `the track reads ${String(final[i]?.type)}. The write was retried as a ` +
+          'whole-array assignment and refused again. Figma refused this track on ' +
+          'this grid; the reply says so rather than reporting a layout the node ' +
+          'does not have.',
+      )
+    }
+  }
+}
 
 const droppedMessage = (
   { field, value }: Intent,
@@ -241,14 +401,50 @@ export const applyLayout = (
   const missed = intents.filter(
     i => !held(reader[i.field], i.value),
   )
-  if (missed.length === 0) {
+  if (missed.length > 0) {
+    writeLayout(frame, missed)
+    for (const intent of missed) {
+      const actual = reader[intent.field]
+      if (!held(actual, intent.value)) {
+        warnings?.push(droppedMessage(intent, actual))
+      }
+    }
+  }
+
+  // Track sizes LAST (I56): a track list describes tracks that already exist,
+  // and the counts that create them are among the intents above. Sizing a row
+  // the grid does not have yet would name nothing.
+  if (layout.mode !== 'GRID') {
     return
   }
-  writeLayout(frame, missed)
-  for (const intent of missed) {
-    const actual = reader[intent.field]
-    if (!held(actual, intent.value)) {
-      warnings?.push(droppedMessage(intent, actual))
-    }
+  const wantTracks =
+    layout.rowSizes !== undefined ||
+    layout.colSizes !== undefined
+  if (!wantTracks) {
+    return
+  }
+  if (!('gridRowSizes' in frame)) {
+    warnings?.push(
+      'applyLayout: GRID track sizing (gridRowSizes/gridColumnSizes) is not available in this runtime — rowSizes/colSizes ignored',
+    )
+    return
+  }
+  if (layout.rowSizes !== undefined) {
+    applyTracks(
+      frame,
+      'gridRowSizes',
+      'rowSizes',
+      layout.rowSizes,
+      warnings,
+    )
+  }
+  if (layout.colSizes !== undefined) {
+    applyTracks(
+      frame,
+      'gridColumnSizes',
+      'colSizes',
+      layout.colSizes,
+      warnings,
+    )
   }
 }

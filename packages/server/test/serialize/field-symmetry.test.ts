@@ -166,6 +166,7 @@ const REPRESENTATIVE_VALUES: Record<string, unknown> = {
   sectionContentsHidden: false,
   isMask: true,
   maskType: 'ALPHA' as const,
+  cell: { row: 0, col: 0, colSpan: 2 },
 }
 
 // ─── PLUGIN_READ_FIELDS ───────────────────────────────────────────────────────
@@ -218,6 +219,7 @@ const PLUGIN_READ_FIELDS: readonly string[] = [
   'layoutPositioning', // line ~1060
   'isMask', // mask clipping (line ~1065)
   'maskType', // mask mode (line ~1075)
+  'cell', // grid child anchor/span/align — applyGridCell (grid-cell.ts), I56
 ]
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

@@ -26,6 +26,10 @@ export const PROFILES: Record<
     'size',
     'position',
     'layout',
+    // A grid child's `cell` is its position. Without it the layout profile
+    // would report a grid's children by the pixel x/y the grid computed, which
+    // says nothing about which cell each one holds (I56).
+    'cell',
     'sizing',
     'constraints',
     'layoutPositioning',
