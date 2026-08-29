@@ -104,6 +104,69 @@ describe('handleCreateVariables', () => {
     })
   })
 
+  // I63 — the collection is ADDRESSED, by name or by id, and exactly one of
+  // the two. The plugin resolves the address; the server's job is to forward
+  // both and to refuse a call that states two targets or none.
+  it('forwards collectionId as the exact address (I63)', async () => {
+    const sent: Sent[] = []
+    await handleCreateVariables(
+      {
+        collectionId: 'VC:7',
+        variables: [
+          {
+            name: 'sem/accent',
+            type: 'COLOR',
+            valuesByMode: { Light: '#FF0000' },
+          },
+        ],
+      },
+      stubClient({ sent, reply: { collectionId: 'VC:7' } }),
+    )
+    expect(sent[0].command).toBe(COMMANDS.CREATE_VARIABLES)
+    const params = sent[0].params as {
+      collection?: string
+      collectionId?: string
+    }
+    expect(params.collectionId).toBe('VC:7')
+    expect(params.collection).toBeUndefined()
+  })
+
+  it('refuses BOTH a name and an id — two targets is not one (I63)', async () => {
+    const sent: Sent[] = []
+    const result = await handleCreateVariables(
+      {
+        collection: 'color',
+        collectionId: 'VC:7',
+        variables: [],
+      },
+      stubClient({ sent }),
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INVALID_PARAM')
+    expect(data.error).toContain('collectionId')
+    // Refused before the plugin was contacted.
+    expect(sent).toHaveLength(0)
+  })
+
+  it('refuses NEITHER a name nor an id, naming both ways in (I63)', async () => {
+    const sent: Sent[] = []
+    const result = await handleCreateVariables(
+      { variables: [] },
+      stubClient({ sent }),
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INVALID_PARAM')
+    expect(data.error).toContain('collection')
+    expect(data.error).toContain('collectionId')
+    expect(sent).toHaveLength(0)
+  })
+
   it('passes FLOAT/STRING/BOOLEAN values through unparsed', async () => {
     const sent: Sent[] = []
     await handleCreateVariables(

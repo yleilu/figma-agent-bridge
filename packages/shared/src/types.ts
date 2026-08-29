@@ -30,6 +30,9 @@ export type RegisterMessage = {
   fileName: string | null
   fileKey?: string | null
   version?: string
+  // Which BUILD produced this plugin bundle (I62). Absent from a plugin that
+  // predates the stamp; `'source'` from an unbundled run.
+  build?: string
   currentPage?: string
   selected?: number
   // Plugin connection nonce, minted per register/reconnect (change-feed.md).
@@ -159,6 +162,10 @@ export type ChannelInfo = {
   fileKey: string | null
   connectedAt: number
   version?: string
+  // Which BUILD produced the registered plugin bundle (I62). Under the
+  // CI-only versioning rule `version` is the same string on every dev build,
+  // so this is the only field that separates one build from the next.
+  build?: string
   // Presence enrichment: page NAME the plugin is currently viewing.
   currentPage?: string
   // Presence enrichment: count of currently selected nodes.

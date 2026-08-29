@@ -51,6 +51,50 @@ import {
 
 const DEFAULT_LIMIT = 50
 
+/**
+ * How many rows one page may HYDRATE (I61).
+ *
+ * `limit` is the caller's number, and B50 bounded the hydration by it — which
+ * is bounded only in the sense that any number is. A projection reaching past
+ * the scan row costs one per-node export EACH, so a big `limit` buys that many
+ * exports inside one 30-second command:
+ *
+ *   Live 2026-08-27, an 838-node file:
+ *     search({match:{type:['INSTANCE']}, fields:['id','name','component'],
+ *             limit:500})  →  {"error":"Command cmd-… timed out","code":"TIMEOUT"}
+ *   The SAME projection, scoped per page at limit:100, succeeded on all four
+ *   pages and returned 480 instances.
+ *
+ * So a heavy projection's page is clipped to 100 — the size that is proven to
+ * come back on this exact projection, and the shared `paginateList` default
+ * every other list read uses. The cursor already exists, so the caller loses
+ * nothing but one round trip, and the reply SAYS the tool clipped the page
+ * rather than letting a short page read as a short document.
+ *
+ * The cap is on the HYDRATION, not on `search`: a projection the scan row
+ * already answers (`id`/`name`/`type`/`size`/`characters`) pays nothing and
+ * keeps the caller's `limit` untouched. This is the get_components shape —
+ * gate the O(document) half, surface the truncation (T10) — applied to the
+ * half that actually costs.
+ */
+export const HYDRATION_CAP = 100
+
+/** What a clipped page says: what happened, why, and how to continue. */
+const hydrationCapWarning = (
+  asked: number,
+  fields: readonly string[] | null,
+): string =>
+  `search: limit ${asked} was clipped to ${HYDRATION_CAP} for this page. ` +
+  'The requested projection (' +
+  (fields === null
+    ? "profile:'full'"
+    : fields.map(f => '`' + f + '`').join(', ')) +
+  ') reaches past the scan row, so every result costs one node read — and a ' +
+  'wider page than this times out rather than answering. Pass the returned ' +
+  '`cursor` for the next ' +
+  String(HYDRATION_CAP) +
+  ', or narrow `scope` to one page.'
+
 type SearchScope =
   | 'document'
   | 'page'
@@ -317,10 +361,21 @@ export const handleSearch = async (
     // It version-stamps the matched id-set and rejects a STALE/MALFORMED cursor
     // with a typed CursorError, which we surface (search keeps its own default
     // limit of 50; paginateList defaults to 100 for other list reads).
+    //
+    // I61 — a projection that must HYDRATE is clipped to HYDRATION_CAP first.
+    // The page is what decides how many per-node reads step 3½ pays for, so
+    // this is the only place the cost can be bounded, and clipping it here
+    // keeps the cursor contract intact: the caller continues, it does not lose
+    // rows.
+    const askedLimit = params.limit ?? DEFAULT_LIMIT
+    const hydrating = needsNodeSpecs(params)
+    const pageLimit = hydrating
+      ? Math.min(askedLimit, HYDRATION_CAP)
+      : askedLimit
     let bounded
     try {
       bounded = paginateList(matched, {
-        limit: params.limit ?? DEFAULT_LIMIT,
+        limit: pageLimit,
         cursor: params.cursor,
       })
     } catch (err) {
@@ -335,7 +390,18 @@ export const handleSearch = async (
     // the two steps above already bounded — so the common scan pays nothing
     // and the expensive one pays for `limit` nodes, not for the document.
     const hydrateWarnings: string[] = []
-    const specs = needsNodeSpecs(params)
+    // I61 — said BEFORE the fetch, so the note stands even if the hydration
+    // then degrades per row: a clipped page and a thin row are two different
+    // facts and the caller needs both.
+    if (hydrating && pageLimit < askedLimit) {
+      hydrateWarnings.push(
+        hydrationCapWarning(
+          askedLimit,
+          selectedFields(params),
+        ),
+      )
+    }
+    const specs = hydrating
       ? await fetchNodeSpecs(
           bounded.page.map(n => n.id ?? ''),
           client,

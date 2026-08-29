@@ -91,11 +91,15 @@ drives one specific file with no ambiguity (B3). The lifecycle contract:
   back to a per-session channel registered under `fileName`; reload determinism there is
   best-effort.
 - **Availability, not activity (the availability registry).** The relay maintains
-  `{ fileKey → { channel, fileName, connectedAt, epoch } }` — the files with a **live plugin**
-  (reachable/writable). **Each entry is bound to the registering plugin's socket.** A plugin's
-  `register` on a channel it has joined creates the entry, or — from a new socket — rebinds the
-  existing one and refreshes its fields in place; every binding mints a fresh `connectedAt`, so
-  that value identifies one plugin *connection*, not one channel. The entry then lives exactly as
+  `{ fileKey → { channel, fileName, connectedAt, epoch, version, build } }` — the files with a
+  **live plugin** (reachable/writable). **Each entry is bound to the registering plugin's socket.**
+  A plugin's `register` on a channel it has joined creates the entry, or — from a new socket —
+  rebinds the existing one and refreshes its fields in place; every binding mints a fresh
+  `connectedAt`, so that value identifies one plugin *connection*, not one channel. `build` (I62)
+  is likewise per-CONNECTION and is never inherited from the previous entry: it names the BUILD the
+  registering sandbox bundle came out of, and carrying the old id forward would report a freshly
+  installed bundle under the id of the one it replaced (see
+  [[figma-bridge/docs/specs/version-handshake|version-handshake.md]]). The entry then lives exactly as
   long as that socket: an explicit `leave` frame (a clean plugin close), the socket's `close`, or
   a missed heartbeat (`DEFAULT_HEARTBEAT_INTERVAL = 10_000` ms → dead within ~2 ticks) removes
   it, so **closing a file drops it from the set** — even while other members (the MCP server)

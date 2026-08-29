@@ -45,26 +45,60 @@ type CreateVariableSpec = {
 }
 
 /**
- * Create a variable collection (+ optional extra modes) and its variables with
- * per-mode values. COLOR values are hex atoms parsed server-side to {r,g,b[,a]}
+ * Add variables to a variable collection, creating the collection when the
+ * name is unused. COLOR values are hex atoms parsed server-side to {r,g,b[,a]}
  * (the grammar paint face — hexToRgba); FLOAT/STRING/BOOLEAN pass through as
  * literals. aliases / scopes / codeSyntax / hiddenFromPublishing pass through to
  * the plugin's per-variable apply path (parity with update_variables; each
  * feature-detected + T7-degraded). Returns
  * { collectionId, modes, variables:[{id,name}], warnings }.
+ *
+ * I63 — the tool used to call createVariableCollection unconditionally, so a
+ * second call with the same name forked a duplicate and said nothing. That
+ * made a design system whose aliases live beside its raw tokens unbuildable in
+ * one pass: an alias needs a target id the first call has not yet returned,
+ * and the second call forked instead of appending. The collection is now
+ * RESOLVED plugin-side (variable-collection-target.ts) and the reply says
+ * which of create / extend happened.
+ *
+ * The addressing guard lives here rather than in a `.refine()` so the schema
+ * keeps `.shape` for registerFileTool, and so a `batch` entry and a direct
+ * call face the same rule (the search-handler precedent).
  */
 export const handleCreateVariables = async (
   {
     collection,
+    collectionId,
     modes,
     variables,
   }: {
-    collection: string
+    collection?: string
+    collectionId?: string
     modes?: string[]
     variables: CreateVariableSpec[]
   },
   client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
+  // Exactly one address. Both is a contradiction the plugin would have to
+  // rank silently; neither names no collection at all.
+  if (
+    collection !== undefined &&
+    collectionId !== undefined
+  ) {
+    return errorEnvelope(
+      'INVALID_PARAM',
+      'create_variables takes `collection` (a name) OR `collectionId` (an exact address), never both. The id addresses one collection and the name looks one up, so a call carrying both states two targets.',
+    )
+  }
+  if (
+    collection === undefined &&
+    collectionId === undefined
+  ) {
+    return errorEnvelope(
+      'INVALID_PARAM',
+      'create_variables needs a collection: pass `collection` (a name — an existing one is EXTENDED, an unused one is created) or `collectionId` (an exact address).',
+    )
+  }
   try {
     // Parse COLOR valuesByMode to {r,g,b[,a]}; other types pass through.
     // aliases / scopes / codeSyntax / hiddenFromPublishing forward as-is (the
@@ -90,7 +124,12 @@ export const handleCreateVariables = async (
 
     const result = (await client.sendCommand(
       COMMANDS.CREATE_VARIABLES,
-      { collection, modes, variables: converted },
+      {
+        collection,
+        collectionId,
+        modes,
+        variables: converted,
+      },
     )) as { error?: string } | null
     return formatMutationResult(
       result,

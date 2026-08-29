@@ -32,20 +32,26 @@ const stubClient = (opts: {
 })
 
 describe('handleGetNodes (rebuilt — NodeSpec)', () => {
+  // `children` rides in the fields list because `depth:1` asks for a descent,
+  // and I64 refuses the pair that would descend and then drop the result.
   it('sends COMMANDS.GET_NODES with {nodeIds, depth, fields}', async () => {
     const sent: Sent[] = []
     await handleGetNodes(
       {
         nodeIds: ['1:42'],
         depth: 1,
-        fields: ['type', 'name'],
+        fields: ['type', 'name', 'children'],
       },
       stubClient({ sent, reply: [cardFixture] }),
     )
     expect(sent[0].command).toBe(COMMANDS.GET_NODES)
     expect(sent[0].params?.nodeIds).toEqual(['1:42'])
     expect(sent[0].params?.depth).toBe(1)
-    expect(sent[0].params?.fields).toEqual(['type', 'name'])
+    expect(sent[0].params?.fields).toEqual([
+      'type',
+      'name',
+      'children',
+    ])
   })
 
   it('converts each raw export to a NodeSpec (atom-grammar leaves)', async () => {

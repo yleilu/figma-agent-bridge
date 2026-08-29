@@ -1,4 +1,5 @@
 import {
+  BUILD_ID,
   COMMANDS,
   CONTEXT_NS,
   CONTEXT_KEY,
@@ -61,6 +62,21 @@ import {
   otherCollectionsHolding,
   type VariableLike,
 } from './variable-shadowing'
+import {
+  resolveCollectionTarget,
+  extendedCollectionWarning,
+  duplicateVariableWarning,
+  ambiguousCollectionError,
+} from './variable-collection-target'
+import { resolvePageScope } from './search-page-scope'
+import {
+  appendRefusal,
+  sealedInstanceHost,
+} from './instance-ceiling'
+import {
+  modeIdFor,
+  type ModeLike,
+} from './variable-modes'
 import {
   readSlotEntry,
   slotParentRefusal,
@@ -139,6 +155,12 @@ figma.showUI(__html__, {
 const fileIdentity = () => ({
   type: 'identity' as const,
   fileKey: figma.fileKey ?? null,
+  // I62 — the build identity the UI registers with comes from HERE, the
+  // bundle that answers every command. Reporting the UI bundle's own stamp
+  // would have missed the incident this exists for: the 2026-08-27 QA round
+  // had a stale `dist/code.js` beside a fresh `ui.html`, so the half that
+  // returned the wrong reads is exactly the half whose id must be published.
+  build: BUILD_ID,
   fileName: figma.root.name,
   currentPage: figma.currentPage.name,
   selected: figma.currentPage.selection.length,
@@ -1940,14 +1962,19 @@ const buildSingleNode = async (
   // structured message that callers convert to { error }.
   try {
     parent.appendChild(node)
-  } catch {
+  } catch (err) {
     // The node exists and cannot be placed. Removing it is the wrapper's job —
-    // this rethrow only has to say WHY, in words the caller can act on.
+    // this rethrow only has to say WHY, in words the caller can act on. I66:
+    // the reason is CHECKED, not assumed, and when an instance really is the
+    // ceiling the message names it and both ways through.
     throw new Error(
-      'Cannot append into this parent: only a component SLOT accepts ' +
-        'children inside an instance (got ' +
-        parent.type +
-        '). To fill a slot, target the slot node.',
+      appendRefusal({
+        operation: 'create',
+        parentId: parent.id,
+        parentType: parent.type,
+        host: sealedInstanceHost(parent),
+        raw: messageOf(err),
+      }),
     )
   }
 
@@ -2124,13 +2151,16 @@ const createTreeNode = async (
       // T7: same instance-lock guard as createSingleNode — wrap and re-raise.
       try {
         parent.appendChild(instance)
-      } catch {
+      } catch (err) {
         instance.remove()
         throw new Error(
-          'Cannot append into this parent: only a component SLOT accepts ' +
-            'children inside an instance (got ' +
-            parent.type +
-            '). To fill a slot, target the slot node.',
+          appendRefusal({
+            operation: 'create',
+            parentId: parent.id,
+            parentType: parent.type,
+            host: sealedInstanceHost(parent),
+            raw: messageOf(err),
+          }),
         )
       }
       writeScope.claim(writer, instance)
@@ -2145,13 +2175,16 @@ const createTreeNode = async (
         const instance = mainComp.createInstance()
         try {
           parent.appendChild(instance)
-        } catch {
+        } catch (err) {
           instance.remove()
           throw new Error(
-            'Cannot append into this parent: only a component SLOT accepts ' +
-              'children inside an instance (got ' +
-              parent.type +
-              '). To fill a slot, target the slot node.',
+            appendRefusal({
+              operation: 'create',
+              parentId: parent.id,
+              parentType: parent.type,
+              host: sealedInstanceHost(parent),
+              raw: messageOf(err),
+            }),
           )
         }
         writeScope.claim(writer, instance)
@@ -2163,13 +2196,16 @@ const createTreeNode = async (
     const cloned = (existing as SceneNode).clone()
     try {
       parent.appendChild(cloned)
-    } catch {
+    } catch (err) {
       cloned.remove()
       throw new Error(
-        'Cannot append into this parent: only a component SLOT accepts ' +
-          'children inside an instance (got ' +
-          parent.type +
-          '). To fill a slot, target the slot node.',
+        appendRefusal({
+          operation: 'create',
+          parentId: parent.id,
+          parentType: parent.type,
+          host: sealedInstanceHost(parent),
+          raw: messageOf(err),
+        }),
       )
     }
     writeScope.claim(writer, cloned)
@@ -2303,7 +2339,10 @@ const applyVariableMeta = async (
     codeSyntax?: Record<string, string>
     hiddenFromPublishing?: boolean
   },
-  modeByName: Record<string, string>,
+  // I70 — the collection's modes, not a name→id map: a mode reference resolves
+  // by NAME first and by ID second (variable-modes.ts), so an id that came out
+  // of a read still lands instead of being skipped as an unknown mode.
+  modes: readonly ModeLike[],
   warnings: string[],
 ): Promise<void> => {
   if (meta.aliases !== undefined) {
@@ -2315,7 +2354,7 @@ const applyVariableMeta = async (
     for (const [modeName, targetId] of Object.entries(
       meta.aliases,
     )) {
-      const modeId = modeByName[modeName]
+      const modeId = modeIdFor(modeName, modes)
       if (modeId === undefined) {
         warnings.push(
           'unknown mode "' +
@@ -3224,6 +3263,18 @@ const handleCommand = async (
     case COMMANDS.SEARCH: {
       const scope = (params.scope as string) || 'document'
 
+      // I65 — a `scope:'page'` that names no page used to answer
+      // "Page not found: undefined": the missing id was forwarded as it
+      // arrived and printed back as if the caller had typed it. The
+      // neighbouring `inspect({pageId?})` already means the CURRENT page when
+      // the id is omitted, and two sibling reads meaning two different things
+      // by "this page" is the T1 failure. The choice is stated in the reply's
+      // warnings[] — a scope the tool picked is a fact the caller has to see.
+      const pageScope = resolvePageScope(
+        params.pageId as string | undefined,
+        figma.currentPage,
+      )
+
       // Collect the root subtrees to scan based on scope. (selection scope
       // builds its candidates directly below — no shared root.)
       const roots: (BaseNode & ChildrenMixin)[] = []
@@ -3240,12 +3291,18 @@ const handleCommand = async (
         }
         roots.push(target as BaseNode & ChildrenMixin)
       } else if (scope === 'page') {
+        if (pageScope.pageId === undefined) {
+          return {
+            error:
+              'search: scope "page" needs a pageId — this document exposes no current page to fall back to.',
+          }
+        }
         const pageNode = await figma.getNodeByIdAsync(
-          params.pageId as string,
+          pageScope.pageId,
         )
         if (!pageNode || pageNode.type !== 'PAGE') {
           return {
-            error: 'Page not found: ' + params.pageId,
+            error: 'Page not found: ' + pageScope.pageId,
           }
         }
         roots.push(pageNode as PageNode)
@@ -3319,6 +3376,11 @@ const handleCommand = async (
       // subtree (the repair pass after the candidate loop). A warning is what
       // is left when even that cannot be done.
       const skipped: string[] = []
+      // I65 — the page the tool chose, said first: it explains every row
+      // below it, so it belongs above the per-node degrades.
+      if (scope === 'page' && pageScope.note !== undefined) {
+        skipped.push(pageScope.note)
+      }
       // Even the id in a warning has to be read defensively: a stale handle
       // answers NOTHING, its own id included.
       const idOf = (node: BaseNode): string => {
@@ -5340,10 +5402,28 @@ const handleCommand = async (
       // the raw parent-relative x/y, so without this the node jumps.
       const childOrigin = originOf(child as Placeable)
       const index = params.index as number | undefined
-      if (index !== undefined) {
-        parent.insertChild(index, child)
-      } else {
-        parent.appendChild(child)
+      // I66 — the move hits the SAME per-instance ceiling a create does, and
+      // used to hit it as a raw uncaught Figma throw naming an id the caller
+      // never sent. It is now the same sentence, from the same builder: an
+      // instance is sealed except its slots, and here are the ways through.
+      // reparent_node is itself half of the taught workaround, so a refusal
+      // here is the one an operator is most likely to have to read.
+      try {
+        if (index !== undefined) {
+          parent.insertChild(index, child)
+        } else {
+          parent.appendChild(child)
+        }
+      } catch (err) {
+        return {
+          error: appendRefusal({
+            operation: 'move ' + child.id,
+            parentId: parent.id,
+            parentType: parent.type,
+            host: sealedInstanceHost(parent),
+            raw: messageOf(err),
+          }),
+        }
       }
       // Recompute the child's parent-relative x/y so its CANVAS position is
       // unchanged. reparentPlacement answers undefined when the new parent owns
@@ -5889,12 +5969,18 @@ const handleCommand = async (
       }
     }
 
-    // create_variables: create a collection (+ optional extra modes), then its
-    // variables with per-mode values. The server has already CONVERTED COLOR
-    // values to {r,g,b,a}; FLOAT/STRING/BOOLEAN pass through. valuesByMode is
-    // keyed by mode NAME — resolved to mode ids against the collection's modes
+    // create_variables: address a collection, then add variables to it with
+    // per-mode values. The server has already CONVERTED COLOR values to
+    // {r,g,b,a}; FLOAT/STRING/BOOLEAN pass through. valuesByMode is keyed by
+    // mode NAME — resolved to mode ids against the TARGET collection's modes
     // (an unknown mode name is reported as a warning, never throws). T7:
     // feature-detect createVariableCollection / createVariable / setValueForMode.
+    //
+    // I63 — the call used to call createVariableCollection unconditionally, so
+    // a second call with the same name forked a duplicate and said nothing.
+    // The target is now resolved first (variable-collection-target.ts): an
+    // existing name EXTENDS its collection and says so, an ambiguous name is
+    // refused, and only an unused name creates.
     case COMMANDS.CREATE_VARIABLES: {
       const vars = figma.variables as VariablesAPI & {
         createVariableCollection?: (
@@ -5921,29 +6007,146 @@ const handleCommand = async (
       // will not enumerate simply reports no shadows.
       const existingVariables =
         await localVariablesSnapshot()
-      // T7: the collection-level factory failing is a genuine failure (nothing
-      // to return) → {error}, not a degrade.
-      let collection: VariableCollection
-      try {
-        collection = vars.createVariableCollection(
-          params.collection as string,
-        )
-      } catch (e) {
+      // I63 — which collection this call means, decided before anything is
+      // made. The name lookup runs over the enumeration the shadow snapshot
+      // already read, so it costs no extra round trip.
+      const existingCollections = Object.entries(
+        existingVariables.collectionNames,
+      ).map(([id, name]) => ({ id, name }))
+      // An ID, though, is resolved AUTHORITATIVELY and not from that snapshot.
+      // localVariablesSnapshot degrades to `{}` on a runtime that will not
+      // enumerate (the T7 path B66 relies on), and answering "Collection not
+      // found" for a perfectly good id because the listing was empty would be
+      // a false refusal — the exact failure shape this batch removes.
+      const addressedId = params.collectionId as
+        | string
+        | undefined
+      const heldById =
+        addressedId === undefined
+          ? null
+          : await figma.variables.getVariableCollectionByIdAsync(
+              addressedId,
+            )
+      const known =
+        heldById !== null &&
+        !existingCollections.some(c => c.id === heldById.id)
+          ? [
+              ...existingCollections,
+              { id: heldById.id, name: heldById.name },
+            ]
+          : existingCollections
+      const target = resolveCollectionTarget(
+        {
+          collectionId: addressedId,
+          collection: params.collection as
+            | string
+            | undefined,
+        },
+        known,
+      )
+      if (target.kind === 'unaddressed') {
         return {
           error:
-            'createVariableCollection failed for "' +
-            String(params.collection) +
-            '": ' +
-            String(e),
+            'create_variables needs a collection: pass `collection` (a name) ' +
+            'or `collectionId` (an exact address).',
+        }
+      }
+      if (target.kind === 'missing') {
+        return {
+          error: 'Collection not found: ' + target.id,
+        }
+      }
+      if (target.kind === 'ambiguous') {
+        return {
+          error: ambiguousCollectionError(
+            target.name,
+            target.ids,
+          ),
         }
       }
       const warnings: string[] = []
+      // T7: the collection-level factory failing is a genuine failure (nothing
+      // to return) → {error}, not a degrade. An EXTEND makes nothing, so it
+      // has no factory to fail — it resolves the handle it was given.
+      let collection: VariableCollection
+      if (target.kind === 'create') {
+        try {
+          collection = vars.createVariableCollection(
+            target.name,
+          )
+        } catch (e) {
+          return {
+            error:
+              'createVariableCollection failed for "' +
+              target.name +
+              '": ' +
+              String(e),
+          }
+        }
+      } else {
+        // Reuse the handle the id path already resolved; the NAME path still
+        // has to ask, because a snapshot entry is a name and an id, not a
+        // collection.
+        const held =
+          heldById !== null && heldById.id === target.id
+            ? heldById
+            : await figma.variables.getVariableCollectionByIdAsync(
+                target.id,
+              )
+        if (!held) {
+          return {
+            error: 'Collection not found: ' + target.id,
+          }
+        }
+        collection = held
+        warnings.push(
+          extendedCollectionWarning(
+            collection.name,
+            collection.id,
+          ),
+        )
+      }
+      const extending = target.kind === 'extend'
 
-      // Build the mode NAME → modeId map. The collection starts with one
+      // Build the mode NAME → modeId map. A NEW collection starts with one
       // default mode; the first requested mode renames it, the rest are added.
+      //
+      // An EXTEND never renames (I63). The collection's modes already carry
+      // values for every variable in it, so renaming the first one to whatever
+      // this call happens to list would rewrite the meaning of data this call
+      // did not write. A mode the collection lacks is ADDED; one it already
+      // has is simply used.
       const requestedModes =
         (params.modes as string[] | undefined) ?? []
-      if (requestedModes.length > 0) {
+      const modeNamesNow = (): string[] =>
+        collection.modes.map(m => m.name)
+      const addOneMode = (modeName: string): void => {
+        if (typeof collection.addMode === 'function') {
+          try {
+            collection.addMode(modeName)
+          } catch (e) {
+            warnings.push(
+              'addMode failed for "' +
+                modeName +
+                '": ' +
+                String(e),
+            )
+          }
+        } else {
+          warnings.push(
+            'addMode unavailable in this Figma version; mode "' +
+              modeName +
+              '" not added',
+          )
+        }
+      }
+      if (requestedModes.length > 0 && extending) {
+        for (const modeName of requestedModes) {
+          if (!modeNamesNow().includes(modeName)) {
+            addOneMode(modeName)
+          }
+        }
+      } else if (requestedModes.length > 0) {
         if (typeof collection.renameMode === 'function') {
           // T7: a duplicate/invalid rename degrades to a warning rather than
           // throwing the whole call into {error}.
@@ -5971,29 +6174,21 @@ const handleCommand = async (
           )
         }
         for (const modeName of requestedModes.slice(1)) {
-          if (typeof collection.addMode === 'function') {
-            try {
-              collection.addMode(modeName)
-            } catch (e) {
-              warnings.push(
-                'addMode failed for "' +
-                  modeName +
-                  '": ' +
-                  String(e),
-              )
-            }
-          } else {
-            warnings.push(
-              'addMode unavailable in this Figma version; mode "' +
-                modeName +
-                '" not added',
-            )
-          }
+          addOneMode(modeName)
         }
       }
-      const modeByName: Record<string, string> = {}
-      for (const m of collection.modes) {
-        modeByName[m.name] = m.modeId
+      // I63 — the names the TARGET collection already holds. A second variable
+      // of one name inside one collection makes the name ambiguous in the very
+      // scope Figma says it is unique in, so the create is skipped and named
+      // rather than made.
+      const heldNames = new Set<string>()
+      for (const v of existingVariables.variables) {
+        if (
+          typeof v.name === 'string' &&
+          v.variableCollectionId === collection.id
+        ) {
+          heldNames.add(v.name)
+        }
       }
 
       const inVars =
@@ -6015,6 +6210,16 @@ const handleCommand = async (
             'createVariable unavailable; variable "' +
               spec.name +
               '" not created',
+          )
+          continue
+        }
+        // I63 — the fork, one level down. Skipped and named, never made.
+        if (heldNames.has(spec.name)) {
+          warnings.push(
+            duplicateVariableWarning(
+              spec.name,
+              collection.name,
+            ),
           )
           continue
         }
@@ -6045,12 +6250,16 @@ const handleCommand = async (
           spec.name,
           existingVariables.variables,
           existingVariables.collectionNames,
+          // I63 — the TARGET collection is never its own shadow. On the extend
+          // path the target's variables are in the snapshot, so without this a
+          // name held elsewhere in the same collection would report itself.
+          collection.id,
         )
         if (shadows.length > 0) {
           warnings.push(
             createShadowWarning(
               spec.name,
-              params.collection as string,
+              collection.name,
               shadows,
             ),
           )
@@ -6058,7 +6267,11 @@ const handleCommand = async (
         for (const [modeName, value] of Object.entries(
           spec.valuesByMode,
         )) {
-          const modeId = modeByName[modeName]
+          // I70 — a NAME or an ID; read live, so a mode added above counts.
+          const modeId = modeIdFor(
+            modeName,
+            collection.modes,
+          )
           if (modeId === undefined) {
             warnings.push(
               'unknown mode "' +
@@ -6108,7 +6321,7 @@ const handleCommand = async (
             codeSyntax: spec.codeSyntax,
             hiddenFromPublishing: spec.hiddenFromPublishing,
           },
-          modeByName,
+          collection.modes,
           warnings,
         )
         created.push({
@@ -6143,21 +6356,13 @@ const handleCommand = async (
       }
       const warnings: string[] = []
 
-      // renameModes / removeModes match a mode by NAME first, then by id.
+      // renameModes / removeModes match a mode by NAME first, then by id —
+      // now through the SHARED resolver every mode reference uses (I70), so
+      // the lifecycle edits and the value edits cannot drift apart.
       const findModeId = (
         ref: string,
-      ): string | undefined => {
-        const byName = collection.modes.find(
-          m => m.name === ref,
-        )
-        if (byName) {
-          return byName.modeId
-        }
-        const byId = collection.modes.find(
-          m => m.modeId === ref,
-        )
-        return byId?.modeId
-      }
+      ): string | undefined =>
+        modeIdFor(ref, collection.modes)
 
       for (const modeName of (params.addModes as
         | string[]
@@ -6247,12 +6452,6 @@ const handleCommand = async (
         }
       }
 
-      // Re-read modes after lifecycle edits for value-by-name resolution.
-      const modeByName: Record<string, string> = {}
-      for (const m of collection.modes) {
-        modeByName[m.name] = m.modeId
-      }
-
       for (const edit of (params.variables as
         | {
             id: string
@@ -6275,8 +6474,12 @@ const handleCommand = async (
           for (const [modeName, value] of Object.entries(
             edit.valuesByMode,
           )) {
-            const modeId =
-              modeByName[modeName] ?? findModeId(modeName)
+            // I70 — read live, so a mode the lifecycle edits above added is
+            // resolvable in the same call.
+            const modeId = modeIdFor(
+              modeName,
+              collection.modes,
+            )
             if (modeId === undefined) {
               warnings.push(
                 'unknown mode "' +
@@ -6378,7 +6581,7 @@ const handleCommand = async (
           await applyVariableMeta(
             variable,
             { name: edit.id, aliases: edit.aliases },
-            modeByName,
+            collection.modes,
             warnings,
           )
         }

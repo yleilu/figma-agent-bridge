@@ -57,3 +57,13 @@ Figma side (once): run the figma-setup skill, or import by hand:
   Figma -> Plugins -> Development -> Import from manifest ->
   ${REPO_ROOT}/packages/figma-plugin/manifest.json
 EOF
+
+# The install guard: this script wrote a fresh bundle and restarted NOTHING, so a
+# server process started before the write keeps serving the code it loaded — and
+# nothing in the protocol says so, because every dev build stamps the same version.
+# The build fingerprint (I62) catches a stale BUNDLE; a `bun run packages/server`
+# tree-runner honestly reports 'source' and is invisible to it, so both families
+# are listed here. Reports only — it never kills anything and never fails the
+# install (`|| true`): a second server may be deliberate, and a build script that
+# killed processes it did not start would be worse than the trap it prevents.
+bun run "$REPO_ROOT/scripts/stale-servers.ts" "$REPO_ROOT/plugin/bin/server.js" || true

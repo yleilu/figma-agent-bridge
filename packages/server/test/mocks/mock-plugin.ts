@@ -1976,12 +1976,28 @@ export const createMockPlugin = (
           }
           break
         }
+        // I65 — a `scope:'page'` naming NO page falls back to the current one
+        // and says which it chose (search-page-scope.ts). This mock's current
+        // page is `0:1` / "Page 1", so the fallback lands on the same tree the
+        // explicit `0:1` scan returns. Modelled BEFORE the not-found guard,
+        // exactly as the real plugin resolves it before the lookup — otherwise
+        // `undefined` would still reach that guard and reproduce the defect.
+        const namedPage = cmd.params?.pageId as
+          | string
+          | undefined
+        const pageFallback =
+          searchScope === 'page' &&
+          (namedPage === undefined || namedPage === '')
+        const scopeNote = pageFallback
+          ? 'search: scope "page" named no pageId, so the CURRENT page "Page 1" (0:1) was scanned. Pass pageId to scan a different page, or scope:"document" to scan them all.'
+          : undefined
         if (
           searchScope === 'page' &&
-          !knownPages.has(cmd.params?.pageId as string)
+          !pageFallback &&
+          !knownPages.has(namedPage as string)
         ) {
           result = {
-            error: 'Page not found: ' + cmd.params?.pageId,
+            error: 'Page not found: ' + namedPage,
           }
           break
         }
@@ -2103,6 +2119,11 @@ export const createMockPlugin = (
             }
             return candidate
           }),
+          // I65 — the page the tool chose, on the same warnings[] channel the
+          // real plugin uses, and omitted when the caller named the page.
+          ...(scopeNote !== undefined
+            ? { warnings: [scopeNote] }
+            : {}),
         }
         break
       }
@@ -2455,11 +2476,14 @@ export const createMockPlugin = (
           | string
           | undefined
         if (parentId?.startsWith('badparent:')) {
-          // Mirror the real plugin's T7 structured error: the type reported is
-          // the simulated parent type (INSTANCE for a non-slot descendant).
+          // Mirror the real plugin's T7 structured error — I66 wording: the
+          // refusal names the INSTANCE that seals the target (not just the
+          // target), states the ceiling as a Figma rule, and names all three
+          // ways through. Byte-faithful to instance-ceiling.ts's appendRefusal
+          // so a behavioural test asserts the real plugin's contract.
           result = {
             error:
-              'Cannot append into this parent: only a component SLOT accepts children inside an instance (got INSTANCE). To fill a slot, target the slot node.',
+              'Cannot create into 456:1 (FRAME): it is inside the INSTANCE "Card" (I123:456), and an instance is SEALED — its contents mirror its main component, so only a component SLOT takes children inside one. This is the per-instance write ceiling, and it is a Figma rule, not a limit of this tool. Three ways through: target the SLOT node itself if the region already has one; add a slot to the MASTER component with update_component({slots}) and then fill it; or build the content at page level and move it in with reparent_node.',
           }
           break
         }
@@ -2616,9 +2640,10 @@ export const createMockPlugin = (
           | string
           | undefined
         if (treeParentId?.startsWith('badparent:')) {
+          // I66 wording, same builder, same sentence as create_node's.
           result = {
             error:
-              'Cannot append into this parent: only a component SLOT accepts children inside an instance (got INSTANCE). To fill a slot, target the slot node.',
+              'Cannot create into 456:1 (FRAME): it is inside the INSTANCE "Card" (I123:456), and an instance is SEALED — its contents mirror its main component, so only a component SLOT takes children inside one. This is the per-instance write ceiling, and it is a Figma rule, not a limit of this tool. Three ways through: target the SLOT node itself if the region already has one; add a slot to the MASTER component with update_component({slots}) and then fill it; or build the content at page level and move it in with reparent_node.',
           }
           break
         }
@@ -2788,14 +2813,34 @@ export const createMockPlugin = (
       }
 
       // reparent_node: echo {id,…,parentId} so the new-parent move is assertable.
-      case 'reparent_node':
+      //
+      // I66 — a `badparent:` destination models the per-instance write ceiling
+      // on the MOVE path. It used to be an uncaught Figma throw; the real
+      // plugin now catches it and answers with the SAME sentence the create
+      // paths use (instance-ceiling.ts's appendRefusal), which matters most
+      // here: reparent_node is itself half of the taught workaround, so this
+      // is the refusal an operator is likeliest to have to read.
+      case 'reparent_node': {
+        const rpParent = cmd.params?.parentId as
+          | string
+          | undefined
+        if (rpParent?.startsWith('badparent:')) {
+          result = {
+            error:
+              'Cannot move ' +
+              String(cmd.params?.nodeId) +
+              ' into 456:1 (FRAME): it is inside the INSTANCE "Card" (I123:456), and an instance is SEALED — its contents mirror its main component, so only a component SLOT takes children inside one. This is the per-instance write ceiling, and it is a Figma rule, not a limit of this tool. Three ways through: target the SLOT node itself if the region already has one; add a slot to the MASTER component with update_component({slots}) and then fill it; or build the content at page level and move it in with reparent_node.',
+          }
+          break
+        }
         result = {
           id: cmd.params?.nodeId as string,
           name: 'Card',
           type: 'FRAME',
-          parentId: cmd.params?.parentId as string,
+          parentId: rpParent,
         }
         break
+      }
 
       // reorder_children: set-equality validate the requested ids against the
       // mock parent's fixed child set ['1:1','1:2','1:3']. A mismatch WARNS
@@ -3535,9 +3580,39 @@ export const createMockPlugin = (
       // target id prefixed `missing:` models alias-target-not-found (the SHARED
       // per-variable apply path's T7 degrade — warned, never thrown).
       case 'create_variables': {
-        const collectionName = cmd.params
-          ?.collection as string
-        if (collectionName.startsWith('err:')) {
+        const collectionName = cmd.params?.collection as
+          | string
+          | undefined
+        const collectionAddr = cmd.params?.collectionId as
+          | string
+          | undefined
+        // I63 — the real plugin resolves the target BEFORE it makes anything
+        // (variable-collection-target.ts). The mock models the three answers
+        // that change the reply: an unknown id is a miss, an ambiguous name is
+        // refused, and a name a collection already carries EXTENDS it. The
+        // document it models: one collection `col:existing` named `existing`
+        // holding `held/token`, plus two forks both named `forked`.
+        if (collectionAddr !== undefined) {
+          if (collectionAddr !== 'col:existing') {
+            error = `Collection not found: ${collectionAddr}`
+            break
+          }
+        } else if (collectionName === undefined) {
+          error =
+            'create_variables needs a collection: pass `collection` (a name) or `collectionId` (an exact address).'
+          break
+        } else if (collectionName === 'forked') {
+          error =
+            'more than one variable collection is named "forked" in this file (col:f1, col:f2), so the name addresses none of them. Pass collectionId to say which one to extend, or delete_variables the forks first.'
+          break
+        }
+        const extending =
+          collectionAddr !== undefined ||
+          collectionName === 'existing'
+        if (
+          collectionName !== undefined &&
+          collectionName.startsWith('err:')
+        ) {
           error = `createVariableCollection failed for "${collectionName}"`
           break
         }
@@ -3556,14 +3631,28 @@ export const createMockPlugin = (
         const reqModes =
           (cmd.params?.modes as string[] | undefined) ?? []
         // The default mode is renamed to reqModes[0] when given, else 'Mode 1'.
-        const modeNames =
-          reqModes.length > 0 ? reqModes : ['Mode 1']
+        // An EXTEND renames nothing (I63): the existing mode `Light` stays and
+        // a requested mode it lacks is appended.
+        const modeNames = extending
+          ? [
+              'Light',
+              ...reqModes.filter(m => m !== 'Light'),
+            ]
+          : reqModes.length > 0
+            ? reqModes
+            : ['Mode 1']
         const warnings: string[] = []
+        if (extending) {
+          warnings.push(
+            `create_variables added these variables to the existing collection "existing" (col:existing) instead of creating a second one with the same name. Pass collectionId to target a collection exactly, or a different \`collection\` name to start a new one.`,
+          )
+        }
         // Mirror the real plugin's T7 renameMode-unavailable warning: a
         // collection name prefixed `norename:` models renameMode being absent,
         // so the default mode keeps its name and a warning rides back.
         if (
-          collectionName.startsWith('norename:') &&
+          collectionName?.startsWith('norename:') ===
+            true &&
           reqModes.length > 0
         ) {
           warnings.push(
@@ -3575,6 +3664,15 @@ export const createMockPlugin = (
           if (v.name.startsWith('degrade:')) {
             warnings.push(
               `setValueForMode failed for variable "${v.name}"; value not set`,
+            )
+            return
+          }
+          // I63 — a name the TARGET collection already holds is skipped and
+          // named, never created a second time. The modelled `existing`
+          // collection holds `held/token`.
+          if (extending && v.name === 'held/token') {
+            warnings.push(
+              `variable "${v.name}" already exists in "existing" and was NOT created again — a second variable of the same name in one collection makes the name ambiguous. Change its value with update_variables, or create it under a different name.`,
             )
             return
           }
@@ -3594,7 +3692,9 @@ export const createMockPlugin = (
           created.push({ id: `var:${i + 1}`, name: v.name })
         })
         result = {
-          collectionId: 'col:new',
+          collectionId: extending
+            ? 'col:existing'
+            : 'col:new',
           modes: modeNames.map((name, i) => ({
             modeId: `m${i + 1}`,
             name,

@@ -651,3 +651,96 @@ describe('handleBindVariable — clear (B58)', () => {
     expect(sent[0].params).not.toHaveProperty('clear')
   })
 })
+
+// I70 — the read must feed the write without a manual mapping.
+//
+// `get_variables` keyed `valuesByMode` by MODE ID while `create_variables` and
+// `update_variables` consume mode NAMES, so a read-modify-write cycle needed a
+// hand-built modeId→name join against the sibling `modes` array — the same T2
+// gap `aliases` was fixed for in B2, left open one field over.
+describe('get_variables keys valuesByMode by mode NAME (I70)', () => {
+  const collection = (
+    modes: { modeId: string; name: string }[],
+    valuesByMode: Record<string, unknown>,
+  ) => ({
+    results: [
+      {
+        id: 'col:1',
+        name: 'Brand',
+        modes,
+        variables: [
+          {
+            id: 'var:1',
+            name: 'Brand/Primary',
+            resolvedType: 'COLOR',
+            valuesByMode,
+            aliases: [],
+          },
+        ],
+      },
+    ],
+  })
+
+  const readValues = async (
+    modes: { modeId: string; name: string }[],
+    valuesByMode: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> => {
+    const result = await handleGetVariables(
+      {},
+      stubClient({
+        reply: collection(modes, valuesByMode),
+      }),
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      results: {
+        variables: {
+          valuesByMode: Record<string, unknown>
+        }[]
+      }[]
+    }
+    return out.results[0].variables[0].valuesByMode
+  }
+
+  it('emits the NAME the write path consumes, not the raw modeId', async () => {
+    const values = await readValues(
+      [
+        { modeId: 'm1', name: 'Light' },
+        { modeId: 'm2', name: 'Dark' },
+      ],
+      {
+        m1: { r: 1, g: 0, b: 0, a: 1 },
+        m2: { r: 0, g: 0, b: 0, a: 1 },
+      },
+    )
+    expect(Object.keys(values).sort()).toEqual([
+      'Dark',
+      'Light',
+    ])
+    expect(values.Light).toBe('#FF0000')
+    expect(values.Dark).toBe('#000000')
+  })
+
+  it('keeps the raw modeId when the collection does not name that mode', async () => {
+    // Lossless, not tidy: a value under an unnamed mode is still a value, and
+    // dropping it to keep the keys uniform would be the silent loss this batch
+    // exists to remove.
+    const values = await readValues(
+      [{ modeId: 'm1', name: 'Light' }],
+      { m1: { r: 1, g: 0, b: 0, a: 1 }, ghost: 4 },
+    )
+    expect(values.Light).toBe('#FF0000')
+    expect(values.ghost).toBe(4)
+  })
+
+  it('keeps the id for a DUPLICATE name rather than clobbering the first', async () => {
+    const values = await readValues(
+      [
+        { modeId: 'm1', name: 'Light' },
+        { modeId: 'm2', name: 'Light' },
+      ],
+      { m1: 1, m2: 2 },
+    )
+    expect(values.Light).toBe(1)
+    expect(values.m2).toBe(2)
+  })
+})

@@ -9,6 +9,8 @@ import type { Server } from 'bun'
 import {
   COMMANDS,
   APP_VERSION,
+  BUILD_ID,
+  buildSkew,
 } from '@figma-agent-bridge/shared'
 import type { FigmaClient } from '@figma-agent-bridge/server/figma-client'
 import {
@@ -576,5 +578,106 @@ describe('handleStatus surfaces a version skew', () => {
     const out = await statusWith(APP_VERSION)
     const joined = out.joined as { incompatible?: string }[]
     expect(joined[0].incompatible).toBeUndefined()
+  })
+})
+
+// I62 — the build fingerprint. `version` is the same string on every dev build
+// under the CI-only versioning rule, so it cannot separate a fresh bundle from
+// a weeks-old one. `build` can, and status carries it beside the version on
+// both joined[] and available[]. The comparison is ADVISORY: `buildSkew` is a
+// note on the SUCCESS reply and requireFile never consults it.
+describe('handleStatus reports the build fingerprint (I62)', () => {
+  const stubRelay = (build?: string): Server =>
+    Bun.serve({
+      port: 0,
+      fetch: () =>
+        new Response(
+          JSON.stringify([
+            {
+              channel: 'file-fk-1',
+              fileName: 'F',
+              fileKey: 'fk-1',
+              connectedAt: Date.now(),
+              version: APP_VERSION,
+              ...(build !== undefined ? { build } : {}),
+              epoch: 'epoch-x',
+            },
+          ]),
+          {
+            headers: {
+              'content-type': 'application/json',
+            },
+          },
+        ),
+    })
+
+  const statusWith = async (
+    build?: string,
+  ): Promise<Record<string, unknown>> => {
+    const srv = stubRelay(build)
+    const client = {
+      joinChannel: () => Promise.resolve(''),
+      sendCommand: () => Promise.resolve(null),
+      disconnect: () => undefined,
+      isConnected: () => true,
+      joinedFiles: () => ['fk-1'],
+      channelFor: () => 'file-fk-1',
+    } as unknown as FigmaClient
+    const result = await handleStatus(
+      client,
+      `http://localhost:${srv.port}`,
+    )
+    srv.stop(true)
+    return JSON.parse(
+      result.content[0].text ?? '',
+    ) as Record<string, unknown>
+  }
+
+  it('carries the plugin build on joined[] and available[], beside the version', async () => {
+    const out = await statusWith(
+      'a1b2c3d@2026-08-29T15:40Z',
+    )
+    const joined = out.joined as {
+      build?: string
+      serverBuild?: string
+      version?: string
+    }[]
+    const available = out.available as { build?: string }[]
+    expect(joined[0].build).toBe(
+      'a1b2c3d@2026-08-29T15:40Z',
+    )
+    expect(joined[0].version).toBe(APP_VERSION)
+    // The server names its own build too — a fingerprint one side can read
+    // and the other cannot is half a comparison.
+    expect(joined[0].serverBuild).toBe(BUILD_ID)
+    expect(available[0].build).toBe(
+      'a1b2c3d@2026-08-29T15:40Z',
+    )
+  })
+
+  it('names a skew ADVISORILY, and never refuses on it', async () => {
+    // The suite's own server build is SOURCE_BUILD, which is deliberately
+    // silent — so this asserts the comparison against a STAMPED server pair
+    // directly, and that status itself still answers.
+    expect(
+      buildSkew(
+        'a1b2c3d@2026-08-29T15:40Z',
+        'ff00aa1@2026-08-21T09:02Z',
+      ),
+    ).toContain('advisory')
+    const out = await statusWith(
+      'a1b2c3d@2026-08-29T15:40Z',
+    )
+    expect(out.connected).toBe(true)
+  })
+
+  it('says nothing when the plugin predates the stamp', async () => {
+    const out = await statusWith()
+    const joined = out.joined as {
+      build?: string
+      buildSkew?: string
+    }[]
+    expect(joined[0].build).toBeUndefined()
+    expect(joined[0].buildSkew).toBeUndefined()
   })
 })

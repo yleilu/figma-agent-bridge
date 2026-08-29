@@ -862,6 +862,55 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(text).not.toContain('results: []')
   })
 
+  // 11a-2 — I65: `scope:'page'` naming NO page scans the CURRENT page and
+  // SAYS which one. It used to answer "Page not found: undefined" — the
+  // missing id forwarded as it arrived and printed back as if the caller had
+  // typed it. The neighbouring `inspect({pageId?})` already means the current
+  // page, and two sibling reads meaning two different things by "this page" is
+  // the T1 failure.
+  it('search scope=page without a pageId scans the current page and names it (I65)', async () => {
+    const result = await handleSearch(
+      { scope: 'page' },
+      scoped,
+    )
+    const { text } = result.content[0]
+    const out = JSON.parse(text) as {
+      results: { id: string }[]
+      warnings?: string[]
+    }
+    expect(text).not.toContain('Page not found')
+    expect(text).not.toContain('undefined')
+    // The same tree the explicit current-page scan returns.
+    expect(out.results).toHaveLength(4)
+    const note = (out.warnings ?? []).find(w =>
+      w.includes('scope "page" named no pageId'),
+    )
+    expect(note).toBeDefined()
+    expect(note).toContain('0:1')
+
+    // Control: a page the caller DID name is scanned with no note at all —
+    // the fallback fires only when the tool had to choose.
+    const named = await handleSearch(
+      { scope: 'page', pageId: '0:1' },
+      scoped,
+    )
+    const namedOut = JSON.parse(named.content[0].text) as {
+      warnings?: string[]
+    }
+    expect(namedOut.warnings).toBeUndefined()
+  })
+
+  it('search still refuses a pageId that names nothing (I65 control)', async () => {
+    const result = await handleSearch(
+      { scope: 'page', pageId: 'nope:9' },
+      scoped,
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+    }
+    expect(data.error).toContain('Page not found: nope:9')
+  })
+
   // 11b — B2: depth bounds the scan SCOPE across the relay. depth=0 keeps only
   // the page's level-0 node (Card); the default scans the whole subtree (4).
   it('search depth bounds the scan scope across the relay', async () => {
@@ -1144,6 +1193,29 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(text).toContain('#FF0000')
     expect(text).toContain('ALL_SCOPES')
     expect(text).toContain('--brand-primary')
+  })
+
+  // 16a — I70: the read hands back the vocabulary the write consumes. Over the
+  // relay the mock reports `valuesByMode:{m1:…}` beside `modes:[{m1,'Light'}]`,
+  // and the server re-keys it to `{Light:…}` — the exact shape
+  // create_variables / update_variables take, so a read-modify-write needs no
+  // hand-built modeId→name join.
+  it('get_variables emits valuesByMode keyed by mode NAME (I70)', async () => {
+    const result = await handleGetVariables({}, scoped)
+    const out = JSON.parse(result.content[0].text) as {
+      results: {
+        modes: { modeId: string; name: string }[]
+        variables: {
+          valuesByMode: Record<string, unknown>
+        }[]
+      }[]
+    }
+    const values = out.results[0].variables[0].valuesByMode
+    expect(Object.keys(values)).toEqual(['Light'])
+    expect(values.Light).toBe('#FF0000')
+    // The modes array still carries the id, so the id is never lost — it moves
+    // to the one place it belongs.
+    expect(out.results[0].modes[0].modeId).toBe('m1')
   })
 
   // 17 — get_components: a result carries variant axes + key over the relay.
@@ -1684,6 +1756,106 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(result.content[0].text).toContain(
       'alias target not found',
     )
+  })
+
+  // 25c — I63: a collection NAME the file already carries EXTENDS that
+  // collection rather than forking a same-named duplicate, and the reply says
+  // which of the two it did. The mock models the real plugin's resolution
+  // (variable-collection-target.ts): `existing` is one collection, `forked` is
+  // two, and `existing` already holds `held/token`.
+  it('create_variables EXTENDS an existing collection and says so (I63)', async () => {
+    const result = await handleCreateVariables(
+      {
+        collection: 'existing',
+        variables: [
+          {
+            name: 'sem/accent',
+            type: 'COLOR',
+            valuesByMode: { Light: '#FF0000' },
+          },
+        ],
+      },
+      scoped,
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      collectionId: string
+      warnings: string[]
+      variables: { name: string }[]
+    }
+    // The SAME collection, not a second one.
+    expect(out.collectionId).toBe('col:existing')
+    expect(out.variables[0].name).toBe('sem/accent')
+    expect(
+      out.warnings.some(w =>
+        w.includes('existing collection "existing"'),
+      ),
+    ).toBe(true)
+  })
+
+  it('create_variables skips a variable name the target collection already holds (I63)', async () => {
+    const result = await handleCreateVariables(
+      {
+        collection: 'existing',
+        variables: [
+          {
+            name: 'held/token',
+            type: 'COLOR',
+            valuesByMode: { Light: '#FF0000' },
+          },
+        ],
+      },
+      scoped,
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      variables: { name: string }[]
+      warnings: string[]
+    }
+    expect(out.variables).toHaveLength(0)
+    expect(
+      out.warnings.some(w =>
+        w.includes('update_variables'),
+      ),
+    ).toBe(true)
+  })
+
+  it('create_variables REFUSES a collection name several collections carry (I63)', async () => {
+    const result = await handleCreateVariables(
+      {
+        collection: 'forked',
+        variables: [
+          {
+            name: 'sem/accent',
+            type: 'COLOR',
+            valuesByMode: { Light: '#FF0000' },
+          },
+        ],
+      },
+      scoped,
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      error?: string
+    }
+    expect(out.error).toContain('collectionId')
+  })
+
+  it('create_variables reports an unknown collectionId, never falling back (I63)', async () => {
+    const result = await handleCreateVariables(
+      {
+        collectionId: 'col:404',
+        variables: [
+          {
+            name: 'sem/accent',
+            type: 'COLOR',
+            valuesByMode: { Light: '#FF0000' },
+          },
+        ],
+      },
+      scoped,
+    )
+    const out = JSON.parse(result.content[0].text) as {
+      error?: string
+    }
+    expect(out.error).toContain('col:404')
   })
 
   // 26 — update_variables: addMode + a COLOR value edit, parsed from hex.

@@ -53,6 +53,10 @@ export const registerMessageSchema = z.object({
   // the version handshake catches skew separately.
   fileKey: z.string().nullable().optional(),
   version: z.string().optional(),
+  // Which BUILD produced this plugin bundle (I62). Optional so a plugin that
+  // predates the stamp still registers — an absent build is reported as
+  // absent, never compared.
+  build: z.string().optional(),
   currentPage: z.string().optional(),
   selected: z.number().optional(),
   // Plugin connection nonce, minted per register/reconnect. Stored on the

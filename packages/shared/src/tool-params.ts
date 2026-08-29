@@ -30,10 +30,11 @@ import { FEEDBACK_CATEGORIES } from './feedback'
 import { strictParams } from './strict-params'
 import { identityHeadersSchema } from './identity-headers'
 import {
-  nodeSpecSchema,
+  createNodeSpecSchema,
   partialNodeSpecSchema,
   slotEntrySchema,
   treeNodeSpecSchema,
+  updateNodePatchSchema,
 } from './node-spec-schema'
 import {
   treeReadParamsSchema,
@@ -672,8 +673,8 @@ export const duplicatePageParamsSchema = strictParams({
 export const updateNodeParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   nodeId: z.string().describe('ID of the node to update.'),
-  patch: partialNodeSpecSchema.describe(
-    'Partial NodeSpec. Only supplied fields are replaced; omitted fields are left unchanged.',
+  patch: updateNodePatchSchema.describe(
+    'Partial NodeSpec. Only supplied fields are replaced; omitted fields are left unchanged. It carries no `children`: structure moves through create_node / create_tree / reparent_node, never through a patch (I67).',
   ),
 })
 
@@ -687,7 +688,7 @@ export const updateNodeParamsSchema = strictParams({
  */
 export const createNodeParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
-  spec: nodeSpecSchema.describe(
+  spec: createNodeSpecSchema.describe(
     'The NodeSpec to create. Its `type` selects the Figma node kind. A FRAME that names no `layout` is created as a vertical auto-layout stack, and a `size` it stated is pinned FIXED so the stack cannot hug it away; pass `layout:{mode:"NONE"}` for an absolutely-positioned frame, or any other `layout` to choose your own (then `sizing` is yours to state too).',
   ),
   parentId: z
@@ -867,24 +868,40 @@ export const createVariableSpecSchema = z.object({
 })
 
 /**
- * Params for `create_variables`: create a collection (with optional extra
- * modes), then its variables with per-mode values. Returns
- * { collectionId, modes, variables:[{id,name}] }.
+ * Params for `create_variables`: address a collection (by name or id), then
+ * add variables to it with per-mode values. Returns
+ * { collectionId, modes, variables:[{id,name}], warnings }.
+ *
+ * I63 — a name that an existing collection already carries EXTENDS that
+ * collection; only an unused name creates one. Exactly one of `collection` /
+ * `collectionId` is required, enforced in the handler (INVALID_PARAM) rather
+ * than via .refine() so the schema keeps .shape for registerFileTool.
  */
 export const createVariablesParamsSchema = strictParams({
   ...fileTargetParamsSchema.shape,
   collection: z
     .string()
-    .describe('Name for the new variable collection.'),
+    .optional()
+    .describe(
+      'Variable collection NAME. A name no collection carries creates one; a name exactly one collection already carries EXTENDS that collection (and the reply says so). A name carried by SEVERAL collections is refused — pass collectionId instead. Give this OR collectionId, not both.',
+    ),
+  collectionId: z
+    .string()
+    .optional()
+    .describe(
+      'Variable collection ID to add these variables to — the exact address, for a file that already holds several collections of one name. Give this OR collection, not both.',
+    ),
   modes: z
     .array(z.string())
     .optional()
     .describe(
-      'Additional mode names to add beyond the default mode. The default mode is renamed to the first entry when given.',
+      'Mode names for the collection. On a NEW collection the default mode is renamed to the first entry and the rest are added. On an EXISTING collection nothing is renamed (its modes already hold values) — a mode it lacks is added, one it has is used as is.',
     ),
   variables: z
     .array(createVariableSpecSchema)
-    .describe('Variables to create in the collection.'),
+    .describe(
+      'Variables to add to the collection. A name the collection already holds is skipped with a warning — change a value with update_variables.',
+    ),
 })
 
 /** A single per-variable edit for `update_variables`. */
