@@ -840,3 +840,142 @@ describe('handleSearch — the fields vocabulary (I58)', () => {
     expect('childCount' in out.results[0]).toBe(false)
   })
 })
+
+// ---------------------------------------------------------------------------
+// I61 — a heavy projection is BOUNDED, not merely bounded-by-default
+// ---------------------------------------------------------------------------
+//
+// Live 2026-08-27, an 838-node dashboard file:
+//   search({match:{type:['INSTANCE']}, fields:['id','name','component'],
+//           limit:500})   →   {"error":"Command cmd-… timed out","code":"TIMEOUT"}
+// The same projection scoped per page with limit:100 succeeded four times over
+// and returned 480 instances. B50 bounded the hydration by `limit`, but `limit`
+// is the CALLER's number, and a projection that reaches past the scan row costs
+// one per-node export EACH — so `limit:500` buys 500 exports and blows the 30s
+// command timeout. The bounded-by-default promise (T10) stops holding the
+// moment a heavy projection rides a document-wide scan.
+//
+// The get_components precedent: cap the expensive half, and SAY it was capped.
+describe('handleSearch — the hydration is capped (I61)', () => {
+  const many = Array.from({ length: 300 }, (_, i) => ({
+    id: `1:${i + 1}`,
+    name: `Node ${i + 1}`,
+    type: 'INSTANCE',
+  }))
+
+  const cappedClient = (opts: {
+    sent?: Sent[]
+  }): ScopedFigmaClient => ({
+    fileKey: 'fk-test',
+    sendCommand: async (
+      command: string,
+      params?: Record<string, unknown>,
+    ) => {
+      opts.sent?.push({ command, params })
+      if (command === COMMANDS.GET_NODES) {
+        const ids = (params?.nodeIds as string[]) ?? []
+        return ids.map(id => ({
+          id,
+          name: 'N',
+          type: 'INSTANCE',
+        }))
+      }
+      return { results: many }
+    },
+  })
+
+  it('clips a heavy projection to the cap and hands back a cursor', async () => {
+    const sent: Sent[] = []
+    const result = await handleSearch(
+      {
+        match: { type: ['INSTANCE'] },
+        fields: ['id', 'name', 'component'],
+        limit: 500,
+      },
+      cappedClient({ sent }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: unknown[]
+      truncated: boolean
+      cursor?: string
+      warnings?: string[]
+    }
+    expect(out.results).toHaveLength(100)
+    expect(out.truncated).toBe(true)
+    expect(typeof out.cursor).toBe('string')
+    // The hydration — the expensive half — never asked for more than the cap.
+    const hydration = sent.find(
+      x => x.command === COMMANDS.GET_NODES,
+    )!
+    expect(
+      (hydration.params?.nodeIds as string[]).length,
+    ).toBe(100)
+    // …and the reply SAYS the tool clipped the page.
+    const note = (out.warnings ?? []).find(w =>
+      w.includes('limit'),
+    )
+    expect(note).toBeDefined()
+    expect(note).toContain('100')
+    expect(note).toContain('cursor')
+  })
+
+  it('the resumed page keeps the cap and keeps going', async () => {
+    const first = await handleSearch(
+      { fields: ['id', 'component'], limit: 500 },
+      cappedClient({}),
+    )
+    const out1 = YAML.parse(first.content[0].text) as {
+      cursor: string
+    }
+    const second = await handleSearch(
+      {
+        fields: ['id', 'component'],
+        limit: 500,
+        cursor: out1.cursor,
+      },
+      cappedClient({}),
+    )
+    const out2 = YAML.parse(second.content[0].text) as {
+      results: { id: string }[]
+      truncated: boolean
+    }
+    expect(out2.results).toHaveLength(100)
+    expect(out2.truncated).toBe(true)
+    expect(out2.results[0].id).toBe('1:101')
+  })
+
+  // CONTROL — the cap is on the HYDRATION, not on search. A projection the
+  // scan row already answers pays nothing and keeps the caller's limit.
+  it('a candidate-only projection keeps the caller’s limit and never hydrates', async () => {
+    const sent: Sent[] = []
+    const result = await handleSearch(
+      { fields: ['id', 'name', 'type'], limit: 500 },
+      cappedClient({ sent }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: unknown[]
+      truncated: boolean
+      warnings?: string[]
+    }
+    expect(out.results).toHaveLength(300)
+    expect(out.truncated).toBe(false)
+    expect(
+      sent.some(x => x.command === COMMANDS.GET_NODES),
+    ).toBe(false)
+    expect(out.warnings).toBeUndefined()
+  })
+
+  // CONTROL — a limit at or under the cap is untouched, and says nothing.
+  it('a limit within the cap is not clipped and carries no note', async () => {
+    const result = await handleSearch(
+      { fields: ['id', 'component'], limit: 100 },
+      cappedClient({}),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: unknown[]
+      warnings?: string[]
+    }
+    expect(out.results).toHaveLength(100)
+    expect(out.warnings).toBeUndefined()
+  })
+})
