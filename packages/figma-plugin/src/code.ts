@@ -70,6 +70,10 @@ import {
 } from './variable-collection-target'
 import { resolvePageScope } from './search-page-scope'
 import {
+  appendRefusal,
+  sealedInstanceHost,
+} from './instance-ceiling'
+import {
   modeIdFor,
   type ModeLike,
 } from './variable-modes'
@@ -1958,14 +1962,19 @@ const buildSingleNode = async (
   // structured message that callers convert to { error }.
   try {
     parent.appendChild(node)
-  } catch {
+  } catch (err) {
     // The node exists and cannot be placed. Removing it is the wrapper's job —
-    // this rethrow only has to say WHY, in words the caller can act on.
+    // this rethrow only has to say WHY, in words the caller can act on. I66:
+    // the reason is CHECKED, not assumed, and when an instance really is the
+    // ceiling the message names it and both ways through.
     throw new Error(
-      'Cannot append into this parent: only a component SLOT accepts ' +
-        'children inside an instance (got ' +
-        parent.type +
-        '). To fill a slot, target the slot node.',
+      appendRefusal({
+        operation: 'create',
+        parentId: parent.id,
+        parentType: parent.type,
+        host: sealedInstanceHost(parent),
+        raw: messageOf(err),
+      }),
     )
   }
 
@@ -2142,13 +2151,16 @@ const createTreeNode = async (
       // T7: same instance-lock guard as createSingleNode — wrap and re-raise.
       try {
         parent.appendChild(instance)
-      } catch {
+      } catch (err) {
         instance.remove()
         throw new Error(
-          'Cannot append into this parent: only a component SLOT accepts ' +
-            'children inside an instance (got ' +
-            parent.type +
-            '). To fill a slot, target the slot node.',
+          appendRefusal({
+            operation: 'create',
+            parentId: parent.id,
+            parentType: parent.type,
+            host: sealedInstanceHost(parent),
+            raw: messageOf(err),
+          }),
         )
       }
       writeScope.claim(writer, instance)
@@ -2163,13 +2175,16 @@ const createTreeNode = async (
         const instance = mainComp.createInstance()
         try {
           parent.appendChild(instance)
-        } catch {
+        } catch (err) {
           instance.remove()
           throw new Error(
-            'Cannot append into this parent: only a component SLOT accepts ' +
-              'children inside an instance (got ' +
-              parent.type +
-              '). To fill a slot, target the slot node.',
+            appendRefusal({
+              operation: 'create',
+              parentId: parent.id,
+              parentType: parent.type,
+              host: sealedInstanceHost(parent),
+              raw: messageOf(err),
+            }),
           )
         }
         writeScope.claim(writer, instance)
@@ -2181,13 +2196,16 @@ const createTreeNode = async (
     const cloned = (existing as SceneNode).clone()
     try {
       parent.appendChild(cloned)
-    } catch {
+    } catch (err) {
       cloned.remove()
       throw new Error(
-        'Cannot append into this parent: only a component SLOT accepts ' +
-          'children inside an instance (got ' +
-          parent.type +
-          '). To fill a slot, target the slot node.',
+        appendRefusal({
+          operation: 'create',
+          parentId: parent.id,
+          parentType: parent.type,
+          host: sealedInstanceHost(parent),
+          raw: messageOf(err),
+        }),
       )
     }
     writeScope.claim(writer, cloned)
@@ -5384,10 +5402,28 @@ const handleCommand = async (
       // the raw parent-relative x/y, so without this the node jumps.
       const childOrigin = originOf(child as Placeable)
       const index = params.index as number | undefined
-      if (index !== undefined) {
-        parent.insertChild(index, child)
-      } else {
-        parent.appendChild(child)
+      // I66 — the move hits the SAME per-instance ceiling a create does, and
+      // used to hit it as a raw uncaught Figma throw naming an id the caller
+      // never sent. It is now the same sentence, from the same builder: an
+      // instance is sealed except its slots, and here are the ways through.
+      // reparent_node is itself half of the taught workaround, so a refusal
+      // here is the one an operator is most likely to have to read.
+      try {
+        if (index !== undefined) {
+          parent.insertChild(index, child)
+        } else {
+          parent.appendChild(child)
+        }
+      } catch (err) {
+        return {
+          error: appendRefusal({
+            operation: 'move ' + child.id,
+            parentId: parent.id,
+            parentType: parent.type,
+            host: sealedInstanceHost(parent),
+            raw: messageOf(err),
+          }),
+        }
       }
       // Recompute the child's parent-relative x/y so its CANVAS position is
       // unchanged. reparentPlacement answers undefined when the new parent owns

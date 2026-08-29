@@ -2476,11 +2476,14 @@ export const createMockPlugin = (
           | string
           | undefined
         if (parentId?.startsWith('badparent:')) {
-          // Mirror the real plugin's T7 structured error: the type reported is
-          // the simulated parent type (INSTANCE for a non-slot descendant).
+          // Mirror the real plugin's T7 structured error — I66 wording: the
+          // refusal names the INSTANCE that seals the target (not just the
+          // target), states the ceiling as a Figma rule, and names all three
+          // ways through. Byte-faithful to instance-ceiling.ts's appendRefusal
+          // so a behavioural test asserts the real plugin's contract.
           result = {
             error:
-              'Cannot append into this parent: only a component SLOT accepts children inside an instance (got INSTANCE). To fill a slot, target the slot node.',
+              'Cannot create into 456:1 (FRAME): it is inside the INSTANCE "Card" (I123:456), and an instance is SEALED — its contents mirror its main component, so only a component SLOT takes children inside one. This is the per-instance write ceiling, and it is a Figma rule, not a limit of this tool. Three ways through: target the SLOT node itself if the region already has one; add a slot to the MASTER component with update_component({slots}) and then fill it; or build the content at page level and move it in with reparent_node.',
           }
           break
         }
@@ -2637,9 +2640,10 @@ export const createMockPlugin = (
           | string
           | undefined
         if (treeParentId?.startsWith('badparent:')) {
+          // I66 wording, same builder, same sentence as create_node's.
           result = {
             error:
-              'Cannot append into this parent: only a component SLOT accepts children inside an instance (got INSTANCE). To fill a slot, target the slot node.',
+              'Cannot create into 456:1 (FRAME): it is inside the INSTANCE "Card" (I123:456), and an instance is SEALED — its contents mirror its main component, so only a component SLOT takes children inside one. This is the per-instance write ceiling, and it is a Figma rule, not a limit of this tool. Three ways through: target the SLOT node itself if the region already has one; add a slot to the MASTER component with update_component({slots}) and then fill it; or build the content at page level and move it in with reparent_node.',
           }
           break
         }
@@ -2809,14 +2813,34 @@ export const createMockPlugin = (
       }
 
       // reparent_node: echo {id,…,parentId} so the new-parent move is assertable.
-      case 'reparent_node':
+      //
+      // I66 — a `badparent:` destination models the per-instance write ceiling
+      // on the MOVE path. It used to be an uncaught Figma throw; the real
+      // plugin now catches it and answers with the SAME sentence the create
+      // paths use (instance-ceiling.ts's appendRefusal), which matters most
+      // here: reparent_node is itself half of the taught workaround, so this
+      // is the refusal an operator is likeliest to have to read.
+      case 'reparent_node': {
+        const rpParent = cmd.params?.parentId as
+          | string
+          | undefined
+        if (rpParent?.startsWith('badparent:')) {
+          result = {
+            error:
+              'Cannot move ' +
+              String(cmd.params?.nodeId) +
+              ' into 456:1 (FRAME): it is inside the INSTANCE "Card" (I123:456), and an instance is SEALED — its contents mirror its main component, so only a component SLOT takes children inside one. This is the per-instance write ceiling, and it is a Figma rule, not a limit of this tool. Three ways through: target the SLOT node itself if the region already has one; add a slot to the MASTER component with update_component({slots}) and then fill it; or build the content at page level and move it in with reparent_node.',
+          }
+          break
+        }
         result = {
           id: cmd.params?.nodeId as string,
           name: 'Card',
           type: 'FRAME',
-          parentId: cmd.params?.parentId as string,
+          parentId: rpParent,
         }
         break
+      }
 
       // reorder_children: set-equality validate the requested ids against the
       // mock parent's fixed child set ['1:1','1:2','1:3']. A mismatch WARNS

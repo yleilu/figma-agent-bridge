@@ -31,7 +31,10 @@ import type {
 import { handleCreateNode } from '@figma-agent-bridge/server/tools/create-node'
 import { handleCreateTree } from '@figma-agent-bridge/server/tools/create-tree'
 import { handleGetNode } from '@figma-agent-bridge/server/tools/read'
-import { handleCloneNode } from '@figma-agent-bridge/server/tools/structure'
+import {
+  handleCloneNode,
+  handleReparentNode,
+} from '@figma-agent-bridge/server/tools/structure'
 import { handleUpdateNode } from '@figma-agent-bridge/server/tools/update'
 import { handleBindVariable } from '@figma-agent-bridge/server/tools/design-system'
 import { handleSearch } from '@figma-agent-bridge/server/tools/search'
@@ -91,9 +94,88 @@ describe('M2b slot-fill e2e (T7 instance-lock wrap)', () => {
     }
     // The error message must mention the slot / SLOT / parent type (T7 honesty)
     expect(data.error).toMatch(
-      /Cannot append into this parent|only a component SLOT|To fill a slot/,
+      /only a component SLOT|per-instance write ceiling/,
     )
     expect(data.code).toBe('PLUGIN_ERROR')
+  })
+
+  // I66 — the refusal at the per-instance ceiling names the CEILING and the
+  // taught way through, on every write path, in one sentence. It used to name
+  // neither: four copies of a text raised from a bare `catch {}` that discarded
+  // the real error, so a parent refusing for any other reason was told about
+  // component slots, and when the instance rule WAS the reason the message
+  // named neither the instance responsible nor a way forward. NO override is
+  // added — the ceiling is a Figma rule and stays one.
+  const namesTheCeiling = (error: string): void => {
+    // The ceiling, and the instance responsible for it.
+    expect(error).toContain('INSTANCE')
+    expect(error).toContain('SEALED')
+    expect(error).toContain('I123:456')
+    expect(error).toContain('per-instance write ceiling')
+    // …and it says whose rule it is, so nobody files it as a tool bug.
+    expect(error).toContain('Figma rule')
+    // All three taught ways through (S44).
+    expect(error).toContain('SLOT node')
+    expect(error).toContain('update_component({slots})')
+    expect(error).toContain('reparent_node')
+  }
+
+  it('create_node: the ceiling refusal names the ceiling and the workaround (I66)', async () => {
+    const result = await handleCreateNode(
+      {
+        spec: { type: 'FRAME', name: 'Content' },
+        parentId: 'badparent:I123;456',
+      },
+      scoped,
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+    }
+    namesTheCeiling(data.error)
+  })
+
+  it('create_tree: the SAME sentence, not a second dialect (I66)', async () => {
+    const result = await handleCreateTree(
+      {
+        tree: { type: 'FRAME', name: 'Content' },
+        parentId: 'badparent:I123;456',
+      },
+      scoped,
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+    }
+    namesTheCeiling(data.error)
+  })
+
+  it('reparent_node: the move hits the same ceiling and says the same thing (I66)', async () => {
+    const result = await handleReparentNode(
+      {
+        nodeId: '1:42',
+        parentId: 'badparent:I123;456',
+      },
+      scoped,
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+    }
+    namesTheCeiling(data.error)
+    // The node it could not move is named — the old raw Figma throw named an
+    // id the caller never sent.
+    expect(data.error).toContain('1:42')
+  })
+
+  it('reparent_node: a parent that is NOT sealed still moves (I66 control)', async () => {
+    const result = await handleReparentNode(
+      { nodeId: '1:42', parentId: 'page:1' },
+      scoped,
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      error?: string
+      parentId?: string
+    }
+    expect(data.error).toBeUndefined()
+    expect(data.parentId).toBe('page:1')
   })
 
   it('create_node: normal appendable parent still works (no regression)', async () => {
