@@ -22,6 +22,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "install:local": "bash scripts/install-local.sh",
+    "install:local:dev": "bash scripts/install-local.sh --dev",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "release:stamp": "bun run scripts/stamp-version.ts",

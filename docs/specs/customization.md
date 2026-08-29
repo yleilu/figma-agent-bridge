@@ -195,6 +195,8 @@ always runs the latest example, and the example is exactly what users install. T
 
 A directory-level symlink is impossible by design: the template ships `SKILL.md.tmpl` precisely so
 it can never be globbed as a live skill, which is why dev mode links the two entries individually.
+`install:local --dev` is the sanctioned way to create or repair the links (dev-ops.md §3.6); it
+also removes a user-scope duplicate that would shadow them, and it never touches a divergent copy.
 
 **Safety contract on the template.**
 

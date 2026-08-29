@@ -16,6 +16,18 @@ PLUGIN="figma-agent-bridge"   # plugin name (marketplace.json plugins[].name)
 STAGE="${XDG_CACHE_HOME:-$HOME/.cache}/figma-agent-bridge/local-marketplace"
 cd "$REPO_ROOT"
 
+# --dev: after the install, converge the figma-bridge-prefs instance onto the
+# shipped template via entry-level symlinks (customization.md §6 "Dev mode") —
+# and do NOT steer to figma-setup for prefs, whose Part 2 would COPY. That
+# pointer is how a dev machine drifted to a copy once already.
+DEV_MODE=0
+for arg in "$@"; do
+  case "$arg" in
+    --dev) DEV_MODE=1 ;;
+    *) echo "ERROR: unknown argument '$arg' (only --dev is taken)" >&2; exit 1 ;;
+  esac
+done
+
 command -v claude >/dev/null || { echo "ERROR: the 'claude' CLI is not on PATH." >&2; exit 1; }
 
 echo "=== build the package (server bundle + fig-plugin payload) ==="
@@ -48,15 +60,24 @@ rm -rf "$HOME"/.claude/plugins/cache/*"${PLUGIN}"* 2>/dev/null || true
 claude plugin marketplace add "$STAGE"
 claude plugin install "${PLUGIN}@${MARKET}" --scope user
 
+if [ "$DEV_MODE" = "1" ]; then
+  bun run "$REPO_ROOT/scripts/dev-prefs-link.ts"
+fi
+
 cat <<EOF
 
 === installed (current dev version) ===
 In your Claude Code session, run:  /reload-plugins   (activates without a restart)
 
-Figma side (once): run the figma-setup skill, or import by hand:
+Figma side (once): import by hand:
   Figma -> Plugins -> Development -> Import from manifest ->
   ${REPO_ROOT}/packages/figma-plugin/manifest.json
 EOF
+if [ "$DEV_MODE" != "1" ]; then
+  echo "(figma-setup can drive the Figma import too — but on a DEV checkout"
+  echo " use 'install:local --dev' for prefs: figma-setup's Part 2 copies the"
+  echo " template, and a dev instance must LINK it — customization.md §6.)"
+fi
 
 # The install guard: this script wrote a fresh bundle and restarted NOTHING, so a
 # server process started before the write keeps serving the code it loaded — and

@@ -365,6 +365,14 @@ directory cannot be one symlink — the template deliberately ships `SKILL.md.tm
 so it can never be globbed as a live skill. `figma-setup` refuses to copy or update over a symlinked
 instance (its dev-checkout guard).
 
+**`install:local --dev` owns the links** (`scripts/dev-prefs-link.ts`). It creates or repairs them,
+swaps a byte-identical copy to links (the `template_version:` line is ignored in that compare — the
+stamp is the §9 marker for USER copies, and killing its drift class is the point), and removes a
+user-scope duplicate that would SHADOW the project links. A **divergent** copy is never touched, in
+either scope: the guard names the differing files and the remedy (fold the wanted changes into the
+template, then re-run). Plain `install:local` keeps its user-shaped behavior and instead prints why
+a dev checkout should not take the figma-setup prefs path.
+
 ### 3.7 Not offered
 
 Enumerated so the boundary is explicit:
