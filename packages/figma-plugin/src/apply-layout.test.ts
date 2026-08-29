@@ -199,6 +199,197 @@ test('partial GRID (rows only) sets only rows; other grid fields untouched', () 
   expect(frame.gridColumnGap).toBe(-1)
 })
 
+// ─── per-track sizing (I56) ───────────────────────────────────────────────────
+//
+// ⚠️ ASSUMED RUNTIME BEHAVIOUR — NOT LIVE-CONFIRMED.
+//
+// `gridRowSizes` returns an array of `GridTrackSize` objects, and the Figma
+// docs' own example mutates one IN PLACE (`frame.gridRowSizes[0].type =
+// 'FIXED'`) and then reads the new value back off the frame. So the array's
+// entries are modelled here as LIVE handles: a write through one reaches the
+// frame. If the real runtime hands back a detached SNAPSHOT instead, that
+// mutation lands on a copy and the frame keeps its old tracks — the shape of
+// failure this campaign already met once (5710f56), where the effect happens
+// at assignment time and a headless green proves nothing.
+//
+// Both worlds are modelled. `makeTrackFrame` is the live-handle runtime; the
+// snapshot runtime is `snapshotTrackFrame` below, and the applier is required
+// to fall back to whole-array assignment and then to SAY SO if neither took.
+// Which of the two Figma actually is must be settled by a live probe.
+
+type FakeTrack = { type: string; value?: number }
+
+const makeTrackFrame = (
+  rows: number,
+  cols: number,
+): LayoutTarget & {
+  gridRowCount: number
+  gridColumnCount: number
+  gridRowGap: number
+  gridColumnGap: number
+  gridRowSizes: FakeTrack[]
+  gridColumnSizes: FakeTrack[]
+} => ({
+  ...makeGridFrame(),
+  gridRowSizes: Array.from({ length: rows }, () => ({
+    type: 'FLEX',
+    value: 1,
+  })),
+  gridColumnSizes: Array.from({ length: cols }, () => ({
+    type: 'FLEX',
+    value: 1,
+  })),
+})
+
+test('I56: track sizes are written onto the tracks the grid already has', () => {
+  const frame = makeTrackFrame(2, 2)
+  const warnings: string[] = []
+  applyLayout(
+    frame,
+    {
+      mode: 'GRID',
+      rows: 2,
+      cols: 2,
+      rowSizes: [
+        { type: 'FIXED', value: 64 },
+        { type: 'FLEX', value: 1 },
+      ],
+      colSizes: [
+        { type: 'FIXED', value: 240 },
+        { type: 'FLEX', value: 1 },
+      ],
+    },
+    warnings,
+  )
+  expect(frame.gridRowSizes[0]).toEqual({
+    type: 'FIXED',
+    value: 64,
+  })
+  expect(frame.gridColumnSizes[0]).toEqual({
+    type: 'FIXED',
+    value: 240,
+  })
+  expect(frame.gridColumnSizes[1].type).toBe('FLEX')
+  expect(warnings).toEqual([])
+})
+
+test('I56: a HUG track carries no value', () => {
+  const frame = makeTrackFrame(1, 1)
+  applyLayout(frame, {
+    mode: 'GRID',
+    colSizes: [{ type: 'HUG' }],
+  })
+  expect(frame.gridColumnSizes[0].type).toBe('HUG')
+})
+
+test('I56: naming more tracks than the grid has is reported, and the rest still land', () => {
+  const frame = makeTrackFrame(1, 2)
+  const warnings: string[] = []
+  applyLayout(
+    frame,
+    {
+      mode: 'GRID',
+      cols: 2,
+      colSizes: [
+        { type: 'FIXED', value: 240 },
+        { type: 'FLEX', value: 1 },
+        { type: 'FIXED', value: 80 },
+      ],
+    },
+    warnings,
+  )
+  expect(frame.gridColumnSizes[0].value).toBe(240)
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain('colSizes')
+  expect(warnings[0]).toContain('3')
+  expect(warnings[0]).toContain('2')
+})
+
+test('I56: a runtime with no gridRowSizes says the capability is missing, once', () => {
+  const frame = makeGridFrame()
+  const warnings: string[] = []
+  expect(() =>
+    applyLayout(
+      frame,
+      {
+        mode: 'GRID',
+        rowSizes: [{ type: 'FIXED', value: 64 }],
+        colSizes: [{ type: 'FIXED', value: 240 }],
+      },
+      warnings,
+    ),
+  ).not.toThrow()
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toMatch(/gridRowSizes|track/i)
+})
+
+test('I56: a SNAPSHOT runtime is caught by the whole-array fallback', () => {
+  // The other world: reading `gridRowSizes` hands back a fresh copy every
+  // time, so mutating an entry changes nothing. Assigning the whole array
+  // still works, and that is the documented second mechanism.
+  let columns: FakeTrack[] = [
+    { type: 'FLEX', value: 1 },
+    { type: 'FLEX', value: 1 },
+  ]
+  const frame = makeTrackFrame(1, 0) as LayoutTarget & {
+    gridColumnSizes: FakeTrack[]
+  }
+  Object.defineProperty(frame, 'gridColumnSizes', {
+    get: () => columns.map(t => ({ ...t })),
+    set: (next: FakeTrack[]) => {
+      columns = next.map(t => ({ ...t }))
+    },
+    configurable: true,
+    enumerable: true,
+  })
+  const warnings: string[] = []
+  applyLayout(
+    frame,
+    {
+      mode: 'GRID',
+      cols: 2,
+      colSizes: [
+        { type: 'FIXED', value: 240 },
+        { type: 'FLEX', value: 1 },
+      ],
+    },
+    warnings,
+  )
+  expect(frame.gridColumnSizes[0]).toEqual({
+    type: 'FIXED',
+    value: 240,
+  })
+  expect(warnings).toEqual([])
+})
+
+test('I56: a runtime that refuses both mechanisms is named, not hidden', () => {
+  const frozen: FakeTrack[] = [{ type: 'FLEX', value: 1 }]
+  const frame = makeTrackFrame(1, 0) as LayoutTarget & {
+    gridColumnSizes: FakeTrack[]
+  }
+  Object.defineProperty(frame, 'gridColumnSizes', {
+    get: () => frozen.map(t => ({ ...t })),
+    set: () => {
+      /* swallows the write, the way a read-only getter would */
+    },
+    configurable: true,
+    enumerable: true,
+  })
+  const warnings: string[] = []
+  applyLayout(
+    frame,
+    {
+      mode: 'GRID',
+      cols: 1,
+      colSizes: [{ type: 'FIXED', value: 240 }],
+    },
+    warnings,
+  )
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain('colSizes[0]')
+  expect(warnings[0]).toContain('FIXED')
+})
+
 test('GRID feature-detect: absent gridRowCount property → no throw, no assignment', () => {
   // Simulate a runtime that does NOT support gridRowCount (T7 degrade).
   // makeFrame() has no gridRowCount so 'gridRowCount' in frame is false.

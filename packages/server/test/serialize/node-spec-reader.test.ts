@@ -366,6 +366,123 @@ describe('toNodeSpec — GRID layout read-back', () => {
     expect(spec.layout).not.toHaveProperty('cols')
   })
 
+  // I56 — per-track sizing on the read face. A 240px sidebar column and a
+  // fractional content column are the same `cols: 2` without these, so a read
+  // that omitted them described two grids it could not tell apart.
+  it('renders the track sizes the plugin patched across', () => {
+    const spec = toNodeSpec(
+      {
+        id: '10:6',
+        name: 'Shell',
+        type: 'FRAME',
+        layoutMode: 'GRID',
+        gridRowCount: 2,
+        gridColumnCount: 2,
+        gridRowSizes: [
+          { type: 'FIXED', value: 64 },
+          { type: 'FLEX', value: 1 },
+        ],
+        gridColumnSizes: [
+          { type: 'FIXED', value: 240 },
+          { type: 'FLEX', value: 1 },
+          { type: 'HUG' },
+        ],
+      },
+      { depth: -1 },
+    )
+    expect(spec.layout?.rowSizes).toEqual(['64px', '1fr'])
+    expect(spec.layout?.colSizes).toEqual([
+      '240px',
+      '1fr',
+      'hug',
+    ])
+  })
+
+  it('omits the track keys when the runtime carried none', () => {
+    const spec = toNodeSpec(
+      {
+        id: '10:7',
+        type: 'FRAME',
+        layoutMode: 'GRID',
+        gridRowCount: 1,
+        gridColumnCount: 1,
+      },
+      { depth: -1 },
+    )
+    expect(spec.layout).not.toHaveProperty('rowSizes')
+    expect(spec.layout).not.toHaveProperty('colSizes')
+  })
+})
+
+// ─── I56 — the grid child's cell ─────────────────────────────────────────────
+//
+// A grid child's CELL is the only thing that says where it is. `position` is a
+// pixel x/y the grid computed, so a read-modify-write that dropped the cell
+// re-auto-placed every child — the class of silent destruction B63 was about,
+// on the field grid exists for.
+
+describe('toNodeSpec — cell (grid child placement)', () => {
+  it('states the anchor of every grid child, spans and align at their defaults', () => {
+    const spec = toNodeSpec(
+      {
+        id: '11:1',
+        name: 'Main',
+        type: 'FRAME',
+        gridRowAnchorIndex: 1,
+        gridColumnAnchorIndex: 1,
+        gridRowSpan: 1,
+        gridColumnSpan: 1,
+        gridChildHorizontalAlign: 'AUTO',
+        gridChildVerticalAlign: 'AUTO',
+      },
+      { depth: -1 },
+    )
+    expect(spec.cell).toEqual({ row: 1, col: 1 })
+  })
+
+  it('states a span only when it reaches past one track', () => {
+    const spec = toNodeSpec(
+      {
+        id: '11:2',
+        name: 'Header',
+        type: 'FRAME',
+        gridRowAnchorIndex: 0,
+        gridColumnAnchorIndex: 0,
+        gridRowSpan: 1,
+        gridColumnSpan: 3,
+      },
+      { depth: -1 },
+    )
+    expect(spec.cell).toEqual({
+      row: 0,
+      col: 0,
+      colSpan: 3,
+    })
+  })
+
+  it('states an align only when it is not AUTO', () => {
+    const spec = toNodeSpec(
+      {
+        id: '11:3',
+        type: 'FRAME',
+        gridRowAnchorIndex: 0,
+        gridColumnAnchorIndex: 0,
+        gridChildHorizontalAlign: 'CENTER',
+        gridChildVerticalAlign: 'AUTO',
+      },
+      { depth: -1 },
+    )
+    expect(spec.cell?.align).toEqual(['CENTER', 'AUTO'])
+  })
+
+  it('emits no cell for a node that is not in a grid', () => {
+    const spec = toNodeSpec(
+      { id: '11:4', name: 'Plain', type: 'FRAME' },
+      { depth: -1 },
+    )
+    expect(spec).not.toHaveProperty('cell')
+  })
+
   // B63 — a gap that was destroyed must not read like a gap nobody ever set.
   // JSON_REST_V1 spells zero by omission, so the two arrived at the reader as
   // the same thing: no `itemSpacing` key. The read dropped `gap` with it, and a

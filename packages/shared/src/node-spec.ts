@@ -73,6 +73,54 @@ export type LayoutSpec = {
   rowGap?: NumberAtom
   /** Grid column gap in px (GRID mode only). Maps to `gridColumnGap` on FrameNode. */
   colGap?: NumberAtom
+  /**
+   * Per-ROW track sizes, top to bottom (GRID mode only). Maps to
+   * `gridRowSizes` on FrameNode.
+   *
+   * One track atom per row, in the CSS-grid vocabulary the concept already
+   * has: `1fr` (a fraction of the free space), `240px` (a fixed track), `hug`
+   * (sized to its content). Without these, a fixed sidebar track and a
+   * fractional content track are the same `cols: 2` — the read could not tell
+   * two different grids apart, and the write could not ask for either.
+   */
+  rowSizes?: Atom[]
+  /** Per-COLUMN track sizes, left to right (GRID mode only). Maps to `gridColumnSizes`. */
+  colSizes?: Atom[]
+}
+
+/**
+ * Where a node sits in its parent's GRID, and how far it reaches.
+ *
+ * Only meaningful on a DIRECT CHILD of a `layout:{mode:'GRID'}` frame; the
+ * plugin says so and ignores it anywhere else (T7). It is the child half of the
+ * grid grammar — the parent declares the tracks, the child takes cells:
+ *
+ *   `{row: 0, col: 0, colSpan: 3}`   a header across every column
+ *   `{row: 1, col: 0, rowSpan: 2}`   a sidebar down the remaining rows
+ *
+ * A grid child's cell is the ONLY thing that says where it is. Its `position`
+ * is a pixel x/y the grid computed, so a read that dropped the cell would let a
+ * read-modify-write silently re-auto-place every child.
+ *
+ * `row`/`col` are Figma's `gridRowAnchorIndex`/`gridColumnAnchorIndex`, which
+ * are READ-ONLY properties — the write goes through `setGridChildPosition`, and
+ * the grammar spells one concept once whichever side of the API it lands on.
+ */
+export type GridCellSpec = {
+  /** 0-based row anchor (`gridRowAnchorIndex`). */
+  row?: number
+  /** 0-based column anchor (`gridColumnAnchorIndex`). */
+  col?: number
+  /** Rows this node occupies from `row` (`gridRowSpan`); a positive integer. */
+  rowSpan?: number
+  /** Columns this node occupies from `col` (`gridColumnSpan`); a positive integer. */
+  colSpan?: number
+  /**
+   * `[horizontal, vertical]` alignment WITHIN the cell — `MIN`/`CENTER`/
+   * `MAX`/`AUTO` (`gridChildHorizontalAlign`/`gridChildVerticalAlign`). The
+   * tuple mirrors `layout.align`'s shape: one key, two axes, in reading order.
+   */
+  align?: [string, string]
 }
 
 /** A per-range text override; same atoms scoped by `at:[start,end]`. */
@@ -161,6 +209,13 @@ export type NodeSpec = {
 
   // layout
   layout?: LayoutSpec
+  /**
+   * Placement in the parent's GRID (GridCellSpec). Only meaningful on a direct
+   * child of a `layout:{mode:'GRID'}` frame — the plugin says so and ignores it
+   * anywhere else. `layout` is what this node does to its children; `cell` is
+   * what its parent's grid does to it.
+   */
+  cell?: GridCellSpec
   /** [horizontal, vertical] sizing: FIXED | HUG | FILL. */
   sizing?: [string, string]
   /** [horizontal, vertical] constraints: MIN/MAX/CENTER/STRETCH/SCALE. */

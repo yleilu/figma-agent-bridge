@@ -170,11 +170,12 @@ describe('handleUpdateNode', () => {
     expect(out.id).toBe('1:42')
     // Both the plugin warning and the server writer warning live in warnings[].
     expect(out.warnings).toContain('a plugin warning')
+    // The key LIST grows as the grid grammar does (I56 added the two track
+    // keys), so the assertion holds the invariant — a GRID-only key on an H/V
+    // mode is reported — and not the roster.
     expect(
       out.warnings.some(w =>
-        w.includes(
-          'rows/cols/rowGap/colGap keys are GRID-only',
-        ),
+        w.includes('keys are GRID-only'),
       ),
     ).toBe(true)
   })

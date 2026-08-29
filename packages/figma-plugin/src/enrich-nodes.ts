@@ -185,6 +185,96 @@ export const readContext = (
   return typeof v === 'string' && v !== '' ? v : undefined
 }
 
+/**
+ * The four grid-CHILD fields, in the Plugin API's own spelling (I56).
+ *
+ * The two anchors are READ-ONLY properties; the read face is the only place
+ * they can come from, which is why they travel even though no write sets them
+ * directly (the write goes through `setGridChildPosition`).
+ */
+const GRID_CELL_FIELDS = [
+  'gridRowAnchorIndex',
+  'gridColumnAnchorIndex',
+  'gridRowSpan',
+  'gridColumnSpan',
+  'gridChildHorizontalAlign',
+  'gridChildVerticalAlign',
+] as const
+
+/**
+ * Per-track sizes of a GRID frame, flattened to plain objects (I56).
+ *
+ * `gridRowSizes` hands back live `GridTrackSize` handles, and a handle cannot
+ * cross `postMessage` — the same wall `figma.mixed`'s Symbol hit. What travels
+ * is `{type, value}`, which is exactly what the read face renders and what the
+ * write face sends back.
+ *
+ * Gated on `layoutMode === 'GRID'`, not on the property: the Plugin API calls
+ * the track arrays "only applicable" to a GRID frame, and reading them off an
+ * H-mode frame would put two empty lists on every auto-layout node in a read.
+ */
+const gridTracksPatch = (
+  node: LiveNode,
+  patch: Patch,
+): void => {
+  if (
+    node.layoutMode !== 'GRID' ||
+    !('gridRowSizes' in node)
+  ) {
+    return
+  }
+  const flatten = (raw: unknown): unknown =>
+    Array.isArray(raw)
+      ? raw.map(track => {
+          const t = track as {
+            type?: unknown
+            value?: unknown
+          }
+          return typeof t.value === 'number'
+            ? { type: t.type, value: t.value }
+            : { type: t.type }
+        })
+      : undefined
+  const rows = flatten(node.gridRowSizes)
+  if (rows !== undefined) {
+    patch.gridRowSizes = rows
+  }
+  const cols = flatten(node.gridColumnSizes)
+  if (cols !== undefined) {
+    patch.gridColumnSizes = cols
+  }
+}
+
+/**
+ * A grid child's anchor, spans and in-cell align (I56).
+ *
+ * Gated on the PARENT, and it has to be. `GridChildrenMixin` sits on
+ * `LayoutMixin`, so every scene node in the file answers `gridRowSpan` — a
+ * property probe would put a cell on all of them, and the read face would then
+ * report a grid position for nodes that are not in a grid.
+ */
+const gridCellPatch = (
+  node: LiveNode,
+  patch: Patch,
+): void => {
+  const parent = node.parent as
+    | { layoutMode?: unknown }
+    | null
+    | undefined
+  if (
+    typeof parent !== 'object' ||
+    parent === null ||
+    parent.layoutMode !== 'GRID'
+  ) {
+    return
+  }
+  for (const field of GRID_CELL_FIELDS) {
+    if (field in node) {
+      patch[field] = node[field]
+    }
+  }
+}
+
 const vectorPatch = (
   node: LiveNode,
   patch: Patch,
@@ -391,6 +481,10 @@ export const syncPatch = (
     patch.gridRowGap = node.gridRowGap
     patch.gridColumnGap = node.gridColumnGap
   }
+
+  // I56 — per-track sizing, and the cell of a grid CHILD.
+  gridTracksPatch(node, patch)
+  gridCellPatch(node, patch)
 
   // B44 — which VARIABLE each bindable layout field is bound to. Only the ids
   // travel; the reader turns them into the `var()` names it emits, off the same

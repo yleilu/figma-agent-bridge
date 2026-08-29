@@ -376,6 +376,96 @@ describe('syncPatch — the fields REST cannot carry', () => {
       },
     })
   })
+
+  // I56 — the two halves of grid track/cell state REST does not carry.
+  it('carries the track sizes of a GRID frame as plain objects', () => {
+    // The live GridTrackSize entries are runtime handles; a Symbol or a proxy
+    // cannot cross postMessage, so what travels is a plain {type, value}.
+    const patch = syncPatch(
+      node({
+        id: 'g1',
+        type: 'FRAME',
+        layoutMode: 'GRID',
+        gridRowCount: 2,
+        gridColumnCount: 2,
+        gridRowGap: 0,
+        gridColumnGap: 0,
+        gridRowSizes: [
+          { type: 'FIXED', value: 64 },
+          { type: 'FLEX', value: 1 },
+        ],
+        gridColumnSizes: [{ type: 'HUG' }],
+      }),
+      MIXED,
+    )
+    expect(patch.gridRowSizes).toEqual([
+      { type: 'FIXED', value: 64 },
+      { type: 'FLEX', value: 1 },
+    ])
+    expect(patch.gridColumnSizes).toEqual([{ type: 'HUG' }])
+  })
+
+  it('leaves the track keys off a frame that is not a grid', () => {
+    const patch = syncPatch(
+      node({
+        id: 'g2',
+        type: 'FRAME',
+        layoutMode: 'VERTICAL',
+        gridRowCount: 0,
+        gridColumnCount: 0,
+        gridRowGap: 0,
+        gridColumnGap: 0,
+        gridRowSizes: [{ type: 'FLEX', value: 1 }],
+      }),
+      MIXED,
+    )
+    expect('gridRowSizes' in patch).toBe(false)
+  })
+
+  it('carries a grid CHILD’s anchor, spans and align', () => {
+    const patch = syncPatch(
+      node({
+        id: 'g3',
+        type: 'FRAME',
+        parent: { layoutMode: 'GRID' },
+        gridRowAnchorIndex: 1,
+        gridColumnAnchorIndex: 0,
+        gridRowSpan: 2,
+        gridColumnSpan: 1,
+        gridChildHorizontalAlign: 'CENTER',
+        gridChildVerticalAlign: 'AUTO',
+      }),
+      MIXED,
+    )
+    expect(patch).toMatchObject({
+      gridRowAnchorIndex: 1,
+      gridColumnAnchorIndex: 0,
+      gridRowSpan: 2,
+      gridColumnSpan: 1,
+      gridChildHorizontalAlign: 'CENTER',
+      gridChildVerticalAlign: 'AUTO',
+    })
+  })
+
+  it('leaves the cell keys off a node whose parent is not a grid', () => {
+    // GridChildrenMixin is on LayoutMixin, so EVERY scene node answers
+    // `gridRowSpan`. Only the parent says whether the answer means anything —
+    // without that gate the read would put a cell on every node in the file.
+    const patch = syncPatch(
+      node({
+        id: 'g4',
+        type: 'FRAME',
+        parent: { layoutMode: 'VERTICAL' },
+        gridRowAnchorIndex: 0,
+        gridColumnAnchorIndex: 0,
+        gridRowSpan: 1,
+        gridColumnSpan: 1,
+      }),
+      MIXED,
+    )
+    expect('gridRowSpan' in patch).toBe(false)
+    expect('gridRowAnchorIndex' in patch).toBe(false)
+  })
 })
 
 describe('styleIdsOf / variableIdsOf', () => {

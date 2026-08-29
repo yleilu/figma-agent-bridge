@@ -28,6 +28,7 @@ import type {
   NodeSpec,
   NodeSpecOrStub,
   IdStub,
+  GridCellSpec,
   LayoutSpec,
   NumberAtom,
   TextSpec,
@@ -52,6 +53,7 @@ import {
   type RGBA,
   type Transform,
 } from '../grammar'
+import { renderTracks } from './grid-track'
 import { renderResolvedList } from './styled-fields'
 
 // ─── raw (JSON_REST_V1) shapes we read from ───────────────────────────────────
@@ -1157,6 +1159,17 @@ const layoutSpec = (
       num(raw.gridColumnGap) ?? 0,
       layoutVarName(raw, bindingNames, 'gridColumnGap'),
     )
+    // Per-track sizing (I56). Omitted when the runtime patched none: unlike the
+    // two gaps, an absent track list is genuinely absent — there is no zero
+    // spelled by omission to confuse with a real value (B63).
+    const rowSizes = renderTracks(raw.gridRowSizes)
+    if (rowSizes !== undefined) {
+      out.rowSizes = rowSizes
+    }
+    const colSizes = renderTracks(raw.gridColumnSizes)
+    if (colSizes !== undefined) {
+      out.colSizes = colSizes
+    }
     if (pad !== undefined) {
       out.pad = pad
     }
@@ -1180,6 +1193,58 @@ const layoutSpec = (
   }
   if (str(raw.layoutWrap) === 'WRAP') {
     out.wrap = true
+  }
+  return out
+}
+
+/**
+ * A grid child's cell, or undefined when this node is not one (I56).
+ *
+ * Presence is decided by the ANCHOR keys, which the plugin patches across only
+ * for a direct child of a GRID frame. `GridChildrenMixin` sits on every scene
+ * node, so `gridRowSpan` alone would put a cell on every node in the file; the
+ * gate lives where the parent is visible, and this face trusts it.
+ *
+ * `row`/`col` are stated ALWAYS. A grid child's cell is the only thing that
+ * says where it is — `position` is a pixel x/y the grid computed — so a read
+ * that omitted the anchor would let a read-modify-write silently re-auto-place
+ * every child, which is B63's failure on the field grid exists for.
+ *
+ * `rowSpan`/`colSpan` are stated only past 1, and `align` only past AUTO: those
+ * ARE their defaults, they are not spelled by omission at the runtime, and four
+ * more keys on every cell of a forty-cell grid is the T4 cost this face does
+ * not pay for nothing.
+ */
+const cellSpec = (
+  raw: RawNode,
+): GridCellSpec | undefined => {
+  const row = num(raw.gridRowAnchorIndex)
+  const col = num(raw.gridColumnAnchorIndex)
+  if (row === undefined && col === undefined) {
+    return undefined
+  }
+  const out: GridCellSpec = {}
+  if (row !== undefined) {
+    out.row = row
+  }
+  if (col !== undefined) {
+    out.col = col
+  }
+  const rowSpan = num(raw.gridRowSpan)
+  if (rowSpan !== undefined && rowSpan > 1) {
+    out.rowSpan = rowSpan
+  }
+  const colSpan = num(raw.gridColumnSpan)
+  if (colSpan !== undefined && colSpan > 1) {
+    out.colSpan = colSpan
+  }
+  const hAlign = str(raw.gridChildHorizontalAlign)
+  const vAlign = str(raw.gridChildVerticalAlign)
+  if (
+    (hAlign !== undefined && hAlign !== 'AUTO') ||
+    (vAlign !== undefined && vAlign !== 'AUTO')
+  ) {
+    out.align = [hAlign ?? 'AUTO', vAlign ?? 'AUTO']
   }
   return out
 }
@@ -1608,6 +1673,11 @@ const buildNode = (
   const layout = layoutSpec(raw, bindingNames)
   if (layout !== undefined) {
     out.layout = layout
+  }
+
+  const cell = cellSpec(raw)
+  if (cell !== undefined) {
+    out.cell = cell
   }
 
   const sizingH = str(raw.layoutSizingHorizontal)

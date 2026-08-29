@@ -393,9 +393,34 @@ array, and the style that owns the field with the list it resolves to.
 
 Key struct fields:
 - **`layout`** — `{mode: H|V|NONE|GRID, gap, pad: [t,r,b,l], align: [primary, counter],
-  wrap, rows, cols, rowGap, colGap}`. `gap` / `align` / `wrap` are H/V-only; the four
-  grid keys are GRID-only. `gap`, `rowGap`, `colGap` and each `pad` entry are number
-  atoms, so a bound one carries its `var()` wrapper: `gap: var(space/8)8`.
+  wrap, rows, cols, rowGap, colGap, rowSizes, colSizes}`. `gap` / `align` / `wrap` are
+  H/V-only; the six grid keys are GRID-only. `gap`, `rowGap`, `colGap` and each `pad`
+  entry are number atoms, so a bound one carries its `var()` wrapper:
+  `gap: var(space/8)8`.
+  **`rowSizes` / `colSizes`** size the tracks one by one — a list of track atoms in
+  CSS-grid's own vocabulary: `1fr` (a fraction of the free space; bare `fr` means one),
+  `240px` (fixed; bare `240` is the same), `hug` (sized to its content). They describe
+  tracks that already exist, so set `rows` / `cols` to the count you mean; naming more
+  applies the ones that fit and warns.
+- **`cell`** *(a direct child of a GRID frame)* — `{row, col, rowSpan, colSpan,
+  align: [horizontal, vertical]}`. `layout` is what a node does to its children;
+  `cell` is what its parent's grid does to it. `row` / `col` are 0-based cell anchors,
+  the spans are positive integers, `align` is `MIN`/`CENTER`/`MAX`/`AUTO` per axis.
+  This is the classic shell:
+
+  ```yaml
+  layout: {mode: GRID, rows: 3, cols: 3, rowSizes: [64px, 1fr, 1fr], colSizes: [240px, 1fr, 1fr]}
+  # children:
+  #   Header  cell: {row: 0, col: 0, colSpan: 3}
+  #   Sidebar cell: {row: 1, col: 0, rowSpan: 2}
+  #   Main    cell: {row: 1, col: 1, rowSpan: 2, colSpan: 2}
+  ```
+
+  On a child whose parent is not a GRID it is ignored, and the reply says so. A cell
+  is held by at most one node: an occupied anchor, an overlapping span, or a span past
+  the last track is refused per key with a warning — the rest of the write still lands.
+  A read states `row` / `col` on every grid child (that is the only record of where it
+  is), and states a span only past `1` and an align only past `AUTO`.
 - **`text`** — `{content, font, color, align, valign, decoration, case, runs}`.
   Line height + letter spacing are on the `font(...)` atom (`{lh=, ls=}`), not
   separate top-level keys.

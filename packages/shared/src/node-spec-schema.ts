@@ -54,6 +54,29 @@ export const layoutSpecSchema = z.object({
   colGap: z
     .union([z.number().nonnegative(), atomSchema])
     .optional(),
+  // Per-track sizing (I56): one track atom per row/column — `1fr`, `240px`,
+  // `hug`. The SHAPE is validated here; the spelling of each atom is the
+  // server-side grammar's (serialize/grid-track.ts).
+  rowSizes: z.array(atomSchema).optional(),
+  colSizes: z.array(atomSchema).optional(),
+})
+
+/**
+ * A grid child's cell (I56) — where it sits in the parent's GRID and how far it
+ * reaches. Plain numbers, no atom grammar: an index is not a value a variable
+ * binds through this face.
+ *
+ * A span is a POSITIVE integer, and an anchor a NON-NEGATIVE one, because that
+ * is what Figma's setters accept — `gridColumnSpan = 0` throws. Stating the
+ * bound here turns a caller's typo into a clean param rejection instead of a
+ * plugin-side degrade the caller has to read the warnings to find.
+ */
+export const gridCellSchema = z.object({
+  row: z.number().int().nonnegative().optional(),
+  col: z.number().int().nonnegative().optional(),
+  rowSpan: z.number().int().positive().optional(),
+  colSpan: z.number().int().positive().optional(),
+  align: z.tuple([z.string(), z.string()]).optional(),
 })
 
 export const textRunSchema = z.object({
@@ -123,6 +146,7 @@ const nodeSpecBase = {
 
   // layout
   layout: layoutSpecSchema.optional(),
+  cell: gridCellSchema.optional(),
   sizing: z.tuple([z.string(), z.string()]).optional(),
   constraints: z.tuple([z.string(), z.string()]).optional(),
   minWidth: z.number().nullable().optional(),
