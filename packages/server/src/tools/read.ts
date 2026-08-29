@@ -14,6 +14,7 @@ import { truncateTree, isStub } from '../read/truncate-tree'
 import { buildMatcher } from '../read/match'
 import { projectNode } from '../read/project'
 import { contextSummaryOf } from '../read/context-summary'
+import { depthProjectionConflict } from '../read/depth-projection'
 import { paginateList, CursorError } from '../read/paginate'
 import {
   type ToolResult,
@@ -104,6 +105,19 @@ export const handleInspect = async (
   },
   client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
+  // I64 — `depth` must never be silently inert. A descent whose projection
+  // drops `children` throws away the one field the descent produces, and the
+  // reply then reads as a node that has no children at all. Refused here,
+  // before the scope is walked, on the same terms search refuses a field it
+  // cannot supply (I58).
+  const conflict = depthProjectionConflict({
+    depth,
+    fields,
+    profile,
+  })
+  if (conflict !== null) {
+    return errorEnvelope('INVALID_PARAM', conflict)
+  }
   try {
     const raw = (await client.sendCommand(
       COMMANDS.INSPECT,
@@ -227,6 +241,15 @@ export const handleGetNode = async (
   },
   client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
+  // I64 — see handleInspect. One rule across all three readers.
+  const conflict = depthProjectionConflict({
+    depth,
+    fields,
+    profile,
+  })
+  if (conflict !== null) {
+    return errorEnvelope('INVALID_PARAM', conflict)
+  }
   try {
     const raw = (await client.sendCommand(
       COMMANDS.GET_NODE,
@@ -282,6 +305,15 @@ export const handleGetNodes = async (
   },
   client: ScopedFigmaClient,
 ): Promise<ToolResult> => {
+  // I64 — see handleInspect. One rule across all three readers.
+  const conflict = depthProjectionConflict({
+    depth,
+    fields,
+    profile,
+  })
+  if (conflict !== null) {
+    return errorEnvelope('INVALID_PARAM', conflict)
+  }
   try {
     const raw = (await client.sendCommand(
       COMMANDS.GET_NODES,

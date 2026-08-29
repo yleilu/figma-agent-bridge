@@ -171,8 +171,10 @@ requested `depth` (default 0 = just that node; deeper children are id-stubs that
 round-trip via drill-by-id). They take only the **reduced** read params (`depth`, `fields`,
 `profile`) — **no `budget`, no `match`** (a budget-capped edit read would break round-trip; the
 edit reader returns the faithful spec, it does not filter at the source). For a large subtree
-the agent raises `depth` deliberately; the read never drops a field behind the agent's back. They
-still satisfy T10: the default `depth=0` bounds the call to a single node, deeper children are
+the agent raises `depth` deliberately; the read never drops a field behind the agent's back — and
+**never drops the descent either**: a `depth` other than 0 paired with a projection that omits
+`children` is `INVALID_PARAM`, not a silently childless reply (I64, and the same rule on
+`inspect`). They still satisfy T10: the default `depth=0` bounds the call to a single node, deeper children are
 id-stubs, and breadth is the agent's explicit choice — no unbounded scan, so no cursor.
 
 **Rule C — a destructive event drain → `limit` + `truncated`, no cursor (bounded, T10).** A read
@@ -340,7 +342,7 @@ Precedent: `get_document_info` / `close_plugin` are already non-facade lifecycle
 
 ### Read — nodes (4)
 - `inspect({nodeId?, pageId?, depth?, budget?, fields?, profile?, match?}) → {view, truncated[]}` — compact lossy view, drill-by-id (Rule B); each node carries a read-only **`contextSummary`** (the frontmatter slice of `context`, capped at `CONTEXT_SUMMARY_MAX_BYTES` = 512, rendered as a YAML block scalar; server-derived, **not** `fields`/`profile`-projectable; omitted when absent); omit both ids to inspect the current selection (multi-select returns a `SELECTION` forest) · **T3 inspect**, T4; §1 human view, §3 deep/large trees, §13 CSS-handoff data.
-- `get_node(nodeId, {depth?=0, fields?, profile?}) → NodeSpec` — faithful edit form, round-trips; **fidelity-first, never budget-truncated**, **no budget/match** (children past `depth` are id-stubs that round-trip via drill-by-id). `NodeSpec` carries `context` (full, round-trippable markdown note ≤ 2 KB, from shared `pluginData`), `layoutPositioning`, instance `componentProperties`/`variantProperties`/`overrides` — so override-reads (§6/§11) and the §7 absolute-positioning audit ride on this read · **T3 edit**, T2; §1 read-exact-to-write, §6 instance overrides.
+- `get_node(nodeId, {depth?=0, fields?, profile?}) → NodeSpec` — faithful edit form, round-trips; **fidelity-first, never budget-truncated**, **no budget/match** (children past `depth` are id-stubs that round-trip via drill-by-id). **`depth` is never silently inert (I64):** a `depth` other than 0 asks the read to DESCEND, and a projection that drops `children` — any `fields` list without it, any `profile` but `full` — throws away the one field the descent produces, so the pair is `INVALID_PARAM` naming both ways out (`'children'` in `fields`, or `profile:'full'`/no projection, or drop `depth`). It **refuses rather than auto-including** the children as stubs, because `fields` is an exact allow-list with no identity floor and merging a field in behind the caller would contradict that on the read face while it holds on the search face — and because whether a projection carries an identity floor at all is still an open decision (I29). Same rule, same message, on `get_nodes` and `inspect`; enforced in the handler, so a `batch` entry faces it too. `NodeSpec` carries `context` (full, round-trippable markdown note ≤ 2 KB, from shared `pluginData`), `layoutPositioning`, instance `componentProperties`/`variantProperties`/`overrides` — so override-reads (§6/§11) and the §7 absolute-positioning audit ride on this read · **T3 edit**, T2; §1 read-exact-to-write, §6 instance overrides.
 - `get_nodes(nodeIds[], {depth?, fields?, profile?}) → {results, errors[]}` — multi-id read (faithful spec per id — including the full `context` field, same as `get_node`; same reduced params + fidelity-first contract) · T4, T5; §1 read-many.
 - `export(nodeId, {format?, scale?}) → image|svg-text` — render-to-see + one-off asset export (`format`: PNG|JPG|SVG|PDF, default PNG; `scale` ignored for SVG/PDF) · T6; §1 visual-confirm, §13 export-assets. *(Persistent `exportSettings` is a `NodeSpec` field — round-trips via `get_node`/`update_node`.)*
 
