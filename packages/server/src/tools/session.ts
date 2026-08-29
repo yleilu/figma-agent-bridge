@@ -1,5 +1,7 @@
 import {
   APP_VERSION,
+  BUILD_ID,
+  buildSkew,
   COMMANDS,
 } from '@figma-agent-bridge/shared'
 import type { ChannelInfo } from '@figma-agent-bridge/shared'
@@ -98,6 +100,7 @@ const availableView = (
   fileName: string | null
   connectedAt: number
   version?: string
+  build?: string
   currentPage?: string
   selected?: number
 }[] =>
@@ -106,6 +109,9 @@ const availableView = (
     fileName: c.fileName,
     connectedAt: c.connectedAt,
     version: c.version,
+    // I62 — beside the version, because under the CI-only versioning rule the
+    // version is the same string on every dev build and this is not.
+    build: c.build,
     currentPage: c.currentPage,
     selected: c.selected,
   }))
@@ -115,16 +121,25 @@ const connectResult = (r: {
   fileKey: string | null
   fileName: string | null
   available: ChannelInfo[]
-}): ToolResult =>
-  textResult(
+  build?: string
+}): ToolResult => {
+  // I62 — the advisory build comparison, on the other join point. It rides
+  // with the SUCCESS reply and is omitted when there is nothing to say: a
+  // build skew is never a reason to refuse a connection.
+  const drift = buildSkew(r.build)
+  return textResult(
     JSON.stringify({
       connected: true,
       fileKey: r.fileKey,
       fileName: r.fileName,
       channel: r.channel,
+      build: r.build,
+      serverBuild: BUILD_ID,
+      ...(drift !== null ? { buildSkew: drift } : {}),
       available: availableView(r.available),
     }),
   )
+}
 
 export const handleConnect = async (
   params: {
@@ -184,6 +199,7 @@ export const handleConnect = async (
         fileKey: joinedKey,
         fileName: info?.fileName ?? null,
         available,
+        build: info?.build,
       })
     } catch (err) {
       return toolError(err)
@@ -243,6 +259,7 @@ export const handleConnect = async (
       fileKey: synthKey(info),
       fileName: info.fileName,
       available,
+      build: info.build,
     })
   } catch (err) {
     return toolError(err)
@@ -332,12 +349,20 @@ export const handleStatus = async (
         mine !== undefined
           ? protocolMismatch(mine.version)
           : null
+      // I62 — the fact the version cannot carry. ADVISORY: a `buildSkew` entry
+      // never blocks a call, and `requireFile` does not consult it. Silent
+      // when the ids agree, when either side ran from source, or when the
+      // plugin predates the stamp.
+      const drift = buildSkew(mine?.build)
       return {
         fileKey,
         fileName: mine?.fileName ?? null,
         channel,
         version: mine?.version,
+        build: mine?.build,
+        serverBuild: BUILD_ID,
         ...(skew !== null ? { incompatible: skew } : {}),
+        ...(drift !== null ? { buildSkew: drift } : {}),
         currentPage: live.currentPage,
         selection: live.selection,
         viewport: live.viewport,

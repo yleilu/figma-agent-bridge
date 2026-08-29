@@ -11,6 +11,7 @@ import type {
 } from '@figma-agent-bridge/shared'
 import {
   APP_VERSION,
+  BUILD_ID,
   COMMANDS,
   genId,
   genToken,
@@ -41,6 +42,11 @@ export const useRelay = () => {
   const errorRef = useRef<string | null>(null)
   const fileNameRef = useRef<string | null>(null)
   const fileKeyRef = useRef<string | null>(null)
+  // I62 — the CODE bundle's build id, mirrored from its identity push. The
+  // code bundle is the half that answers every command, so its stamp is the
+  // one the register frame publishes; this UI's own BUILD_ID is the fallback
+  // for a code bundle that predates the stamp.
+  const buildRef = useRef<string>(BUILD_ID)
   // Presence (Plugin Presence): current page name + selection count, mirrored
   // from code.ts's identity/presence pushes. Written in BOTH the persistent
   // identity listener and requestIdentity's one-shot handler — the latter is
@@ -233,6 +239,10 @@ export const useRelay = () => {
       if (msg.type === 'identity') {
         fileKeyRef.current = msg.fileKey ?? null
         fileNameRef.current = msg.fileName ?? null
+        // I62 — the sandbox's own build, not this bundle's.
+        if (typeof msg.build === 'string') {
+          buildRef.current = msg.build
+        }
         currentPageRef.current = msg.currentPage ?? null
         selectedRef.current =
           typeof msg.selected === 'number'
@@ -403,6 +413,11 @@ export const useRelay = () => {
           if (m?.type === 'identity') {
             fileKeyRef.current = m.fileKey ?? null
             fileNameRef.current = m.fileName ?? null
+            // I62 — load-bearing here too: the register frame reads this ref
+            // synchronously, before the persistent listener would have run.
+            if (typeof m.build === 'string') {
+              buildRef.current = m.build
+            }
             currentPageRef.current = m.currentPage ?? null
             selectedRef.current =
               typeof m.selected === 'number'
@@ -485,6 +500,10 @@ export const useRelay = () => {
                 fileKey: fileKeyRef.current,
                 fileName: fileNameRef.current,
                 version: APP_VERSION,
+                // I62 — which BUILD the SANDBOX bundle is. Every dev build
+                // stamps the same `version`, so this is the only field that
+                // can tell a fresh install from a weeks-old one.
+                build: buildRef.current,
                 currentPage:
                   currentPageRef.current ?? undefined,
                 selected: selectedRef.current ?? undefined,

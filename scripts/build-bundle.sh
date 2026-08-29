@@ -17,6 +17,16 @@ OUT="${1:-plugin/bin/server.js}"
 mkdir -p "$(dirname "$OUT")"
 
 DEFINES=()
+
+# I62 — stamp WHICH BUILD this bundle is. The same value goes into the fig-plugin
+# bundles (packages/figma-plugin/vite.config.*.ts), so a pair whose stamps disagree is
+# a pair that came out of two different builds. Advisory only — see
+# packages/shared/src/build-id.ts.
+BUILD_ID="$(bash "$(dirname "$0")/build-id.sh")"
+BUILD_ID_LITERAL="$(BUILD_ID="$BUILD_ID" bun -e 'process.stdout.write(JSON.stringify(process.env.BUILD_ID))')"
+DEFINES+=(--define "FIGMA_BRIDGE_BUILD=$BUILD_ID_LITERAL")
+echo "BUILD_ID: $BUILD_ID"
+
 if [ -n "${WORKER_URL:-}" ]; then
   # A --define value is parsed as a JS expression, so it must arrive as a *quoted* string
   # literal; Bun's JSON encoder does the quoting and escaping.

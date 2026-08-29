@@ -76,6 +76,47 @@ diagnostic). A handshake flags both immediately.
   when the sides are built from different releases (each build freezes its version), so a same-build
   plugin+server always match.
 
+### The build fingerprint — the fact the version cannot carry (I62)
+
+- **Why a second field exists at all.** Only CI moves the version, so every DEV build of both sides
+  stamps the **same** string, and a same-version pair proves nothing about whether the two halves
+  came out of one build. A stale installed plugin bundle therefore passes this handshake and then
+  answers reads with data that is **wrong rather than absent** — 115 text nodes reported as carrying
+  no text style when every one of them did, every effect reported inline instead of as a `style()`
+  reference, 71 spurious `readError`s, all of which vanished when `dist/code.js` was rebuilt from
+  unchanged source. A read that is confidently wrong is worse than one that errors (T7), and the
+  version could not see it.
+- **What it is.** A **build identity** stamped by the bundler that produced each bundle:
+  `<short-sha>[+]@<UTC minute>` (`+` = the tree was dirty). One script computes it
+  (`scripts/build-id.sh`); the fig-plugin's two vite configs and the server bundle's `bun build`
+  all stamp that one value, so **one `bun run build` puts one id on both halves** and a pair whose
+  ids disagree is a pair from two different builds. A bundle that never passed through a build
+  reports `'source'`.
+- **Where it rides.** `registerMessageSchema` gains **`build?: string`** — optional, so an older
+  plugin still registers. The **relay stays semantics-free**: it stores the value on the channel
+  registry entry and gains no comparison (B1). It is **not** inherited from a previous
+  registration — a re-register is a new plugin connection, and carrying the old id forward would
+  report a fresh install under the id of the bundle it replaced.
+- **Which bundle's id.** The **sandbox** (`code.js`) bundle's, published by the UI on register. The
+  code bundle is the half that answers every command, and the incident above was exactly a stale
+  `code.js` beside a fresh `ui.html` — so the half that returns the wrong reads is the half whose
+  id must reach the registry.
+- **How it is compared: ADVISORILY, always.** `buildSkew` is reported on `connect` and `status`
+  (`joined[].build` + `joined[].serverBuild`, `available[].build`, and a `buildSkew` note only when
+  there is one). It **never refuses**: `requireFile` does not consult it, and no tool call is
+  blocked by it. Dev iterates fast, a half-rebuilt pair is a normal minute of work, and a bridge
+  that refused would be unusable exactly when it is being changed. The **version** handshake keeps
+  its `INCOMPATIBLE` refusal; this only adds what the version cannot say.
+- **When it says nothing.** The two ids agree; **either** side reports `'source'` (a working tree
+  passed through no build, so there is nothing to compare and a warning every dev turn would train
+  the reader to ignore it); or the plugin reports no build at all (it predates the stamp). Like the
+  version message, it **names both stamps and neither side as the stale one** — which half is behind
+  is not knowable from the ids.
+- **What it does not cover.** A server run from the working tree (`bun run packages/server/…`)
+  reports `'source'` and is invisible to this comparison by design. The stale **tree-runner** family
+  is the install guard's job — `scripts/install-local.sh` lists live server processes older than the
+  bundle it just wrote (dev-ops.md).
+
 ## Wire contract & layer alignment (B1)
 
 - `registerMessageSchema` gains `version: string` (the sender's `APP_VERSION` semver). The **relay

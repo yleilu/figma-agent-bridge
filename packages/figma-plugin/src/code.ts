@@ -1,4 +1,5 @@
 import {
+  BUILD_ID,
   COMMANDS,
   CONTEXT_NS,
   CONTEXT_KEY,
@@ -145,6 +146,12 @@ figma.showUI(__html__, {
 const fileIdentity = () => ({
   type: 'identity' as const,
   fileKey: figma.fileKey ?? null,
+  // I62 — the build identity the UI registers with comes from HERE, the
+  // bundle that answers every command. Reporting the UI bundle's own stamp
+  // would have missed the incident this exists for: the 2026-08-27 QA round
+  // had a stale `dist/code.js` beside a fresh `ui.html`, so the half that
+  // returned the wrong reads is exactly the half whose id must be published.
+  build: BUILD_ID,
   fileName: figma.root.name,
   currentPage: figma.currentPage.name,
   selected: figma.currentPage.selection.length,

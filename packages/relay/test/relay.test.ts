@@ -240,6 +240,44 @@ describe('relay', () => {
       await closeWs(ws)
     })
 
+    // I62 — the plugin's BUILD identity rides on register and is published on
+    // /channels, so the server can compare it with its own. Under the CI-only
+    // versioning rule `version` is the same string on every dev build, which
+    // is why the registry has to carry this one too.
+    it('GET /channels carries the registered build fingerprint (I62)', async () => {
+      const ws = await connect()
+      const nextMessage = createMessageQueue(ws)
+
+      ws.send(
+        JSON.stringify({
+          type: 'join',
+          channel: 'build-ch',
+        }),
+      )
+      await nextMessage()
+
+      ws.send(
+        JSON.stringify({
+          type: 'register',
+          channel: 'build-ch',
+          fileName: null,
+          fileKey: null,
+          version: APP_VERSION,
+          build: 'a1b2c3d@2026-08-29T15:40Z',
+        }),
+      )
+      await Bun.sleep(30)
+
+      const res = await fetch(`${HTTP_URL}/channels`)
+      const data = (await res.json()) as ChannelInfo[]
+      expect(data).toHaveLength(1)
+      expect(data[0].build).toBe(
+        'a1b2c3d@2026-08-29T15:40Z',
+      )
+
+      await closeWs(ws)
+    })
+
     it('register updates fileName on channel', async () => {
       const ws = await connect()
       const nextMessage = createMessageQueue(ws)

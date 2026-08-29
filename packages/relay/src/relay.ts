@@ -302,6 +302,7 @@ const handleRegister = (
   fileName: string | null,
   fileKey: string | null,
   version: string | undefined,
+  build: string | undefined,
   currentPage?: string,
   selected?: number,
   epoch?: string,
@@ -322,6 +323,10 @@ const handleRegister = (
     fileKey,
     connectedAt: Date.now(),
     version,
+    // I62 — carried, never defaulted from `prev`: a re-register is a NEW
+    // plugin connection, and inheriting the last one's build would report a
+    // freshly installed bundle under the id of the one it replaced.
+    build,
     currentPage: currentPage ?? prev?.currentPage,
     selected: selected ?? prev?.selected,
     epoch: epoch ?? prev?.epoch,
@@ -763,6 +768,7 @@ export const startRelay = (
             frame.fileName,
             frame.fileKey ?? null,
             frame.version,
+            frame.build,
             frame.currentPage,
             frame.selected,
             frame.epoch,
