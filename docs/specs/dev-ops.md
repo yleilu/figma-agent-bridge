@@ -339,6 +339,18 @@ Not user-facing. They are named so they are not mistaken for install routes:
 - **R5 · Skills-directory plugin.** A plugin scaffolded into the user's own skills directory, which
   auto-loads. Useful for authoring, not for distribution.
 
+**The install guard.** R4's script (`scripts/install-local.sh`) writes a fresh bundle and restarts
+**nothing**, so a server process started before the write keeps serving the code it loaded — and the
+protocol cannot see it, because only CI moves the version and every dev build stamps the same one.
+Three incidents in two days came out of that, one of which flipped a QA category verdict. The script
+therefore **ends by listing every live MCP server process older than the bundle it just wrote**, in
+**both** families — an installed `bin/server.js` bundle and a `bun run packages/server` tree-runner —
+with PIDs, start times, and a one-line `kill` remedy. It only **reports**: a second server may be
+deliberate, and a build script that killed processes it did not start would be worse than the trap it
+prevents. It is the complement of the build fingerprint
+([[figma-bridge/docs/specs/version-handshake|version-handshake.md]], I62), which catches a stale
+BUNDLE and is silent for a tree-runner by design.
+
 ### 3.7 Not offered
 
 Enumerated so the boundary is explicit:
