@@ -44,7 +44,9 @@ handshake (principle B2, see `version-handshake.md`) compares the plugin's repor
 version to the server's on connect. Patch differences are ignored; a minor or major
 difference trips the error:
 
-> _"Agent Bridge plugin vX is incompatible with server vY — update the {plugin | server}."_
+> _"Figma plugin version 'X' is incompatible with server version 'Y' (major.minor mismatch).
+> Update whichever side was not rebuilt — version order is not build recency, so the lower number
+> can be the newer build after a renumber."_
 
 The two sides only differ when they were built from different releases. Same-build
 plugin + server always match.
@@ -87,9 +89,9 @@ the server side.
 ## Less common: stale server
 
 If the **server** is the stale side — it was not rebuilt/reinstalled when the plugin
-was (do not trust the numeric comparison alone; the error's "older side" wording
-assumes version order equals build recency, which a renumber breaks) — then the
-server side has to move forward. There is no binary to refresh — the
+was — then the server side has to move forward. Decide by which side you last rebuilt,
+never by which number is lower: the error no longer names a stale side, because the
+two numbers cannot tell you one. There is no binary to refresh — the
 server is a JavaScript bundle run with `bun`, shipped inside whatever installed it:
 
 - **Claude Code plugin:** the server bundle and the plugin metadata are the same package,

@@ -112,26 +112,23 @@ export type FileGate =
   | { ok: true; fileKey: string }
   | { ok: false; result: ToolResult }
 
-// Order two semver strings on major.minor NUMERICALLY. majorMinor() returns a
-// STRING ('0.10', '0.9'), and a lexical compare mis-orders it — '0.10' < '0.9'
-// as text but is the NEWER version. Returns <0 / 0 / >0.
-export const compareMajorMinor = (
-  a: string,
-  b: string,
-): number => {
-  const part = (v: string, i: number): number =>
-    Number(v.split('.')[i]) || 0
-  return part(a, 0) - part(b, 0) || part(a, 1) - part(b, 1)
-}
-
 /**
  * B2 skew check: returns an actionable INCOMPATIBLE message when a plugin's
  * reported `version` differs from the server on major.minor, else null. A plugin
  * that reports NO version is treated as incompatible (it predates the handshake).
  * `undefined` info-version → incompatible; matching major.minor → null.
  *
- * The message names the STALE side — the one the user has to move — rather than
- * always blaming the plugin: the server is just as likely to be the older half.
+ * THE MESSAGE NAMES THE MISMATCH, NOT A STALE SIDE. It used to name one, chosen
+ * by comparing the two numbers — and a version RENUMBER breaks that inference:
+ * the lower number was the newer build, and the message stated the wrong
+ * verdict as a fact. A reader who trusts it looks at the wrong half of the
+ * stack, which is what it cost live.
+ *
+ * Two version strings can prove that the sides disagree. They cannot say which
+ * one moved, because nothing in a number records when it was built. The person
+ * running the two sides knows which one they last rebuilt, so the message hands
+ * them that question instead of guessing at the answer — the doctrine the
+ * figma-connection skill already carries.
  */
 export const protocolMismatch = (
   version: string | undefined,
@@ -143,16 +140,12 @@ export const protocolMismatch = (
     return null
   }
   const got = version ?? '(none)'
-  // No reported version predates the handshake → the plugin is the old side.
-  const pluginIsNewer =
-    version !== undefined &&
-    compareMajorMinor(version, APP_VERSION) > 0
-  const fix = pluginIsNewer
-    ? 'update the MCP server (it is the older side)'
-    : 'reinstall/update the Figma plugin (it is the older side)'
   return (
     `Figma plugin version '${got}' is incompatible with server version ` +
-    `'${APP_VERSION}' (major.minor mismatch) — ${fix}.`
+    `'${APP_VERSION}' (major.minor mismatch). Update whichever side was not ` +
+    'rebuilt — version order is not build recency, so the lower number can ' +
+    'be the newer build after a renumber. A stale plugin is a re-run of ' +
+    'figma-setup; a stale server is usually a stale Claude Code plugin.'
   )
 }
 

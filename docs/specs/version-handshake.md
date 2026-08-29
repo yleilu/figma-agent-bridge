@@ -62,9 +62,15 @@ diagnostic). A handshake flags both immediately.
   (the B2 gate every file-addressed tool call flows through) plus the two `connect` branches
   (explicit-channel and resolved-target) — not a single manual connect handler; every path that can
   discover a skewed plugin runs the same compare and the same emit.
-- **Mismatch → actionable error** — naming the stale side: *"Agent Bridge plugin vX is incompatible
-  with server vY — update the {plugin | server}."* Subsequent tool calls short-circuit with the
-  same message until resolved.
+- **Mismatch → actionable error** — naming the MISMATCH, never a stale side: *"Figma plugin version
+  'X' is incompatible with server version 'Y' (major.minor mismatch). Update whichever side was not
+  rebuilt — version order is not build recency, so the lower number can be the newer build after a
+  renumber."* Subsequent tool calls short-circuit with the same message until resolved.
+  **The message must not infer which side is stale from the two numbers.** It used to, and a
+  version renumber made the inference false: the lower number was the newer build, and a reader who
+  trusted the verdict looked at the wrong half of the stack. Two version strings prove that the
+  sides disagree; nothing in a number records when it was built. The person running both sides
+  knows which one they last rebuilt, so the message hands them that question.
 - **Model:** **major.minor** match of the app semver (B2). A **patch** difference does **not** trip
   it; a **minor or major** difference — i.e. a breaking change — does. The two versions differ only
   when the sides are built from different releases (each build freezes its version), so a same-build
