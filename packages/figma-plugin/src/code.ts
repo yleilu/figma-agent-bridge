@@ -70,6 +70,10 @@ import {
 } from './variable-collection-target'
 import { resolvePageScope } from './search-page-scope'
 import {
+  modeIdFor,
+  type ModeLike,
+} from './variable-modes'
+import {
   readSlotEntry,
   slotParentRefusal,
   type SlotEntry,
@@ -2317,7 +2321,10 @@ const applyVariableMeta = async (
     codeSyntax?: Record<string, string>
     hiddenFromPublishing?: boolean
   },
-  modeByName: Record<string, string>,
+  // I70 — the collection's modes, not a name→id map: a mode reference resolves
+  // by NAME first and by ID second (variable-modes.ts), so an id that came out
+  // of a read still lands instead of being skipped as an unknown mode.
+  modes: readonly ModeLike[],
   warnings: string[],
 ): Promise<void> => {
   if (meta.aliases !== undefined) {
@@ -2329,7 +2336,7 @@ const applyVariableMeta = async (
     for (const [modeName, targetId] of Object.entries(
       meta.aliases,
     )) {
-      const modeId = modeByName[modeName]
+      const modeId = modeIdFor(modeName, modes)
       if (modeId === undefined) {
         warnings.push(
           'unknown mode "' +
@@ -6109,10 +6116,6 @@ const handleCommand = async (
           addOneMode(modeName)
         }
       }
-      const modeByName: Record<string, string> = {}
-      for (const m of collection.modes) {
-        modeByName[m.name] = m.modeId
-      }
       // I63 — the names the TARGET collection already holds. A second variable
       // of one name inside one collection makes the name ambiguous in the very
       // scope Figma says it is unique in, so the create is skipped and named
@@ -6203,7 +6206,11 @@ const handleCommand = async (
         for (const [modeName, value] of Object.entries(
           spec.valuesByMode,
         )) {
-          const modeId = modeByName[modeName]
+          // I70 — a NAME or an ID; read live, so a mode added above counts.
+          const modeId = modeIdFor(
+            modeName,
+            collection.modes,
+          )
           if (modeId === undefined) {
             warnings.push(
               'unknown mode "' +
@@ -6253,7 +6260,7 @@ const handleCommand = async (
             codeSyntax: spec.codeSyntax,
             hiddenFromPublishing: spec.hiddenFromPublishing,
           },
-          modeByName,
+          collection.modes,
           warnings,
         )
         created.push({
@@ -6288,21 +6295,13 @@ const handleCommand = async (
       }
       const warnings: string[] = []
 
-      // renameModes / removeModes match a mode by NAME first, then by id.
+      // renameModes / removeModes match a mode by NAME first, then by id —
+      // now through the SHARED resolver every mode reference uses (I70), so
+      // the lifecycle edits and the value edits cannot drift apart.
       const findModeId = (
         ref: string,
-      ): string | undefined => {
-        const byName = collection.modes.find(
-          m => m.name === ref,
-        )
-        if (byName) {
-          return byName.modeId
-        }
-        const byId = collection.modes.find(
-          m => m.modeId === ref,
-        )
-        return byId?.modeId
-      }
+      ): string | undefined =>
+        modeIdFor(ref, collection.modes)
 
       for (const modeName of (params.addModes as
         | string[]
@@ -6392,12 +6391,6 @@ const handleCommand = async (
         }
       }
 
-      // Re-read modes after lifecycle edits for value-by-name resolution.
-      const modeByName: Record<string, string> = {}
-      for (const m of collection.modes) {
-        modeByName[m.name] = m.modeId
-      }
-
       for (const edit of (params.variables as
         | {
             id: string
@@ -6420,8 +6413,12 @@ const handleCommand = async (
           for (const [modeName, value] of Object.entries(
             edit.valuesByMode,
           )) {
-            const modeId =
-              modeByName[modeName] ?? findModeId(modeName)
+            // I70 — read live, so a mode the lifecycle edits above added is
+            // resolvable in the same call.
+            const modeId = modeIdFor(
+              modeName,
+              collection.modes,
+            )
             if (modeId === undefined) {
               warnings.push(
                 'unknown mode "' +
@@ -6523,7 +6520,7 @@ const handleCommand = async (
           await applyVariableMeta(
             variable,
             { name: edit.id, aliases: edit.aliases },
-            modeByName,
+            collection.modes,
             warnings,
           )
         }

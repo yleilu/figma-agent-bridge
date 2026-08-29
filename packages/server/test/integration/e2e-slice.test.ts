@@ -1195,6 +1195,29 @@ describe('M2 vertical slice e2e (mock plugin over real relay)', () => {
     expect(text).toContain('--brand-primary')
   })
 
+  // 16a — I70: the read hands back the vocabulary the write consumes. Over the
+  // relay the mock reports `valuesByMode:{m1:…}` beside `modes:[{m1,'Light'}]`,
+  // and the server re-keys it to `{Light:…}` — the exact shape
+  // create_variables / update_variables take, so a read-modify-write needs no
+  // hand-built modeId→name join.
+  it('get_variables emits valuesByMode keyed by mode NAME (I70)', async () => {
+    const result = await handleGetVariables({}, scoped)
+    const out = JSON.parse(result.content[0].text) as {
+      results: {
+        modes: { modeId: string; name: string }[]
+        variables: {
+          valuesByMode: Record<string, unknown>
+        }[]
+      }[]
+    }
+    const values = out.results[0].variables[0].valuesByMode
+    expect(Object.keys(values)).toEqual(['Light'])
+    expect(values.Light).toBe('#FF0000')
+    // The modes array still carries the id, so the id is never lost — it moves
+    // to the one place it belongs.
+    expect(out.results[0].modes[0].modeId).toBe('m1')
+  })
+
   // 17 — get_components: a result carries variant axes + key over the relay.
   it('get_components carries variant axes and key over the relay', async () => {
     const result = await handleGetComponents({}, scoped)

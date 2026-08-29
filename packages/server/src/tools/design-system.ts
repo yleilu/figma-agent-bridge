@@ -609,21 +609,41 @@ const isRgbaColor = (
   typeof (v as Record<string, unknown>).g === 'number' &&
   typeof (v as Record<string, unknown>).b === 'number'
 
+/**
+ * Render one variable's per-mode values into the shape a WRITE consumes (I70).
+ *
+ * Two things happen here. COLOR values render to hex atoms (alias refs and
+ * FLOAT/STRING/BOOLEAN pass through). And the map is RE-KEYED from the plugin's
+ * mode IDs to mode NAMES — the vocabulary `create_variables` and
+ * `update_variables` take — so a read feeds a write with no hand-built
+ * modeId→name join against the sibling `modes` array. `aliases` was fixed for
+ * exactly this in B2 and the same T2 gap was left open one field over.
+ *
+ * Lossless where the join fails. A value under a mode the collection does not
+ * name keeps its raw id key, and so does the SECOND of two modes sharing a
+ * name: dropping either to keep the keys uniform would be the silent loss this
+ * whole batch exists to remove, and the id is at least something a caller can
+ * look up.
+ */
 const renderVariableValues = (
   valuesByMode: Record<string, unknown> | undefined,
+  modes: RawMode[],
 ): Record<string, unknown> | undefined => {
   if (valuesByMode === undefined) {
     return undefined
+  }
+  const nameOf: Record<string, string> = {}
+  for (const m of modes) {
+    nameOf[m.modeId] = m.name
   }
   const out: Record<string, unknown> = {}
   for (const [modeId, value] of Object.entries(
     valuesByMode,
   )) {
-    // COLOR values render to hex atoms; alias refs and FLOAT/STRING/BOOLEAN
-    // pass through unchanged.
-    out[modeId] = isRgbaColor(value)
-      ? rgbaToHex(value)
-      : value
+    const name = nameOf[modeId]
+    const key =
+      name !== undefined && !(name in out) ? name : modeId
+    out[key] = isRgbaColor(value) ? rgbaToHex(value) : value
   }
   return out
 }
@@ -684,6 +704,7 @@ export const handleGetVariables = async (
             type: v.resolvedType,
             valuesByMode: renderVariableValues(
               v.valuesByMode,
+              modes,
             ),
             scopes: v.scopes,
             codeSyntax: v.codeSyntax,
