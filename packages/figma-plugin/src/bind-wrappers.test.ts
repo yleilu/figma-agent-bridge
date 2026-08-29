@@ -9,16 +9,32 @@ import {
 
 // A stand-in for figma.variables.setBoundVariableForPaint: returns a NEW paint
 // carrying the binding, exactly as the real API does (it never mutates).
+//
+// AND IT DOES NOT KEEP THE PAINT'S OPACITY — which is B68. The bind re-resolves
+// the paint's colour through the variable, and a SolidPaint keeps its alpha in
+// `opacity`, so the channel the write stated is gone. Reproduced live three
+// times: `fills:['var(x)#22D3EE{op=0.2}']` applied clean, warned about
+// nothing, read back `var(x)#22D3EE`, and rendered opaque — while the plain
+// `#FF0000{op=0.2}` beside it kept its alpha.
+//
+// The fake models the OUTCOME, which is what the reproductions pin, not the
+// mechanism inside Figma, which they do not. A paint that never stated an
+// opacity is unaffected either way.
 const bindPaint = (
   paint: unknown,
   field: 'color',
   variable: unknown,
-): unknown => ({
-  ...(paint as object),
-  boundVariables: {
-    [field]: { id: (variable as { id: string }).id },
-  },
-})
+): unknown => {
+  const { opacity: _dropped, ...rest } = paint as {
+    opacity?: number
+  }
+  return {
+    ...rest,
+    boundVariables: {
+      [field]: { id: (variable as { id: string }).id },
+    },
+  }
+}
 
 const VAR_SURFACE = { id: 'VariableID:1:2' }
 
@@ -94,6 +110,78 @@ test('a var() paint binding with no index binds every SOLID paint (the bind_vari
     type: 'IMAGE',
     imageHash: 'h',
   })
+})
+
+// ─── B68: the bind keeps the paint's stated opacity ──────────────────────────
+
+test('a var() paint binding keeps the opacity the write stated', async () => {
+  const node = {
+    type: 'FRAME',
+    fills: [{ ...solid(0), opacity: 0.2 }],
+  }
+  const warnings: string[] = []
+  await applyWrapperBindings(
+    node,
+    [
+      {
+        kind: 'var',
+        name: 'surface/2',
+        field: 'fills',
+        index: 0,
+      },
+    ],
+    deps(),
+    warnings,
+  )
+  expect(warnings).toEqual([])
+  expect(node.fills[0]).toEqual({
+    ...solid(0),
+    opacity: 0.2,
+    boundVariables: { color: { id: 'VariableID:1:2' } },
+  })
+})
+
+test('the bind_variable core (no index) keeps every paint its own opacity', async () => {
+  const node = {
+    type: 'FRAME',
+    fills: [
+      { ...solid(0), opacity: 0.2 },
+      { ...solid(1), opacity: 0.9 },
+    ],
+  }
+  const warnings: string[] = []
+  await applyWrapperBindings(
+    node,
+    [{ kind: 'var', name: 'surface/2', field: 'fills' }],
+    deps(),
+    warnings,
+  )
+  expect(warnings).toEqual([])
+  expect(
+    node.fills.map(
+      f => (f as { opacity?: number }).opacity,
+    ),
+  ).toEqual([0.2, 0.9])
+})
+
+test('a paint that stated no opacity gains none — the bind is left alone', async () => {
+  const node = { type: 'FRAME', fills: [solid(0)] }
+  const warnings: string[] = []
+  await applyWrapperBindings(
+    node,
+    [
+      {
+        kind: 'var',
+        name: 'surface/2',
+        field: 'fills',
+        index: 0,
+      },
+    ],
+    deps(),
+    warnings,
+  )
+  expect(warnings).toEqual([])
+  expect('opacity' in (node.fills[0] as object)).toBe(false)
 })
 
 test('a var() scalar binding goes through setBoundVariable with the handler field', async () => {

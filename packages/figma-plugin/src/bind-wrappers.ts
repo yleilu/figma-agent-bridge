@@ -113,10 +113,47 @@ export type PaintBindDeps = {
 const isSolid = (paint: unknown): boolean =>
   (paint as { type?: string } | null)?.type === 'SOLID'
 
+/**
+ * Give a freshly bound paint back the opacity the write stated (B68).
+ *
+ * A `var()` binds the COLOUR of a paint. It does not say anything about how
+ * opaque that paint is, and `{op=}` is the only thing that does. The bind
+ * re-resolves the paint's colour through the variable and does not carry the
+ * stated opacity across, so `fills:['var(brand/cyan)#22D3EE{op=0.2}']` applied
+ * clean, warned about nothing, and rendered fully opaque — the plain
+ * `#FF0000{op=0.2}` beside it kept its alpha, which is what made the loss look
+ * like the grammar's fault rather than the binding's.
+ *
+ * Only a STATED opacity is restored. A paint that carried none before the bind
+ * gets none after it: this puts back what the caller asked for, and never
+ * invents a value Figma is entitled to choose.
+ */
+const keepStatedOpacity = (
+  before: unknown,
+  bound: unknown,
+): unknown => {
+  const stated = (before as { opacity?: unknown } | null)
+    ?.opacity
+  if (typeof stated !== 'number') {
+    return bound
+  }
+  const kept = (bound as { opacity?: unknown } | null)
+    ?.opacity
+  if (kept === stated) {
+    return bound
+  }
+  return {
+    ...(bound as Record<string, unknown>),
+    opacity: stated,
+  }
+}
+
 /** One gradient stop, as much of it as a binding touches. */
 type ColorStop = Record<string, unknown>
 
-const stopsOf = (paint: unknown): ColorStop[] | undefined => {
+const stopsOf = (
+  paint: unknown,
+): ColorStop[] | undefined => {
   const stops = (
     paint as { gradientStops?: unknown } | null
   )?.gradientStops
@@ -300,7 +337,10 @@ export const bindPaintField = (
   try {
     node[field] = paints.map((paint, i) =>
       (index === undefined || i === index) && isSolid(paint)
-        ? setForPaint(paint, 'color', variable)
+        ? keepStatedOpacity(
+            paint,
+            setForPaint(paint, 'color', variable),
+          )
         : paint,
     )
   } catch (e) {

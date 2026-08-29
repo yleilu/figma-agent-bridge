@@ -453,6 +453,38 @@ describe('toNodeSpec — var() binding read-back', () => {
     expect(spec.fills?.[0]).not.toContain('var:123')
     expect(spec).not.toHaveProperty('boundVariables')
   })
+
+  // B68 — the wrapper and the paint's own opacity are independent claims. A
+  // var() says which token supplies the COLOUR; `{op=}` says how opaque the
+  // paint is, and the read has to carry both back or the value the caller
+  // wrote is not the value it can write again.
+  it('keeps a bound paint’s opacity in the atom alpha', () => {
+    const spec = toNodeSpec(
+      {
+        id: '1:1',
+        name: 'Chip',
+        type: 'RECTANGLE',
+        fills: [
+          {
+            type: 'SOLID',
+            color: { r: 0.133, g: 0.827, b: 0.933 },
+            opacity: 0.2,
+            boundVariables: {
+              color: {
+                id: 'VariableID:1:2',
+                type: 'VARIABLE_ALIAS',
+              },
+            },
+          },
+        ],
+        bindingNames: {
+          variables: { 'VariableID:1:2': 'brand/cyan' },
+        },
+      } as never,
+      { depth: 0 },
+    )
+    expect(spec.fills?.[0]).toBe('var(brand/cyan)#22D3EE33')
+  })
 })
 
 // ─── component read-back (INSTANCE main-component ref) ────────────────────────
