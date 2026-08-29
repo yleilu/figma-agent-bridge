@@ -184,6 +184,125 @@ test('a paint that stated no opacity gains none — the bind is left alone', asy
   expect('opacity' in (node.fills[0] as object)).toBe(false)
 })
 
+// ─── B66: the token a name resolved to contradicts the literal beside it ─────
+
+const CYAN = { r: 34 / 255, g: 211 / 255, b: 238 / 255 }
+const RED = { r: 1, g: 0, b: 0 }
+
+const shadowDeps = (
+  value: Record<string, unknown>,
+  shadows: string[] = [],
+) =>
+  deps({
+    variableByName: async (name: string) =>
+      name === 'brand/primary'
+        ? { id: 'VariableID:9:9', valuesByMode: value }
+        : null,
+    variableShadows: async () => shadows,
+  })
+
+test('B66 — a var() whose token does not hold the stated colour says so, naming the other collection', async () => {
+  const node = {
+    type: 'FRAME',
+    fills: [{ type: 'SOLID', color: CYAN }],
+  }
+  const warnings: string[] = []
+  await applyWrapperBindings(
+    node,
+    [
+      {
+        kind: 'var',
+        name: 'brand/primary',
+        field: 'fills',
+        index: 0,
+      },
+    ],
+    shadowDeps({ light: { ...RED, a: 1 } }, ['Legacy']),
+    warnings,
+  )
+  expect(warnings.length).toBe(1)
+  expect(warnings[0]).toContain('var(brand/primary)')
+  expect(warnings[0]).toContain('"Legacy"')
+  // The binding still lands — this is a warning, never a refusal (T7).
+  expect(
+    (node.fills[0] as { boundVariables?: unknown })
+      .boundVariables,
+  ).toBeDefined()
+})
+
+test('B66 — a token that DOES hold the stated colour is silent', async () => {
+  const node = {
+    type: 'FRAME',
+    fills: [{ type: 'SOLID', color: CYAN }],
+  }
+  const warnings: string[] = []
+  await applyWrapperBindings(
+    node,
+    [
+      {
+        kind: 'var',
+        name: 'brand/primary',
+        field: 'fills',
+        index: 0,
+      },
+    ],
+    shadowDeps({ light: { ...CYAN, a: 1 } }, ['Legacy']),
+    warnings,
+  )
+  expect(warnings).toEqual([])
+})
+
+test('B66 — a scalar field is compared the same way', async () => {
+  const node = {
+    type: 'FRAME',
+    cornerRadius: 8,
+    setBoundVariable: () => {},
+  }
+  const warnings: string[] = []
+  await applyWrapperBindings(
+    node,
+    [
+      {
+        kind: 'var',
+        name: 'brand/primary',
+        field: 'cornerRadius',
+      },
+    ],
+    shadowDeps({ light: 16 }),
+    warnings,
+  )
+  expect(warnings.length).toBe(1)
+  expect(warnings[0]).toContain('var(brand/primary)')
+  // No shadow to blame, so the message does not invent one.
+  expect(warnings[0]).not.toContain('also defined in')
+})
+
+test('B66 — a runtime that exposes no mode values accuses nobody', async () => {
+  const node = {
+    type: 'FRAME',
+    fills: [{ type: 'SOLID', color: CYAN }],
+  }
+  const warnings: string[] = []
+  await applyWrapperBindings(
+    node,
+    [
+      {
+        kind: 'var',
+        name: 'brand/primary',
+        field: 'fills',
+        index: 0,
+      },
+    ],
+    deps({
+      variableByName: async () => ({
+        id: 'VariableID:9:9',
+      }),
+    }),
+    warnings,
+  )
+  expect(warnings).toEqual([])
+})
+
 test('a var() scalar binding goes through setBoundVariable with the handler field', async () => {
   const calls: [string, unknown][] = []
   const node = {

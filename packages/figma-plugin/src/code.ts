@@ -54,6 +54,11 @@ import {
   type StyleField,
 } from './bind-wrappers'
 import {
+  createShadowWarning,
+  otherCollectionsHolding,
+  type VariableLike,
+} from './variable-shadowing'
+import {
   readSlotEntry,
   slotParentRefusal,
   type SlotEntry,
@@ -437,6 +442,15 @@ const bindingLookups = createBindingLookups({
       figma.variables,
     ),
   ),
+  // B66 — only for naming a collection in a shadow report, and only asked for
+  // when there is one to name, so a clean write never pays for this scan.
+  listCollections: lister(
+    'getLocalVariableCollectionsAsync',
+    () =>
+      figma.variables?.getLocalVariableCollectionsAsync?.bind(
+        figma.variables,
+      ),
+  ),
   listStyles: {
     paint: lister('getLocalPaintStylesAsync', () =>
       figma.getLocalPaintStylesAsync?.bind(figma),
@@ -452,6 +466,50 @@ const bindingLookups = createBindingLookups({
     ),
   },
 })
+
+/**
+ * Every local variable and every collection NAME, as the file stands now (B66).
+ *
+ * Not the cached `bindingLookups` scan: this one is taken at a specific moment
+ * — before `create_variables` adds anything — and the cache is keyed to the
+ * dispatch, not to a moment inside it.
+ *
+ * Degrades to nothing (T7). A runtime that will not enumerate reports no
+ * shadow, which is the same answer as a file that has none; a create must never
+ * fail over a warning it could not compute.
+ */
+const localVariablesSnapshot = async (): Promise<{
+  variables: VariableLike[]
+  collectionNames: Record<string, string>
+}> => {
+  const empty = { variables: [], collectionNames: {} }
+  const listVars =
+    figma.variables?.getLocalVariablesAsync?.bind(
+      figma.variables,
+    )
+  if (typeof listVars !== 'function') return empty
+  let variables: VariableLike[]
+  try {
+    variables = (await listVars()) as VariableLike[]
+  } catch {
+    return empty
+  }
+  const collectionNames: Record<string, string> = {}
+  const listCollections =
+    figma.variables?.getLocalVariableCollectionsAsync?.bind(
+      figma.variables,
+    )
+  if (typeof listCollections === 'function') {
+    try {
+      for (const c of await listCollections()) {
+        collectionNames[c.id] = c.name
+      }
+    } catch {
+      // A collection that will not name itself is named by id downstream.
+    }
+  }
+  return { variables, collectionNames }
+}
 
 /** figma.variables.setBoundVariableForPaint + figma.mixed, feature-detected. */
 const paintBindDeps = () => ({
@@ -485,6 +543,7 @@ const paintBindDeps = () => ({
 const wrapperBindDeps = () => ({
   ...paintBindDeps(),
   variableByName: bindingLookups.variableByName,
+  variableShadows: bindingLookups.variableShadows,
   styleByName: bindingLookups.styleByName,
 })
 
@@ -5764,6 +5823,13 @@ const handleCommand = async (
             'Variables API unavailable in this Figma version',
         }
       }
+      // B66 — the file as it stands BEFORE this call, so a name that collides
+      // with an existing one can be reported. Read first for that reason: once
+      // the collection exists, its own variables are in the list and every
+      // created name looks like its own shadow. T7 throughout — a runtime that
+      // will not enumerate simply reports no shadows.
+      const existingVariables =
+        await localVariablesSnapshot()
       // T7: the collection-level factory failing is a genuine failure (nothing
       // to return) → {error}, not a degrade.
       let collection: VariableCollection
@@ -5879,6 +5945,24 @@ const handleCommand = async (
               String(e),
           )
           continue
+        }
+        // B66 — the name now exists twice in this file, and nothing else says
+        // so. `var(<name>)` resolves by a first-wins enumeration the caller
+        // does not control, so the collision is reported the moment it is made
+        // rather than the moment a binding picks the wrong half.
+        const shadows = otherCollectionsHolding(
+          spec.name,
+          existingVariables.variables,
+          existingVariables.collectionNames,
+        )
+        if (shadows.length > 0) {
+          warnings.push(
+            createShadowWarning(
+              spec.name,
+              params.collection as string,
+              shadows,
+            ),
+          )
         }
         for (const [modeName, value] of Object.entries(
           spec.valuesByMode,

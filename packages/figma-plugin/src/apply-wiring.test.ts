@@ -621,3 +621,64 @@ describe('SEARCH live-candidate component ref wiring', () => {
     expect(liveCandidateRef).toContain('instancesOfSet')
   })
 })
+
+// B66 — the same blind spot as the slot loop. `variable-shadowing.ts` is pure
+// and fully tested, and every one of its tests stays green with the call site
+// deleted. Only a live file holding two collections with one name would notice,
+// which is exactly the situation the warning exists for.
+const createVariablesCase = ((): string => {
+  const from = callers.indexOf(
+    'case COMMANDS.CREATE_VARIABLES',
+  )
+  const to = callers.indexOf(
+    'case COMMANDS.UPDATE_VARIABLES',
+    from,
+  )
+  return from === -1 || to === -1
+    ? ''
+    : callers.slice(from, to)
+})()
+
+describe('CREATE_VARIABLES shadow-name wiring', () => {
+  it('actually found the case (liveness)', () => {
+    expect(createVariablesCase.length).toBeGreaterThan(200)
+    expect(createVariablesCase).toContain(
+      'createVariableCollection',
+    )
+  })
+
+  it('reports a created name another collection already holds', () => {
+    expect(createVariablesCase).toContain(
+      'otherCollectionsHolding(',
+    )
+    expect(createVariablesCase).toContain(
+      'createShadowWarning(',
+    )
+  })
+
+  it('snapshots the file BEFORE the collection exists', () => {
+    // Taken afterwards, the new collection's own variables are in the list and
+    // every created name shadows itself.
+    expect(
+      createVariablesCase.indexOf(
+        'localVariablesSnapshot()',
+      ),
+    ).toBeLessThan(
+      createVariablesCase.indexOf(
+        'vars.createVariableCollection(',
+      ),
+    )
+  })
+})
+
+describe('inline var() value-mismatch wiring', () => {
+  it('hands the binder the shadow lookup it reports with', () => {
+    // `variableShadows` is optional on the deps, so a dropped wiring degrades
+    // to a mismatch warning that names no collection — green everywhere, and
+    // half the message gone.
+    expect(callers).toContain(
+      'variableShadows: bindingLookups.variableShadows',
+    )
+    expect(callers).toContain('listCollections:')
+  })
+})
