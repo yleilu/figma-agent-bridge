@@ -450,6 +450,55 @@ export const sizeMismatchWarning = (
 }
 
 /**
+ * The doubt a size write leaves when it changed nothing it could be judged by
+ * (B67), or undefined when there is no doubt to report.
+ *
+ * The mismatch check above compares the OUTCOME against the REQUEST. That is
+ * the right test almost everywhere and it has one blind spot: a node that
+ * ALREADY reads the numbers asked for passes it whether the write landed or was
+ * refused outright. Live, an agent resized an instance sublayer to the size it
+ * already had, got `warnings: []`, and took that as proof the target class
+ * accepts a resize. The next write, to a different number, was the one that
+ * cost a design.
+ *
+ * So the doubt is reported by TARGET CLASS rather than by value — and only for
+ * the class where a refusal is both real and silent. Three cases stay quiet:
+ *
+ *   the size CHANGED       — the write proved itself, whatever the target is.
+ *   no instance ancestor   — nothing here refuses a resize behind your back.
+ *   the size did not land  — `sizeMismatchWarning` already says so, in words
+ *                            that are more specific than this doubt.
+ */
+const unprovenResizeWarning = (
+  node: SizeTarget,
+  before: [number, number] | undefined,
+  asked: [number, number],
+): string | undefined => {
+  if (
+    before === undefined ||
+    !near(before[0], asked[0]) ||
+    !near(before[1], asked[1])
+  ) {
+    return undefined
+  }
+  const instance = enclosingInstance(node)
+  if (instance === undefined) return undefined
+  return (
+    'size not verified — ' +
+    nodeLabel(node) +
+    ' already read [' +
+    asked[0] +
+    ', ' +
+    asked[1] +
+    '] before this write, so the reply cannot tell an applied resize from a ' +
+    'refused one. This node is a sublayer of the instance ' +
+    nodeLabel(instance) +
+    '. Figma can refuse a size change on an instance sublayer. Resize the ' +
+    'main component, or detach the instance.'
+  )
+}
+
+/**
  * Name a stated size the CREATE path could not honour (B61).
  *
  * The create path applies the size and does not re-apply it, which is right:
@@ -557,6 +606,10 @@ export const applySizeVerified = (
     noResizeWarning(node, warnings)
     return
   }
+  // Read BEFORE the write (B67). A size that changes proves the write landed;
+  // a size that was already what was asked for proves nothing either way, and
+  // only the reading taken first can tell those apart.
+  const before = measured(node)
   try {
     node.resize(width, height)
   } catch (e) {
@@ -572,8 +625,19 @@ export const applySizeVerified = (
       height,
       opts?.statedSizing,
     )
+  /** The size landed. Did it LAND, or was it never in doubt? (B67) */
+  const settle = (): void => {
+    const doubt = unprovenResizeWarning(node, before, [
+      width,
+      height,
+    ])
+    if (doubt !== undefined) warnings?.push(doubt)
+  }
   let message = mismatch()
-  if (message === undefined) return
+  if (message === undefined) {
+    settle()
+    return
+  }
   // Second chance. `resize` applies every child constraint on the way down and
   // can be refused where the constraint-free form is not, so the size worth
   // trying twice is tried twice before anything is called a refusal. Reached
@@ -585,7 +649,10 @@ export const applySizeVerified = (
       // The mismatch below is the report — a second throw adds nothing to it.
     }
     message = mismatch()
-    if (message === undefined) return
+    if (message === undefined) {
+      settle()
+      return
+    }
   }
   warnings?.push(message)
 }

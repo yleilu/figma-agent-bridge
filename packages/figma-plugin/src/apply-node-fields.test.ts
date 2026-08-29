@@ -409,6 +409,57 @@ test('applySize: B46 — an instance sublayer names the instance it sits in', ()
   expect(warnings[0]).toContain('Resize the main component')
 })
 
+// B67 — the no-op detector compares the OUTCOME against the REQUEST, so a
+// refusal and a success look identical when the node already reads the numbers
+// that were asked for. An agent that resized an instance sublayer to the size
+// it already had got `warnings: []` and learned the wrong lesson: that this
+// target class takes a resize.
+test('applySize: B67 — a resize that proved nothing on an instance sublayer says so', () => {
+  const warnings: string[] = []
+  const node = sizeNode(
+    {
+      width: 60,
+      height: 30,
+      parent: {
+        type: 'FRAME',
+        name: 'Row',
+        parent: { type: 'INSTANCE', name: 'Card' },
+      },
+    },
+    'no',
+  )
+  applySizeVerified(node, [60, 30], warnings)
+  expect(warnings.length).toBe(1)
+  expect(warnings[0]).toContain('size not verified')
+  expect(warnings[0]).toContain(
+    'sublayer of the instance "Card"',
+  )
+  expect(warnings[0]).toContain('already read [60, 30]')
+})
+
+test('applySize: B67 — a resize that CHANGED the size proves itself, instance or not', () => {
+  const warnings: string[] = []
+  const node = sizeNode(
+    {
+      parent: { type: 'INSTANCE', name: 'Card' },
+    },
+    'yes',
+  )
+  applySizeVerified(node, [60, 30], warnings)
+  expect(node.width).toBe(60)
+  // The write moved the node, so nothing is unproven and nothing is said.
+  expect(warnings).toEqual([])
+})
+
+test('applySize: B67 — a coincidental match outside an instance is not accused', () => {
+  const warnings: string[] = []
+  const node = sizeNode({ width: 60, height: 30 }, 'no')
+  applySizeVerified(node, [60, 30], warnings)
+  // No instance ancestor: nothing here silently refuses a resize, so there is
+  // no doubt to report and a warning would be noise on every idempotent write.
+  expect(warnings).toEqual([])
+})
+
 test('applySize: B46 — a flexible auto-layout axis is named with the sizing that owns it', () => {
   const warnings: string[] = []
   const node = sizeNode(
