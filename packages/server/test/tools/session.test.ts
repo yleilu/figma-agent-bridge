@@ -386,21 +386,80 @@ describe('handleStatus', () => {
     expect(JSON.stringify(entry)).toContain('Page 1')
   })
 
-  it('returns disconnected when no file is joined', async () => {
-    const mockClient = {
+  // B75 — "this server has joined nothing" is NOT "no Figma file is open", and
+  // the two used to answer with the same word: the bare string `disconnected`,
+  // returned before the registry was ever asked. That is every session's FIRST
+  // call. The relay held a live channel, connect({fileKey}) then succeeded
+  // instantly, and figma-connection maps a disconnected answer to "close and
+  // reopen the plugin / restart the relay" — all of it wrong, and all of it
+  // disruptive. Hit twice in one round, once by a naive operator who burned
+  // three status calls before finding connect.
+  const unjoined = (): FigmaClient =>
+    ({
       joinChannel: () => Promise.resolve(''),
       sendCommand: () => Promise.resolve(null),
       disconnect: () => undefined,
       isConnected: () => false,
       joinedFiles: () => [],
       channelFor: () => null,
-    } as unknown as FigmaClient
+    }) as unknown as FigmaClient
 
-    const result = await handleStatus(mockClient)
+  it('answers the connected SHAPE when no file is joined, not a bare word', async () => {
+    const out = JSON.parse(
+      (await handleStatus(unjoined())).content[0].text,
+    ) as { connected: boolean; available: unknown[] }
+    expect(out.connected).toBe(false)
+    expect(out.available).toEqual([])
+  })
 
-    expect(result.content).toHaveLength(1)
-    expect(result.content[0].type).toBe('text')
-    expect(result.content[0].text).toBe('disconnected')
+  it('still asks the registry, and hands back what it holds', async () => {
+    const relay = Bun.serve({
+      port: 0,
+      fetch: () =>
+        new Response(
+          JSON.stringify([
+            {
+              channel: 'ch-live',
+              fileKey: 'fk-live',
+              fileName: 'Dashboard',
+              connectedAt: 1,
+            },
+          ]),
+        ),
+    })
+    try {
+      const out = JSON.parse(
+        (
+          await handleStatus(
+            unjoined(),
+            `http://localhost:${relay.port}`,
+          )
+        ).content[0].text,
+      ) as {
+        connected: boolean
+        available: { fileKey: string }[]
+        nextStep: string
+      }
+      // The whole defect: a live channel the caller could not see.
+      expect(out.available.map(a => a.fileKey)).toEqual([
+        'fk-live',
+      ])
+      // …and the remedy names the step that works, and says outright that the
+      // disruptive one is not needed.
+      expect(out.nextStep).toContain('connect({fileKey})')
+      expect(out.nextStep).toContain(
+        'nothing needs restarting',
+      )
+    } finally {
+      relay.stop(true)
+    }
+  })
+
+  it('says the file is not open when the registry really is empty', async () => {
+    const out = JSON.parse(
+      (await handleStatus(unjoined())).content[0].text,
+    ) as { nextStep: string }
+    expect(out.nextStep).toContain('Open the file in Figma')
   })
 
   // When the plugin returns NO live context (null), status still reports the

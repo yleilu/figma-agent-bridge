@@ -289,15 +289,39 @@ export const handleStatus = async (
   relayHttpUrl?: string,
 ): Promise<ToolResult> => {
   const files = client.joinedFiles()
-  if (files.length === 0) {
-    return textResult('disconnected')
-  }
 
   let available: ReturnType<typeof availableView> = []
   let infos: ChannelInfo[] = []
   if (relayHttpUrl !== undefined) {
     infos = await discoverChannels(relayHttpUrl)
     available = availableView(infos)
+  }
+
+  // B75 — "this server has joined nothing" is NOT "no Figma file is open", and
+  // the two used to answer with the same word. The zero-joined branch returned
+  // the bare string `disconnected` before the registry was ever asked, which is
+  // every session's FIRST call: the relay held a live channel, `connect({
+  // fileKey })` succeeded instantly, and the agent had been told to close and
+  // reopen the plugin or restart the relay.
+  //
+  // `plugin-presence.md:219` names `status().available[]` a first-class
+  // consumer of the channel registry, and every file-addressed tool's `fileKey`
+  // param says "from status/connect available[]" — so the documented discovery
+  // path answered nothing at exactly the moment discovery is the whole
+  // question. It now answers with the same shape as the connected case, plus
+  // the step that actually works.
+  if (files.length === 0) {
+    return textResult(
+      JSON.stringify({
+        connected: false,
+        joined: [],
+        available,
+        nextStep:
+          available.length > 0
+            ? 'This server has joined no file yet. Call connect({fileKey}) with one of available[] — the plugin is already online, so nothing needs restarting.'
+            : 'No Figma file is connected to the relay. Open the file in Figma and run the Agent Bridge plugin, then call status again.',
+      }),
+    )
   }
 
   // One best-effort live read PER joined file (never throws — a failed round

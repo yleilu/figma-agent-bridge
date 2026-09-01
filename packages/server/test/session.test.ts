@@ -380,11 +380,22 @@ describe('connect/status multi-file contract', () => {
     b.close()
   })
 
-  it('status reports disconnected when nothing is joined', async () => {
+  it('status reports connected:false when nothing is joined — with the registry (B75)', async () => {
     const client = createFigmaClient(WS)
-    expect(
+    const out = JSON.parse(
       text(await handleStatus(client, HTTP)),
-    ).toContain('disconnected')
+    ) as {
+      connected: boolean
+      joined: unknown[]
+      available: unknown[]
+      nextStep: string
+    }
+    expect(out.connected).toBe(false)
+    expect(out.joined).toEqual([])
+    // It ASKED — the shape is the same one the connected case answers with, so
+    // a caller reads `available[]` the same way whatever the state.
+    expect(Array.isArray(out.available)).toBe(true)
+    expect(out.nextStep.length).toBeGreaterThan(0)
     client.disconnect()
   })
 
