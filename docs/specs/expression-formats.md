@@ -345,6 +345,26 @@ Example: `path(NONZERO,"M0 0 L100 0 L100 100 Z")`
 
 Read back on the `vectorPaths` field of a VECTOR node. Write: supply in `create_node`/`update_node` spec as `vectorPaths: [path(...), ...]`.
 
+**The coordinate frame, and how `position` reads against it (B79).** Path data is written in the
+**parent's** coordinates, and the node's `position` **translates** that frame rather than replacing
+it: `final = stated + <where the data put the ink>`. Figma's own setter is what establishes the
+frame — assigning `vectorPaths` rebases the data into the node's box, resizes the node to the path
+bounds, and walks the node to the path minimum, so data written as `M 60 76 … L 700 185 Z` lands at
+those numbers whether or not a position is stated. Consequences, both ways round:
+
+- **0-based data** (`M 0 0 L 24 24 Z`) offsets by zero, so `position` means exactly what it says.
+  This is the common case and it is unaffected.
+- **Data in its parent's coordinates** with `position: [0, 0]` lands where the numbers say. It used
+  to land at the parent's origin, dragging every coordinate by the path minimum — silently, with
+  `warnings: []` — which put a chart's fill baseline 16px off its zero gridline and pulled every
+  24-box icon glyph 4px into its corner.
+- **A non-zero `position` with non-zero data** shifts the whole shape by that amount. State one or
+  the other; stating both adds them.
+
+The frame was never stated before, and under **both** readable contracts the intent was the same ink
+placement — which is why the misplacement was invisible on the write face and only an exported PNG
+showed it.
+
 **Per-point detail rides in the `{…}` channel, sparsely.** Figma holds a vector two ways:
 `vectorPaths` — `{windingRule, data}`, which this atom's head mirrors — and `vectorNetwork`, whose
 vertices additionally carry `cornerRadius`, `strokeCap` and `strokeJoin`. The path data alone

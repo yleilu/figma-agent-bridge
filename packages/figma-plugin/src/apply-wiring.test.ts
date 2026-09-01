@@ -747,6 +747,49 @@ describe('INSTANCE_SWAP default currency wiring', () => {
   })
 })
 
+// B79 — `vector-origin.ts` can be perfect and never reach a node. The whole
+// defect is that the stated position is written AFTER the setter walked the
+// node, and the compensation only exists if `spec` reaches the geometry write:
+// drop that one argument at either call site and the ink slides back to the
+// corner, silently, with every unit test still green. This file is where that
+// is catchable — the mock is a SERVER double and never runs this code.
+describe('vector origin wiring (B79)', () => {
+  const vectorApply = between(
+    'const applyVectorPaths = async (',
+    'const buildSingleNode = async (',
+  )
+
+  it('actually found the geometry writer (liveness)', () => {
+    expect(vectorApply).toContain('assignVectorPaths(')
+    expect(vectorApply).toContain('positionOverOffset(')
+  })
+
+  it('folds the walk into the position the appliers read', () => {
+    // Not a direct `node.x =` here: `spec.position` is the ONE place both
+    // `applyCommonProperties` and the ABSOLUTE re-apply take it from, so
+    // writing it there is what makes the two agree.
+    expect(vectorApply).toContain('spec.position = placed')
+  })
+
+  it('compensates BEFORE the per-point detail, and skips both on a refusal', () => {
+    const theRefusal = vectorApply.indexOf('if (!applied)')
+    const theDetail = vectorApply.indexOf(
+      'applyVectorPointDetail(',
+    )
+    expect(theRefusal).toBeGreaterThan(0)
+    expect(theDetail).toBeGreaterThan(theRefusal)
+  })
+
+  it('BOTH write paths hand it the spec — create and update', () => {
+    // One missing argument is one silently mis-placed vector per path, and the
+    // create path alone carries every icon glyph in a build.
+    const handed = code.split(
+      /applyVectorPaths\(\s*[\w.() ]+,\s*spec\.vectorPaths,\s*warnings,\s*spec,/,
+    ).length - 1
+    expect(handed).toBe(2)
+  })
+})
+
 describe('inline var() value-mismatch wiring', () => {
   it('hands the binder the shadow lookup it reports with', () => {
     // `variableShadows` is optional on the deps, so a dropped wiring degrades

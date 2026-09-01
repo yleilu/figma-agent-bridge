@@ -117,6 +117,11 @@ import {
   slicedReadMessage,
 } from './resolve-node'
 import type { RawNode } from './canonical-ids'
+import {
+  assignVectorPaths,
+  positionOverOffset,
+  type PathTarget,
+} from './vector-origin'
 import { projectComponentDefs } from './project-component-defs'
 import { rollbackCreated } from './rollback'
 import { resolveInstanceProps } from './resolve-instance-props'
@@ -1686,34 +1691,45 @@ const applyVectorPointDetail = async (
  * The server hands each path over as `{windingRule, data, corners?}`. Only the
  * first two are Figma's shape — the radii, caps and joins live on the network,
  * and are written after, because assigning `vectorPaths` rebuilds it.
+ *
+ * AND THE ASSIGNMENT MOVES THE NODE (B79). Figma rebases the data into the
+ * node's own box and walks the node by the path minimum, so the node already
+ * stands where the numbers said. The stated `position` — written afterwards by
+ * `applyCommonProperties`, on both write paths — used to overwrite that walk
+ * with a number whose meaning the rebase had destroyed, dragging the ink away
+ * silently. So the walk is measured here and folded INTO `spec.position`, which
+ * is the one place both callers read it from (`applyPostAppendProperties`'
+ * ABSOLUTE re-apply included). See vector-origin.ts for the contract and the
+ * live evidence; the arithmetic is relative, so update_node needs no variant of
+ * it.
  */
 const applyVectorPaths = async (
   vector: VectorNode,
   raw: unknown,
   warnings?: string[],
+  spec?: Record<string, unknown>,
 ): Promise<void> => {
   const paths = raw as (VectorPath & {
     corners?: Record<number, number>
     caps?: Record<number, string>
     joins?: Record<number, string>
   })[]
-  try {
-    vector.vectorPaths = paths.map(
-      ({ windingRule, data }) => ({
-        windingRule,
-        data,
-      }),
+  const { applied, offset } = assignVectorPaths(
+    vector as unknown as PathTarget,
+    paths,
+    warnings,
+  )
+  // The network was not rebuilt, so per-point detail has nothing to land on —
+  // and nothing moved, so nothing needs compensating.
+  if (!applied) return
+  if (spec !== undefined) {
+    const placed = positionOverOffset(
+      spec.position,
+      offset,
     )
-  } catch (e) {
-    // Figma's own message, not a guess at the cause. On a create the data is
-    // the only thing that can be wrong, but update_node reaches nodes whose
-    // path is read-only, and calling that "invalid path data" would send the
-    // agent to fix a string that is already correct.
-    warnings?.push(
-      'vectorPaths rejected by Figma: ' + String(e),
-    )
-    // The network was not rebuilt, so per-point detail has nothing to land on.
-    return
+    if (placed !== undefined) {
+      spec.position = placed
+    }
   }
   await applyVectorPointDetail(vector, paths, warnings)
 }
@@ -1792,10 +1808,14 @@ const buildSingleNode = async (
         'vectorPaths' in vector &&
         spec.vectorPaths !== undefined
       ) {
+        // `spec` rides along so the stated position can be read in the frame
+        // the assignment leaves behind (B79) — `applyCommonProperties` writes
+        // it a few dozen lines below, and used to write it flat.
         await applyVectorPaths(
           vector,
           spec.vectorPaths,
           warnings,
+          spec,
         )
       }
       node = vector
@@ -4768,10 +4788,15 @@ const handleCommand = async (
         spec.vectorPaths !== undefined &&
         'vectorPaths' in node
       ) {
+        // Same compensation as the create arm, and the same arithmetic: the
+        // setter walks from wherever the node ALREADY stands, so the offset is
+        // measured relatively and a re-write of an already-placed vector needs
+        // no variant rule (B79).
         await applyVectorPaths(
           node as VectorNode,
           spec.vectorPaths,
           warnings,
+          spec,
         )
       }
 
