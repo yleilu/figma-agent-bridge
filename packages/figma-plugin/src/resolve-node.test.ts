@@ -30,6 +30,7 @@ import {
   leadingInstanceId,
   MAX_INSTANCE_EXPORTS,
   outerInstanceOf,
+  servedByAncestorExport,
   slicedReadMessage,
 } from './resolve-node'
 import type { LiveNode, RawNode } from './canonical-ids'
@@ -782,6 +783,15 @@ describe('the write face refuses what it cannot address (B73/B74)', () => {
     ).toBeNull()
   })
 
+  it('the phantom is still READABLE — the refusal is the write face only', async () => {
+    // Law: a read may serve an id a write refuses. Reads have an export to fall
+    // back on and a `readError` to declare with; a write has neither.
+    const { resolver } = deepHarness()
+    expect(
+      (await resolver.resolve(CELL_ALIAS))?.name,
+    ).toBe('Amount')
+  })
+
   it('reset returns the resolver to READ mode', async () => {
     const { resolver } = deepHarness()
     resolver.setStrict(true)
@@ -789,5 +799,75 @@ describe('the write face refuses what it cannot address (B73/B74)', () => {
     expect((await resolver.resolve(CELL_ALIAS))?.name).toBe(
       'Amount',
     )
+  })
+})
+
+// ── B78: an enumeration that drops what addressing finds ─────────────────────
+//
+// `get_node depth:1` on the Overview chart's Plot listed the gridlines, the
+// fill, the axes and the ticks and SKIPPED `Treasury line`
+// (`I549:17448;549:17078;549:17513`) — while a direct `get_node` on that id
+// answered it in full. Two oracles disagreeing: the parent was described by the
+// ancestor's export, the child by the alias handle's own export, which is a
+// different document rooted at a different id.
+//
+// Same family as B72/B74, and the same rule closes it: the export that NAMED a
+// node is the one that describes it.
+describe('servedByAncestorExport — one node, one oracle', () => {
+  it('a handle answering a DIFFERENT id does not describe itself', () => {
+    const row = findLiveById(
+      deepLive(),
+      '549:17625',
+    ) as LiveNode
+    // The caller asked for the canonical id; the handle answers the alias.
+    expect(servedByAncestorExport(ROW_C, row)).toBe(true)
+  })
+
+  it('a handle answering the caller’s own id is its own oracle', () => {
+    const slot = findLiveById(
+      deepLive(),
+      SLOT_C,
+    ) as LiveNode
+    expect(servedByAncestorExport(SLOT_C, slot)).toBe(false)
+  })
+
+  it('a PLAIN id is always its own oracle — nothing renamed it', () => {
+    // A page-root instance answers its own id and has no ancestor export to
+    // prefer; routing it to a slice would buy an export for nothing.
+    expect(servedByAncestorExport(CARD, deepLive())).toBe(
+      false,
+    )
+  })
+
+  it('a miss is not routed anywhere', () => {
+    expect(servedByAncestorExport(CELL_C, null)).toBe(false)
+  })
+
+  it('a handle that cannot state its id is served by the ancestor', () => {
+    // `idOf` answers undefined for a refusing handle, which is never the
+    // caller's id — so the export speaks, which is what it already did.
+    expect(servedByAncestorExport(CELL_C, CELL_DEAD)).toBe(
+      true,
+    )
+  })
+
+  it('the ancestor export carries the child an alias export could drop', async () => {
+    // The property B78 is about, end to end: what the ancestor's export says a
+    // node's children are is what a read of that node has to return.
+    const { resolver } = deepHarness()
+    const row = await resolver.exportedNode(ROW_C)
+    expect(
+      (row?.children as RawNode[]).map(c => c.id),
+    ).toEqual([CELL_C])
+    // …and the id it comes back under is the one the caller asked for.
+    expect(row?.id).toBe(ROW_C)
+  })
+
+  it('the TABLE level too — the disagreement is not depth-specific', async () => {
+    const { resolver } = deepHarness()
+    const table = await resolver.exportedNode(TABLE_C)
+    expect(
+      (table?.children as RawNode[]).map(c => c.id),
+    ).toEqual([ROW_C])
   })
 })

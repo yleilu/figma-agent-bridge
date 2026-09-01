@@ -291,6 +291,41 @@ export const deadHandleMessage = (nodeId: string): string =>
   'slot, write there, and reparent it back — or set the value through the ' +
   'instance override / component property on the instance above it.'
 
+/**
+ * Whether `nodeId` must be described by its ANCESTOR's export rather than by
+ * the handle's own (B78).
+ *
+ * ONE NODE, ONE ORACLE. A read emits the id the export gives each node. When
+ * the handle that id resolves to answers a DIFFERENT id — slot content keeps
+ * its pre-append one — then `handle.exportAsync()` is a different document,
+ * rooted at a different id, and its children need not agree with what the
+ * ancestor's export said. Both halves of that were live:
+ *
+ *   the ROOT disagrees      — a read of `I549:17448;549:17078;549:17515` came
+ *                             back under `549:17514`, so every id-join between
+ *                             a read and a search broke on those rows.
+ *   the CHILDREN disagree   — `get_node depth:1` on Plot listed the gridlines,
+ *                             the fill, the axes and the ticks and SKIPPED
+ *                             `Treasury line`, while a direct read of that
+ *                             child's id answered it in full (B78). An
+ *                             enumeration that drops what addressing finds is
+ *                             two oracles disagreeing, not a missing node.
+ *
+ * The ancestor's export named the node, so the ancestor's export describes it.
+ * The handle is still used for everything only a live read can add — the
+ * enrichment pairs it against that document exactly as a parent read does — so
+ * this costs no fidelity and is NOT a degrade.
+ *
+ * A plain id is always its own oracle: nothing above it renamed it.
+ */
+export const servedByAncestorExport = (
+  nodeId: string,
+  handle: LiveNode | null,
+): boolean =>
+  handle !== null &&
+  leadingInstanceId(nodeId) !== undefined &&
+  idOf(handle) !== nodeId
+
 export type ResolveDeps = {
   /** `figma.getNodeByIdAsync`, which only ever answers a PLAIN id reliably. */
   getNodeById: (id: string) => Promise<LiveNode | null>

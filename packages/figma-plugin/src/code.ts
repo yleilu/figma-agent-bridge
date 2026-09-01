@@ -114,6 +114,7 @@ import {
   createNodeResolver,
   declareDegradedRead,
   isAliasHandle,
+  servedByAncestorExport,
   slicedReadMessage,
 } from './resolve-node'
 import type { RawNode } from './canonical-ids'
@@ -2596,13 +2597,19 @@ const readNodeDocument = async (
    * The node as its ancestor's export describes it, enriched by whatever the
    * live handle will still answer.
    *
-   * A slice is a DEGRADED read, and `declareDegradedRead` is what makes it say
-   * so — see resolve-node.ts for why a silent thin row is the one outcome this
-   * fallback must never produce.
+   * A slice taken because the handle FAILED is a DEGRADED read, and
+   * `declareDegradedRead` is what makes it say so — see resolve-node.ts for why
+   * a silent thin row is the one outcome this fallback must never produce.
+   *
+   * A slice taken because the handle answers a DIFFERENT id is not degraded and
+   * passes no `reason` (B78). The handle is alive and the enrichment pairs it
+   * against this document exactly as a parent read does, so nothing is lost —
+   * only the ORACLE changed, and a readError there would cry wolf on every
+   * healthy slot-content read.
    */
   const slice = async (
     live: BaseNode | null,
-    reason: string,
+    reason?: string,
   ): Promise<Record<string, unknown> | undefined> => {
     const exported = await nodeResolver.exportedNode(nodeId)
     if (exported === undefined) return undefined
@@ -2617,12 +2624,27 @@ const readNodeDocument = async (
       depth,
       enrichDeps(),
     )
-    declareDegradedRead(doc, reason)
+    if (reason !== undefined) {
+      declareDegradedRead(doc, reason)
+    }
     return doc
   }
   const node = await resolveNodeId(nodeId)
   if (node === null) {
     return slice(null, slicedReadMessage(nodeId))
+  }
+  // B78 — ONE NODE, ONE ORACLE. A handle that answers a different id has its
+  // own export, rooted at that other id, whose children need not agree with
+  // what the ancestor's export said. That disagreement is how `get_node
+  // depth:1` on Plot listed four children and dropped `Treasury line` while a
+  // direct read of that child answered in full, and how a read came back under
+  // an id no search result carried. The export that NAMED the node describes
+  // it.
+  if (
+    servedByAncestorExport(nodeId, node as unknown as LiveNode)
+  ) {
+    const sliced = await slice(node)
+    if (sliced !== undefined) return sliced
   }
   try {
     return await exportNodeDocument(node, depth)

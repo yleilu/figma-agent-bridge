@@ -790,6 +790,38 @@ describe('vector origin wiring (B79)', () => {
   })
 })
 
+// B78 — `servedByAncestorExport` is a predicate, and a predicate nothing calls
+// is a green module over a read that still answers from the wrong oracle. The
+// symptom is a dropped CHILD, which no unit test of the read face can see
+// because `code.ts` owns which export the read is built from.
+describe('read-oracle wiring (B78)', () => {
+  const readDoc = between(
+    'const readNodeDocument = async (',
+    'const resolveStyle = async (',
+  )
+
+  it('actually found the read (liveness)', () => {
+    expect(readDoc).toContain('exportNodeDocument(')
+  })
+
+  it('asks whose export describes the node before exporting the handle', () => {
+    const theQuestion = readDoc.indexOf(
+      'servedByAncestorExport(',
+    )
+    expect(theQuestion).toBeGreaterThan(0)
+    expect(
+      readDoc.indexOf('exportNodeDocument(node, depth)'),
+    ).toBeGreaterThan(theQuestion)
+  })
+
+  it('takes that slice WITHOUT declaring a degrade', () => {
+    // The handle is alive and the enrichment still pairs against it, so only
+    // the oracle changed. A readError here would fire on every healthy
+    // slot-content read and drown the ones that mean something.
+    expect(readDoc).toContain('await slice(node)')
+  })
+})
+
 describe('inline var() value-mismatch wiring', () => {
   it('hands the binder the shadow lookup it reports with', () => {
     // `variableShadows` is optional on the deps, so a dropped wiring degrades
