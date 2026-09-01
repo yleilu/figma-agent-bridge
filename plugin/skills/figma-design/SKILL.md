@@ -96,7 +96,9 @@ Rules for running the surface smoothly and cheaply:
 
 - **Reuse before create** — search for an existing component or token before making a
   new one. `get_components` + `get_variables` first; `create_component` / `create_variables`
-  only when nothing exists.
+  only when nothing exists. `create_variables` EXTENDS a collection when you name an
+  existing one (or pass `collectionId`) — it never forks a duplicate; a same-named variable
+  is skipped with a pointer at `update_variables`.
 - **"check my selection"** → call `inspect` on the selection and describe it. Read,
   don't assume.
 - **Mind token usage** — batch calls where the API allows; prefer scoped reads over

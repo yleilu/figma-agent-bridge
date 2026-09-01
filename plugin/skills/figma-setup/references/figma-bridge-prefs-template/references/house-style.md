@@ -83,6 +83,8 @@ floor.
   blocks that screen alone consumes sitting beside it.
 - **No standing extra pages** — no scratch page, no archive page. A build creates only the
   design-system page and the screen pages.
+- **DS sections stack in ONE page-root auto-layout wrapper** (V, gap 100) — growth then reflows
+  instead of colliding with a neighbor section.
 - **Master grid:** masters laid out left to right with 100 px gutters, grouped by family (all
   `Button/*` on one row, all `Card/*` on the next).
 - Page names follow the naming convention above; no page keeps a Figma default.

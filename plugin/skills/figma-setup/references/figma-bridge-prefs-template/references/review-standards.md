@@ -17,6 +17,12 @@ These **add stricter house checks** on top of the reviewer's floor.
   (These two lists are **mirrors of `house-style.md` §Concrete values** — the builder reads
   that copy. Edit both together.)
 
+## Icon standard
+
+- **A glyph sits centered in its icon frame** — flag a glyph whose bounds are not centered in
+  the box (allow the house optical-centering tolerance, ±1px). An off-center glyph propagates
+  through every instance of the icon, so measure it on the masters.
+
 ## Naming standard (stricter than the floor)
 
 - Components must use the `/` taxonomy (e.g. `Button/Primary`); flag a component master

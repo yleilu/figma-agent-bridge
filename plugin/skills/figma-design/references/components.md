@@ -71,6 +71,14 @@ write the four NOs down (the census, SKILL.md).
   - **Workbench** — someone would take it alone: export it as a PNG for
     development, drag an instance to squeeze-test its sizing without
     dragging the whole screen, hand it off as one unit.
+
+  **Reuse counts INSIDE masters too.** The same anatomy carved into two
+  or more masters is itself a component — the masters instance it.
+  Worked case: three table-row masters each hand-built the same Status
+  cell (box + chip, same padding); one edit then means three carvings,
+  and a missed one drifts the tables apart. The cell is a component;
+  the rows hold instances. The census enumerates in-master reuse the
+  same as page-level reuse.
 - **Q2 — States.** Does it carry states — hover, active, selected,
   disabled, loading, or variant looks?
 - **Q3 — Role or asset.** Is it a pattern the web has a name for —
@@ -202,7 +210,11 @@ When the region already holds an instance and you only need to point it somewher
 ## 5. Slots in practice
 
 **An instance is sealed except its slots.** The only place an instance
-can receive new children is a SLOT. So any region of a master that must
+can receive new children is a SLOT. A blocked write now says so itself:
+the refusal names the sealing INSTANCE, states the per-instance write
+ceiling as a Figma rule, and lists the three ways through (a SLOT ·
+`update_component({slots})` · build at page level + `reparent_node`) —
+trust that sentence over any older error text quoted in docs. So any region of a master that must
 receive content later — a header's trailing end, a card's action area —
 needs a slot (or a property-gated child) in the MASTER, at authoring
 time. A region without one is closed forever in every instance, and the
