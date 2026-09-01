@@ -5,6 +5,7 @@ import {
   applySize,
   applySizeVerified,
   applySizing,
+  hugFillCollapseWarning,
   applyStrokeGeometry,
   applyStrokeWeights,
   applyExportSettings,
@@ -1025,6 +1026,177 @@ test('applySizing: T7 — a refused FILL degrades to a warning, naming the type'
   expect(warnings).toEqual([
     'sizing not applicable on this node (SLOT): Error: FILL can only be set on children of auto-layout frames',
   ])
+})
+
+// ─── B80: the circular pair Figma accepts and then collapses ────────────────
+//
+// Live 2026-09-01: a `Token cell` stating `sizing:[FILL, HUG]` inside a HUG
+// row master came out **12px wide with 56px of children overflowing it**, and
+// the write answered `warnings: []`. The parent asks its children how wide to
+// be, the child asks its parent, and Figma resolves the circle by collapsing
+// the child to its minimum.
+//
+// Nothing throws here — which is exactly why a `catch` could never have caught
+// it. B58's precedent is the shape (a self-contradictory pair, named where the
+// node is in hand), but not the verdict: B58 REFUSES because Figma destroys
+// that pair on the next click, and Figma tolerates this one. So: warn, and
+// never refuse.
+
+/** A child under a parent that lays out on `mode` and hugs the named axes. */
+const inHug = (
+  mode: 'HORIZONTAL' | 'VERTICAL' | 'NONE',
+  parentSizing: [string, string],
+  child: Record<string, unknown> = {},
+): Record<string, unknown> => ({
+  type: 'FRAME',
+  name: 'Token cell',
+  layoutSizingHorizontal: 'FIXED',
+  layoutSizingVertical: 'FIXED',
+  parent: {
+    type: 'FRAME',
+    name: 'Table row',
+    layoutMode: mode,
+    layoutSizingHorizontal: parentSizing[0],
+    layoutSizingVertical: parentSizing[1],
+  },
+  ...child,
+})
+
+test('applySizing: B80 — a FILL child on the axis its parent HUGS is named', () => {
+  const node = inHug('HORIZONTAL', ['HUG', 'FIXED'])
+  const warnings: string[] = []
+  applySizing(node, ['FILL', 'HUG'], warnings)
+  // The write LANDS — Figma takes it, and refusing would block what the file
+  // accepts.
+  expect(node.layoutSizingHorizontal).toBe('FILL')
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain('"Token cell"')
+  expect(warnings[0]).toContain('"Table row"')
+  expect(warnings[0]).toContain('horizontal')
+  expect(warnings[0]).toContain('collapses')
+})
+
+test('applySizing: B80 — the numbers ride along when the node can be measured', () => {
+  // The live case exactly: 12px of cell, 56px of children.
+  const node = inHug('HORIZONTAL', ['HUG', 'FIXED'], {
+    width: 12,
+    height: 20,
+    children: [
+      { width: 24, height: 16 },
+      { width: 32, height: 16 },
+    ],
+  })
+  const warnings: string[] = []
+  applySizing(node, ['FILL', 'HUG'], warnings)
+  expect(warnings[0]).toContain('resolved to 12px')
+  expect(warnings[0]).toContain('children need 56px')
+})
+
+test('applySizing: B80 — an empty frame still gets the pair named', () => {
+  // A create states the pair before any child exists. Author time is when the
+  // caller can still act, so a value-only check would arrive too late.
+  const warnings: string[] = []
+  applySizing(
+    inHug('VERTICAL', ['FIXED', 'HUG'], { children: [] }),
+    ['HUG', 'FILL'],
+    warnings,
+  )
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain('vertical')
+  expect(warnings[0]).not.toContain('resolved to')
+})
+
+test('applySizing: B80 — the COUNTER axis is left alone', () => {
+  // A hug on the counter axis means "as big as my largest child", and a FILL
+  // child stretching to the tallest sibling is ordinary. Warning here would be
+  // noise on a very common shape.
+  const warnings: string[] = []
+  applySizing(
+    inHug('HORIZONTAL', ['FIXED', 'HUG']),
+    ['FIXED', 'FILL'],
+    warnings,
+  )
+  expect(warnings).toEqual([])
+})
+
+test('applySizing: B80 — a FIXED or FILL parent is not a conflict', () => {
+  for (const parentSizing of [
+    ['FIXED', 'FIXED'],
+    ['FILL', 'FIXED'],
+  ] as [string, string][]) {
+    const warnings: string[] = []
+    applySizing(
+      inHug('HORIZONTAL', parentSizing),
+      ['FILL', 'HUG'],
+      warnings,
+    )
+    expect(warnings).toEqual([])
+  }
+})
+
+test('applySizing: B80 — a parent that lays out nothing is not a conflict', () => {
+  const warnings: string[] = []
+  applySizing(
+    inHug('NONE', ['HUG', 'HUG']),
+    ['FILL', 'FILL'],
+    warnings,
+  )
+  expect(warnings).toEqual([])
+})
+
+test('applySizing: B80 — a refused write is never also called a collapse', () => {
+  // The node never took the FILL, so there is no circle to report — and two
+  // sentences about one axis would send the caller two ways at once.
+  const node = {
+    type: 'SLOT',
+    name: 'Body',
+    set layoutSizingHorizontal(_value: string) {
+      throw new Error('FILL can only be set on children')
+    },
+    layoutSizingVertical: 'FIXED',
+    parent: {
+      type: 'FRAME',
+      layoutMode: 'HORIZONTAL',
+      layoutSizingHorizontal: 'HUG',
+    },
+  }
+  const warnings: string[] = []
+  applySizing(node, ['FILL', 'HUG'], warnings)
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain('sizing not applicable')
+})
+
+test('hugFillCollapseWarning: a parent that refuses every read is not a finding', () => {
+  const dead = new Proxy({} as Record<string, unknown>, {
+    get: () => {
+      throw new Error('does not exist')
+    },
+    has: () => true,
+  })
+  expect(
+    hugFillCollapseWarning(
+      { name: 'Cell', parent: dead },
+      ['FILL', 'HUG'],
+    ),
+  ).toBeUndefined()
+})
+
+test('hugFillCollapseWarning: the legacy sizing fields answer when the new ones are absent', () => {
+  // A runtime that predates layoutSizing* still states the hug through
+  // primaryAxisSizingMode — the same preference order feed/write-scope.ts uses.
+  const warning = hugFillCollapseWarning(
+    {
+      name: 'Cell',
+      parent: {
+        name: 'Row',
+        layoutMode: 'HORIZONTAL',
+        primaryAxisSizingMode: 'AUTO',
+        counterAxisSizingMode: 'FIXED',
+      },
+    },
+    ['FILL', 'HUG'],
+  )
+  expect(warning).toContain('HUGS the same axis')
 })
 
 // ─── B60: the end state a create_tree owes a constrained absolute child ─────
