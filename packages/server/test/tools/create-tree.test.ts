@@ -133,6 +133,108 @@ describe('convertTree (recursive children + ref-pool)', () => {
     })
   })
 
+  // ── B83: a { ref } with fields beside it ──────────────────────────────────
+  //
+  // LIVE (2026-09-01): twelve icon components in ONE create_tree, each child
+  // `{ref:'ink', vectorPaths:['path(NONE,"M 3 3 L 8 3 …")']}` over a shared
+  // `refs.ink` VECTOR spec. The call returned THIRTEEN ids and `warnings: []`
+  // — a clean success — and the read-back showed every vector at [100,100]
+  // with `vectorPaths: []`. The atoms were fine: the identical string through
+  // `update_node` on the same node landed perfectly, size [14,14], path
+  // rebased. They never reached the write face, because the union's `{ref}`
+  // branch was a bare `z.object` and zod strips what it does not name.
+  describe('a { ref } carrying overrides', () => {
+    const inkPool = {
+      ink: {
+        type: 'VECTOR',
+        name: 'ink',
+        size: [14, 14] as [number, number],
+        strokes: ['#7C5CFF'],
+        fills: [],
+      },
+    }
+
+    it('merges the sibling fields over the pooled spec', () => {
+      const out = convertTree(
+        {
+          ref: 'ink',
+          vectorPaths: ['path(NONE,"M 3 3 L 8 3")'],
+        } as never,
+        undefined,
+        inkPool as never,
+      ) as Record<string, unknown>
+      // The override landed…
+      expect(out.vectorPaths).toBeDefined()
+      // …and the pooled spec is still what the node IS.
+      expect(out.type).toBe('VECTOR')
+      expect(out.name).toBe('ink')
+      expect(out.size).toEqual([14, 14])
+      expect(out.strokes).toBeDefined()
+      expect(out.ref).toBeUndefined()
+    })
+
+    it('gives each use its own copy', () => {
+      const out = convertTree(
+        {
+          type: 'FRAME',
+          children: [
+            {
+              ref: 'ink',
+              name: 'first',
+              vectorPaths: ['path(NONE,"M 0 0 L 1 1")'],
+            },
+            { ref: 'ink', name: 'second' },
+          ],
+        } as never,
+        undefined,
+        inkPool as never,
+      )
+      const kids = out.children as Record<string, unknown>[]
+      expect(kids[0].name).toBe('first')
+      expect(kids[1].name).toBe('second')
+      expect(kids[0].vectorPaths).toBeDefined()
+      expect(kids[1].vectorPaths).toBeUndefined()
+    })
+
+    it('stays a marker when the ref carries nothing of its own', () => {
+      expect(
+        convertTree(
+          { ref: 'ink' },
+          undefined,
+          inkPool as never,
+        ),
+      ).toEqual({ ref: 'ink' })
+    })
+
+    it('leaves an unknown ref to the plugin to refuse', () => {
+      expect(
+        convertTree(
+          { ref: 'nope', name: 'x' } as never,
+          undefined,
+          inkPool as never,
+        ),
+      ).toEqual({ ref: 'nope' })
+    })
+
+    it('refuses an { id } clone that carries fields it cannot apply', () => {
+      // The other half of B83's ask. There is no pooled spec to merge onto —
+      // the source is a node in the document — so silence is the one answer
+      // that must not be given.
+      expect(() =>
+        convertTree({
+          id: '1:99',
+          vectorPaths: ['path(NONE,"M 0 0")'],
+        } as never),
+      ).toThrow(/vectorPaths/)
+      expect(() =>
+        convertTree({
+          id: '1:99',
+          vectorPaths: ['path(NONE,"M 0 0")'],
+        } as never),
+      ).toThrow(/update_node/)
+    })
+  })
+
   it('keeps ref/clone markers inside a children array', () => {
     const out = convertTree({
       type: 'FRAME',

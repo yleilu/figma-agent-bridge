@@ -353,6 +353,15 @@ export const slotEntrySchema = z.union([
 
 // treeNodeSpecSchema — create_tree shape: a NodeSpec with recursive
 // TreeNodeSpec children, a { ref } pool reference, or an { id } clone.
+//
+// The `{ ref }` branch carries the fields written BESIDE it (B83). It used to
+// be a bare `z.object({ref})`, which zod strips to `{ref}` alone — so twelve
+// icons sent as `{ref:'ink', vectorPaths:['path(NONE,"M 3 3 …")']}` came back
+// as thirteen ids and `warnings: []`, a clean success, with every vector at
+// [100,100] and `vectorPaths: []`. The paths were valid: the identical string
+// through `update_node` landed on the same node. They never reached the write
+// face at all. PASSTHROUGH for the same reason `partialNodeSpecSchema` is: a
+// key the handler cannot see is a key the handler cannot report.
 export const treeNodeSpecSchema: z.ZodType<TreeNodeSpec> =
   z.lazy(() =>
     z.union([
@@ -360,7 +369,15 @@ export const treeNodeSpecSchema: z.ZodType<TreeNodeSpec> =
         ...nodeSpecBase,
         children: z.array(treeNodeSpecSchema).optional(),
       }),
-      z.object({ ref: z.string() }),
-      z.object({ id: z.string() }),
+      z
+        .object({
+          ...nodeSpecBase,
+          type: z.string().optional(),
+          text: textSpecSchema.partial().optional(),
+          ref: z.string(),
+          children: z.array(treeNodeSpecSchema).optional(),
+        })
+        .passthrough(),
+      z.object({ id: z.string() }).passthrough(),
     ]),
   )

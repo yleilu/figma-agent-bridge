@@ -297,6 +297,32 @@ describe('treeNodeSpecSchema (recursive)', () => {
     ).toBe(true)
   })
 
+  // B83 — the fields written beside a ref reach the handler. A bare
+  // `z.object({ref})` stripped them here, at the schema boundary, and twelve
+  // icons sent as `{ref:'ink', vectorPaths:[…]}` came back as a clean success
+  // with `vectorPaths: []` on every one of them.
+  it('keeps the fields written beside a { ref }', () => {
+    const parsed = treeNodeSpecSchema.parse({
+      ref: 'ink',
+      name: 'Chain glyph',
+      vectorPaths: ['path(NONE,"M 3 3 L 8 3")'],
+    }) as Record<string, unknown>
+    expect(parsed.ref).toBe('ink')
+    expect(parsed.name).toBe('Chain glyph')
+    expect(parsed.vectorPaths).toEqual([
+      'path(NONE,"M 3 3 L 8 3")',
+    ])
+  })
+
+  it('keeps the fields written beside an { id } clone', () => {
+    const parsed = treeNodeSpecSchema.parse({
+      id: '1:99',
+      name: 'Copy',
+    }) as Record<string, unknown>
+    expect(parsed.id).toBe('1:99')
+    expect(parsed.name).toBe('Copy')
+  })
+
   it('validates an { id } clone reference', () => {
     expect(
       treeNodeSpecSchema.safeParse({ id: '12:34' }).success,
