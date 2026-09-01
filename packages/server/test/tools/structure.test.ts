@@ -341,4 +341,31 @@ describe('delete_node PAGE branch (M4 guard)', () => {
       'setCurrentPageAsync unavailable',
     )
   })
+
+  // B84 — the slot-content arm. The plugin decides WHAT goes (slot-content.ts,
+  // unit-covered there); what this pins is that the tool surface carries the
+  // receipt through: a caller who deletes a card has to be able to see, from
+  // the reply alone, that the table inside it went too. Live 2026-09-01 the
+  // reply was `ok` with `warnings: []` while the table stayed on the screen
+  // under an address nothing could resolve.
+  it('instance with filled slot: names the content it took', async () => {
+    const scoped = client.forFile(FK)
+    const res = await handleDeleteNode(
+      { nodeId: 'instance:filled-slot' },
+      scoped,
+    )
+    expect(res.content[0].text).not.toContain('"error"')
+    const out = JSON.parse(res.content[0].text) as {
+      id: string
+      type: string
+      removed: { id: string; name: string }[]
+      warnings: string[]
+    }
+    expect(out.type).toBe('INSTANCE')
+    expect(out.removed).toHaveLength(1)
+    expect(out.removed[0].id).toBe(
+      'I570:21813;570:20826;570:21817',
+    )
+    expect(out.warnings[0]).toContain('slot')
+  })
 })

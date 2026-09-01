@@ -113,6 +113,10 @@ import {
   UNREADABLE_NODE,
 } from './search-scan'
 import {
+  removeSlotContent,
+  slotContentRemovedMessage,
+} from './slot-content'
+import {
   createNodeResolver,
   declareDegradedRead,
   isAliasHandle,
@@ -5430,8 +5434,23 @@ const handleCommand = async (
           currentPageId: figma.currentPage.id,
         }
       }
+      // B84 — a SLOT's content does NOT go with its instance. Figma re-homes
+      // it into the parent, where it renders under an address composed off the
+      // instance that no longer exists, so nothing can address it and nothing
+      // can remove it. Clear it FIRST, while its handles still answer, and say
+      // what went: a delete that quietly destroys content would be the other
+      // half of the same defect.
+      const removed = removeSlotContent(
+        node as unknown as LiveNode,
+      )
       node.remove()
-      return info
+      return removed.length === 0
+        ? info
+        : {
+            ...info,
+            removed,
+            warnings: [slotContentRemovedMessage(removed)],
+          }
     }
 
     // set_focus: scroll + zoom the viewport so the resolved nodes are in view.
