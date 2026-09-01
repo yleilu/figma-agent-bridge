@@ -269,6 +269,13 @@ export type ScanEntry = {
   id: string
   levelsLeft: number
   subtreeEnd: number
+  /**
+   * The scan START this entry descends from, by index (search-scan.ts).
+   *
+   * Optional so a fixture describing ONE subtree can leave it out; absent
+   * means "one root", which is what a node- or page-scoped scan is.
+   */
+  root?: number
 }
 
 /**
@@ -347,7 +354,22 @@ export type RepairInput = {
   componentRefOf?: (
     componentId: string,
   ) => Promise<ComponentRef | undefined>
-  /** Cap on how many subtrees may be serialized in one scan (T10). */
+  /**
+   * Cap on how many subtrees may be serialized PER SCAN ROOT (T10).
+   *
+   * Per root, not per scan. A document scan starts once per top-level node of
+   * every page, and a single shared cap is spent in scan order — so the pages
+   * that happen to be scanned first take all of it and the pages after them
+   * come back short. That is not a hypothesis: on the 2026-09-01 artifact the
+   * document scan returned 1477 rows against 1646 from the same four pages
+   * scanned one at a time, and every one of the 195 missing rows sat on the
+   * last two pages, under 8 subtree roots, while the first two pages lost
+   * nothing. The four pages needed 33 / 12 / 17 / 13 repairs against a shared
+   * cap of 50: the first two pages spent 45 of it.
+   *
+   * The cap still bounds the work per subtree, which is what T10 is for. What
+   * it no longer does is let one subtree's damage decide another's fidelity.
+   */
   maxRepairs?: number
 }
 
@@ -480,16 +502,25 @@ export const repairScan = async ({
   }
   const hosts = [...hostSet].sort((a, b) => a - b)
 
-  let repairs = 0
-  /** A host the budget stopped us reaching — its subtree is simply missing. */
-  let budgetCut = false
+  /** How many repairs each scan ROOT has spent, and what it could not reach. */
+  const spent = new Map<number, number>()
+  /** root index → hosts the budget refused, so the cut can be ITEMISED. */
+  const cutBy = new Map<number, number>()
+  const rootOf = (host: number): number =>
+    scanned[host]?.root ?? 0
   for (const host of hosts) {
     if (covered.has(host)) continue
-    if (repairs >= maxRepairs) {
-      budgetCut = true
-      break
+    const root = rootOf(host)
+    const used = spent.get(root) ?? 0
+    if (used >= maxRepairs) {
+      // This root is out of budget. Its remaining hosts are counted rather
+      // than abandoned quietly, and the SCAN CONTINUES: the next root has its
+      // own allowance, and stopping here is precisely what cost the last two
+      // pages of the 2026-09-01 artifact 195 rows.
+      cutBy.set(root, (cutBy.get(root) ?? 0) + 1)
+      continue
     }
-    repairs++
+    spent.set(root, used + 1)
     const exported = await exportHost(host)
     if (exported === undefined) continue
     // Every ref the maps of THIS export can name, folded into the shared
@@ -625,7 +656,7 @@ export const repairScan = async ({
   // subtree it was read at, and a failure outside that slice is not covered by
   // it however close the two look.
   const warnings: string[] = []
-  let incomplete = budgetCut
+  let incomplete = cutBy.size > 0
   for (const failure of failures) {
     const isCovered =
       failure.at >= 0
@@ -640,12 +671,23 @@ export const repairScan = async ({
       incomplete = true
     }
   }
-  if (budgetCut) {
+  // The cut is ITEMISED, one line per scan root that hit the cap (B72). A
+  // single "the budget stopped me" line said the set was short and left the
+  // caller no way to find out where: 195 rows went missing under 8 subtrees on
+  // two named pages, and the reply named none of them. Each line carries the
+  // root's own id, so `scope:'node'` on it recovers exactly what was lost.
+  for (const [root, unreached] of cutBy) {
     warnings.push(
-      'search: stopped repairing after ' +
+      'search: stopped repairing under ' +
+        (scanned[root]?.id ?? '(unknown root)') +
+        ' after ' +
         maxRepairs +
-        ' subtrees (the per-scan budget) — the result set is INCOMPLETE. ' +
-        'Scan one page at a time (scope:"page", pageId) to see the rest.',
+        ' subtrees (the per-root budget) — ' +
+        unreached +
+        ' more degraded subtree(s) there are MISSING from these results. ' +
+        'Re-scan that subtree on its own (scope:"node", nodeId:"' +
+        (scanned[root]?.id ?? '…') +
+        '") to see the rest.',
     )
   }
   // …and what the repair itself cost, after what it could not repair.

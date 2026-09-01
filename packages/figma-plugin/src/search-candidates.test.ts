@@ -365,9 +365,14 @@ describe('repairScan — repair without downgrading (C1)', () => {
     })
     expect(asked).toEqual([1])
     // B72 — the cut is stated as well as counted. A budget that silently stops
-    // repairing returns a short set that looks whole.
+    // repairing returns a short set that looks whole. It is ITEMISED too: the
+    // line names the subtree that ran out and how many hosts it left, so the
+    // caller can re-scan exactly that subtree (the 2026-09-01 document scan
+    // lost 195 rows under 8 named subtrees and its reply named none of them).
     expect(warnings[0]).toBe('second')
-    expect(warnings[1]).toContain('per-scan budget')
+    expect(warnings[1]).toContain('per-root budget')
+    expect(warnings[1]).toContain('2:1')
+    expect(warnings[1]).toContain('1 more')
     expect(incomplete).toBe(true)
   })
 

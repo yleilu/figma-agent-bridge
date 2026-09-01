@@ -162,6 +162,36 @@ export const slicedReadMessage = (nodeId: string): string =>
   'vector geometry and the unrotated size'
 
 /**
+ * What a row says when its live handle answered SOME reads and refused others
+ * (B65).
+ *
+ * The third wording of one loss, and it exists because the loss is genuinely
+ * a third shape: `slicedReadMessage` is "no handle at all", the enrichment's
+ * `walkError` is "this node would not list its children", and this one is a
+ * handle that answers its identity and refuses particular reads. Figma
+ * composes such a handle's address off a pre-append id, and its own refusal
+ * QUOTES that address — `I570:22243;570:20740`, two segments, naming no node
+ * — so passing the raw message through hands the caller an id that resolves
+ * to nothing. 580 rows carried one on the 2026-09-01 artifact.
+ *
+ * So the id here is the one the read EMITS for this node, which is the one a
+ * caller can hand back, and the fields are named so the absence is a fact
+ * about the read rather than a fact about the design.
+ */
+export const partialLiveReadMessage = (
+  nodeId: string,
+  fields: readonly string[],
+): string =>
+  'the live handle for ' +
+  nodeId +
+  ' refused ' +
+  fields.join(', ') +
+  ' — Figma composed its address from a pre-append id. Those fields are ' +
+  'missing from this row; everything else on it is the file’s own. Read the ' +
+  'enclosing INSTANCE (get_node, depth:-1) to see this node through a handle ' +
+  'that answers.'
+
+/**
  * How many ancestors an id walk will climb before it gives up.
  *
  * A Figma tree is a few dozen levels at worst. The bound is here so a cyclic or

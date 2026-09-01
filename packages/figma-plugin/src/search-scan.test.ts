@@ -333,6 +333,169 @@ describe('B62 — a doc-scoped sweep comes back whole', () => {
   })
 })
 
+// ─── B72: one root cannot spend another root's repair budget ─────────────────
+//
+// LIVE EVIDENCE (2026-09-01 dashboard, dev 9d306cf). The same four pages,
+// minutes apart, through the same tool:
+//
+//   document scope   1477 rows
+//   page scope ×4    1646 rows   (358 / 437 / 507 / 344)
+//
+// All 195 missing rows sat on the LAST TWO pages — Payments 44, Counterparties
+// 151 — under 8 subtree roots, and the first two pages lost NOTHING. Neither
+// result set held a single duplicate id, so nothing was deduped away. The four
+// pages need 33 / 12 / 17 / 13 repairs; the shared cap is 50, and the first two
+// pages spend 45 of it. That is an in-order budget, and it is the only
+// candidate that predicts a loss ordered by page.
+//
+// The fake is the smallest document with that shape: two roots, each holding
+// one degraded subtree, and a cap of one.
+describe('B72 — the repair budget is spent PER ROOT', () => {
+  const degraded = (n: number) => {
+    const inner = node({
+      id: 'I9:' + n + ';8:1',
+      trueId: 'I7:' + n + ';8:0;8:1',
+      name: 'Cell',
+      type: 'TEXT',
+      width: 40,
+      height: 16,
+      fabricated: true,
+    })
+    const content = node({
+      id: '9:' + n,
+      trueId: 'I7:' + n + ';8:0',
+      name: 'Row',
+      type: 'INSTANCE',
+      width: 100,
+      height: 24,
+      children: [inner],
+    })
+    return node({
+      id: '7:' + n,
+      trueId: '7:' + n,
+      name: 'Page root ' + n,
+      type: 'FRAME',
+      width: 200,
+      height: 100,
+      children: [content],
+    })
+  }
+
+  const sweepRoots = async (maxRepairs: number) => {
+    const roots = [degraded(1), degraded(2)]
+    const { scanned, failures } = scanFrom(roots, -1)
+    const candidates: (Candidate | undefined)[] =
+      scanned.map(s => ({
+        id: s.id,
+        name: s.node.name,
+        type: s.node.type,
+      }))
+    return {
+      scanned,
+      ...(await repairScan({
+        scanned,
+        candidates,
+        failures,
+        maxRepairs,
+        exportHost: async index =>
+          exportOf(scanned[index].node),
+      })),
+    }
+  }
+
+  it('attributes every scanned node to the start it came from', () => {
+    const { scanned } = scanFrom(
+      [degraded(1), degraded(2)],
+      -1,
+    )
+    expect(
+      scanned.map(s => [s.id, s.root] as const),
+    ).toEqual([
+      ['7:1', 0],
+      ['9:1', 0],
+      ['I9:1;8:1', 0],
+      ['7:2', 3],
+      ['9:2', 3],
+      ['I9:2;8:1', 3],
+    ])
+  })
+
+  it('repairs the SECOND root after the first has spent its share', async () => {
+    const { results, incomplete } = await sweepRoots(1)
+    const ids = results.map(r => r.id as string)
+    // Before the fix the budget stopped at the first root and root 2's cell
+    // was simply gone — the 2026-09-01 shape, at two rows instead of 195.
+    expect(ids).toContain('I7:1;8:0;8:1')
+    expect(ids).toContain('I7:2;8:0;8:1')
+    expect(incomplete).toBe(false)
+  })
+
+  it('names the ROOT and the count when a root really does run out', async () => {
+    const roots = [degraded(1)]
+    const { scanned, failures } = scanFrom(roots, -1)
+    const { warnings, incomplete } = await repairScan({
+      scanned,
+      candidates: scanned.map(s => ({ id: s.id })),
+      failures: [
+        ...failures,
+        // A second, disjoint host under the same root.
+        { at: -1, host: 0, message: 'search: skipped …' },
+      ],
+      maxRepairs: 0,
+      exportHost: async index =>
+        exportOf(scanned[index].node),
+    })
+    expect(incomplete).toBe(true)
+    const cut = warnings.find(w =>
+      w.includes('per-root budget'),
+    ) as string
+    // Itemised: which subtree, how many were left, and how to get them.
+    expect(cut).toContain('7:1')
+    expect(cut).toContain('2 more')
+    expect(cut).toContain('scope:"node"')
+  })
+})
+
+// ─── B72, the other candidate: the dedup drop ────────────────────────────────
+//
+// `if (fresh)` guards the push and not the descent, so a node whose id another
+// node already answered is dropped from the results while its children are
+// still walked. FALSIFIED as the mechanism behind the 2026-09-01 loss — that
+// artifact's 1646 rows carried 1646 distinct ids, and its document scan's 1477
+// carried 1477 — but the hole is real and it was silent.
+describe('B72 — two nodes, one id', () => {
+  const twin = (name: string) =>
+    node({
+      id: '11:1',
+      trueId: '11:1',
+      name,
+      type: 'FRAME',
+      width: 10,
+      height: 10,
+    })
+
+  it('keeps one row and NAMES the one it dropped', () => {
+    const { scanned, failures } = scanFrom(
+      [twin('first'), twin('second')],
+      -1,
+    )
+    expect(scanned).toHaveLength(1)
+    expect(failures).toHaveLength(1)
+    expect(failures[0].message).toContain('11:1')
+    expect(failures[0].message).toContain('two nodes')
+  })
+
+  it('stays silent when the SAME handle is reached twice', () => {
+    const shared = twin('once')
+    const { scanned, failures } = scanFrom(
+      [shared, shared],
+      -1,
+    )
+    expect(scanned).toHaveLength(1)
+    expect(failures).toEqual([])
+  })
+})
+
 // The whole point of extracting the walk is that `code.ts` can no longer hold a
 // second copy of it. `code.ts` calls `figma.showUI(__html__)` at module scope,
 // so it cannot be imported outside Figma — hence a source scan, carrying its

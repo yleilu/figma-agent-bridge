@@ -101,7 +101,10 @@ import {
   type NodePair,
   type RawNode,
 } from './canonical-ids'
-import { slicedReadMessage } from './resolve-node'
+import {
+  partialLiveReadMessage,
+  slicedReadMessage,
+} from './resolve-node'
 
 export type { LiveNode, RawNode }
 
@@ -359,166 +362,214 @@ const runsPatch = (node: LiveNode, patch: Patch): void => {
 /**
  * Everything that is a plain property read — no round trips, so it costs the
  * same on a descendant as on the root.
+ *
+ * EVERY GROUP IS GUARDED ON ITS OWN, and `refused` names the ones that threw
+ * (B65). A handle Figma composed from a pre-append id does not refuse
+ * uniformly: it answers `id`, `name`, `type` and its size, and throws on
+ * `parent`, `children` and `getSharedPluginData` (live, B74/B81/B84). The
+ * collection used to run under ONE guard with `getSharedPluginData` first, so
+ * the very first read decided the whole node: 580 nodes on the 2026-09-01
+ * artifact came back with nothing but a `readError` while their unrotated
+ * size, vector geometry and text runs were all still readable.
+ *
+ * `refused` is a plain accumulator rather than a throw so the caller can name
+ * the loss ONCE, against an id the caller can actually use.
  */
 export const syncPatch = (
   node: LiveNode,
   mixed: symbol,
+  refused: string[] = [],
 ): Patch => {
   const patch: Patch = {}
 
-  const ctx = readContext(node)
-  if (ctx !== undefined) {
-    patch.context = ctx
+  /**
+   * One field group, guarded. A refusing member costs its own group and
+   * nothing else — never the node.
+   */
+  const group = (name: string, read: () => void): void => {
+    try {
+      read()
+    } catch {
+      refused.push(name)
+    }
   }
 
-  vectorPatch(node, patch, mixed)
-  runsPatch(node, patch)
+  group('context', () => {
+    const ctx = readContext(node)
+    if (ctx !== undefined) {
+      patch.context = ctx
+    }
+  })
+
+  group('vector geometry', () =>
+    vectorPatch(node, patch, mixed),
+  )
+  group('text runs', () => runsPatch(node, patch))
 
   // width / height — JSON_REST_V1 emits only absoluteBoundingBox, which is the
   // AXIS-ALIGNED bbox (inflated when the node is rotated). node.width/height
   // are always unrotated (B7), so the reader can prefer them.
-  if ('width' in node) {
-    patch.width = node.width
-    patch.height = node.height
-  }
-
-  // strokeJoin / strokeMiterLimit — REST carries strokeCap but NOT these two
-  // (live-confirmed absent, 2026-07-31).
-  if ('strokeJoin' in node) {
-    // A vector whose points carry different joins reports figma.mixed, which
-    // is a Symbol and cannot cross the plugin boundary — see mixed.ts.
-    // Omitting is the honest answer: mixed is not one value, and the per-point
-    // `joins=` list says what each point actually does.
-    const join = omitMixed(node.strokeJoin, mixed)
-    if (join !== undefined) {
-      patch.strokeJoin = join
+  group('the unrotated size', () => {
+    if ('width' in node) {
+      patch.width = node.width
+      patch.height = node.height
     }
-  }
-  if ('strokeMiterLimit' in node) {
-    patch.strokeMiterLimit = node.strokeMiterLimit
-  }
+  })
 
-  // Per-side stroke weights (B27) — only when the four sides DIFFER.
-  //
-  // A node whose sides differ reports `figma.mixed` for `strokeWeight`, so the
-  // uniform field cannot describe it at all: without these four the read of a
-  // `stroke([0,0,1,0])` divider says either nothing or the wrong thing, and
-  // writing that read back erases the rule. Only frame-like and RECTANGLE
-  // nodes carry them (IndividualStrokesMixin), hence the property probe.
-  //
-  // Uniform sides are deliberately NOT patched: `strokeWeight` already says it,
-  // the read face emits the plain number as the canonical form, and four extra
-  // numbers on every stroked node in a large read is the T4 cost this module
-  // stays clear of. (These are plain numbers — never `figma.mixed` — so no
-  // Symbol can reach the wire through them.)
-  if ('strokeTopWeight' in node) {
-    const sides = [
-      node.strokeTopWeight,
-      node.strokeRightWeight,
-      node.strokeBottomWeight,
-      node.strokeLeftWeight,
-    ]
-    if (
-      sides.every(w => typeof w === 'number') &&
-      !sides.every(w => w === sides[0])
-    ) {
-      patch.strokeTopWeight = sides[0]
-      patch.strokeRightWeight = sides[1]
-      patch.strokeBottomWeight = sides[2]
-      patch.strokeLeftWeight = sides[3]
-    }
-  }
-
-  // minWidth / maxWidth / minHeight / maxHeight (B54) — the four auto-layout
-  // size clamps. `update_node` writes them (code.ts) and the layout obeys them,
-  // but no read channel carried them, so a floor could only be proved by its
-  // geometric effect. They ride the live patch because the export does not
-  // reliably carry them, and the live node is the value the write just set.
-  //
-  // Only a NUMBER travels. Figma reports an absent clamp as `null`, and four
-  // null keys on every frame of a big read buy nothing (T4) — the absence
-  // already says "no floor".
-  for (const field of MIN_MAX_FIELDS) {
-    if (field in node && typeof node[field] === 'number') {
-      patch[field] = node[field]
-    }
-  }
-
-  // pointCount (POLYGON + STAR) and innerRadius (STAR). Feature-detected by
-  // PROPERTY, which is robust to the POLYGON vs REGULAR_POLYGON export-type
-  // name difference.
-  if ('pointCount' in node) {
-    patch.pointCount = node.pointCount
-  }
-  if ('innerRadius' in node) {
-    patch.innerRadius = node.innerRadius
-  }
-
-  // isMask / maskType — only when masking, to keep ordinary nodes clean.
-  if ('isMask' in node && node.isMask === true) {
-    patch.isMask = true
-    if ('maskType' in node) {
-      patch.maskType = node.maskType
-    }
-  }
-
-  // explicitVariableModes (M13) — per-collection mode pins.
-  if ('explicitVariableModes' in node) {
-    const evm = node.explicitVariableModes
-    if (
-      typeof evm === 'object' &&
-      evm !== null &&
-      Object.keys(evm).length > 0
-    ) {
-      patch.explicitVariableModes = evm
-    }
-  }
-
-  // M12 — GRID layout. REST may not carry these for a GRID-mode frame.
-  if ('gridRowCount' in node) {
-    patch.gridRowCount = node.gridRowCount
-    patch.gridColumnCount = node.gridColumnCount
-    patch.gridRowGap = node.gridRowGap
-    patch.gridColumnGap = node.gridColumnGap
-  }
-
-  // I56 — per-track sizing, and the cell of a grid CHILD.
-  gridTracksPatch(node, patch)
-  gridCellPatch(node, patch)
-
-  // B44 — which VARIABLE each bindable layout field is bound to. Only the ids
-  // travel; the reader turns them into the `var()` names it emits, off the same
-  // `bindingNames` map every other wrapper resolves through.
-  const bound = node.boundVariables as
-    | Record<string, { id?: unknown } | undefined>
-    | undefined
-  if (typeof bound === 'object' && bound !== null) {
-    const layoutBound: Record<string, string> = {}
-    for (const field of LAYOUT_BOUND_FIELDS) {
-      const id = bound[field]?.id
-      if (typeof id === 'string') {
-        layoutBound[field] = id
+  group('the stroke detail', () => {
+    // strokeJoin / strokeMiterLimit — REST carries strokeCap but NOT these two
+    // (live-confirmed absent, 2026-07-31).
+    if ('strokeJoin' in node) {
+      // A vector whose points carry different joins reports figma.mixed, which
+      // is a Symbol and cannot cross the plugin boundary — see mixed.ts.
+      // Omitting is the honest answer: mixed is not one value, and the per-point
+      // `joins=` list says what each point actually does.
+      const join = omitMixed(node.strokeJoin, mixed)
+      if (join !== undefined) {
+        patch.strokeJoin = join
       }
     }
-    if (Object.keys(layoutBound).length > 0) {
-      patch.layoutBoundVariables = layoutBound
+    if ('strokeMiterLimit' in node) {
+      patch.strokeMiterLimit = node.strokeMiterLimit
     }
-  }
 
-  // B3 — componentPropertyReferences: field → canonical component property id,
-  // set by update_component's add+targetNodeId binding. Present on component
-  // and instance SUBLAYERS, which is precisely where the root-only rule used
-  // to lose it.
-  if ('componentPropertyReferences' in node) {
-    const refs = node.componentPropertyReferences
-    if (
-      typeof refs === 'object' &&
-      refs !== null &&
-      Object.keys(refs).length > 0
-    ) {
-      patch.componentPropertyReferences = refs
+    // Per-side stroke weights (B27) — only when the four sides DIFFER.
+    //
+    // A node whose sides differ reports `figma.mixed` for `strokeWeight`, so the
+    // uniform field cannot describe it at all: without these four the read of a
+    // `stroke([0,0,1,0])` divider says either nothing or the wrong thing, and
+    // writing that read back erases the rule. Only frame-like and RECTANGLE
+    // nodes carry them (IndividualStrokesMixin), hence the property probe.
+    //
+    // Uniform sides are deliberately NOT patched: `strokeWeight` already says it,
+    // the read face emits the plain number as the canonical form, and four extra
+    // numbers on every stroked node in a large read is the T4 cost this module
+    // stays clear of. (These are plain numbers — never `figma.mixed` — so no
+    // Symbol can reach the wire through them.)
+    if ('strokeTopWeight' in node) {
+      const sides = [
+        node.strokeTopWeight,
+        node.strokeRightWeight,
+        node.strokeBottomWeight,
+        node.strokeLeftWeight,
+      ]
+      if (
+        sides.every(w => typeof w === 'number') &&
+        !sides.every(w => w === sides[0])
+      ) {
+        patch.strokeTopWeight = sides[0]
+        patch.strokeRightWeight = sides[1]
+        patch.strokeBottomWeight = sides[2]
+        patch.strokeLeftWeight = sides[3]
+      }
     }
-  }
+  })
+
+  group('the size clamps', () => {
+    // minWidth / maxWidth / minHeight / maxHeight (B54) — the four auto-layout
+    // size clamps. `update_node` writes them (code.ts) and the layout obeys them,
+    // but no read channel carried them, so a floor could only be proved by its
+    // geometric effect. They ride the live patch because the export does not
+    // reliably carry them, and the live node is the value the write just set.
+    //
+    // Only a NUMBER travels. Figma reports an absent clamp as `null`, and four
+    // null keys on every frame of a big read buy nothing (T4) — the absence
+    // already says "no floor".
+    for (const field of MIN_MAX_FIELDS) {
+      if (
+        field in node &&
+        typeof node[field] === 'number'
+      ) {
+        patch[field] = node[field]
+      }
+    }
+  })
+
+  group('the shape detail', () => {
+    // pointCount (POLYGON + STAR) and innerRadius (STAR). Feature-detected by
+    // PROPERTY, which is robust to the POLYGON vs REGULAR_POLYGON export-type
+    // name difference.
+    if ('pointCount' in node) {
+      patch.pointCount = node.pointCount
+    }
+    if ('innerRadius' in node) {
+      patch.innerRadius = node.innerRadius
+    }
+
+    // isMask / maskType — only when masking, to keep ordinary nodes clean.
+    if ('isMask' in node && node.isMask === true) {
+      patch.isMask = true
+      if ('maskType' in node) {
+        patch.maskType = node.maskType
+      }
+    }
+  })
+
+  group('the variable modes', () => {
+    // explicitVariableModes (M13) — per-collection mode pins.
+    if ('explicitVariableModes' in node) {
+      const evm = node.explicitVariableModes
+      if (
+        typeof evm === 'object' &&
+        evm !== null &&
+        Object.keys(evm).length > 0
+      ) {
+        patch.explicitVariableModes = evm
+      }
+    }
+  })
+
+  group('the grid', () => {
+    // M12 — GRID layout. REST may not carry these for a GRID-mode frame.
+    if ('gridRowCount' in node) {
+      patch.gridRowCount = node.gridRowCount
+      patch.gridColumnCount = node.gridColumnCount
+      patch.gridRowGap = node.gridRowGap
+      patch.gridColumnGap = node.gridColumnGap
+    }
+
+    // I56 — per-track sizing, and the cell of a grid CHILD.
+    gridTracksPatch(node, patch)
+    gridCellPatch(node, patch)
+  })
+
+  group('the layout bindings', () => {
+    // B44 — which VARIABLE each bindable layout field is bound to. Only the ids
+    // travel; the reader turns them into the `var()` names it emits, off the same
+    // `bindingNames` map every other wrapper resolves through.
+    const bound = node.boundVariables as
+      | Record<string, { id?: unknown } | undefined>
+      | undefined
+    if (typeof bound === 'object' && bound !== null) {
+      const layoutBound: Record<string, string> = {}
+      for (const field of LAYOUT_BOUND_FIELDS) {
+        const id = bound[field]?.id
+        if (typeof id === 'string') {
+          layoutBound[field] = id
+        }
+      }
+      if (Object.keys(layoutBound).length > 0) {
+        patch.layoutBoundVariables = layoutBound
+      }
+    }
+  })
+
+  group('the component property references', () => {
+    // B3 — componentPropertyReferences: field → canonical component property id,
+    // set by update_component's add+targetNodeId binding. Present on component
+    // and instance SUBLAYERS, which is precisely where the root-only rule used
+    // to lose it.
+    if ('componentPropertyReferences' in node) {
+      const refs = node.componentPropertyReferences
+      if (
+        typeof refs === 'object' &&
+        refs !== null &&
+        Object.keys(refs).length > 0
+      ) {
+        patch.componentPropertyReferences = refs
+      }
+    }
+  })
 
   return patch
 }
@@ -680,20 +731,40 @@ const collectOne = (
     }
   }
   try {
-    const patch = syncPatch(node, mixed)
+    const refused: string[] = []
+    const patch = syncPatch(node, mixed, refused)
+    // Both are plain property reads on the same handle, so both refuse the
+    // same way — and losing the style ids silently is B41 exactly.
+    let styleIds: Record<string, string> = {}
+    try {
+      styleIds = styleIdsOf(node)
+    } catch {
+      refused.push('style() names')
+    }
+    let liveVariableIds: string[] = []
+    try {
+      liveVariableIds = variableIdsOf(node)
+    } catch {
+      refused.push('the live variable bindings')
+    }
     if (pair.walkError !== undefined) {
       patch.readError = pair.walkError
+    } else if (refused.length > 0) {
+      // B65 — the loss is stated in OUR words, against the id the read emits.
+      // Figma's own message quotes the address it composed off the pre-append
+      // id (`I570:22243;570:20740`, exactly two segments), and that address
+      // resolves to nothing: 580 rows on the 2026-09-01 artifact carried one,
+      // so every id a caller could have acted on was the one id the row did
+      // not carry. An id a read mentions has to be an id a read resolves.
+      patch.readError = partialLiveReadMessage(id, refused)
     }
     return {
       node,
       id,
       patch,
-      styleIds: styleIdsOf(node),
+      styleIds,
       variableIds: [
-        ...new Set([
-          ...variableIdsOf(node),
-          ...exportedIds,
-        ]),
+        ...new Set([...liveVariableIds, ...exportedIds]),
       ],
     }
   } catch (err) {

@@ -710,7 +710,14 @@ describe('collectPatches — one bad node costs one node (B31)', () => {
       deps(),
     )
 
-    expect(patches.get('gone')?.readError).toContain(STALE)
+    // B65 — the row still declares the loss, and it names the id the READ
+    // emits. Figma's own message quotes `I3:1;4:5;6:7`, the address it
+    // composed off the pre-append id, which resolves to nothing.
+    const failed = patches.get('gone')?.readError as string
+    expect(failed).toContain('gone')
+    expect(failed).toContain('context')
+    expect(failed).not.toContain('I3:1;4:5;6:7')
+    expect(STALE).toContain('I3:1;4:5;6:7')
     for (const id of ['good-before', 'good-after']) {
       expect(patches.get(id)).toMatchObject({
         pointCount: 7,
@@ -718,6 +725,101 @@ describe('collectPatches — one bad node costs one node (B31)', () => {
       })
       expect('readError' in patches.get(id)!).toBe(false)
     }
+  })
+
+  // ── B65: one refusing READ costs one field, not the node ─────────────────
+  //
+  // LIVE EVIDENCE (2026-09-01 dashboard, dev 9d306cf): 580 nodes came back
+  // carrying nothing but `readError: in getSharedPluginData: The node
+  // (instance sublayer or table cell) with id "I570:22243;570:20740" does not
+  // exist` — and every quoted id was exactly TWO segments, the address Figma
+  // composes off a pre-append id, naming no node in the file.
+  //
+  // The fake models the ASYMMETRY that made it expensive, which is the part a
+  // uniform "this handle is dead" fake cannot show: such a handle answers
+  // `id`, `name`, `type` and its size (B62's 89 get_children refusals came
+  // with zero get_name refusals; B74/B81: "get_parent fails while id/name/type
+  // answer") and refuses `parent`, `children` and `getSharedPluginData`. So
+  // the unrotated size, the vector geometry and the text runs were all still
+  // readable, and the single guard around the whole collection threw them away
+  // because `getSharedPluginData` happened to run first.
+  describe('a handle that refuses SOME reads', () => {
+    const partial = (id: string): LiveNode => {
+      const handle: LiveNode = {
+        id,
+        type: 'VECTOR',
+        width: 24,
+        height: 24,
+        vectorPaths: [
+          { windingRule: 'NONZERO', data: 'M 4 4 L 20 20' },
+        ],
+        getSharedPluginData: () => {
+          throw new Error(STALE)
+        },
+      }
+      // `parent` refuses too — the read that gridCellPatch makes, and the one
+      // the live artifact named on every mutation route (B84).
+      Object.defineProperty(handle, 'parent', {
+        get() {
+          throw new Error(STALE)
+        },
+        enumerable: false,
+        configurable: true,
+      })
+      return handle
+    }
+
+    it('keeps every field the handle DID answer', async () => {
+      const patches = await collectPatches(
+        node({ id: 'root', type: 'FRAME' }, [
+          partial('I570:22243;570:20740'),
+        ]),
+        undefined,
+        -1,
+        deps(),
+      )
+      const patch = patches.get('I570:22243;570:20740')
+      expect(patch).toMatchObject({
+        width: 24,
+        height: 24,
+      })
+      expect(patch?.vectorPaths).toEqual([
+        { windingRule: 'NONZERO', data: 'M 4 4 L 20 20' },
+      ])
+    })
+
+    it('declares the loss against an id the read EMITS', async () => {
+      const patches = await collectPatches(
+        node({ id: 'root', type: 'FRAME' }, [
+          partial('I570:22243;570:20740'),
+        ]),
+        // The export is the oracle for identity, and it names this node the
+        // way the file does — four segments, not two.
+        {
+          id: 'root',
+          type: 'FRAME',
+          children: [
+            {
+              id: 'I570:22200;570:20739;570:22243;570:20740',
+              type: 'VECTOR',
+            },
+          ],
+        },
+        -1,
+        deps(),
+      )
+      const canonical =
+        'I570:22200;570:20739;570:22243;570:20740'
+      const patch = patches.get(canonical)
+      expect(patch?.readError).toContain(canonical)
+      expect(patch?.readError).toContain('context')
+      // The whole of B65: no row may quote an address that resolves to
+      // nothing. The two-segment id is Figma's, and it is not ours to repeat.
+      expect(patch?.readError).not.toContain(
+        'I570:22243;570:20740"',
+      )
+      expect(patch?.width).toBe(24)
+    })
   })
 
   it('survives a node that throws in the ASYNC half too', async () => {
