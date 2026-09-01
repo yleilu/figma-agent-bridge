@@ -181,6 +181,14 @@ would also get:
 | `TEXT` | `fills: [#000000]` |
 | `VECTOR` · `LINE` | `strokes: [#000000]` |
 
+**And the create SAYS which nodes it applied to (B86).** Four builds shipped an unstated default
+they had to repair — 16 white wrapper frames over a dark screen in one, a black 1px rim on a
+gradient logo mark in another — so the table above is not enough on its own: it is read before the
+build and the default is met during it. `create_node` and `create_tree` therefore carry one
+aggregated `warnings[]` line per call, naming how many nodes kept a default, on which type and
+field, and the empty array that opts out. Nothing is neutralised; the ruling is unchanged. One
+line per call, not per node — sixteen unstated frames are one sentence with a count.
+
 **Pass an empty array to mean none.** `fills: []` and `strokes: []` clear the default and are
 distinct from an absent key — that distinction is the only way to say "deliberately unpainted", so
 neither side of it may be collapsed into the other. The defaults round-trip: a read reports what

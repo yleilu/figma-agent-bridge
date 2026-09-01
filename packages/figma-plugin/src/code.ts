@@ -117,6 +117,11 @@ import {
   slotContentRemovedMessage,
 } from './slot-content'
 import {
+  constructionDefaultsWarning,
+  unstatedDefaultOf,
+  type ConstructionDefault,
+} from './construction-defaults'
+import {
   createNodeResolver,
   declareDegradedRead,
   isAliasHandle,
@@ -1771,7 +1776,11 @@ const buildSingleNode = async (
   // B60. Passed through to applyPostAppendProperties: on the tree path the
   // caller owns the sizing write, because only it knows when this node's
   // children are in place.
-  opts?: { deferSizing?: boolean },
+  opts?: {
+    deferSizing?: boolean
+    // B86 — where the construction defaults this node inherited are recorded.
+    defaults?: ConstructionDefault[]
+  },
 ): Promise<SceneNode> => {
   const type = spec.type as string
   let node: SceneNode
@@ -2012,6 +2021,18 @@ const buildSingleNode = async (
   // — Figma still emits CREATE + DELETE for it.
   writeScope.claim(writer, node)
 
+  // B86 — read BEFORE the spec lands, because this is the only moment the node
+  // holds Figma's answer and nothing else. What it inherited is DECLARED, not
+  // neutralised: B16's ruling stands, and four sightings across four builds say
+  // the spec table alone never reached a caller.
+  const inherited = unstatedDefaultOf(
+    spec,
+    node as unknown as Record<string, unknown>,
+  )
+  if (inherited !== undefined) {
+    opts?.defaults?.push(inherited)
+  }
+
   // Apply common properties (fills, strokes, effects, etc.)
   await applyCommonProperties(node, spec, parent, warnings)
 
@@ -2116,7 +2137,10 @@ const createSingleNode = async (
   writer: string,
   warnings?: string[],
   placed?: Placement[],
-  opts?: { deferSizing?: boolean },
+  opts?: {
+    deferSizing?: boolean
+    defaults?: ConstructionDefault[]
+  },
 ): Promise<SceneNode> => {
   let held: SceneNode | undefined
   const track = <T extends SceneNode>(node: T): T => {
@@ -2171,6 +2195,9 @@ const createTreeNode = async (
   // so a ref-built child records the position its POOL spec stated — the
   // wrapper never carries one.
   placed?: Placement[],
+  // B86's sink, threaded for the same reason `warnings` is: a default can be
+  // inherited at ANY depth and the caller only ever sees the root's reply.
+  defaults?: ConstructionDefault[],
 ): Promise<SceneNode> => {
   const type = spec.type as string
 
@@ -2199,6 +2226,7 @@ const createTreeNode = async (
       created,
       warnings,
       placed,
+      defaults,
     )
   }
 
@@ -2320,7 +2348,7 @@ const createTreeNode = async (
     writer,
     warnings,
     placed,
-    { deferSizing: hasChildren },
+    { deferSizing: hasChildren, defaults },
   )
   // Pushed BEFORE the children recurse, so the order is root-first depth-first.
   created?.push(node.id)
@@ -2345,6 +2373,7 @@ const createTreeNode = async (
         created,
         warnings,
         childPlacements,
+        defaults,
       )
     }
   }
@@ -3864,13 +3893,20 @@ const handleCommand = async (
         // B35: one node, so the sink can only ever hold one entry — and
         // `discardedPositionsWarning` renders that as the singular sentence.
         const placed: Placement[] = []
+        const defaults: ConstructionDefault[] = []
         const created = await createSingleNode(
           spec,
           parent,
           writer,
           warnings,
           placed,
+          { defaults },
         )
+        const inheritedNote =
+          constructionDefaultsWarning(defaults)
+        if (inheritedNote !== undefined) {
+          warnings.push(inheritedNote)
+        }
         const discarded = discardedPositionsWarning(
           parent,
           placed,
@@ -3945,6 +3981,9 @@ const handleCommand = async (
         // parent that placed it, inside createTreeNode — this sink covers the
         // one node no parent in the recursion owns.
         const rootPlaced: Placement[] = []
+        // B86 — ONE sink for the whole tree, so sixteen unstated frames are one
+        // line and not sixteen copies of it (the I41 noise rule).
+        const treeDefaults: ConstructionDefault[] = []
         const treeResult = await createTreeNode(
           treeSpec,
           treeParent,
@@ -3954,7 +3993,13 @@ const handleCommand = async (
           createdIds,
           treeWarnings,
           rootPlaced,
+          treeDefaults,
         )
+        const treeInherited =
+          constructionDefaultsWarning(treeDefaults)
+        if (treeInherited !== undefined) {
+          treeWarnings.push(treeInherited)
+        }
         const rootDiscarded = discardedPositionsWarning(
           treeParent,
           rootPlaced,
