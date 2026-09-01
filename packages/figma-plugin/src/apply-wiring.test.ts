@@ -797,6 +797,50 @@ describe('vector origin wiring (B79)', () => {
 // B76 — the predicate is pure and green on its own; what decides the bug is
 // whether the UPDATE arm asks it instead of reading the node's current
 // `layoutPositioning` directly.
+// I5 — the check needs a BEFORE and an AFTER of the same box, taken on either
+// side of the write. A call site that measured after only would answer "does
+// this page overlap", which is a different and mostly useless question; one
+// that measured before only would answer nothing. Both halves, at every door
+// that can grow a page-root frame.
+describe('page-root growth wiring (I5)', () => {
+  it('measures the box before the write and reports after it', () => {
+    const before = code.split('rootBoundsOf(').length - 1
+    const after =
+      code.split('warnGrownIntoNeighbour(').length - 1
+    // Four doors that can grow a page-root frame: create_node, create_tree,
+    // update_node, reparent_node. Paired, so neither half can be dropped
+    // alone — a measurement with nothing to compare it to, or a comparison
+    // against nothing, both pass every other test in this repo.
+    expect(before).toBe(4)
+    expect(after).toBe(4)
+  })
+
+  it('takes the create measurement BEFORE the node is built', () => {
+    const createArm = between(
+      'case COMMANDS.CREATE_NODE: {',
+      'case COMMANDS.CREATE_TREE: {',
+    )
+    expect(
+      createArm.indexOf('rootBoundsOf('),
+    ).toBeLessThan(createArm.indexOf('createSingleNode('))
+    expect(
+      createArm.indexOf('warnGrownIntoNeighbour('),
+    ).toBeGreaterThan(createArm.indexOf('createSingleNode('))
+  })
+
+  it('reports on update AFTER every field that can move a box', () => {
+    const updateArm = between(
+      'case COMMANDS.UPDATE_NODE: {',
+      'case COMMANDS.DELETE_NODE',
+    )
+    expect(
+      updateArm.indexOf('warnGrownIntoNeighbour('),
+    ).toBeGreaterThan(
+      updateArm.indexOf('applySizeVerified('),
+    )
+  })
+})
+
 describe('patch-position wiring (B76)', () => {
   it('the update arm asks about the PATCH, not about the node alone', () => {
     expect(code).toContain('patchPositionIgnored(')

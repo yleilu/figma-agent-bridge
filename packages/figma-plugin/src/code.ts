@@ -125,6 +125,13 @@ import {
   positionOverOffset,
   type PathTarget,
 } from './vector-origin'
+import {
+  boxOf,
+  grownIntoNeighbourWarning,
+  pageRootOf,
+  type Box,
+  type BoxNode,
+} from './root-overlap'
 import { projectComponentDefs } from './project-component-defs'
 import { rollbackCreated } from './rollback'
 import { resolveInstanceProps } from './resolve-instance-props'
@@ -2577,6 +2584,34 @@ const resolveNodeId = async (
   )) as unknown as BaseNode | null
 
 /**
+ * The box of the PAGE-ROOT frame a write is about to touch (I5).
+ *
+ * Taken BEFORE the write, and paired with `warnGrownIntoNeighbour` after it.
+ * Two measurements of the same box are what turn "did this write cause a
+ * collision" into a question with an exact answer — no policy about where
+ * things belong, and no false finding on a page someone laid out overlapping on
+ * purpose. See root-overlap.ts for why growth is the half that bites a caller
+ * who placed everything correctly.
+ */
+const rootBoundsOf = (node: unknown): Box | undefined =>
+  boxOf(pageRootOf(node as BoxNode))
+
+/** …and the sentence, when that write pushed the frame into a neighbour. */
+const warnGrownIntoNeighbour = (
+  node: unknown,
+  before: Box | undefined,
+  warnings: string[],
+): void => {
+  const grown = grownIntoNeighbourWarning(
+    pageRootOf(node as BoxNode),
+    before,
+  )
+  if (grown !== undefined) {
+    warnings.push(grown)
+  }
+}
+
+/**
  * One node's read, from the node itself or from its ancestor's export.
  *
  * `undefined` means no such node — the caller words the miss, because get_node
@@ -3809,6 +3844,10 @@ const handleCommand = async (
           'children ignored — create_node creates a single node; use create_tree (M3) for nested creation',
         )
       }
+      // I5 — the page-root frame this create lands inside, as it stands BEFORE
+      // it. A HUG frame grows when something is appended to it, and nothing
+      // arranges page-root frames afterwards.
+      const rootBefore = rootBoundsOf(parent)
       try {
         // B35: one node, so the sink can only ever hold one entry — and
         // `discardedPositionsWarning` renders that as the singular sentence.
@@ -3827,6 +3866,7 @@ const handleCommand = async (
         if (discarded !== undefined) {
           warnings.push(discarded)
         }
+        warnGrownIntoNeighbour(parent, rootBefore, warnings)
         return {
           id: created.id,
           name: created.name,
@@ -3885,6 +3925,9 @@ const handleCommand = async (
       // reply — the only reply the caller sees. Omitted when empty so a clean
       // build's envelope stays clean.
       const treeWarnings: string[] = []
+      // I5 — a whole subtree appended into a HUG section is the write that grew
+      // one 2026-09-01 DS section 56px into its neighbour.
+      const treeRootBefore = rootBoundsOf(treeParent)
       try {
         // B35: the ROOT's own placement. Every deeper level is reported by the
         // parent that placed it, inside createTreeNode — this sink covers the
@@ -3907,6 +3950,11 @@ const handleCommand = async (
         if (rootDiscarded !== undefined) {
           treeWarnings.push(rootDiscarded)
         }
+        warnGrownIntoNeighbour(
+          treeParent,
+          treeRootBefore,
+          treeWarnings,
+        )
         return {
           id: treeResult.id,
           name: treeResult.name,
@@ -4780,6 +4828,9 @@ const handleCommand = async (
       if (gapConflict !== undefined) {
         return { error: gapConflict }
       }
+      // I5 — measured before the first field lands, so the comparison at the
+      // end of this arm is against the box the caller started with.
+      const updateRootBefore = rootBoundsOf(node)
 
       // warn-on-no-op (T7): a patched property that the target node type does
       // not support is dropped by applyCommonProperties' `'X' in node` guards.
@@ -4863,6 +4914,9 @@ const handleCommand = async (
         wrapperBindDeps(),
         warnings,
       )
+      // I5 — LAST, after every field that can move a box: a size, a sizing, a
+      // padding or a gap on any node inside a page-root frame can grow it.
+      warnGrownIntoNeighbour(node, updateRootBefore, warnings)
 
       return {
         id: node.id,
@@ -5527,6 +5581,11 @@ const handleCommand = async (
       // Capture the child's absolute origin BEFORE the move — appendChild keeps
       // the raw parent-relative x/y, so without this the node jumps.
       const childOrigin = originOf(child as Placeable)
+      // I5 — a move INTO a HUG section grows it exactly as an append does. The
+      // frame the child LEAVES can only shrink, so only the destination is
+      // watched.
+      const reparentRootBefore = rootBoundsOf(parent)
+      const reparentWarnings: string[] = []
       const index = params.index as number | undefined
       // I66 — the move hits the SAME per-instance ceiling a create does, and
       // used to hit it as a raw uncaught Figma throw naming an id the caller
@@ -5570,11 +5629,23 @@ const handleCommand = async (
         ;(child as SceneNode & { x: number; y: number }).y =
           placement.y
       }
+      warnGrownIntoNeighbour(
+        parent,
+        reparentRootBefore,
+        reparentWarnings,
+      )
       return {
         id: child.id,
         name: child.name,
         type: child.type,
         parentId: parent.id,
+        // T7 — reparent_node had no warnings channel at all, which is a gap
+        // rather than a decision: it is a WRITE, and a write that degrades
+        // silently is the one thing no door on this surface may do. Omitted
+        // when clean, so its presence is the signal.
+        ...(reparentWarnings.length > 0
+          ? { warnings: reparentWarnings }
+          : {}),
       }
     }
 
