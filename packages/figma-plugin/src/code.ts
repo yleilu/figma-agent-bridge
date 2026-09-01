@@ -122,6 +122,10 @@ import {
   type ConstructionDefault,
 } from './construction-defaults'
 import {
+  restoreAbsolutePositions,
+  type PlacedChild,
+} from './absolute-position'
+import {
   createNodeResolver,
   declareDegradedRead,
   isAliasHandle,
@@ -2359,12 +2363,16 @@ const createTreeNode = async (
   // with — an auto-layout that centres or space-betweens moves every earlier
   // child as later ones arrive, and a FILL collapse re-anchors them all.
   const childPlacements: Placement[] = []
+  // B87 — every ABSOLUTE child, with the spec that asked for it. The deferred
+  // resize below re-maps them through their own constraints, against a box the
+  // caller never saw, so they are put back afterwards.
+  const absoluteChildren: PlacedChild[] = []
   if (hasChildren && 'appendChild' in node) {
     for (const childSpec of children as Record<
       string,
       unknown
     >[]) {
-      await createTreeNode(
+      const childNode = await createTreeNode(
         childSpec,
         node as ParentNode,
         writer,
@@ -2375,6 +2383,15 @@ const createTreeNode = async (
         childPlacements,
         defaults,
       )
+      if (childSpec.layoutPositioning === 'ABSOLUTE') {
+        absoluteChildren.push({
+          node: childNode as unknown as Record<
+            string,
+            unknown
+          >,
+          spec: childSpec,
+        })
+      }
     }
   }
 
@@ -2405,6 +2422,13 @@ const createTreeNode = async (
       warnings,
       spec.sizing,
     )
+    // B87 — and NOW the box is the one the children will live in, so an
+    // ABSOLUTE child's stated position means what the caller meant by it. The
+    // resize above re-anchored each of them through its OWN constraints,
+    // against the provisional box: a bar asked for at [0,10] inside a frame
+    // that hugged from 100 to 40 landed at [0,-20], outside its parent, and
+    // nothing said so.
+    restoreAbsolutePositions(absoluteChildren, warnings)
   }
 
   if (childPlacements.length > 0) {
