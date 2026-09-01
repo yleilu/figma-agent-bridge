@@ -51,6 +51,19 @@ export type ScannedNode<N> = {
   levelsLeft: number
   parentIndex: number
   subtreeEnd: number
+  /**
+   * The scan START this node descends from, by index — itself for a start.
+   *
+   * A document scan starts once per top-level node of every page, and the
+   * repair budget is spent in scan order, so the pages scanned FIRST spend it
+   * all. Live 2026-09-01: a document scan returned 1477 rows where the same
+   * four pages returned 1646 one page at a time, and all 195 lost rows sat on
+   * the LAST TWO pages (Payments 44, Counterparties 151) with none on the
+   * first two — the signature of an in-order budget, not of a scan defect.
+   * The root is what lets the budget be spent per subtree and what lets a cut
+   * NAME where it happened (B72).
+   */
+  root: number
 }
 
 export type ScanOutput<N> = {
@@ -76,6 +89,11 @@ export const messageOf = (err: unknown): string =>
  * still descended from the deeper request. Only the FIRST visit owns a range:
  * a second, deeper visit appends its finds after it, and widening the range to
  * swallow them would let one host supersede nodes that are not under it.
+ *
+ * TWO DIFFERENT HANDLES ANSWERING ONE ID is a different thing, and it is a
+ * loss: the second row never reaches `results`. It is named as a failure so
+ * the repair can put it back from the host's export. Object identity is what
+ * separates the two cases — the same handle twice is the paragraph above.
  */
 export const scanFrom = <N extends object>(
   starts: Iterable<N>,
@@ -127,6 +145,34 @@ export const scanFrom = <N extends object>(
         levelsLeft,
         parentIndex,
         subtreeEnd: index + 1,
+        // A start owns itself; everything else inherits the start it was
+        // reached through. `parentIndex` is always an EARLIER entry, so the
+        // chain is already resolved by the time this reads it.
+        root:
+          parentIndex === -1
+            ? index
+            : scanned[parentIndex].root,
+      })
+    } else if (scanned[already].node !== node) {
+      // TWO DIFFERENT HANDLES, ONE ID. The dedup above keeps the first and
+      // drops the second, and it dropped it in silence: the row never reached
+      // `results` and no failure named it. A repeat visit of the SAME handle
+      // is the documented overlapping-roots case and is not a loss, so object
+      // identity is the discriminator.
+      //
+      // NOT the mechanism behind the 2026-09-01 loss — that artifact carried
+      // 1646 rows under 1646 distinct ids, so nothing collided (see the root
+      // field above). This closes the hole rather than reporting a finding:
+      // named as a failure with the ancestor as host, the repair exports that
+      // ancestor and the export names both nodes canonically, which puts the
+      // dropped one back.
+      failures.push({
+        at: -1,
+        host: parentIndex,
+        message:
+          'search: two nodes answered the id ' +
+          id +
+          '; only the first is in these results',
       })
     }
     if (levelsLeft !== 0) {

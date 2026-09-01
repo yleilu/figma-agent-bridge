@@ -51,16 +51,47 @@ import {
 /** A `{ ref }` pool reference (re-built fresh on each reuse). */
 const isRefNode = (
   spec: TreeNodeSpec,
-): spec is { ref: string } =>
+): spec is { ref: string } & Record<string, unknown> =>
   'ref' in spec && typeof spec.ref === 'string'
 
 /** A `{ id }` clone-by-id reference. */
 const isCloneNode = (
   spec: TreeNodeSpec,
-): spec is { id: string } =>
+): spec is { id: string } & Record<string, unknown> =>
   'id' in spec &&
   typeof spec.id === 'string' &&
   !('type' in spec)
+
+/**
+ * What a caller wrote BESIDE a `{ ref }` or `{ id }` — the override half (B83).
+ *
+ * Only the fields the caller actually sent, so a bare marker answers `[]` and
+ * takes every path it always took.
+ */
+const siblingKeysOf = (
+  spec: Record<string, unknown>,
+  marker: 'ref' | 'id',
+): string[] => Object.keys(spec).filter(k => k !== marker)
+
+/**
+ * What a `{ id }` clone is told when it carries fields it cannot apply (B83).
+ *
+ * The `{ ref }` half of this defect is repaired by merging, because the server
+ * holds the pooled spec and can. A clone's source is a node in the DOCUMENT and
+ * the plugin's clone path applies no spec to it, so there is nothing here to
+ * merge onto — and stripping the keys silently is exactly what cost twelve
+ * icons their geometry. So it refuses, and names the two calls that work.
+ */
+export const cloneOverrideRejection = (
+  id: string,
+  keys: readonly string[],
+): string =>
+  'create_tree: {id:"' +
+  id +
+  '"} clones an existing node and applies no fields to it, so ' +
+  keys.join(', ') +
+  ' would be dropped. Clone it here, then set those fields with update_node ' +
+  'on the returned id — or state the node in full instead of cloning it.'
 
 /**
  * Recursively convert a TreeNodeSpec to a converted FigmaWritePayload tree.
@@ -77,11 +108,40 @@ const isCloneNode = (
 export const convertTree = (
   spec: TreeNodeSpec,
   warnings?: string[],
+  refs?: RefPool,
 ): FigmaWritePayload => {
   if (isRefNode(spec)) {
-    return { ref: spec.ref }
+    // B83 — the fields written beside the ref are the caller's overrides, and
+    // they used to be stripped at the schema boundary: twelve icons came back
+    // as a clean success with no geometry at all. The pooled spec is here, so
+    // the merge happens here — the result is a plain node, which is what a ref
+    // resolves to anyway, and it keeps the one-fresh-subtree-per-use rule
+    // because each use converts its own copy.
+    const overrides = siblingKeysOf(spec, 'ref')
+    const pooled = refs?.[spec.ref]
+    if (overrides.length === 0 || pooled === undefined) {
+      // A bare ref, or a ref this call cannot resolve — the plugin owns the
+      // "no such ref" error, and inventing a second one here would hide it.
+      return { ref: spec.ref }
+    }
+    const merged: Record<string, unknown> = {
+      ...(pooled as Record<string, unknown>),
+      ...spec,
+    }
+    delete merged.ref
+    return convertTree(
+      merged as TreeNodeSpec,
+      warnings,
+      refs,
+    )
   }
   if (isCloneNode(spec)) {
+    const overrides = siblingKeysOf(spec, 'id')
+    if (overrides.length > 0) {
+      throw new Error(
+        cloneOverrideRejection(spec.id, overrides),
+      )
+    }
     return { id: spec.id }
   }
 
@@ -110,7 +170,7 @@ export const convertTree = (
   const converted = specToFigmaForCreate(flat, warnings)
   if (children !== undefined && children.length > 0) {
     converted.children = children.map(child =>
-      convertTree(child, warnings),
+      convertTree(child, warnings, refs),
     )
   }
   return converted
@@ -282,7 +342,7 @@ export const handleCreateTree = async (
     // and a refusal that arrives after half the payload is built has already
     // cost the caller the round trip it was meant to save (I69).
     assertNoNestedComponent(tree, refs)
-    const convertedTree = convertTree(tree, warnings)
+    const convertedTree = convertTree(tree, warnings, refs)
     const convertedRefs =
       refs !== undefined
         ? convertRefs(refs, warnings)

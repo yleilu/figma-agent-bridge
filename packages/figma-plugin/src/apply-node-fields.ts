@@ -1040,35 +1040,107 @@ const childrenSpan = (
 }
 
 /**
- * A FILL child on the axis its parent HUGS — the circular pair (B80).
+ * How many ancestors the master walk climbs before it gives up.
  *
- * The parent asks its children how wide to be and the child asks its parent,
- * so there is nothing to resolve and Figma collapses the child to its minimum.
- * That is almost never the intent: live 2026-09-01 a `Token cell` stating
- * `sizing:[FILL, HUG]` inside a HUG row master came out **12px wide with 56px
- * of children overflowing it**, and the write answered `warnings: []`.
+ * A Figma tree is a few dozen levels at worst; the bound is here so a cyclic
+ * fake cannot hang a dispatch, never as a real limit.
+ */
+const MAX_MASTER_HOPS = 32
+
+/** How this parent sizes itself on `axis`, in Figma's own words. */
+const axisSizingOf = (
+  parent: unknown,
+  axis: Axis,
+): string | undefined => {
+  try {
+    const value = (parent as Record<string, unknown>)[
+      axis === 0
+        ? 'layoutSizingHorizontal'
+        : 'layoutSizingVertical'
+    ]
+    return typeof value === 'string' ? value : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Whether this node lives inside a COMPONENT master (B80 refinement).
+ *
+ * A master's own geometry is a TEMPLATE, and the circular pair inside one does
+ * not mean what it means on a screen: every INSTANCE of the row overrides its
+ * width to FILL, which un-hugs the parent and re-enables the FILL child.
+ * Proved live 2026-09-01 on four designated flex columns across three tables —
+ * none collapsed, and their sizes were stable across re-writes.
+ *
+ * `undefined` for a walk that could not finish: an unknown must not be reported
+ * as a finding, and must not suppress one either.
+ */
+const insideMaster = (
+  node: unknown,
+): boolean | undefined => {
+  let current = node
+  for (let hop = 0; hop < MAX_MASTER_HOPS; hop++) {
+    let parent: unknown
+    try {
+      parent = (current as { parent?: unknown })?.parent
+    } catch {
+      return undefined
+    }
+    if (typeof parent !== 'object' || parent === null) {
+      return false
+    }
+    let type: unknown
+    try {
+      type = (parent as { type?: unknown }).type
+    } catch {
+      return undefined
+    }
+    if (type === 'COMPONENT' || type === 'COMPONENT_SET') {
+      return true
+    }
+    current = parent
+  }
+  return undefined
+}
+
+/**
+ * A FILL child that came out SMALLER than its own contents need (B80).
+ *
+ * Two parents starve a FILL child, and the first cut of this warning named
+ * only one of them:
+ *
+ *   the CIRCULAR pair  — the parent HUGS the same axis, so each asks the other
+ *                        how big to be and Figma resolves it at the minimum.
+ *   a STARVED parent   — the parent is FIXED at less than the child needs, so
+ *                        the FILL child gets a share that cannot hold its own
+ *                        contents.
+ *
+ * THE REFINEMENT, and both halves come from one live round. The first cut
+ * warned on the circular PAIR alone, by shape, and stream 3 (2026-09-01) showed
+ * that reads wrong in BOTH directions: it fired on four designated flex columns
+ * across three tables that do not collapse — a master is a template, and every
+ * row INSTANCE overrides its width to FILL, which un-hugs the parent and
+ * re-enables the child — while the collapse it was filed for, the `Token cell`
+ * at 12px with 56px of children in it, was under a STARVED FIXED parent that
+ * the shape rule never looked at.
+ *
+ * So the finding is the COLLAPSE, not the pair: warn when the numbers say this
+ * node ended up smaller than its contents, whichever parent did it. The pair is
+ * still named on its own where no numbers exist yet — an empty frame at create
+ * time can only be judged by shape, and author time is when the caller can
+ * still act on it — except inside a master, where the shape is not evidence.
  *
  * WARN, NEVER REFUSE. B58 refused its self-contradictory pair because Figma
  * destroys that one on the next click; Figma TOLERATES this one and resolves
- * it, so refusing would block a write the file accepts. What was missing was
- * the sentence, not the permission.
+ * it, so refusing would block a write the file accepts.
  *
  * ON THE PRIMARY AXIS ONLY, and deliberately. That axis is where a hug means
- * *the sum of my children*, which leaves a FILL child exactly nothing — the
- * proven collapse and the live case. The COUNTER axis hug means *the largest
- * of my children*, where a FILL child stretching to the tallest sibling is
- * ordinary and correct, and warning on it would be noise on a very common
- * shape. (An all-FILL counter axis has no largest child to stretch to; that
- * case is not claimed here because it has not been observed live.)
- *
- * The NUMBERS are added when they can be read — a node with children already
- * in it can be asked how the collapse actually landed, which turns a rule the
- * caller must apply themselves into a fact about their own document. A create
- * of an empty frame has no such numbers and still gets the pair named, because
- * the pair is decidable from what the caller just wrote and author time is
- * when they can still act on it.
+ * *the sum of my children*. The COUNTER axis hug means *the largest of my
+ * children*, where a FILL child stretching to the tallest sibling is ordinary
+ * and correct, and warning on it would be noise on a very common shape.
  */
-export const hugFillCollapseWarning = (
+export const fillCollapseWarning = (
   node: SizingTarget,
   sizing: unknown,
 ): string | undefined => {
@@ -1084,20 +1156,13 @@ export const hugFillCollapseWarning = (
   const axis = primaryAxisOf(parent)
   if (axis === undefined) return undefined
   if (sizing[axis] !== 'FILL') return undefined
-  if (hugsAxis(parent, axis) !== true) return undefined
 
   const own = spanOn(node, axis)
   const needed = childrenSpan(node, axis)
-  const collapsed =
-    own !== undefined &&
-    needed !== undefined &&
-    own < needed
-      ? ' It resolved to ' +
-        String(own) +
-        'px while its children need ' +
-        String(needed) +
-        'px, so they overflow it.'
-      : ''
+  const measured = own !== undefined && needed !== undefined
+  const collapsed = measured && own < needed
+  const hugs = hugsAxis(parent, axis) === true
+
   let parentName = ''
   try {
     const name = (parent as { name?: unknown }).name
@@ -1107,6 +1172,48 @@ export const hugFillCollapseWarning = (
   } catch {
     // An unnamed parent still makes the sentence; a thrown name does not.
   }
+  const overflow =
+    ' It resolved to ' +
+    String(own) +
+    'px while its children need ' +
+    String(needed) +
+    'px, so they overflow it.'
+
+  if (collapsed && !hugs) {
+    // The STARVED parent — the shape the Token cell actually had, and the one
+    // the pair rule could not see.
+    const parentSpan = spanOn(parent, axis)
+    const parentSizing = axisSizingOf(parent, axis)
+    return (
+      nodeLabel(node) +
+      ' FILLs the ' +
+      AXES[axis] +
+      ' axis, and its parent' +
+      parentName +
+      ' has less room than this node needs.' +
+      overflow +
+      (parentSpan === undefined
+        ? ''
+        : ' The parent is ' +
+          (parentSizing === undefined
+            ? ''
+            : parentSizing + ' at ') +
+          String(parentSpan) +
+          'px on that axis.') +
+      ' Widen the parent, or give this node a FIXED or HUG ' +
+      AXES[axis] +
+      ' size.'
+    )
+  }
+
+  if (!hugs) return undefined
+  if (!collapsed) {
+    // The circular pair with no collapse to show for it. MEASURED and fine, or
+    // inside a master where the shape is not evidence — an instance re-enables
+    // the child. Either way it is not a finding.
+    if (measured) return undefined
+    if (insideMaster(node) !== false) return undefined
+  }
   return (
     nodeLabel(node) +
     ' FILLs the ' +
@@ -1115,7 +1222,7 @@ export const hugFillCollapseWarning = (
     parentName +
     ' HUGS the same axis. The two ask each other how big to be, so Figma ' +
     'collapses this node to its minimum.' +
-    collapsed +
+    (collapsed ? overflow : '') +
     ' Give this node a FIXED or HUG ' +
     AXES[axis] +
     ' size, or give the parent a FIXED or FILL one.'
@@ -1159,7 +1266,7 @@ export const applySizing = (
   // circular pair and collapses the node, so nothing throws and nothing warns.
   // Read AFTER the assignment, so the node's own span is the one this call
   // produced.
-  const collapse = hugFillCollapseWarning(node, sizing)
+  const collapse = fillCollapseWarning(node, sizing)
   if (collapse !== undefined) {
     warnings?.push(collapse)
   }

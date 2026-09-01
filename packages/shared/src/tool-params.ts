@@ -1343,6 +1343,18 @@ export const exportParamsSchema = strictParams({
     .describe(
       'Raster scale factor (default 1; ignored for SVG/PDF).',
     ),
+  outPath: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Write the render to this file and return its path instead of the ' +
+        'bytes. A path ending in "/" (or naming an existing directory) is ' +
+        'treated as a directory and the file is named after the node. ' +
+        'Parent directories are created. Without it the render comes back ' +
+        'inline, which only a host can display — an agent never sees the ' +
+        'base64 and cannot save it.',
+    ),
 })
 
 // ---------------------------------------------------------------------------

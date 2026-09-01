@@ -269,6 +269,13 @@ export type ScanEntry = {
   id: string
   levelsLeft: number
   subtreeEnd: number
+  /**
+   * The scan START this entry descends from, by index (search-scan.ts).
+   *
+   * Optional so a fixture describing ONE subtree can leave it out; absent
+   * means "one root", which is what a node- or page-scoped scan is.
+   */
+  root?: number
 }
 
 /**
@@ -347,7 +354,22 @@ export type RepairInput = {
   componentRefOf?: (
     componentId: string,
   ) => Promise<ComponentRef | undefined>
-  /** Cap on how many subtrees may be serialized in one scan (T10). */
+  /**
+   * Cap on how many subtrees may be serialized PER SCAN ROOT (T10).
+   *
+   * Per root, not per scan. A document scan starts once per top-level node of
+   * every page, and a single shared cap is spent in scan order — so the pages
+   * that happen to be scanned first take all of it and the pages after them
+   * come back short. That is not a hypothesis: on the 2026-09-01 artifact the
+   * document scan returned 1477 rows against 1646 from the same four pages
+   * scanned one at a time, and every one of the 195 missing rows sat on the
+   * last two pages, under 8 subtree roots, while the first two pages lost
+   * nothing. The four pages needed 33 / 12 / 17 / 13 repairs against a shared
+   * cap of 50: the first two pages spent 45 of it.
+   *
+   * The cap still bounds the work per subtree, which is what T10 is for. What
+   * it no longer does is let one subtree's damage decide another's fidelity.
+   */
   maxRepairs?: number
 }
 
@@ -371,6 +393,20 @@ export type RepairOutput = {
    * so on its own line.
    */
   incomplete: boolean
+  /**
+   * How many rows are PRESENT but thinner than they look (B85).
+   *
+   * `incomplete` says the set is short. This says the set is complete and some
+   * of its rows cannot answer `match:{styleId|context|componentKey|
+   * instancesOf}` — which reads, from `results` alone, exactly like a node that
+   * does not carry the style. An effect-style census answered `results: 1`
+   * where three nodes carried the style and the two missing ones were plainly
+   * glowing in the export, and the reply said so only in prose. A count is
+   * testable; prose is not.
+   *
+   * Zero once every trade carries its keys over, which is the common case now.
+   */
+  degraded: number
 }
 
 /**
@@ -457,6 +493,8 @@ export const repairScan = async ({
     componentRefOf !== undefined || exportRefs.size > 0
   const covered = new Set<number>()
   const superseded = new Set<number>()
+  /** Rows whose live-only keys rode over to their export twin (B85). */
+  const carried = new Set<number>()
   const rescanned: Candidate[] = []
   const rescannedIds = new Set<string>()
   /** One line per row the repair traded away with keys on it. */
@@ -480,16 +518,25 @@ export const repairScan = async ({
   }
   const hosts = [...hostSet].sort((a, b) => a - b)
 
-  let repairs = 0
-  /** A host the budget stopped us reaching — its subtree is simply missing. */
-  let budgetCut = false
+  /** How many repairs each scan ROOT has spent, and what it could not reach. */
+  const spent = new Map<number, number>()
+  /** root index → hosts the budget refused, so the cut can be ITEMISED. */
+  const cutBy = new Map<number, number>()
+  const rootOf = (host: number): number =>
+    scanned[host]?.root ?? 0
   for (const host of hosts) {
     if (covered.has(host)) continue
-    if (repairs >= maxRepairs) {
-      budgetCut = true
-      break
+    const root = rootOf(host)
+    const used = spent.get(root) ?? 0
+    if (used >= maxRepairs) {
+      // This root is out of budget. Its remaining hosts are counted rather
+      // than abandoned quietly, and the SCAN CONTINUES: the next root has its
+      // own allowance, and stopping here is precisely what cost the last two
+      // pages of the 2026-09-01 artifact 195 rows.
+      cutBy.set(root, (cutBy.get(root) ?? 0) + 1)
+      continue
     }
-    repairs++
+    spent.set(root, used + 1)
     const exported = await exportHost(host)
     if (exported === undefined) continue
     // Every ref the maps of THIS export can name, folded into the shared
@@ -520,6 +567,28 @@ export const repairScan = async ({
       }
     }
 
+    // B85 — the HOST's own live row donates the four keys an export cannot
+    // carry. `fromExport[0]` IS this host, named the way the file names it, so
+    // the two rows are the same node under two spellings and the pairing needs
+    // no guessing. It is the row the trade actually cost: an effect-style
+    // census read `results: 1` where three nodes carried the style, because the
+    // two carriers inside repaired subtrees came back from the export with no
+    // `styleIds` for `match:{styleId}` to test. Only the host — a deeper alias
+    // row has no export twin this pass can identify, and guessing one would put
+    // a node's styles on a different node.
+    const hostRow = candidates[host]
+    if (hostRow !== undefined && !exportIds.has(entry.id)) {
+      for (const key of LIVE_ONLY_KEYS) {
+        if (
+          hostRow[key] !== undefined &&
+          fromExport[0][key] === undefined
+        ) {
+          fromExport[0][key] = hostRow[key]
+        }
+      }
+      carried.add(host)
+    }
+
     for (let i = host; i < entry.subtreeEnd; i++) {
       covered.add(i)
       const liveId = scanned[i].id
@@ -535,10 +604,9 @@ export const repairScan = async ({
         // names the same node properly, a few lines down.
         superseded.add(i)
         liveIds.delete(liveId)
-        const lost = liveOnlyKeysOf(
-          liveRow,
-          refsResolvable(),
-        )
+        const lost = carried.has(i)
+          ? []
+          : liveOnlyKeysOf(liveRow, refsResolvable())
         if (lost.length > 0) {
           traded.push(
             'search: repaired the subtree at ' +
@@ -625,7 +693,7 @@ export const repairScan = async ({
   // subtree it was read at, and a failure outside that slice is not covered by
   // it however close the two look.
   const warnings: string[] = []
-  let incomplete = budgetCut
+  let incomplete = cutBy.size > 0
   for (const failure of failures) {
     const isCovered =
       failure.at >= 0
@@ -640,17 +708,36 @@ export const repairScan = async ({
       incomplete = true
     }
   }
-  if (budgetCut) {
+  // The cut is ITEMISED, one line per scan root that hit the cap (B72). A
+  // single "the budget stopped me" line said the set was short and left the
+  // caller no way to find out where: 195 rows went missing under 8 subtrees on
+  // two named pages, and the reply named none of them. Each line carries the
+  // root's own id, so `scope:'node'` on it recovers exactly what was lost.
+  for (const [root, unreached] of cutBy) {
     warnings.push(
-      'search: stopped repairing after ' +
+      'search: stopped repairing under ' +
+        (scanned[root]?.id ?? '(unknown root)') +
+        ' after ' +
         maxRepairs +
-        ' subtrees (the per-scan budget) — the result set is INCOMPLETE. ' +
-        'Scan one page at a time (scope:"page", pageId) to see the rest.',
+        ' subtrees (the per-root budget) — ' +
+        unreached +
+        ' more degraded subtree(s) there are MISSING from these results. ' +
+        'Re-scan that subtree on its own (scope:"node", nodeId:"' +
+        (scanned[root]?.id ?? '…') +
+        '") to see the rest.',
     )
   }
   // …and what the repair itself cost, after what it could not repair.
   for (const message of traded) {
     warnings.push(message)
   }
-  return { results, warnings, incomplete }
+  // B85 — one line per thinned row is already in `warnings`; this is the same
+  // fact as a number, so a completeness check can test it the way it tests
+  // `truncated`.
+  return {
+    results,
+    warnings,
+    incomplete,
+    degraded: traded.length,
+  }
 }

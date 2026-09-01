@@ -3448,6 +3448,36 @@ export const createMockPlugin = (
       //   anything else → ordinary FRAME reply (default mock node)
       case 'delete_node': {
         const dnNodeId = cmd.params?.nodeId as string
+        // B84 — an INSTANCE whose SLOT holds content. Figma leaves that
+        // content behind, re-homed into the parent under an address composed
+        // off the instance that just went, so it renders and no tool can
+        // reach it (live 2026-09-01: nine calls and a re-layout to be rid of
+        // one node). The plugin clears the slot first and NAMES what it took,
+        // which is the shape this arm models — the reply carries `removed[]`
+        // beside the usual identity, plus one warning.
+        if (dnNodeId === 'instance:filled-slot') {
+          result = {
+            id: dnNodeId,
+            name: 'Chart card',
+            type: 'INSTANCE',
+            removed: [
+              {
+                id: 'I570:21813;570:20826;570:21817',
+                name: 'Table',
+                type: 'FRAME',
+              },
+            ],
+            warnings: [
+              'delete_node: removed 1 node(s) held in this node’s slot(s) — ' +
+                'Table (I570:21813;570:20826;570:21817). Figma leaves slot ' +
+                'content behind when its instance goes, re-homed into the ' +
+                'parent under an address that no longer resolves, so it ' +
+                'renders and no tool can reach it. Reparent content out of ' +
+                'the slot before deleting if you meant to keep it.',
+            ],
+          }
+          break
+        }
         // Mock page registry: two pages, page:current is active.
         const mockPages = [
           { id: 'page:current', name: 'Page 1' },

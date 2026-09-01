@@ -42,12 +42,17 @@ const pointsIn = (data: string): [number, number][] => {
 const figmaVector = (
   at: [number, number] = [0, 0],
   refuses = false,
+  // I83 — the node's own id. A vector inside an INSTANCE carries a compound
+  // one, and that is what tells a refusal which story to tell.
+  id = '5:1',
+  reason = 'in set_vectorPaths: Failed to convert path. Invalid command at H',
 ): PathTarget & {
   width: number
   height: number
   stored: unknown
 } => {
   const node = {
+    id,
     x: at[0],
     y: at[1],
     width: 0,
@@ -60,9 +65,7 @@ const figmaVector = (
     get: () => node.stored,
     set: (paths: { data: string }[]) => {
       if (refuses) {
-        throw new Error(
-          'in set_vectorPaths: Failed to convert path. Invalid command at H',
-        )
+        throw new Error(reason)
       }
       const points = paths.flatMap(p => pointsIn(p.data))
       const xs = points.map(p => p[0])
@@ -166,6 +169,42 @@ describe('assignVectorPaths — what Figma moved the node by', () => {
       'vectorPaths rejected by Figma',
     )
     expect(warnings[0]).toContain('Invalid command at H')
+  })
+
+  // ── I83: the refusal names the ways through ──────────────────────────────
+  //
+  // B45 ruled this degrade CORRECT in 2026-08-18 and pointed at "the nested
+  // VECTOR sublayer, reachable since B53" as the per-instance route. Live
+  // 2026-09-01 says that route does not exist: `update_node` on exactly such a
+  // sublayer (`I570:20983;570:20820;570:20699`) answers *"This property cannot
+  // be overridden in an instance: vector-data"*. Figma seals vector data in an
+  // instance, whatever the id. The refusal is right; the guidance around it was
+  // not, and four KPI sparklines were modelled as one component plus
+  // per-instance shape overrides before hitting it at content time.
+  it('names the three ways through when the node is inside an INSTANCE', () => {
+    const node = figmaVector(
+      [0, 0],
+      true,
+      'I570:20983;570:20820;570:20699',
+      'in set_vectorPaths: This property cannot be overridden in an instance: vector-data',
+    )
+    const warnings: string[] = []
+    assignVectorPaths(node, CHART, warnings)
+    // Figma's own words first — the caller still needs the reason.
+    expect(warnings[0]).toContain(
+      'cannot be overridden in an instance',
+    )
+    expect(warnings[0]).toContain('MASTER')
+    expect(warnings[0]).toContain('COMPONENT_SET')
+    expect(warnings[0]).toContain('SLOT')
+  })
+
+  it('tells a plain node nothing about instances', () => {
+    const node = figmaVector([0, 0], true)
+    const warnings: string[] = []
+    assignVectorPaths(node, CHART, warnings)
+    expect(warnings[0]).toContain('Invalid command at H')
+    expect(warnings[0]).not.toContain('COMPONENT_SET')
   })
 
   it('sends Figma only the two keys its shape has', () => {

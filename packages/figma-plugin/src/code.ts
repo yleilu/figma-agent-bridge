@@ -113,6 +113,19 @@ import {
   UNREADABLE_NODE,
 } from './search-scan'
 import {
+  removeSlotContent,
+  slotContentRemovedMessage,
+} from './slot-content'
+import {
+  constructionDefaultsWarning,
+  unstatedDefaultOf,
+  type ConstructionDefault,
+} from './construction-defaults'
+import {
+  restoreAbsolutePositions,
+  type PlacedChild,
+} from './absolute-position'
+import {
   createNodeResolver,
   declareDegradedRead,
   isAliasHandle,
@@ -1767,7 +1780,11 @@ const buildSingleNode = async (
   // B60. Passed through to applyPostAppendProperties: on the tree path the
   // caller owns the sizing write, because only it knows when this node's
   // children are in place.
-  opts?: { deferSizing?: boolean },
+  opts?: {
+    deferSizing?: boolean
+    // B86 — where the construction defaults this node inherited are recorded.
+    defaults?: ConstructionDefault[]
+  },
 ): Promise<SceneNode> => {
   const type = spec.type as string
   let node: SceneNode
@@ -2008,6 +2025,18 @@ const buildSingleNode = async (
   // — Figma still emits CREATE + DELETE for it.
   writeScope.claim(writer, node)
 
+  // B86 — read BEFORE the spec lands, because this is the only moment the node
+  // holds Figma's answer and nothing else. What it inherited is DECLARED, not
+  // neutralised: B16's ruling stands, and four sightings across four builds say
+  // the spec table alone never reached a caller.
+  const inherited = unstatedDefaultOf(
+    spec,
+    node as unknown as Record<string, unknown>,
+  )
+  if (inherited !== undefined) {
+    opts?.defaults?.push(inherited)
+  }
+
   // Apply common properties (fills, strokes, effects, etc.)
   await applyCommonProperties(node, spec, parent, warnings)
 
@@ -2112,7 +2141,10 @@ const createSingleNode = async (
   writer: string,
   warnings?: string[],
   placed?: Placement[],
-  opts?: { deferSizing?: boolean },
+  opts?: {
+    deferSizing?: boolean
+    defaults?: ConstructionDefault[]
+  },
 ): Promise<SceneNode> => {
   let held: SceneNode | undefined
   const track = <T extends SceneNode>(node: T): T => {
@@ -2167,6 +2199,9 @@ const createTreeNode = async (
   // so a ref-built child records the position its POOL spec stated — the
   // wrapper never carries one.
   placed?: Placement[],
+  // B86's sink, threaded for the same reason `warnings` is: a default can be
+  // inherited at ANY depth and the caller only ever sees the root's reply.
+  defaults?: ConstructionDefault[],
 ): Promise<SceneNode> => {
   const type = spec.type as string
 
@@ -2195,6 +2230,7 @@ const createTreeNode = async (
       created,
       warnings,
       placed,
+      defaults,
     )
   }
 
@@ -2316,7 +2352,7 @@ const createTreeNode = async (
     writer,
     warnings,
     placed,
-    { deferSizing: hasChildren },
+    { deferSizing: hasChildren, defaults },
   )
   // Pushed BEFORE the children recurse, so the order is root-first depth-first.
   created?.push(node.id)
@@ -2327,12 +2363,16 @@ const createTreeNode = async (
   // with — an auto-layout that centres or space-betweens moves every earlier
   // child as later ones arrive, and a FILL collapse re-anchors them all.
   const childPlacements: Placement[] = []
+  // B87 — every ABSOLUTE child, with the spec that asked for it. The deferred
+  // resize below re-maps them through their own constraints, against a box the
+  // caller never saw, so they are put back afterwards.
+  const absoluteChildren: PlacedChild[] = []
   if (hasChildren && 'appendChild' in node) {
     for (const childSpec of children as Record<
       string,
       unknown
     >[]) {
-      await createTreeNode(
+      const childNode = await createTreeNode(
         childSpec,
         node as ParentNode,
         writer,
@@ -2341,7 +2381,17 @@ const createTreeNode = async (
         created,
         warnings,
         childPlacements,
+        defaults,
       )
+      if (childSpec.layoutPositioning === 'ABSOLUTE') {
+        absoluteChildren.push({
+          node: childNode as unknown as Record<
+            string,
+            unknown
+          >,
+          spec: childSpec,
+        })
+      }
     }
   }
 
@@ -2372,6 +2422,13 @@ const createTreeNode = async (
       warnings,
       spec.sizing,
     )
+    // B87 — and NOW the box is the one the children will live in, so an
+    // ABSOLUTE child's stated position means what the caller meant by it. The
+    // resize above re-anchored each of them through its OWN constraints,
+    // against the provisional box: a bar asked for at [0,10] inside a frame
+    // that hugged from 100 to 40 landed at [0,-20], outside its parent, and
+    // nothing said so.
+    restoreAbsolutePositions(absoluteChildren, warnings)
   }
 
   if (childPlacements.length > 0) {
@@ -3802,10 +3859,18 @@ const handleCommand = async (
       const searchReply: {
         results: Record<string, unknown>[]
         incomplete?: true
+        degraded?: number
         warnings?: string[]
       } = { results: repaired.results }
       if (repaired.incomplete) {
         searchReply.incomplete = true
+      }
+      // B85 — and `degraded` is the same idea for a row that is PRESENT and
+      // thinner than it looks: it cannot answer a match on styleId, context,
+      // componentKey or instancesOf, which reads exactly like a node that does
+      // not carry the style. A census read 1 where 3 carried it.
+      if (repaired.degraded > 0) {
+        searchReply.degraded = repaired.degraded
       }
       if (skipped.length > 0) {
         searchReply.warnings = skipped
@@ -3852,13 +3917,20 @@ const handleCommand = async (
         // B35: one node, so the sink can only ever hold one entry — and
         // `discardedPositionsWarning` renders that as the singular sentence.
         const placed: Placement[] = []
+        const defaults: ConstructionDefault[] = []
         const created = await createSingleNode(
           spec,
           parent,
           writer,
           warnings,
           placed,
+          { defaults },
         )
+        const inheritedNote =
+          constructionDefaultsWarning(defaults)
+        if (inheritedNote !== undefined) {
+          warnings.push(inheritedNote)
+        }
         const discarded = discardedPositionsWarning(
           parent,
           placed,
@@ -3933,6 +4005,9 @@ const handleCommand = async (
         // parent that placed it, inside createTreeNode — this sink covers the
         // one node no parent in the recursion owns.
         const rootPlaced: Placement[] = []
+        // B86 — ONE sink for the whole tree, so sixteen unstated frames are one
+        // line and not sixteen copies of it (the I41 noise rule).
+        const treeDefaults: ConstructionDefault[] = []
         const treeResult = await createTreeNode(
           treeSpec,
           treeParent,
@@ -3942,7 +4017,13 @@ const handleCommand = async (
           createdIds,
           treeWarnings,
           rootPlaced,
+          treeDefaults,
         )
+        const treeInherited =
+          constructionDefaultsWarning(treeDefaults)
+        if (treeInherited !== undefined) {
+          treeWarnings.push(treeInherited)
+        }
         const rootDiscarded = discardedPositionsWarning(
           treeParent,
           rootPlaced,
@@ -5430,8 +5511,23 @@ const handleCommand = async (
           currentPageId: figma.currentPage.id,
         }
       }
+      // B84 — a SLOT's content does NOT go with its instance. Figma re-homes
+      // it into the parent, where it renders under an address composed off the
+      // instance that no longer exists, so nothing can address it and nothing
+      // can remove it. Clear it FIRST, while its handles still answer, and say
+      // what went: a delete that quietly destroys content would be the other
+      // half of the same defect.
+      const removed = removeSlotContent(
+        node as unknown as LiveNode,
+      )
       node.remove()
-      return info
+      return removed.length === 0
+        ? info
+        : {
+            ...info,
+            removed,
+            warnings: [slotContentRemovedMessage(removed)],
+          }
     }
 
     // set_focus: scroll + zoom the viewport so the resolved nodes are in view.

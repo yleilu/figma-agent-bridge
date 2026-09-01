@@ -181,6 +181,14 @@ would also get:
 | `TEXT` | `fills: [#000000]` |
 | `VECTOR` · `LINE` | `strokes: [#000000]` |
 
+**And the create SAYS which nodes it applied to (B86).** Four builds shipped an unstated default
+they had to repair — 16 white wrapper frames over a dark screen in one, a black 1px rim on a
+gradient logo mark in another — so the table above is not enough on its own: it is read before the
+build and the default is met during it. `create_node` and `create_tree` therefore carry one
+aggregated `warnings[]` line per call, naming how many nodes kept a default, on which type and
+field, and the empty array that opts out. Nothing is neutralised; the ruling is unchanged. One
+line per call, not per node — sixteen unstated frames are one sentence with a count.
+
 **Pass an empty array to mean none.** `fills: []` and `strokes: []` clear the default and are
 distinct from an absent key — that distinction is the only way to say "deliberately unpainted", so
 neither side of it may be collapsed into the other. The defaults round-trip: a read reports what
@@ -271,7 +279,7 @@ exposes:
 - **text** — `{content, font, color, align, valign, decoration, case, paragraphSpacing, runs}`. `font`/`color` are atoms; `runs` carries per-range overrides (see below). Line height and letter spacing are canonical on the `font(...)` atom (`font(...){lh=24, ls=0.5}`) — there are no separate top-level `lh`/`ls` text keys.
 - **exportSettings** — array of persistent export presets, each `{format: PNG|JPG|SVG|PDF, suffix?, constraint?: [SCALE|WIDTH|HEIGHT, value]}`. Round-trips via `get_node`/`update_node` (the persistent-presets path; the `export` tool itself is one-off render/asset output).
 - **position** — `[x, y]`, parent-relative. **Omitted on an invisible child of an auto-layout parent when the read includes the parent** — Figma does not lay out hidden children, so the stored value is stale (T7: a value the engine is not maintaining is not presented as live). A read entered AT such a node (drill-by-id) cannot see its parent, and returns the stored value. A hidden `ABSOLUTE` child keeps its position, and so does a hidden child of a plain (non-auto-layout) frame: those coordinates are real.
-- **layoutPositioning** — `AUTO` | `ABSOLUTE` (a child's flow vs absolute participation). Paired with the parent's `layout.mode` it is what distinguishes a true absolute child from a flow child (the §7 absolute-positioning audit reads this — `position` alone can't, since flow children still carry x/y).
+- **layoutPositioning** — `AUTO` | `ABSOLUTE` (a child's flow vs absolute participation). Paired with the parent's `layout.mode` it is what distinguishes a true absolute child from a flow child (the §7 absolute-positioning audit reads this — `position` alone can't, since flow children still carry x/y). **In `create_tree`, an ABSOLUTE child's `position` is applied against the parent's FINAL box (B87).** A parent's FILL/HUG resize is deferred until its children are in place (B60), so the position first lands against a provisional box and the resize then re-anchors the child through its own `constraints` — correct arithmetic on a box the caller never saw. Live: a bar asked for at `[0,10]` inside a frame that hugged 100 → 40 read back at `[0,-20]`, above the row and outside its parent, with `warnings: []`. The stated position is therefore re-applied after the resize, and only to a child that actually drifted. Same remedy shape as the post-append x/y re-apply and the `vectorPaths` rebase (B79): re-state the value after the thing that moved it.
 - **componentProperties / variantProperties** *(on INSTANCE / variant nodes)* — the instance's current property values and variant selection. The `componentPropertyDefinitions` (the schema) live on the component/set and are read via `get_components`. **Read-only** — see *Read-only node fields* below.
 - **warnings** — the read's honesty channel: one entry per piece of the node's state this read **could not represent**, naming the field and the reason (e.g. a `VIDEO` fill the grammar does not render yet). Omitted entirely when nothing was lost, so its presence is the signal. **Read-only** — see below.
 - **readError** — the one entry `warnings` cannot carry: not a piece of state the read could not *represent*, but a node the read could not *reach*. It names the failure (the message the node itself raised) on that node alone, so a read that crosses an unresolvable node returns it labelled instead of returning nothing at all — every sibling and ancestor comes back whole. Omitted when the node read cleanly, so its presence is the signal. **Read-only** — see below.

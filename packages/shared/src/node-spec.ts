@@ -404,8 +404,22 @@ export type TreeNodeSpec =
   | (Omit<NodeSpec, 'children'> & {
       children?: TreeNodeSpec[]
     })
-  | { ref: string }
-  | { id: string }
+  | TreeRefNode
+  | ({ id: string } & Record<string, unknown>)
+
+/**
+ * A `{ ref }` pool reference, plus the fields written BESIDE it (B83).
+ *
+ * A ref alone reuses the pooled spec verbatim. A ref with siblings is the same
+ * spec with those fields on top — which is what makes a pool worth having:
+ * twelve icons that share every field but their path are one pool entry and
+ * twelve one-key overrides. Sending exactly that used to strip the overrides
+ * and report a clean success.
+ */
+export type TreeRefNode = { ref: string } & Record<
+  string,
+  unknown
+>
 
 /** ref-pool: shared specs keyed for repeated instances/clones. */
 export type RefPool = Record<string, TreeNodeSpec>

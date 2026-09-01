@@ -5,7 +5,7 @@ import {
   applySize,
   applySizeVerified,
   applySizing,
-  hugFillCollapseWarning,
+  fillCollapseWarning,
   patchPositionIgnored,
   applyStrokeGeometry,
   applyStrokeWeights,
@@ -1029,19 +1029,29 @@ test('applySizing: T7 — a refused FILL degrades to a warning, naming the type'
   ])
 })
 
-// ─── B80: the circular pair Figma accepts and then collapses ────────────────
+// ─── B80: the FILL child that came out too small ────────────────────────────
 //
-// Live 2026-09-01: a `Token cell` stating `sizing:[FILL, HUG]` inside a HUG
-// row master came out **12px wide with 56px of children overflowing it**, and
-// the write answered `warnings: []`. The parent asks its children how wide to
-// be, the child asks its parent, and Figma resolves the circle by collapsing
-// the child to its minimum.
+// Live 2026-09-01: a `Token cell` stating `sizing:[FILL, HUG]` came out **12px
+// wide with 56px of children overflowing it**, and the write answered
+// `warnings: []`. Nothing throws here — which is exactly why a `catch` could
+// never have caught it. B58's precedent is the shape (a self-contradictory
+// pair, named where the node is in hand), but not the verdict: B58 REFUSES
+// because Figma destroys that pair on the next click, and Figma tolerates this
+// one. So: warn, and never refuse.
 //
-// Nothing throws here — which is exactly why a `catch` could never have caught
-// it. B58's precedent is the shape (a self-contradictory pair, named where the
-// node is in hand), but not the verdict: B58 REFUSES because Figma destroys
-// that pair on the next click, and Figma tolerates this one. So: warn, and
-// never refuse.
+// THE REFINEMENT (stream 3, same round). The first cut warned on the circular
+// PAIR by shape, and that read wrong in both directions:
+//
+//   FALSE POSITIVE — it fired on four designated flex columns across three
+//                    tables that do NOT collapse. A master is a template: every
+//                    row INSTANCE overrides its width to FILL, which un-hugs
+//                    the parent and re-enables the child. Sizes stable on
+//                    re-write.
+//   FALSE NEGATIVE — the Token cell it was filed for was under a STARVED FIXED
+//                    parent, not a hugging one, so the shape rule never looked
+//                    at it.
+//
+// The finding is therefore the COLLAPSE, not the pair.
 
 /** A child under a parent that lays out on `mode` and hugs the named axes. */
 const inHug = (
@@ -1093,6 +1103,58 @@ test('applySizing: B80 — the numbers ride along when the node can be measured'
   expect(warnings[0]).toContain('children need 56px')
 })
 
+test('applySizing: B80 — a measured node that did NOT collapse says nothing', () => {
+  // The false positive, at its root: the pair is there and the numbers say it
+  // resolved fine. Four flex columns across three tables were reported this
+  // way, all of them correct and load-bearing.
+  const node = inHug('HORIZONTAL', ['HUG', 'FIXED'], {
+    width: 220,
+    height: 20,
+    children: [
+      { width: 24, height: 16 },
+      { width: 32, height: 16 },
+    ],
+  })
+  const warnings: string[] = []
+  applySizing(node, ['FILL', 'HUG'], warnings)
+  expect(warnings).toEqual([])
+})
+
+test('applySizing: B80 — a STARVED FIXED parent is the collapse the pair rule missed', () => {
+  // The Token cell's real shape. The parent is not hugging at all: it is FIXED
+  // and too small, so the FILL child's share cannot hold its own children.
+  const node = inHug('HORIZONTAL', ['FIXED', 'FIXED'], {
+    width: 12,
+    height: 20,
+    children: [
+      { width: 24, height: 16 },
+      { width: 32, height: 16 },
+    ],
+  })
+  ;(node.parent as Record<string, unknown>).width = 40
+  const warnings: string[] = []
+  applySizing(node, ['FILL', 'HUG'], warnings)
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain('"Token cell"')
+  expect(warnings[0]).toContain('less room')
+  expect(warnings[0]).toContain('resolved to 12px')
+  expect(warnings[0]).toContain('children need 56px')
+  expect(warnings[0]).toContain('FIXED at 40px')
+  // …and it does not tell the caller a hug story that is not true here.
+  expect(warnings[0]).not.toContain('HUGS the same axis')
+})
+
+test('applySizing: B80 — a FIXED parent with room to spare says nothing', () => {
+  const node = inHug('HORIZONTAL', ['FIXED', 'FIXED'], {
+    width: 200,
+    height: 20,
+    children: [{ width: 24, height: 16 }],
+  })
+  const warnings: string[] = []
+  applySizing(node, ['FILL', 'HUG'], warnings)
+  expect(warnings).toEqual([])
+})
+
 test('applySizing: B80 — an empty frame still gets the pair named', () => {
   // A create states the pair before any child exists. Author time is when the
   // caller can still act, so a value-only check would arrive too late.
@@ -1105,6 +1167,40 @@ test('applySizing: B80 — an empty frame still gets the pair named', () => {
   expect(warnings).toHaveLength(1)
   expect(warnings[0]).toContain('vertical')
   expect(warnings[0]).not.toContain('resolved to')
+})
+
+test('applySizing: B80 — the same empty frame INSIDE A MASTER says nothing', () => {
+  // The other half of the false positive. In a master the shape is not
+  // evidence: an instance overrides the row's width to FILL, which un-hugs the
+  // parent and re-enables the child. Proved on four columns, sizes stable.
+  const node = inHug('VERTICAL', ['FIXED', 'HUG'], {
+    children: [],
+  })
+  ;(node.parent as Record<string, unknown>).parent = {
+    type: 'COMPONENT',
+    name: 'Table row',
+  }
+  const warnings: string[] = []
+  applySizing(node, ['HUG', 'FILL'], warnings)
+  expect(warnings).toEqual([])
+})
+
+test('applySizing: B80 — a master does NOT suppress a measured collapse', () => {
+  // Suppression is only for the shape rule. Numbers are evidence wherever the
+  // node lives, and a master whose column really did collapse is still wrong.
+  const node = inHug('HORIZONTAL', ['HUG', 'FIXED'], {
+    width: 12,
+    height: 20,
+    children: [{ width: 56, height: 16 }],
+  })
+  ;(node.parent as Record<string, unknown>).parent = {
+    type: 'COMPONENT',
+    name: 'Table row',
+  }
+  const warnings: string[] = []
+  applySizing(node, ['FILL', 'HUG'], warnings)
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain('resolved to 12px')
 })
 
 test('applySizing: B80 — the COUNTER axis is left alone', () => {
@@ -1120,7 +1216,7 @@ test('applySizing: B80 — the COUNTER axis is left alone', () => {
   expect(warnings).toEqual([])
 })
 
-test('applySizing: B80 — a FIXED or FILL parent is not a conflict', () => {
+test('applySizing: B80 — a FIXED or FILL parent with nothing measured is not a conflict', () => {
   for (const parentSizing of [
     ['FIXED', 'FIXED'],
     ['FILL', 'FIXED'],
@@ -1249,7 +1345,7 @@ test('patchPositionIgnored: a patch that states no position has nothing to lose'
   ).toBe(false)
 })
 
-test('hugFillCollapseWarning: a parent that refuses every read is not a finding', () => {
+test('fillCollapseWarning: a parent that refuses every read is not a finding', () => {
   const dead = new Proxy({} as Record<string, unknown>, {
     get: () => {
       throw new Error('does not exist')
@@ -1257,17 +1353,17 @@ test('hugFillCollapseWarning: a parent that refuses every read is not a finding'
     has: () => true,
   })
   expect(
-    hugFillCollapseWarning(
+    fillCollapseWarning(
       { name: 'Cell', parent: dead },
       ['FILL', 'HUG'],
     ),
   ).toBeUndefined()
 })
 
-test('hugFillCollapseWarning: the legacy sizing fields answer when the new ones are absent', () => {
+test('fillCollapseWarning: the legacy sizing fields answer when the new ones are absent', () => {
   // A runtime that predates layoutSizing* still states the hug through
   // primaryAxisSizingMode — the same preference order feed/write-scope.ts uses.
-  const warning = hugFillCollapseWarning(
+  const warning = fillCollapseWarning(
     {
       name: 'Cell',
       parent: {
