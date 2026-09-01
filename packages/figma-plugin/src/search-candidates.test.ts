@@ -415,23 +415,17 @@ describe('repairScan — repair without downgrading (C1)', () => {
     })
 
     it('a TRADED row is not incompleteness — it is present, only thinner', async () => {
+      // The chip is a row UNDER the host, so its keys have no export twin the
+      // repair can identify (B85 carries the host's own; a deeper alias would
+      // need a guess). It is the case that still trades.
       const fixture = frameHosted()
       fixture.candidates[3] = live('298:7519', {
         name: 'Chip',
         context: 'a slot-hosted chip',
       })
-      fixture.failures = [
-        {
-          at: -1,
-          host: 3,
-          message: 'search: skipped I298:7519;298:7510',
-        },
-      ]
       const { incomplete, warnings } = await repairScan({
         ...fixture,
-        exportHost: async () => ({
-          document: (frameDoc().children as RawNode[])[2],
-        }),
+        exportHost: async () => ({ document: frameDoc() }),
       })
       expect(
         warnings.some(w => w.includes('cannot carry')),
@@ -455,11 +449,15 @@ describe('repairScan — repair without downgrading (C1)', () => {
     expect(warnings).toEqual([])
   })
 
-  // Final-review I-1. The C1 round protected the healthy SIBLINGS. The row the
-  // repair actually trades away is the alias ROOT: its own handle read, so the
-  // scan gave it the four live-only keys, and the export row that replaces it
-  // cannot carry them. The trade is a real limit; doing it in silence is not.
-  it('names the row it traded away, and the keys a filter can no longer see', async () => {
+  // Final-review I-1, re-aimed by B85. The C1 round protected the healthy
+  // SIBLINGS; the row the repair traded away was the alias ROOT, whose own
+  // handle read and which therefore HELD the four live-only keys. Trading them
+  // is what an effect-style census paid for: `search({match:{styleId}})`
+  // answered `results: 1` where three nodes carried the style, and the two it
+  // missed were plainly glowing in the export. The host's live row and
+  // `fromExport[0]` are the same node under two spellings, so the keys ride
+  // over and there is nothing left to trade.
+  it('carries the HOST’s live-only keys onto its export twin', async () => {
     const fixture = frameHosted()
     // The chip read — only its label threw — so it HAS a hinted live row.
     fixture.candidates[3] = live('298:7519', {
@@ -476,22 +474,59 @@ describe('repairScan — repair without downgrading (C1)', () => {
         message: 'search: skipped I298:7519;298:7510',
       },
     ]
-    const { results, warnings } = await repairScan({
-      ...fixture,
-      exportHost: async () => ({
-        document: (frameDoc().children as RawNode[])[2],
-      }),
+    const { results, warnings, degraded } =
+      await repairScan({
+        ...fixture,
+        exportHost: async () => ({
+          document: (frameDoc().children as RawNode[])[2],
+        }),
+      })
+    const chip = results.find(r => r.id === CANON)
+    expect(chip).toMatchObject({
+      styleIds: ['S:chip'],
+      componentKey: 'k-chip',
+      instancesOf: 'Chip',
+      context: 'a slot-hosted chip',
     })
-    // The limit itself: the row is gone from a match on those keys.
+    // A census on any of those keys now finds it — under the id the file uses.
+    expect(results.some(r => r.instancesOf === 'Chip')).toBe(
+      true,
+    )
     expect(
-      results.some(r => r.instancesOf === 'Chip'),
-    ).toBe(false)
-    // …and the reply SAYS so, naming the node and every key it cost.
+      warnings.filter(w => w.includes('cannot carry')),
+    ).toEqual([])
+    expect(degraded).toBe(0)
+  })
+
+  // The residual, and it is a different node: an alias row DEEPER than the
+  // host has no export twin this pass can identify, and guessing one would put
+  // a node's styles on a different node. That row is still traded — said in
+  // `warnings`, and COUNTED, so a completeness check can test it the way it
+  // tests `truncated` rather than parsing prose.
+  it('names AND counts a traded row it cannot pair', async () => {
+    const fixture = frameHosted()
+    fixture.candidates[3] = live('298:7519', {
+      name: 'Chip',
+      componentKey: 'k-chip',
+      instancesOf: 'Chip',
+      styleIds: ['S:chip'],
+      context: 'a slot-hosted chip',
+    })
+    // host 0 — the FRAME above it — so row 3 is not the export root.
+    const { results, warnings, degraded } =
+      await repairScan({
+        ...fixture,
+        exportHost: async () => ({ document: frameDoc() }),
+      })
+    expect(results.some(r => r.instancesOf === 'Chip')).toBe(
+      false,
+    )
     const traded = warnings.filter(w =>
       w.includes('298:7519'),
     )
     expect(traded).toHaveLength(1)
-    expect(traded[0]).toContain(CANON)
+    // The subtree that was repaired is the FRAME; the row it cost is the chip.
+    expect(traded[0]).toContain('2:1')
     for (const key of [
       'context',
       'styleIds',
@@ -500,6 +535,7 @@ describe('repairScan — repair without downgrading (C1)', () => {
     ]) {
       expect(traded[0]).toContain(key)
     }
+    expect(degraded).toBe(1)
   })
 
   it('says nothing when the dropped row carried no live-only key', async () => {
@@ -730,13 +766,12 @@ describe('repairScan — instancesOf survives the repair (B56)', () => {
       instancesOf: 'Chart card',
       context: 'the chart card',
     })
-    fixture.failures = [
-      { at: -1, host: 1, message: 'search: skipped …' },
-    ]
+    // Repaired through the PAGE above it, so the chip is a row under the host
+    // and its keys are the ones a trade still costs (B85 carries the host's).
     const { warnings } = await repairScan({
       ...fixture,
       hints: { componentRef: true },
-      exportHost: async () => ({ document: slotHostDoc() }),
+      exportHost: async () => ({ document: hostDoc() }),
       componentRefOf: async () => ({
         key: 'k-chart',
         name: 'Chart card',

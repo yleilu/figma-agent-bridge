@@ -322,6 +322,7 @@ export const handleSearch = async (
     })) as {
       results?: Record<string, unknown>[]
       incomplete?: unknown
+      degraded?: unknown
       warnings?: unknown
       error?: string
     } | null
@@ -467,6 +468,7 @@ export const handleSearch = async (
       results: unknown[]
       truncated: boolean
       incomplete?: true
+      degraded?: number
       cursor?: string
       warnings?: string[]
     } = { results: projected, truncated: bounded.truncated }
@@ -482,6 +484,21 @@ export const handleSearch = async (
     // apart, so they are separate keys and this one is omitted when clean.
     if (raw.incomplete === true) {
       out.incomplete = true
+    }
+    // B85 — `degraded` is the third fact, and it is about ROWS, not about the
+    // set: this many results are present and cannot answer a match on
+    // `styleId`, `context`, `componentKey` or `instancesOf`, because they came
+    // from an ancestor's export and an export carries none of those. From
+    // `results` alone that is indistinguishable from a node the style is not
+    // on — a style census read `results: 1` where three nodes carried the
+    // style and two of them were plainly glowing in the PNG. Counted rather
+    // than only narrated, so a completeness check can test it. Omitted at
+    // zero, like the other two.
+    if (
+      typeof raw.degraded === 'number' &&
+      raw.degraded > 0
+    ) {
+      out.degraded = raw.degraded
     }
     // A candidate the plugin could not read is skipped THERE and named here
     // (T7) — a scan that crossed an unreachable node returns the rest of the

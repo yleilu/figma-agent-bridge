@@ -393,6 +393,20 @@ export type RepairOutput = {
    * so on its own line.
    */
   incomplete: boolean
+  /**
+   * How many rows are PRESENT but thinner than they look (B85).
+   *
+   * `incomplete` says the set is short. This says the set is complete and some
+   * of its rows cannot answer `match:{styleId|context|componentKey|
+   * instancesOf}` — which reads, from `results` alone, exactly like a node that
+   * does not carry the style. An effect-style census answered `results: 1`
+   * where three nodes carried the style and the two missing ones were plainly
+   * glowing in the export, and the reply said so only in prose. A count is
+   * testable; prose is not.
+   *
+   * Zero once every trade carries its keys over, which is the common case now.
+   */
+  degraded: number
 }
 
 /**
@@ -479,6 +493,8 @@ export const repairScan = async ({
     componentRefOf !== undefined || exportRefs.size > 0
   const covered = new Set<number>()
   const superseded = new Set<number>()
+  /** Rows whose live-only keys rode over to their export twin (B85). */
+  const carried = new Set<number>()
   const rescanned: Candidate[] = []
   const rescannedIds = new Set<string>()
   /** One line per row the repair traded away with keys on it. */
@@ -551,6 +567,28 @@ export const repairScan = async ({
       }
     }
 
+    // B85 — the HOST's own live row donates the four keys an export cannot
+    // carry. `fromExport[0]` IS this host, named the way the file names it, so
+    // the two rows are the same node under two spellings and the pairing needs
+    // no guessing. It is the row the trade actually cost: an effect-style
+    // census read `results: 1` where three nodes carried the style, because the
+    // two carriers inside repaired subtrees came back from the export with no
+    // `styleIds` for `match:{styleId}` to test. Only the host — a deeper alias
+    // row has no export twin this pass can identify, and guessing one would put
+    // a node's styles on a different node.
+    const hostRow = candidates[host]
+    if (hostRow !== undefined && !exportIds.has(entry.id)) {
+      for (const key of LIVE_ONLY_KEYS) {
+        if (
+          hostRow[key] !== undefined &&
+          fromExport[0][key] === undefined
+        ) {
+          fromExport[0][key] = hostRow[key]
+        }
+      }
+      carried.add(host)
+    }
+
     for (let i = host; i < entry.subtreeEnd; i++) {
       covered.add(i)
       const liveId = scanned[i].id
@@ -566,10 +604,9 @@ export const repairScan = async ({
         // names the same node properly, a few lines down.
         superseded.add(i)
         liveIds.delete(liveId)
-        const lost = liveOnlyKeysOf(
-          liveRow,
-          refsResolvable(),
-        )
+        const lost = carried.has(i)
+          ? []
+          : liveOnlyKeysOf(liveRow, refsResolvable())
         if (lost.length > 0) {
           traded.push(
             'search: repaired the subtree at ' +
@@ -694,5 +731,13 @@ export const repairScan = async ({
   for (const message of traded) {
     warnings.push(message)
   }
-  return { results, warnings, incomplete }
+  // B85 — one line per thinned row is already in `warnings`; this is the same
+  // fact as a number, so a completeness check can test it the way it tests
+  // `truncated`.
+  return {
+    results,
+    warnings,
+    incomplete,
+    degraded: traded.length,
+  }
 }

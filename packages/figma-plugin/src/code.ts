@@ -3806,10 +3806,18 @@ const handleCommand = async (
       const searchReply: {
         results: Record<string, unknown>[]
         incomplete?: true
+        degraded?: number
         warnings?: string[]
       } = { results: repaired.results }
       if (repaired.incomplete) {
         searchReply.incomplete = true
+      }
+      // B85 — and `degraded` is the same idea for a row that is PRESENT and
+      // thinner than it looks: it cannot answer a match on styleId, context,
+      // componentKey or instancesOf, which reads exactly like a node that does
+      // not carry the style. A census read 1 where 3 carried it.
+      if (repaired.degraded > 0) {
+        searchReply.degraded = repaired.degraded
       }
       if (skipped.length > 0) {
         searchReply.warnings = skipped
