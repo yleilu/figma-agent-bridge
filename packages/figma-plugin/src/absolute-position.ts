@@ -40,7 +40,8 @@ export type PlacedChild = {
 const absolutePositionOf = (
   spec: Record<string, unknown>,
 ): [number, number] | undefined => {
-  if (spec.layoutPositioning !== 'ABSOLUTE') return undefined
+  if (spec.layoutPositioning !== 'ABSOLUTE')
+    return undefined
   const position = spec.position
   if (!Array.isArray(position)) return undefined
   const [x, y] = position as unknown[]
@@ -84,7 +85,9 @@ export const restoreAbsolutePositions = (
           '] could not be restored on the ABSOLUTE child ' +
           String(node.id) +
           ' after its parent resized: ' +
-          (err instanceof Error ? err.message : String(err)),
+          (err instanceof Error
+            ? err.message
+            : String(err)),
       )
     }
   }
