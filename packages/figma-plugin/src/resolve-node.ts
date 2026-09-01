@@ -161,6 +161,136 @@ export const slicedReadMessage = (nodeId: string): string =>
   'fields only a live read can supply — style() names, context, text runs, ' +
   'vector geometry and the unrotated size'
 
+/**
+ * How many ancestors an id walk will climb before it gives up.
+ *
+ * A Figma tree is a few dozen levels at worst. The bound is here so a cyclic or
+ * self-referential fake cannot hang a dispatch — never as a real limit.
+ */
+const MAX_ANCESTOR_HOPS = 64
+
+/**
+ * The OUTERMOST INSTANCE a handle sits inside, or undefined for a node with no
+ * instance above it.
+ *
+ * Guarded at every hop: reading `.parent` is a read of a live node, and the
+ * handles this module exists for refuse exactly that. A refusal ends the walk
+ * with what it has — "unknown" and "no instance" answer the same way here, and
+ * the caller treats both as "do not claim an alias" (see `isAliasHandle`).
+ */
+export const outerInstanceOf = (
+  node: LiveNode,
+): string | undefined => {
+  let outer: string | undefined
+  let current: LiveNode = node
+  for (let hop = 0; hop < MAX_ANCESTOR_HOPS; hop++) {
+    let parent: unknown
+    try {
+      parent = (current as { parent?: unknown }).parent
+    } catch {
+      return outer
+    }
+    if (typeof parent !== 'object' || parent === null) {
+      return outer
+    }
+    const p = parent as LiveNode
+    try {
+      if (p.type === 'INSTANCE') {
+        outer = idOf(p) ?? outer
+      }
+    } catch {
+      return outer
+    }
+    current = p
+  }
+  return outer
+}
+
+/**
+ * Whether a handle answers a PRE-APPEND id while living inside an INSTANCE —
+ * the alias state canonical-ids.ts describes, seen from the live side.
+ *
+ * Figma composes an instance sublayer's id as `I<parent.id>;<local>`, so a node
+ * under an INSTANCE answers a COMPOUND id. One that answers a plain `<n>:<m>`
+ * there is content the append never re-homed, and every address Figma then
+ * mints off it (`I<alias>;<leaf>`) names a node the file does not render.
+ *
+ * That is B74: a write to such an address returned `{ok:true, warnings:[]}`,
+ * read back changed, and never reached the rendered node — ~60 lost writes.
+ *
+ * A handle that refuses its own reads is NOT called an alias. Its ancestry is
+ * unknowable, and an unknown must not be reported as a finding.
+ */
+export const isAliasHandle = (node: LiveNode): boolean => {
+  const id = idOf(node)
+  if (id === undefined) return false
+  if (leadingInstanceId(id) !== undefined) return false
+  return outerInstanceOf(node) !== undefined
+}
+
+/**
+ * Whether a live handle will answer a property read at all.
+ *
+ * `parent` is the discriminator, and the live evidence names it: a write to a
+ * fabricated address answered *"in get_parent: The node … does not exist"*
+ * (B74, 2026-08-30), and a create into one answered *"in appendChild: …"*
+ * (B73). Such a handle still serves `id`, `name`, `type` and its size — enough
+ * to look complete to a scan — so a probe on any of those would pass it.
+ *
+ * `type` is read too: it costs nothing and it covers a runtime that refuses a
+ * different member first.
+ */
+export const handleAnswers = (node: LiveNode): boolean => {
+  try {
+    void (node as { type?: unknown }).type
+    void (node as { parent?: unknown }).parent
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * What a WRITE is told when its id was composed off an alias (B74).
+ *
+ * Exported so the message has ONE author — the `exportBudgetMessage` rule.
+ */
+export const aliasAddressMessage = (
+  nodeId: string,
+  aliasId: string,
+  outerInstanceId: string,
+): string =>
+  'Refusing to write to ' +
+  nodeId +
+  ': its leading instance ' +
+  aliasId +
+  ' is content inside INSTANCE ' +
+  outerInstanceId +
+  ' that still answers its pre-append id, so ' +
+  nodeId +
+  ' addresses a node the file does not render. A write here reports success ' +
+  'and changes nothing anyone can see. Read ' +
+  outerInstanceId +
+  ' (get_node, depth:-1) and address the node by the id that read emits.'
+
+/**
+ * What a WRITE is told when the node exists in the file and no handle serves it.
+ *
+ * The read face answers such an id from the ancestor's export and says the row
+ * is degraded. A write has no such half: Figma rejects the handle, or worse
+ * accepts it onto a different node. Refusing is the only honest answer, so the
+ * message carries the way out the QA build itself found.
+ */
+export const deadHandleMessage = (nodeId: string): string =>
+  'Refusing to write to ' +
+  nodeId +
+  ': the file describes this node, but no live handle answers it — Figma ' +
+  'composed its address from a pre-append id, so every write to it is ' +
+  'rejected or lands on a different node. Reads of this id still work, from ' +
+  'the ancestor export. To change it: reparent_node the subtree out of the ' +
+  'slot, write there, and reparent it back — or set the value through the ' +
+  'instance override / component property on the instance above it.'
+
 export type ResolveDeps = {
   /** `figma.getNodeByIdAsync`, which only ever answers a PLAIN id reliably. */
   getNodeById: (id: string) => Promise<LiveNode | null>
@@ -171,8 +301,23 @@ export type ResolveDeps = {
 }
 
 export type NodeResolver = {
-  /** Drop every cached export. Called once per dispatch. */
+  /** Drop every cached export, and return to READ mode. Once per dispatch. */
   reset: () => void
+  /**
+   * Whether this dispatch MUTATES (B73/B74).
+   *
+   * A read and a write want different things from the same id. A read wants the
+   * best handle available and declares whatever the handle could not say; a
+   * write wants a handle it can hand to Figma, and there is no such thing as a
+   * partial write that says so afterwards. So the resolver serves one contract
+   * per dispatch, set once from the command, and no entry point has to remember
+   * which family it belongs to.
+   *
+   * In write mode `resolve` THROWS rather than returning a handle that cannot
+   * take the write. It still returns null for an id nothing names — a refusal
+   * is not a miss (B39).
+   */
+  setStrict: (strict: boolean) => void
   /**
    * The live handle `nodeId` names, or null.
    *
@@ -204,6 +349,24 @@ export const createNodeResolver = (
     string,
     Promise<IdentityIndex | undefined>
   >()
+  let strict = false
+
+  /**
+   * The handle, or a refusal — the write-mode gate (B73/B74).
+   *
+   * Read mode is unchanged: it takes whatever came back, and the read face
+   * declares what the handle could not answer.
+   */
+  const vouch = (
+    node: LiveNode | null,
+    nodeId: string,
+  ): LiveNode | null => {
+    if (!strict || node === null) return node
+    if (!handleAnswers(node)) {
+      throw new Error(deadHandleMessage(nodeId))
+    }
+    return node
+  }
 
   /**
    * Would resolving inside this instance need a NEW export we cannot afford?
@@ -247,27 +410,49 @@ export const createNodeResolver = (
   return {
     reset: () => {
       indexes.clear()
+      strict = false
+    },
+    setStrict: (on: boolean) => {
+      strict = on
     },
     resolve: async (nodeId: string) => {
       const instanceId = leadingInstanceId(nodeId)
       if (instanceId === undefined) {
+        // A PLAIN id is left alone in both modes. It may still be an alias —
+        // slot content answers one — but the alias IS the node often enough
+        // that refusing every such write would break the one route into a slot
+        // subtree that works (the reparent-out / write / reparent-back
+        // workaround the 2026-08-30 build had to adopt).
         return deps.getNodeById(nodeId)
       }
       const instance = await deps.getNodeById(instanceId)
       if (instance === null) return null
+      // B74 — the address itself, before anything is resolved through it. An
+      // `I<alias>;<leaf>` names a node that reads, writes, reads back changed
+      // and never renders; nothing downstream can tell it from a real one,
+      // because as far as Figma is concerned it IS a node.
+      if (strict && isAliasHandle(instance)) {
+        throw new Error(
+          aliasAddressMessage(
+            nodeId,
+            instanceId,
+            outerInstanceOf(instance) ?? instanceId,
+          ),
+        )
+      }
       // The cheap half first: a master-derived sublayer answers its own
       // compound id, so one guarded walk finds it and nothing is exported.
       // Nothing here is budgeted — the walk is free, so a call naming a
       // thousand ordinary sublayers is unaffected by the cap below.
       const direct = findLiveById(instance, nodeId)
-      if (direct !== undefined) return direct
+      if (direct !== undefined) return vouch(direct, nodeId)
       if (overBudget(instanceId)) {
         throw new Error(
           exportBudgetMessage(nodeId, maxExports),
         )
       }
       const index = await indexFor(instanceId, instance)
-      return index?.live.get(nodeId) ?? null
+      return vouch(index?.live.get(nodeId) ?? null, nodeId)
     },
     exportedNode: async (nodeId: string) => {
       const instanceId = leadingInstanceId(nodeId)

@@ -355,6 +355,22 @@ export type RepairOutput = {
   results: Candidate[]
   /** The failures no export covered, and the rows the repair had to trade. */
   warnings: string[]
+  /**
+   * Whether this result set is SHORT — a subtree the scan could not enter and
+   * the repair could not recover (B72).
+   *
+   * A count taken off an incomplete set is a LOWER BOUND, and the caller has to
+   * be able to test that without parsing warning prose. The 2026-08-30 document
+   * scan lost 8% of instances, 13% of nodes and 17% of text while answering
+   * `truncated:false`, and two rubric categories were driven to a false FAIL on
+   * it — one of them a gate condition. Warnings alone were not enough: 192 of
+   * them named 13 parents, and none of the 91 dropped TEXT nodes descended from
+   * any of the 13.
+   *
+   * A TRADED row does not count. That row is present, only thinner, and it says
+   * so on its own line.
+   */
+  incomplete: boolean
 }
 
 /**
@@ -465,9 +481,14 @@ export const repairScan = async ({
   const hosts = [...hostSet].sort((a, b) => a - b)
 
   let repairs = 0
+  /** A host the budget stopped us reaching — its subtree is simply missing. */
+  let budgetCut = false
   for (const host of hosts) {
     if (covered.has(host)) continue
-    if (repairs >= maxRepairs) break
+    if (repairs >= maxRepairs) {
+      budgetCut = true
+      break
+    }
     repairs++
     const exported = await exportHost(host)
     if (exported === undefined) continue
@@ -604,6 +625,7 @@ export const repairScan = async ({
   // subtree it was read at, and a failure outside that slice is not covered by
   // it however close the two look.
   const warnings: string[] = []
+  let incomplete = budgetCut
   for (const failure of failures) {
     const isCovered =
       failure.at >= 0
@@ -611,11 +633,24 @@ export const repairScan = async ({
         : failure.host >= 0 && covered.has(failure.host)
     if (!isCovered) {
       warnings.push(failure.message)
+      // B72 — the set is SHORT, and that is a fact about the numbers, not a
+      // line of prose. Warnings under-named the loss by construction: a node
+      // whose parent refused `get_children` never got an entry, so nothing
+      // could name it.
+      incomplete = true
     }
+  }
+  if (budgetCut) {
+    warnings.push(
+      'search: stopped repairing after ' +
+        maxRepairs +
+        ' subtrees (the per-scan budget) — the result set is INCOMPLETE. ' +
+        'Scan one page at a time (scope:"page", pageId) to see the rest.',
+    )
   }
   // …and what the repair itself cost, after what it could not repair.
   for (const message of traded) {
     warnings.push(message)
   }
-  return { results, warnings }
+  return { results, warnings, incomplete }
 }

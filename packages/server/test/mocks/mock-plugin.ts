@@ -949,6 +949,56 @@ export const createMockPlugin = (
     'I1:42;1:8',
   ])
 
+  // ── THE PHANTOM ADDRESS: the write that must never be acked (B74) ──────────
+  //
+  // The 2026-08-30 dashboard nested content FOUR deep through a slot:
+  //
+  //   549:17459                                        INSTANCE "Chart card"
+  //     I549:17459;549:17078                           SLOT     "Body"
+  //       I549:17459;549:17078;549:17624               FRAME    "Table"
+  //         I549:17459;549:17078;549:17625             INSTANCE "Table row"
+  //           I549:17459;549:17078;549:17625;549:17265 TEXT     "Amount"
+  //
+  // The row answers its PRE-APPEND id `549:17625` while sitting inside an
+  // INSTANCE, so Figma composes its children off that and mints
+  // `I549:17625;549:17265` — an address that reads, WRITES, reads back changed,
+  // and is not the rendered node. `update_node` answered `{ok:true,
+  // warnings:[]}` for ~60 cell writes and the exported PNG showed none of them.
+  //
+  // This is the shape the deep fixture above could not state. Its nesting
+  // reaches four segments, but EVERY id in it resolves — so no headless test
+  // could reach the phantom, which is why headless never caught the defect. The
+  // mock states it now: the address exists, and every mutating door refuses it
+  // by name rather than answering a bare not-found or, worse, `ok`.
+  const PHANTOM_ALIAS_ID = '549:17625'
+  const PHANTOM_OUTER_INSTANCE = '549:17459'
+  const PHANTOM_NODE_ID = 'I549:17625;549:17265'
+
+  /**
+   * The refusal a WRITE gets for an alias-derived address, or undefined.
+   *
+   * Wording tracks the plugin's `aliasAddressMessage`: the caller's id, the
+   * alias it leads with, the instance to re-read, and what a write there would
+   * actually have done.
+   */
+  const aliasWriteRefusal = (
+    id: string | undefined,
+  ): string | undefined =>
+    id === PHANTOM_NODE_ID
+      ? 'Refusing to write to ' +
+        PHANTOM_NODE_ID +
+        ': its leading instance ' +
+        PHANTOM_ALIAS_ID +
+        ' is content inside INSTANCE ' +
+        PHANTOM_OUTER_INSTANCE +
+        ' that still answers its pre-append id, so ' +
+        PHANTOM_NODE_ID +
+        ' addresses a node the file does not render. A write here reports ' +
+        'success and changes nothing anyone can see. Read ' +
+        PHANTOM_OUTER_INSTANCE +
+        ' (get_node, depth:-1) and address the node by the id that read emits.'
+      : undefined
+
   /**
    * Whether a caller-supplied node id names something in this document.
    *
@@ -2144,6 +2194,14 @@ export const createMockPlugin = (
       // only assigned. Mirrors the real plugin's {id,name,type,warnings} reply.
       case 'update_node': {
         const unId = cmd.params?.nodeId as string
+        // B74 — an alias-derived address is refused BY NAME, before anything is
+        // applied. A bare not-found would be wrong too: the node it names does
+        // exist, and the caller has to be told which id to use instead.
+        const unPhantom = aliasWriteRefusal(unId)
+        if (unPhantom !== undefined) {
+          result = { error: unPhantom }
+          break
+        }
         // A compound id that names nothing is a clean not-found, the same
         // answer every time — never the intermittent network error the bare
         // resolve used to give a sublayer that DOES exist.
@@ -2475,6 +2533,14 @@ export const createMockPlugin = (
         const parentId = cmd.params?.parentId as
           | string
           | undefined
+        // B73/B74 — the same address, arriving as a PARENT. Live it answered
+        // `in appendChild: The node <an id the caller never sent> does not
+        // exist`, which sent the operator hunting an id it had never written.
+        const cnPhantom = aliasWriteRefusal(parentId)
+        if (cnPhantom !== undefined) {
+          result = { error: cnPhantom }
+          break
+        }
         if (parentId?.startsWith('badparent:')) {
           // Mirror the real plugin's T7 structured error — I66 wording: the
           // refusal names the INSTANCE that seals the target (not just the
@@ -2824,6 +2890,15 @@ export const createMockPlugin = (
         const rpParent = cmd.params?.parentId as
           | string
           | undefined
+        const rpPhantom =
+          aliasWriteRefusal(rpParent) ??
+          aliasWriteRefusal(
+            cmd.params?.nodeId as string | undefined,
+          )
+        if (rpPhantom !== undefined) {
+          result = { error: rpPhantom }
+          break
+        }
         if (rpParent?.startsWith('badparent:')) {
           result = {
             error:

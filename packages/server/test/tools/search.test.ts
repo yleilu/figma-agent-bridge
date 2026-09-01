@@ -421,6 +421,39 @@ describe('handleSearch (rebuilt — Rule A)', () => {
       YAML.parse(result.content[0].text),
     ).not.toHaveProperty('warnings')
   })
+
+  // B72 — `truncated` answers "is there another PAGE of results"; `incomplete`
+  // answers "did the scan reach the whole document". The 2026-08-30 round read
+  // the first as an answer to the second: a document scan missing 13% of the
+  // file said `truncated:false`, and two rubric categories were scored to a
+  // false FAIL off it — one of them a gate condition.
+  it('carries the scan-incomplete flag through, beside truncated', async () => {
+    const shortClient: ScopedFigmaClient = {
+      fileKey: 'fk-test',
+      sendCommand: async () => ({
+        results: candidates,
+        incomplete: true,
+        warnings: [
+          'search: skipped the children of I5:1;5:2',
+        ],
+      }),
+    }
+    const out = YAML.parse(
+      (await handleSearch({}, shortClient)).content[0].text,
+    ) as { truncated: boolean; incomplete?: boolean }
+    expect(out.incomplete).toBe(true)
+    // …and the two stay distinguishable: this page held every result.
+    expect(out.truncated).toBe(false)
+  })
+
+  it('omits incomplete when the scan reached everything', async () => {
+    expect(
+      YAML.parse(
+        (await handleSearch({}, stubClient({}))).content[0]
+          .text,
+      ),
+    ).not.toHaveProperty('incomplete')
+  })
 })
 
 // ---------------------------------------------------------------------------

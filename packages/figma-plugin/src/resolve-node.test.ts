@@ -19,12 +19,17 @@
 
 import { describe, expect, it } from 'bun:test'
 import {
+  aliasAddressMessage,
   createNodeResolver,
   declareDegradedRead,
+  deadHandleMessage,
   exportBudgetMessage,
   findLiveById,
+  handleAnswers,
+  isAliasHandle,
   leadingInstanceId,
   MAX_INSTANCE_EXPORTS,
+  outerInstanceOf,
   slicedReadMessage,
 } from './resolve-node'
 import type { LiveNode, RawNode } from './canonical-ids'
@@ -505,5 +510,284 @@ describe('createNodeResolver — exportedNode', () => {
       await resolver.exportedNode('305:8637'),
     ).toBeUndefined()
     expect(calls.exportOf).toBe(0)
+  })
+})
+
+// ── THE 2026-08-30 FAMILY: B65 / B72 / B73 / B74 ─────────────────────────────
+//
+// The fixture above stops one INSTANCE short of the shape that broke. The
+// 2026-08-30 dashboard nested content FOUR deep through a slot —
+//
+//   549:17459                                        INSTANCE  "Chart card"
+//     I549:17459;549:17078                           SLOT      "Body"
+//       I549:17459;549:17078;549:17624               FRAME     "Table"
+//         I549:17459;549:17078;549:17625             INSTANCE  "Table row"
+//           I549:17459;549:17078;549:17625;549:17265 TEXT      "Amount"
+//
+// — and at that depth two live handles stand for one address, neither of which
+// a WRITE may be handed:
+//
+//   the ALIAS     `549:17625`. The row answers its pre-append plain id while
+//                 sitting inside an INSTANCE, so Figma composes its children
+//                 off it and mints `I549:17625;549:17265` — an address that
+//                 reads, writes, reads back changed, and is not the rendered
+//                 node. `update_node` answered {ok:true, warnings:[]} and ~60
+//                 cell writes were lost (B74).
+//   the DEAD one  the handle the export pairing puts opposite the canonical id
+//                 refuses every property read. Live it answered `in get_parent:
+//                 The node … does not exist` on a write (B74), and `in
+//                 appendChild: The node I549:17201;549:17145 does not exist` on
+//                 a create into a nested SLOT — quoting an id the caller never
+//                 sent (B73).
+//
+// A READ still takes either: the read face serves the node from the ancestor's
+// export and declares the degrade. A WRITE takes neither.
+const CARD = '549:17459'
+const SLOT_C = 'I549:17459;549:17078'
+const TABLE_C = 'I549:17459;549:17078;549:17624'
+const ROW_C = 'I549:17459;549:17078;549:17625'
+const CELL_C = 'I549:17459;549:17078;549:17625;549:17265'
+/** What Figma composed off the row's alias — the id the ~60 lost writes used. */
+const CELL_ALIAS = 'I549:17625;549:17265'
+
+/** Give every plain node in a live tree the `parent` link a handle carries. */
+const linkParents = (root: LiveNode): LiveNode => {
+  const walk = (n: LiveNode): void => {
+    const kids = n.children as LiveNode[] | undefined
+    if (kids === undefined) return
+    for (const child of kids) {
+      try {
+        ;(child as Record<string, unknown>).parent = n
+      } catch {
+        // An unreadable handle refuses the write as flatly as the read.
+      }
+      walk(child)
+    }
+  }
+  walk(root)
+  return root
+}
+
+/** The cell handle paired opposite the canonical id: it refuses everything. */
+const CELL_DEAD = unreadable(CELL_ALIAS)
+
+const deepLive = (): LiveNode =>
+  linkParents({
+    id: CARD,
+    name: 'Chart card',
+    type: 'INSTANCE',
+    children: [
+      {
+        id: SLOT_C,
+        name: 'Body',
+        type: 'SLOT',
+        children: [
+          {
+            // Slot content keeps its pre-append plain id …
+            id: '549:17624',
+            name: 'Table',
+            type: 'FRAME',
+            children: [
+              {
+                // … and so does the INSTANCE inside it. THIS is the alias.
+                id: '549:17625',
+                name: 'Table row',
+                type: 'INSTANCE',
+                children: [
+                  // The GHOST: it answers the 2-segment address, reads back
+                  // what was written to it, and is not what renders.
+                  {
+                    id: CELL_ALIAS,
+                    name: 'Amount',
+                    type: 'TEXT',
+                    characters: '940,000 USDC',
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  })
+
+/** The same card as the FILE describes it — the oracle, and it is unchanged. */
+const deepExport = (): RawNode => ({
+  id: CARD,
+  name: 'Chart card',
+  type: 'INSTANCE',
+  children: [
+    {
+      id: SLOT_C,
+      name: 'Body',
+      type: 'SLOT',
+      children: [
+        {
+          id: TABLE_C,
+          name: 'Table',
+          type: 'FRAME',
+          children: [
+            {
+              id: ROW_C,
+              name: 'Table row',
+              type: 'INSTANCE',
+              children: [
+                {
+                  id: CELL_C,
+                  name: 'Amount',
+                  type: 'TEXT',
+                  characters: '1,412.4 ETH',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+})
+
+/** A resolver over the deep fixture; `dead` swaps the ghost for a refusal. */
+const deepHarness = (options: { dead?: boolean } = {}) => {
+  const root = deepLive()
+  const doc = deepExport()
+  if (options.dead === true) {
+    const row = findLiveById(root, '549:17625') as LiveNode
+    ;(row.children as LiveNode[])[0] = CELL_DEAD
+  }
+  const resolver = createNodeResolver({
+    getNodeById: async id => {
+      if (id === CARD) return root
+      if (id === '549:17625') {
+        return findLiveById(root, '549:17625') ?? null
+      }
+      return null
+    },
+    exportOf: async () => doc,
+  })
+  return { resolver, root, doc }
+}
+
+describe('outerInstanceOf / isAliasHandle — an alias is a fact about ancestry', () => {
+  it('names the OUTERMOST instance a handle sits inside', () => {
+    const row = findLiveById(
+      deepLive(),
+      '549:17625',
+    ) as LiveNode
+    expect(outerInstanceOf(row)).toBe(CARD)
+  })
+
+  it('a plain id inside an INSTANCE is an ALIAS — Figma composes ids off it', () => {
+    const row = findLiveById(
+      deepLive(),
+      '549:17625',
+    ) as LiveNode
+    expect(isAliasHandle(row)).toBe(true)
+  })
+
+  it('a page-root INSTANCE is not an alias, however deep its subtree', () => {
+    expect(isAliasHandle(deepLive())).toBe(false)
+  })
+
+  it('a master-derived compound id is not an alias', () => {
+    expect(
+      isAliasHandle(
+        findLiveById(deepLive(), SLOT_C) as LiveNode,
+      ),
+    ).toBe(false)
+  })
+
+  it('a handle that refuses its own reads is never called an alias', () => {
+    // It refuses `parent` too, so ancestry is unknowable — and unknown must
+    // not read as clean.
+    expect(isAliasHandle(CELL_DEAD)).toBe(false)
+  })
+})
+
+describe('handleAnswers — the discriminator a write needs', () => {
+  it('a live handle answers type and parent', () => {
+    expect(handleAnswers(deepLive())).toBe(true)
+  })
+
+  it('a fabricated address refuses `parent` — the live B74 signature', () => {
+    // "in get_parent: The node with id `I549:17613;549:17265` does not exist",
+    // live 2026-08-30. `parent` is the read such a handle will not serve, which
+    // is what makes it the cheap universal probe.
+    expect(handleAnswers(CELL_DEAD)).toBe(false)
+  })
+})
+
+describe('the write face refuses what it cannot address (B73/B74)', () => {
+  it('READ mode still resolves the alias-derived address, as it always did', async () => {
+    const { resolver } = deepHarness()
+    expect((await resolver.resolve(CELL_ALIAS))?.name).toBe(
+      'Amount',
+    )
+  })
+
+  it('WRITE mode refuses the 2-segment ghost instead of acking onto it', async () => {
+    const { resolver } = deepHarness()
+    resolver.setStrict(true)
+    expect(resolver.resolve(CELL_ALIAS)).rejects.toThrow(
+      aliasAddressMessage(CELL_ALIAS, '549:17625', CARD),
+    )
+  })
+
+  it('the refusal names the caller’s id, the alias and the way out', () => {
+    const message = aliasAddressMessage(
+      CELL_ALIAS,
+      '549:17625',
+      CARD,
+    )
+    expect(message).toContain(CELL_ALIAS)
+    expect(message).toContain('549:17625')
+    expect(message).toContain(CARD)
+  })
+
+  it('WRITE mode refuses a canonical id whose handle refuses', async () => {
+    const { resolver } = deepHarness({ dead: true })
+    resolver.setStrict(true)
+    expect(resolver.resolve(CELL_C)).rejects.toThrow(
+      deadHandleMessage(CELL_C),
+    )
+  })
+
+  it('READ mode still hands the dead handle back, so the slice can degrade', async () => {
+    const { resolver } = deepHarness({ dead: true })
+    expect(await resolver.resolve(CELL_C)).toBe(CELL_DEAD)
+  })
+
+  it('WRITE mode leaves an ordinary compound id alone', async () => {
+    const { resolver } = deepHarness()
+    resolver.setStrict(true)
+    expect((await resolver.resolve(SLOT_C))?.name).toBe(
+      'Body',
+    )
+  })
+
+  it('WRITE mode leaves a plain page-root id alone', async () => {
+    const { resolver } = deepHarness()
+    resolver.setStrict(true)
+    expect((await resolver.resolve(CARD))?.name).toBe(
+      'Chart card',
+    )
+  })
+
+  it('WRITE mode still answers "no such node" for an id nothing names', async () => {
+    const { resolver } = deepHarness()
+    resolver.setStrict(true)
+    // A refusal is not a miss and a miss is not a refusal (B39).
+    expect(
+      await resolver.resolve('I549:17459;9:99'),
+    ).toBeNull()
+  })
+
+  it('reset returns the resolver to READ mode', async () => {
+    const { resolver } = deepHarness()
+    resolver.setStrict(true)
+    resolver.reset()
+    expect((await resolver.resolve(CELL_ALIAS))?.name).toBe(
+      'Amount',
+    )
   })
 })

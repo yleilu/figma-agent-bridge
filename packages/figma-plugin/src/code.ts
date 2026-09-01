@@ -3,6 +3,7 @@ import {
   COMMANDS,
   CONTEXT_NS,
   CONTEXT_KEY,
+  isEventCausing,
 } from '@figma-agent-bridge/shared'
 
 import {
@@ -112,6 +113,7 @@ import {
 import {
   createNodeResolver,
   declareDegradedRead,
+  isAliasHandle,
   slicedReadMessage,
 } from './resolve-node'
 import type { RawNode } from './canonical-ids'
@@ -2665,6 +2667,14 @@ const handleCommand = async (
   // multi-id read pays for one export per instance, and a write in the previous
   // command can never be answered from a document that predates it.
   nodeResolver.reset()
+  // B73/B74 — one contract per dispatch, set from the COMMAND. A read wants the
+  // best handle available and declares what it could not say; a write wants a
+  // handle Figma will honour, and there is no partial write that says so
+  // afterwards. Setting it here rather than per entry point is the same rule
+  // `resolveNodeId` already states above: no exception list to remember, and no
+  // write door that can forget. `batch` re-dispatches per op, so each op sets
+  // its own mode.
+  nodeResolver.setStrict(isEventCausing(command))
   switch (command) {
     case 'get_document_info':
       return {
@@ -3472,6 +3482,10 @@ const handleCommand = async (
       // A candidate that cannot be READ is skipped and named (into `skipped`
       // above), never thrown: one broken node costs one candidate, not the
       // scan.
+      // The rows whose id the FILE does not use for that node (B72). Collected
+      // rather than warned per row: on a design-system artifact there are
+      // hundreds, and one line naming the count and a sample is the T4 shape.
+      const aliasIds: string[] = []
       const candidates: (
         | Record<string, unknown>
         | undefined
@@ -3585,6 +3599,16 @@ const handleCommand = async (
             }
           }
 
+          // B72 — this row's id is an ALIAS: the node answers a pre-append
+          // plain id while sitting inside an INSTANCE, so `search` emits an id
+          // `get_node` does not use for the same node, and every id-join
+          // between the two channels breaks on it (34–35 nodes on the
+          // 2026-08-30 artifact). The row is KEPT — it is a real node and its
+          // live-only keys are worth more than the id shape — and the
+          // disagreement is named once, below, rather than per row.
+          if (isAliasHandle(fn as unknown as LiveNode)) {
+            aliasIds.push(candidate.id as string)
+          }
           candidates[index] = candidate
         } catch (err) {
           // `idOf`, not `fn.id`: the scan read this id once, but the node can
@@ -3674,13 +3698,36 @@ const handleCommand = async (
         },
       })
       skipped.push(...repaired.warnings)
+      if (aliasIds.length > 0) {
+        skipped.push(
+          'search: ' +
+            aliasIds.length +
+            ' result id(s) are pre-append ids the file does not use for those ' +
+            'nodes (e.g. ' +
+            aliasIds.slice(0, 3).join(', ') +
+            '). get_node names them by their instance chain instead, so an ' +
+            'id-join between search and a read will miss them. Read the ' +
+            'enclosing INSTANCE to get the canonical id.',
+        )
+      }
 
       // warnings[] rides on the SUCCESS reply and is omitted when empty — the
       // same shape every other degrading read answers with.
+      //
+      // `incomplete` is NOT a warning (B72). A count taken off a short set is a
+      // lower bound, and a caller has to be able to test that without parsing
+      // prose — the 2026-08-30 round scored two rubric categories to a false
+      // FAIL off a document scan that answered `truncated:false` while missing
+      // 13% of the file. Omitted when the scan was whole, so its presence is
+      // the signal.
       const searchReply: {
         results: Record<string, unknown>[]
+        incomplete?: true
         warnings?: string[]
       } = { results: repaired.results }
+      if (repaired.incomplete) {
+        searchReply.incomplete = true
+      }
       if (skipped.length > 0) {
         searchReply.warnings = skipped
       }
