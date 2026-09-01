@@ -266,8 +266,10 @@ the census (step 3, a step of its own) and the binding sweep's closing block
 6. **Content** — populate text, images, instance overrides.
 7. **Verify** — `export` + read-back; check token bindings and instance types.
    **CLOSING BLOCK: your final report ENDS with the rates** — "N of M token-valued
-   paints bound · N of M text nodes styled · every file-defined style applied ≥1×"
-   (Verification discipline). A report without the closing block is not a report; a
+   paints bound · N of M text nodes styled · every file-defined style applied ≥1×
+   · the census names N masters, `get_components` returns M — N == M, or the
+   census's revision list explains the difference" (Verification discipline; the
+   count check is the same arithmetic honesty the rates are). A report without the closing block is not a report; a
    build that looks right and is unbound is a failed build.
 
 ### The component census — two passes, both written
