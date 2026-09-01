@@ -160,11 +160,17 @@ path(EVENODD,"M0 0 L100 0 L100 100 Z"){corners=[0:12,2:4]}
 - Fill rule: `NONZERO` | `EVENODD` | `NONE`.
 - Data: the SVG path string, in double quotes. A comma inside it is a separator like a
   space and is normalized to one on write, so data copied straight out of an SVG file
-  lands as written.
+  lands as written. **`H`, `V`, `S`, `T` and `A` are normalized too** — Figma's converter
+  refuses all five, and each is pure syntax sugar over a command it takes (`H`/`V` become
+  `L`, `S`/`T` become `C`/`Q` with the mirrored control point, an arc becomes cubics), so
+  the surface performs the rewrite rather than handing you a refusal you could only answer
+  by doing it yourself. Data with none of them is passed through unchanged.
 - The field is an array — `vectorPaths: [path(…), path(…)]` — and both `create_node` and
   `update_node` write it, so the `vectorPaths` a read emits is writable back verbatim.
   On an update the assignment rebuilds the node's network **and resizes the node to the
-  new path bounds**, so a `size` in the same patch is applied after the geometry.
+  new path bounds**, so a `size` in the same patch is applied after the geometry — and it
+  **walks the node to the path minimum**, so `position` translates the frame the data
+  already set (`final = stated + that walk`) rather than replacing it.
 
 **Per-point detail rides in the `{…}` channel, sparsely** — three index-keyed lists
 naming only the points that differ from the node's own value:

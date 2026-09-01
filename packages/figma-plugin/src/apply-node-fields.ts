@@ -810,6 +810,52 @@ export const statedPositionWarning = (
   )
 }
 
+/**
+ * Will an auto-layout parent throw away the `position` this PATCH states?
+ *
+ * The update face's twin of `discardedPosition`, and it asks the question one
+ * beat later: not *what is this node now* but *what will it be when this patch
+ * has landed*. `layoutPositioning` is written by the same patch, further down
+ * the same handler, so reading the node's CURRENT value answered about a node
+ * that is on its way out of existence (B76).
+ *
+ * The cost was a surface arguing with itself. `update_node 549:17000
+ * {layoutPositioning:'ABSOLUTE', position:[0,10], …}` answered *"x/y ignored on
+ * an auto-layout child (set layoutPositioning:ABSOLUTE first)"* — the remedy
+ * the patch was already applying — and dropped the position, defeating the
+ * ABSOLUTE re-apply that exists to land it. Re-sending the identical patch
+ * WITHOUT `layoutPositioning` then worked.
+ *
+ * Rule-checked, not value-checked, and it has to be: this runs BEFORE anything
+ * is applied, so there is no landed x/y to compare against yet. The create
+ * path's check runs after and stays value-based.
+ */
+export const patchPositionIgnored = (
+  spec: Partial<{
+    position: unknown
+    layoutPositioning: unknown
+  }>,
+  node: PlacedTarget,
+  parent: unknown,
+): boolean => {
+  if (spec.position === undefined) return false
+  const layoutMode =
+    parent !== null && typeof parent === 'object'
+      ? (parent as { layoutMode?: unknown }).layoutMode
+      : undefined
+  if (
+    typeof layoutMode !== 'string' ||
+    layoutMode === 'NONE'
+  ) {
+    return false
+  }
+  // A patch that STATES the field owns the answer; one that does not falls
+  // back to what the node already holds.
+  const effective =
+    spec.layoutPositioning ?? node.layoutPositioning
+  return effective !== 'ABSOLUTE'
+}
+
 /** One child as the placement check sees it: what it asked for, and what it is. */
 export type Placement = {
   position: unknown
@@ -890,9 +936,191 @@ export const discardedPositionsWarning = (
 /** Structural subset the sizing applier writes to (the two auto-layout axes). */
 export type SizingTarget = Partial<{
   type: unknown
+  name: unknown
+  width: unknown
+  height: unknown
+  children: unknown
+  parent: unknown
   layoutSizingHorizontal: unknown
   layoutSizingVertical: unknown
 }>
+
+/** The two axes, in the order `sizing: [h, v]` states them. */
+const AXES = ['horizontal', 'vertical'] as const
+type Axis = 0 | 1
+
+/** The axis a frame LAYS OUT along, or undefined when it lays out nothing. */
+const primaryAxisOf = (
+  parent: unknown,
+): Axis | undefined => {
+  try {
+    const mode = (parent as { layoutMode?: unknown })
+      ?.layoutMode
+    if (mode === 'HORIZONTAL') return 0
+    if (mode === 'VERTICAL') return 1
+    // GRID lays out on both and resolves a FILL child per track, which is a
+    // different rule; nothing here claims to know it.
+    return undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Whether a frame HUGS a given axis — asks its children how big to be.
+ *
+ * `layoutSizing*` is preferred over `primaryAxisSizingMode`/
+ * `counterAxisSizingMode` for the reason `feed/write-scope.ts` already gives:
+ * the older pair does not describe a GRID frame, and a runtime that answers
+ * both must be read through the newer one.
+ */
+const hugsAxis = (
+  parent: unknown,
+  axis: Axis,
+): boolean | undefined => {
+  try {
+    const f = parent as Record<string, unknown>
+    const field =
+      axis === 0
+        ? 'layoutSizingHorizontal'
+        : 'layoutSizingVertical'
+    const stated = f[field]
+    if (typeof stated === 'string') {
+      return stated === 'HUG'
+    }
+    const primary = primaryAxisOf(parent)
+    if (primary === undefined) return undefined
+    const legacy =
+      axis === primary
+        ? f.primaryAxisSizingMode
+        : f.counterAxisSizingMode
+    return typeof legacy === 'string'
+      ? legacy === 'AUTO'
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** One node's span on an axis, when it will say. */
+const spanOn = (
+  node: unknown,
+  axis: Axis,
+): number | undefined => {
+  try {
+    const value = (node as Record<string, unknown>)?.[
+      axis === 0 ? 'width' : 'height'
+    ]
+    return typeof value === 'number' ? value : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** What this node's own children need on `axis`, when they will all say. */
+const childrenSpan = (
+  node: SizingTarget,
+  axis: Axis,
+): number | undefined => {
+  try {
+    const kids = node.children
+    if (!Array.isArray(kids) || kids.length === 0) {
+      return undefined
+    }
+    let total = 0
+    for (const kid of kids as unknown[]) {
+      const span = spanOn(kid, axis)
+      if (span === undefined) return undefined
+      total += span
+    }
+    return total
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * A FILL child on the axis its parent HUGS — the circular pair (B80).
+ *
+ * The parent asks its children how wide to be and the child asks its parent,
+ * so there is nothing to resolve and Figma collapses the child to its minimum.
+ * That is almost never the intent: live 2026-09-01 a `Token cell` stating
+ * `sizing:[FILL, HUG]` inside a HUG row master came out **12px wide with 56px
+ * of children overflowing it**, and the write answered `warnings: []`.
+ *
+ * WARN, NEVER REFUSE. B58 refused its self-contradictory pair because Figma
+ * destroys that one on the next click; Figma TOLERATES this one and resolves
+ * it, so refusing would block a write the file accepts. What was missing was
+ * the sentence, not the permission.
+ *
+ * ON THE PRIMARY AXIS ONLY, and deliberately. That axis is where a hug means
+ * *the sum of my children*, which leaves a FILL child exactly nothing — the
+ * proven collapse and the live case. The COUNTER axis hug means *the largest
+ * of my children*, where a FILL child stretching to the tallest sibling is
+ * ordinary and correct, and warning on it would be noise on a very common
+ * shape. (An all-FILL counter axis has no largest child to stretch to; that
+ * case is not claimed here because it has not been observed live.)
+ *
+ * The NUMBERS are added when they can be read — a node with children already
+ * in it can be asked how the collapse actually landed, which turns a rule the
+ * caller must apply themselves into a fact about their own document. A create
+ * of an empty frame has no such numbers and still gets the pair named, because
+ * the pair is decidable from what the caller just wrote and author time is
+ * when they can still act on it.
+ */
+export const hugFillCollapseWarning = (
+  node: SizingTarget,
+  sizing: unknown,
+): string | undefined => {
+  if (!Array.isArray(sizing) || sizing.length < 2) {
+    return undefined
+  }
+  let parent: unknown
+  try {
+    parent = node.parent
+  } catch {
+    return undefined
+  }
+  const axis = primaryAxisOf(parent)
+  if (axis === undefined) return undefined
+  if (sizing[axis] !== 'FILL') return undefined
+  if (hugsAxis(parent, axis) !== true) return undefined
+
+  const own = spanOn(node, axis)
+  const needed = childrenSpan(node, axis)
+  const collapsed =
+    own !== undefined &&
+    needed !== undefined &&
+    own < needed
+      ? ' It resolved to ' +
+        String(own) +
+        'px while its children need ' +
+        String(needed) +
+        'px, so they overflow it.'
+      : ''
+  let parentName = ''
+  try {
+    const name = (parent as { name?: unknown }).name
+    if (typeof name === 'string' && name !== '') {
+      parentName = ' "' + name + '"'
+    }
+  } catch {
+    // An unnamed parent still makes the sentence; a thrown name does not.
+  }
+  return (
+    nodeLabel(node) +
+    ' FILLs the ' +
+    AXES[axis] +
+    ' axis while its parent' +
+    parentName +
+    ' HUGS the same axis. The two ask each other how big to be, so Figma ' +
+    'collapses this node to its minimum.' +
+    collapsed +
+    ' Give this node a FIXED or HUG ' +
+    AXES[axis] +
+    ' size, or give the parent a FIXED or FILL one.'
+  )
+}
 
 /**
  * Apply `sizing: [horizontal, vertical]` — the auto-layout FIXED/HUG/FILL pair.
@@ -925,6 +1153,15 @@ export const applySizing = (
         '): ' +
         String(e),
     )
+    return
+  }
+  // B80 — the write LANDED, and that is the whole problem: Figma takes the
+  // circular pair and collapses the node, so nothing throws and nothing warns.
+  // Read AFTER the assignment, so the node's own span is the one this call
+  // produced.
+  const collapse = hugFillCollapseWarning(node, sizing)
+  if (collapse !== undefined) {
+    warnings?.push(collapse)
   }
 }
 

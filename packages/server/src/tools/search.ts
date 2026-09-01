@@ -321,6 +321,7 @@ export const handleSearch = async (
       ...buildCollectHints(params),
     })) as {
       results?: Record<string, unknown>[]
+      incomplete?: unknown
       warnings?: unknown
       error?: string
     } | null
@@ -465,11 +466,22 @@ export const handleSearch = async (
     const out: {
       results: unknown[]
       truncated: boolean
+      incomplete?: true
       cursor?: string
       warnings?: string[]
     } = { results: projected, truncated: bounded.truncated }
     if (bounded.cursor !== undefined) {
       out.cursor = bounded.cursor
+    }
+    // B72 — `truncated` is about THIS PAGE of results: more matched, ask again
+    // with the cursor. `incomplete` is about the SCAN: part of the document was
+    // unreachable, so the match set itself is short and no cursor will finish
+    // it. The two were conflated once and a document scan that had lost 13% of
+    // the file answered `truncated:false` — a positive assertion that nothing
+    // was missing. A caller counting anything has to be able to tell them
+    // apart, so they are separate keys and this one is omitted when clean.
+    if (raw.incomplete === true) {
+      out.incomplete = true
     }
     // A candidate the plugin could not read is skipped THERE and named here
     // (T7) — a scan that crossed an unreachable node returns the rest of the

@@ -3,6 +3,7 @@ import {
   COMMANDS,
   CONTEXT_NS,
   CONTEXT_KEY,
+  isEventCausing,
 } from '@figma-agent-bridge/shared'
 
 import {
@@ -45,6 +46,8 @@ import {
   applyGrids,
   capabilityWarnings,
   discardedPositionsWarning,
+  patchPositionIgnored,
+  type PlacedTarget,
   repinFixedSize,
   verifyCreatedSize,
   type Placement,
@@ -112,9 +115,23 @@ import {
 import {
   createNodeResolver,
   declareDegradedRead,
+  isAliasHandle,
+  servedByAncestorExport,
   slicedReadMessage,
 } from './resolve-node'
 import type { RawNode } from './canonical-ids'
+import {
+  assignVectorPaths,
+  positionOverOffset,
+  type PathTarget,
+} from './vector-origin'
+import {
+  boxOf,
+  grownIntoNeighbourWarning,
+  pageRootOf,
+  type Box,
+  type BoxNode,
+} from './root-overlap'
 import { projectComponentDefs } from './project-component-defs'
 import { rollbackCreated } from './rollback'
 import { resolveInstanceProps } from './resolve-instance-props'
@@ -1684,34 +1701,45 @@ const applyVectorPointDetail = async (
  * The server hands each path over as `{windingRule, data, corners?}`. Only the
  * first two are Figma's shape — the radii, caps and joins live on the network,
  * and are written after, because assigning `vectorPaths` rebuilds it.
+ *
+ * AND THE ASSIGNMENT MOVES THE NODE (B79). Figma rebases the data into the
+ * node's own box and walks the node by the path minimum, so the node already
+ * stands where the numbers said. The stated `position` — written afterwards by
+ * `applyCommonProperties`, on both write paths — used to overwrite that walk
+ * with a number whose meaning the rebase had destroyed, dragging the ink away
+ * silently. So the walk is measured here and folded INTO `spec.position`, which
+ * is the one place both callers read it from (`applyPostAppendProperties`'
+ * ABSOLUTE re-apply included). See vector-origin.ts for the contract and the
+ * live evidence; the arithmetic is relative, so update_node needs no variant of
+ * it.
  */
 const applyVectorPaths = async (
   vector: VectorNode,
   raw: unknown,
   warnings?: string[],
+  spec?: Record<string, unknown>,
 ): Promise<void> => {
   const paths = raw as (VectorPath & {
     corners?: Record<number, number>
     caps?: Record<number, string>
     joins?: Record<number, string>
   })[]
-  try {
-    vector.vectorPaths = paths.map(
-      ({ windingRule, data }) => ({
-        windingRule,
-        data,
-      }),
+  const { applied, offset } = assignVectorPaths(
+    vector as unknown as PathTarget,
+    paths,
+    warnings,
+  )
+  // The network was not rebuilt, so per-point detail has nothing to land on —
+  // and nothing moved, so nothing needs compensating.
+  if (!applied) return
+  if (spec !== undefined) {
+    const placed = positionOverOffset(
+      spec.position,
+      offset,
     )
-  } catch (e) {
-    // Figma's own message, not a guess at the cause. On a create the data is
-    // the only thing that can be wrong, but update_node reaches nodes whose
-    // path is read-only, and calling that "invalid path data" would send the
-    // agent to fix a string that is already correct.
-    warnings?.push(
-      'vectorPaths rejected by Figma: ' + String(e),
-    )
-    // The network was not rebuilt, so per-point detail has nothing to land on.
-    return
+    if (placed !== undefined) {
+      spec.position = placed
+    }
   }
   await applyVectorPointDetail(vector, paths, warnings)
 }
@@ -1790,10 +1818,14 @@ const buildSingleNode = async (
         'vectorPaths' in vector &&
         spec.vectorPaths !== undefined
       ) {
+        // `spec` rides along so the stated position can be read in the frame
+        // the assignment leaves behind (B79) — `applyCommonProperties` writes
+        // it a few dozen lines below, and used to write it flat.
         await applyVectorPaths(
           vector,
           spec.vectorPaths,
           warnings,
+          spec,
         )
       }
       node = vector
@@ -2552,6 +2584,34 @@ const resolveNodeId = async (
   )) as unknown as BaseNode | null
 
 /**
+ * The box of the PAGE-ROOT frame a write is about to touch (I5).
+ *
+ * Taken BEFORE the write, and paired with `warnGrownIntoNeighbour` after it.
+ * Two measurements of the same box are what turn "did this write cause a
+ * collision" into a question with an exact answer — no policy about where
+ * things belong, and no false finding on a page someone laid out overlapping on
+ * purpose. See root-overlap.ts for why growth is the half that bites a caller
+ * who placed everything correctly.
+ */
+const rootBoundsOf = (node: unknown): Box | undefined =>
+  boxOf(pageRootOf(node as BoxNode))
+
+/** …and the sentence, when that write pushed the frame into a neighbour. */
+const warnGrownIntoNeighbour = (
+  node: unknown,
+  before: Box | undefined,
+  warnings: string[],
+): void => {
+  const grown = grownIntoNeighbourWarning(
+    pageRootOf(node as BoxNode),
+    before,
+  )
+  if (grown !== undefined) {
+    warnings.push(grown)
+  }
+}
+
+/**
  * One node's read, from the node itself or from its ancestor's export.
  *
  * `undefined` means no such node — the caller words the miss, because get_node
@@ -2574,13 +2634,19 @@ const readNodeDocument = async (
    * The node as its ancestor's export describes it, enriched by whatever the
    * live handle will still answer.
    *
-   * A slice is a DEGRADED read, and `declareDegradedRead` is what makes it say
-   * so — see resolve-node.ts for why a silent thin row is the one outcome this
-   * fallback must never produce.
+   * A slice taken because the handle FAILED is a DEGRADED read, and
+   * `declareDegradedRead` is what makes it say so — see resolve-node.ts for why
+   * a silent thin row is the one outcome this fallback must never produce.
+   *
+   * A slice taken because the handle answers a DIFFERENT id is not degraded and
+   * passes no `reason` (B78). The handle is alive and the enrichment pairs it
+   * against this document exactly as a parent read does, so nothing is lost —
+   * only the ORACLE changed, and a readError there would cry wolf on every
+   * healthy slot-content read.
    */
   const slice = async (
     live: BaseNode | null,
-    reason: string,
+    reason?: string,
   ): Promise<Record<string, unknown> | undefined> => {
     const exported = await nodeResolver.exportedNode(nodeId)
     if (exported === undefined) return undefined
@@ -2595,12 +2661,27 @@ const readNodeDocument = async (
       depth,
       enrichDeps(),
     )
-    declareDegradedRead(doc, reason)
+    if (reason !== undefined) {
+      declareDegradedRead(doc, reason)
+    }
     return doc
   }
   const node = await resolveNodeId(nodeId)
   if (node === null) {
     return slice(null, slicedReadMessage(nodeId))
+  }
+  // B78 — ONE NODE, ONE ORACLE. A handle that answers a different id has its
+  // own export, rooted at that other id, whose children need not agree with
+  // what the ancestor's export said. That disagreement is how `get_node
+  // depth:1` on Plot listed four children and dropped `Treasury line` while a
+  // direct read of that child answered in full, and how a read came back under
+  // an id no search result carried. The export that NAMED the node describes
+  // it.
+  if (
+    servedByAncestorExport(nodeId, node as unknown as LiveNode)
+  ) {
+    const sliced = await slice(node)
+    if (sliced !== undefined) return sliced
   }
   try {
     return await exportNodeDocument(node, depth)
@@ -2665,6 +2746,14 @@ const handleCommand = async (
   // multi-id read pays for one export per instance, and a write in the previous
   // command can never be answered from a document that predates it.
   nodeResolver.reset()
+  // B73/B74 — one contract per dispatch, set from the COMMAND. A read wants the
+  // best handle available and declares what it could not say; a write wants a
+  // handle Figma will honour, and there is no partial write that says so
+  // afterwards. Setting it here rather than per entry point is the same rule
+  // `resolveNodeId` already states above: no exception list to remember, and no
+  // write door that can forget. `batch` re-dispatches per op, so each op sets
+  // its own mode.
+  nodeResolver.setStrict(isEventCausing(command))
   switch (command) {
     case 'get_document_info':
       return {
@@ -3472,6 +3561,10 @@ const handleCommand = async (
       // A candidate that cannot be READ is skipped and named (into `skipped`
       // above), never thrown: one broken node costs one candidate, not the
       // scan.
+      // The rows whose id the FILE does not use for that node (B72). Collected
+      // rather than warned per row: on a design-system artifact there are
+      // hundreds, and one line naming the count and a sample is the T4 shape.
+      const aliasIds: string[] = []
       const candidates: (
         | Record<string, unknown>
         | undefined
@@ -3585,6 +3678,16 @@ const handleCommand = async (
             }
           }
 
+          // B72 — this row's id is an ALIAS: the node answers a pre-append
+          // plain id while sitting inside an INSTANCE, so `search` emits an id
+          // `get_node` does not use for the same node, and every id-join
+          // between the two channels breaks on it (34–35 nodes on the
+          // 2026-08-30 artifact). The row is KEPT — it is a real node and its
+          // live-only keys are worth more than the id shape — and the
+          // disagreement is named once, below, rather than per row.
+          if (isAliasHandle(fn as unknown as LiveNode)) {
+            aliasIds.push(candidate.id as string)
+          }
           candidates[index] = candidate
         } catch (err) {
           // `idOf`, not `fn.id`: the scan read this id once, but the node can
@@ -3674,13 +3777,36 @@ const handleCommand = async (
         },
       })
       skipped.push(...repaired.warnings)
+      if (aliasIds.length > 0) {
+        skipped.push(
+          'search: ' +
+            aliasIds.length +
+            ' result id(s) are pre-append ids the file does not use for those ' +
+            'nodes (e.g. ' +
+            aliasIds.slice(0, 3).join(', ') +
+            '). get_node names them by their instance chain instead, so an ' +
+            'id-join between search and a read will miss them. Read the ' +
+            'enclosing INSTANCE to get the canonical id.',
+        )
+      }
 
       // warnings[] rides on the SUCCESS reply and is omitted when empty — the
       // same shape every other degrading read answers with.
+      //
+      // `incomplete` is NOT a warning (B72). A count taken off a short set is a
+      // lower bound, and a caller has to be able to test that without parsing
+      // prose — the 2026-08-30 round scored two rubric categories to a false
+      // FAIL off a document scan that answered `truncated:false` while missing
+      // 13% of the file. Omitted when the scan was whole, so its presence is
+      // the signal.
       const searchReply: {
         results: Record<string, unknown>[]
+        incomplete?: true
         warnings?: string[]
       } = { results: repaired.results }
+      if (repaired.incomplete) {
+        searchReply.incomplete = true
+      }
       if (skipped.length > 0) {
         searchReply.warnings = skipped
       }
@@ -3718,6 +3844,10 @@ const handleCommand = async (
           'children ignored — create_node creates a single node; use create_tree (M3) for nested creation',
         )
       }
+      // I5 — the page-root frame this create lands inside, as it stands BEFORE
+      // it. A HUG frame grows when something is appended to it, and nothing
+      // arranges page-root frames afterwards.
+      const rootBefore = rootBoundsOf(parent)
       try {
         // B35: one node, so the sink can only ever hold one entry — and
         // `discardedPositionsWarning` renders that as the singular sentence.
@@ -3736,6 +3866,7 @@ const handleCommand = async (
         if (discarded !== undefined) {
           warnings.push(discarded)
         }
+        warnGrownIntoNeighbour(parent, rootBefore, warnings)
         return {
           id: created.id,
           name: created.name,
@@ -3794,6 +3925,9 @@ const handleCommand = async (
       // reply — the only reply the caller sees. Omitted when empty so a clean
       // build's envelope stays clean.
       const treeWarnings: string[] = []
+      // I5 — a whole subtree appended into a HUG section is the write that grew
+      // one 2026-09-01 DS section 56px into its neighbour.
+      const treeRootBefore = rootBoundsOf(treeParent)
       try {
         // B35: the ROOT's own placement. Every deeper level is reported by the
         // parent that placed it, inside createTreeNode — this sink covers the
@@ -3816,6 +3950,11 @@ const handleCommand = async (
         if (rootDiscarded !== undefined) {
           treeWarnings.push(rootDiscarded)
         }
+        warnGrownIntoNeighbour(
+          treeParent,
+          treeRootBefore,
+          treeWarnings,
+        )
         return {
           id: treeResult.id,
           name: treeResult.name,
@@ -4662,12 +4801,11 @@ const handleCommand = async (
       const parent = node.parent as ParentNode | null
 
       // warn-on-no-op: x/y on an auto-layout flow child is ignored by Figma.
+      // Judged on what the patch LEAVES BEHIND, never on what the node holds
+      // now — `layoutPositioning` is written by this same patch, further down
+      // this same handler (B76). See patchPositionIgnored.
       if (
-        spec.position !== undefined &&
-        parent !== null &&
-        'layoutMode' in parent &&
-        (parent as FrameNode).layoutMode !== 'NONE' &&
-        (node as FrameNode).layoutPositioning !== 'ABSOLUTE'
+        patchPositionIgnored(spec, node as PlacedTarget, parent)
       ) {
         warnings.push(
           'x/y ignored on an auto-layout child (set layoutPositioning:ABSOLUTE first)',
@@ -4690,6 +4828,9 @@ const handleCommand = async (
       if (gapConflict !== undefined) {
         return { error: gapConflict }
       }
+      // I5 — measured before the first field lands, so the comparison at the
+      // end of this arm is against the box the caller started with.
+      const updateRootBefore = rootBoundsOf(node)
 
       // warn-on-no-op (T7): a patched property that the target node type does
       // not support is dropped by applyCommonProperties' `'X' in node` guards.
@@ -4721,10 +4862,15 @@ const handleCommand = async (
         spec.vectorPaths !== undefined &&
         'vectorPaths' in node
       ) {
+        // Same compensation as the create arm, and the same arithmetic: the
+        // setter walks from wherever the node ALREADY stands, so the offset is
+        // measured relatively and a re-write of an already-placed vector needs
+        // no variant rule (B79).
         await applyVectorPaths(
           node as VectorNode,
           spec.vectorPaths,
           warnings,
+          spec,
         )
       }
 
@@ -4768,6 +4914,9 @@ const handleCommand = async (
         wrapperBindDeps(),
         warnings,
       )
+      // I5 — LAST, after every field that can move a box: a size, a sizing, a
+      // padding or a gap on any node inside a page-root frame can grow it.
+      warnGrownIntoNeighbour(node, updateRootBefore, warnings)
 
       return {
         id: node.id,
@@ -5432,6 +5581,11 @@ const handleCommand = async (
       // Capture the child's absolute origin BEFORE the move — appendChild keeps
       // the raw parent-relative x/y, so without this the node jumps.
       const childOrigin = originOf(child as Placeable)
+      // I5 — a move INTO a HUG section grows it exactly as an append does. The
+      // frame the child LEAVES can only shrink, so only the destination is
+      // watched.
+      const reparentRootBefore = rootBoundsOf(parent)
+      const reparentWarnings: string[] = []
       const index = params.index as number | undefined
       // I66 — the move hits the SAME per-instance ceiling a create does, and
       // used to hit it as a raw uncaught Figma throw naming an id the caller
@@ -5475,11 +5629,23 @@ const handleCommand = async (
         ;(child as SceneNode & { x: number; y: number }).y =
           placement.y
       }
+      warnGrownIntoNeighbour(
+        parent,
+        reparentRootBefore,
+        reparentWarnings,
+      )
       return {
         id: child.id,
         name: child.name,
         type: child.type,
         parentId: parent.id,
+        // T7 — reparent_node had no warnings channel at all, which is a gap
+        // rather than a decision: it is a WRITE, and a write that degrades
+        // silently is the one thing no door on this surface may do. Omitted
+        // when clean, so its presence is the signal.
+        ...(reparentWarnings.length > 0
+          ? { warnings: reparentWarnings }
+          : {}),
       }
     }
 

@@ -747,6 +747,138 @@ describe('INSTANCE_SWAP default currency wiring', () => {
   })
 })
 
+// B79 — `vector-origin.ts` can be perfect and never reach a node. The whole
+// defect is that the stated position is written AFTER the setter walked the
+// node, and the compensation only exists if `spec` reaches the geometry write:
+// drop that one argument at either call site and the ink slides back to the
+// corner, silently, with every unit test still green. This file is where that
+// is catchable — the mock is a SERVER double and never runs this code.
+describe('vector origin wiring (B79)', () => {
+  const vectorApply = between(
+    'const applyVectorPaths = async (',
+    'const buildSingleNode = async (',
+  )
+
+  it('actually found the geometry writer (liveness)', () => {
+    expect(vectorApply).toContain('assignVectorPaths(')
+    expect(vectorApply).toContain('positionOverOffset(')
+  })
+
+  it('folds the walk into the position the appliers read', () => {
+    // Not a direct `node.x =` here: `spec.position` is the ONE place both
+    // `applyCommonProperties` and the ABSOLUTE re-apply take it from, so
+    // writing it there is what makes the two agree.
+    expect(vectorApply).toContain('spec.position = placed')
+  })
+
+  it('compensates BEFORE the per-point detail, and skips both on a refusal', () => {
+    const theRefusal = vectorApply.indexOf('if (!applied)')
+    const theDetail = vectorApply.indexOf(
+      'applyVectorPointDetail(',
+    )
+    expect(theRefusal).toBeGreaterThan(0)
+    expect(theDetail).toBeGreaterThan(theRefusal)
+  })
+
+  it('BOTH write paths hand it the spec — create and update', () => {
+    // One missing argument is one silently mis-placed vector per path, and the
+    // create path alone carries every icon glyph in a build.
+    const handed = code.split(
+      /applyVectorPaths\(\s*[\w.() ]+,\s*spec\.vectorPaths,\s*warnings,\s*spec,/,
+    ).length - 1
+    expect(handed).toBe(2)
+  })
+})
+
+// B78 — `servedByAncestorExport` is a predicate, and a predicate nothing calls
+// is a green module over a read that still answers from the wrong oracle. The
+// symptom is a dropped CHILD, which no unit test of the read face can see
+// because `code.ts` owns which export the read is built from.
+// B76 — the predicate is pure and green on its own; what decides the bug is
+// whether the UPDATE arm asks it instead of reading the node's current
+// `layoutPositioning` directly.
+// I5 — the check needs a BEFORE and an AFTER of the same box, taken on either
+// side of the write. A call site that measured after only would answer "does
+// this page overlap", which is a different and mostly useless question; one
+// that measured before only would answer nothing. Both halves, at every door
+// that can grow a page-root frame.
+describe('page-root growth wiring (I5)', () => {
+  it('measures the box before the write and reports after it', () => {
+    const before = code.split('rootBoundsOf(').length - 1
+    const after =
+      code.split('warnGrownIntoNeighbour(').length - 1
+    // Four doors that can grow a page-root frame: create_node, create_tree,
+    // update_node, reparent_node. Paired, so neither half can be dropped
+    // alone — a measurement with nothing to compare it to, or a comparison
+    // against nothing, both pass every other test in this repo.
+    expect(before).toBe(4)
+    expect(after).toBe(4)
+  })
+
+  it('takes the create measurement BEFORE the node is built', () => {
+    const createArm = between(
+      'case COMMANDS.CREATE_NODE: {',
+      'case COMMANDS.CREATE_TREE: {',
+    )
+    expect(
+      createArm.indexOf('rootBoundsOf('),
+    ).toBeLessThan(createArm.indexOf('createSingleNode('))
+    expect(
+      createArm.indexOf('warnGrownIntoNeighbour('),
+    ).toBeGreaterThan(createArm.indexOf('createSingleNode('))
+  })
+
+  it('reports on update AFTER every field that can move a box', () => {
+    const updateArm = between(
+      'case COMMANDS.UPDATE_NODE: {',
+      'case COMMANDS.DELETE_NODE',
+    )
+    expect(
+      updateArm.indexOf('warnGrownIntoNeighbour('),
+    ).toBeGreaterThan(
+      updateArm.indexOf('applySizeVerified('),
+    )
+  })
+})
+
+describe('patch-position wiring (B76)', () => {
+  it('the update arm asks about the PATCH, not about the node alone', () => {
+    expect(code).toContain('patchPositionIgnored(')
+    // The old reading, which answered about a node the patch was replacing.
+    expect(code).not.toContain(
+      "(node as FrameNode).layoutPositioning !== 'ABSOLUTE'",
+    )
+  })
+})
+
+describe('read-oracle wiring (B78)', () => {
+  const readDoc = between(
+    'const readNodeDocument = async (',
+    'const resolveStyle = async (',
+  )
+
+  it('actually found the read (liveness)', () => {
+    expect(readDoc).toContain('exportNodeDocument(')
+  })
+
+  it('asks whose export describes the node before exporting the handle', () => {
+    const theQuestion = readDoc.indexOf(
+      'servedByAncestorExport(',
+    )
+    expect(theQuestion).toBeGreaterThan(0)
+    expect(
+      readDoc.indexOf('exportNodeDocument(node, depth)'),
+    ).toBeGreaterThan(theQuestion)
+  })
+
+  it('takes that slice WITHOUT declaring a degrade', () => {
+    // The handle is alive and the enrichment still pairs against it, so only
+    // the oracle changed. A readError here would fire on every healthy
+    // slot-content read and drown the ones that mean something.
+    expect(readDoc).toContain('await slice(node)')
+  })
+})
+
 describe('inline var() value-mismatch wiring', () => {
   it('hands the binder the shadow lookup it reports with', () => {
     // `variableShadows` is optional on the deps, so a dropped wiring degrades

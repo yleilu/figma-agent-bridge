@@ -303,6 +303,17 @@ concept, no duplicated source of truth — both read the enriched registry, so t
 The block adds only what a passive turn-start view needs beyond `status()`: the folded-in `pending_edits`
 signal and the `recently_offline` transition.
 
+**`status()` reads the registry whether or not this server has joined anything (B75).** *Joined nothing*
+and *no file is open* are different facts, and the reply keeps them apart: `{connected: false, joined: [],
+available: [...], nextStep}` in both cases, with `available[]` from the registry and `nextStep` naming the
+step that works — `connect({fileKey})` when a channel is live, "open the file and run the plugin" when the
+registry is genuinely empty. It used to answer the bare word `disconnected` **before the registry was
+asked**, which is every session's first call: the relay held a live channel, `connect({fileKey})` then
+succeeded instantly, and `figma-connection` maps a disconnected answer to *close and reopen the plugin /
+restart the relay*. The documented discovery path (this section, and every file-addressed tool's `fileKey`
+param — *"from status/connect available[]"*) has to answer at exactly the moment discovery is the whole
+question.
+
 ## Relationship to the Change Feed
 
 The Change Feed owns the count mirror (the on-disk `pending_edits` / `pending_edits_state` source), the

@@ -111,6 +111,37 @@ describe('atomToPath — parse atom string', () => {
       data: 'garbage',
     })
   })
+
+  // B77 — `grammar.md` promises that data copied straight out of an SVG file
+  // lands as written, and Figma refuses `H`, `V` and `A`: the live
+  // `path(NONE,"M 4 4 H 10 V 10 H 4 Z")` came back as "Failed to convert path.
+  // Invalid command at H", node landed, geometry gone. Five of twelve icons
+  // plus every chain glyph were rewritten by hand on that build.
+  it('rewrites the commands Figma refuses, so the promise holds', () => {
+    expect(
+      atomToPath('path(NONE,"M 4 4 H 10 V 10 H 4 Z")'),
+    ).toEqual({
+      windingRule: 'NONE',
+      data: 'M 4 4 L 10 4 L 10 10 L 4 10 Z',
+    })
+  })
+
+  it('rewrites an arc, commas and all — the copy-paste case end to end', () => {
+    const { data } = atomToPath(
+      'path(NONZERO,"M 10,0 A 10,10 0 0,1 0,10 Z")',
+    )
+    expect(data).not.toContain('A')
+    expect(data.startsWith('M 10 0 C ')).toBe(true)
+    expect(data.endsWith('Z')).toBe(true)
+  })
+
+  it('leaves data Figma already takes byte-identical', () => {
+    // The round-trip guarantee below depends on this: a normaliser with
+    // nothing to do must return the string it was given.
+    expect(
+      atomToPath('path(NONZERO,"M 0 0 L 10 0 Z")').data,
+    ).toBe('M 0 0 L 10 0 Z')
+  })
 })
 
 // ─── B45: an atom that does not parse is rejected, never guessed at ──────────

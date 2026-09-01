@@ -36,6 +36,7 @@ import type { AtomAST, AtomArg } from '../types'
 import { parseAtom } from '../parse-atom'
 import { renderAtom } from '../render-atom'
 import { ToolError } from '../../errors'
+import { normalizeSvgCommands } from '../svg-path'
 
 export type FigmaVectorPath = {
   windingRule: 'NONZERO' | 'EVENODD' | 'NONE'
@@ -225,12 +226,24 @@ export const atomToPath = (s: string): FigmaVectorPath => {
   // args and used to keep `"M0` as the whole shape. Rejoining and then
   // normalizing is what makes the write face's own promise true (commas are
   // normalized to spaces on write — expression-formats.md).
-  const data = normalizePathData(
-    unquote(
-      args
-        .slice(1)
-        .map(a => String(scalar(a) ?? ''))
-        .join(','),
+  //
+  // …and then the COMMANDS are normalized (B77). Figma's own converter refuses
+  // `H`, `V` and `A` — `path(NONE,"M 4 4 H 10 V 10 H 4 Z")` came back as
+  // "Failed to convert path. Invalid command at H" with the node landed and
+  // its geometry gone — while `grammar.md` promises that data copied straight
+  // out of an SVG file lands as written. Every refused command is pure syntax
+  // sugar over one Figma takes, so the surface performs the conversion the
+  // caller would otherwise have to do by hand. See svg-path.ts. Data with
+  // nothing to rewrite comes back as the same string, so the read → write
+  // round trip is untouched.
+  const data = normalizeSvgCommands(
+    normalizePathData(
+      unquote(
+        args
+          .slice(1)
+          .map(a => String(scalar(a) ?? ''))
+          .join(','),
+      ),
     ),
   )
   if (data.trim() === '') {

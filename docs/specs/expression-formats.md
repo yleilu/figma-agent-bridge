@@ -341,9 +341,39 @@ Read back on the `grids` field of a FRAME node. Write: supply in `create_node`/`
 
 SVG-path atom for VECTOR nodes. `windingRule` is one of `NONZERO | EVENODD | NONE`; `data` is the SVG path data string (spaces as coordinate separators — commas are normalized to spaces on write).
 
+**The command set is normalized on write (B77).** Figma's own converter takes `M`, `L`, `C`, `Q` and
+`Z` (relative forms included) and refuses `H`, `V` and `A` outright — *"Failed to convert path.
+Invalid command at H"*, with the node landed and its geometry dropped. Each refused command, and the
+two shorthand curves `S`/`T`, is **pure syntax sugar** over one Figma accepts: `H x` is `L x <current
+y>`, `S`/`T` are `C`/`Q` with one control point mirrored, and an elliptical arc has the standard
+cubic decomposition (SVG 1.1 F.6.5, split at 90°). A caller handed the refusal can do nothing with it
+except perform that same conversion by hand, so the write face performs it. **Data with none of the
+five is passed through byte-for-byte**, which is what keeps the read→write round trip below exact. An
+unparseable string is still forwarded unchanged, so an engine refusal remains Figma's to make.
+
 Example: `path(NONZERO,"M0 0 L100 0 L100 100 Z")`
 
 Read back on the `vectorPaths` field of a VECTOR node. Write: supply in `create_node`/`update_node` spec as `vectorPaths: [path(...), ...]`.
+
+**The coordinate frame, and how `position` reads against it (B79).** Path data is written in the
+**parent's** coordinates, and the node's `position` **translates** that frame rather than replacing
+it: `final = stated + <where the data put the ink>`. Figma's own setter is what establishes the
+frame — assigning `vectorPaths` rebases the data into the node's box, resizes the node to the path
+bounds, and walks the node to the path minimum, so data written as `M 60 76 … L 700 185 Z` lands at
+those numbers whether or not a position is stated. Consequences, both ways round:
+
+- **0-based data** (`M 0 0 L 24 24 Z`) offsets by zero, so `position` means exactly what it says.
+  This is the common case and it is unaffected.
+- **Data in its parent's coordinates** with `position: [0, 0]` lands where the numbers say. It used
+  to land at the parent's origin, dragging every coordinate by the path minimum — silently, with
+  `warnings: []` — which put a chart's fill baseline 16px off its zero gridline and pulled every
+  24-box icon glyph 4px into its corner.
+- **A non-zero `position` with non-zero data** shifts the whole shape by that amount. State one or
+  the other; stating both adds them.
+
+The frame was never stated before, and under **both** readable contracts the intent was the same ink
+placement — which is why the misplacement was invisible on the write face and only an exported PNG
+showed it.
 
 **Per-point detail rides in the `{…}` channel, sparsely.** Figma holds a vector two ways:
 `vectorPaths` — `{windingRule, data}`, which this atom's head mirrors — and `vectorNetwork`, whose

@@ -42,6 +42,7 @@ import {
 } from '@figma-agent-bridge/server/tools/read'
 import { handleSearch } from '@figma-agent-bridge/server/tools/search'
 import { handleUpdateNode } from '@figma-agent-bridge/server/tools/update'
+import { handleCreateNode } from '@figma-agent-bridge/server/tools/create-node'
 import { createMockPlugin } from '../mocks/mock-plugin'
 
 const TEST_PORT = 3138
@@ -395,5 +396,65 @@ describe('B53 — three-level slot nesting', () => {
     expect(result.content[0].text).toContain(
       'Node not found',
     )
+  })
+
+  // ── B74: the phantom address, four deep ─────────────────────────────────
+  //
+  // The fixture above nests four segments and every id in it resolves, which
+  // is why it could never reach this defect. The 2026-08-30 build produced the
+  // one shape it does not state: a slot-hosted INSTANCE that answers its
+  // PRE-APPEND id, so Figma composes `I<alias>;<leaf>` off it. That address
+  // reads, writes, reads back changed, and is not the rendered node — ~60 cell
+  // writes returned `{ok:true, warnings:[]}` and reached nothing, and only an
+  // exported PNG ever said so.
+  //
+  // The mock states the address now (see its PHANTOM section). These pin what
+  // the surface owes: a REFUSAL that names the id the caller sent, not an ack,
+  // and not a bare not-found on an id the file does hold.
+  describe('B74 — a write to an alias-derived address', () => {
+    const PHANTOM = 'I549:17625;549:17265'
+
+    it('is refused, never acked', async () => {
+      const result = await handleUpdateNode(
+        {
+          nodeId: PHANTOM,
+          patch: { text: '940,000 USDC' },
+        },
+        scoped,
+      )
+      const { text } = result.content[0]
+      expect(text).toContain('Refusing to write to')
+      expect(text).toContain(PHANTOM)
+      // The worst outcome this row exists to remove.
+      expect(text).not.toContain('warnings: []')
+    })
+
+    it('names the alias, the instance to re-read, and what a write would do', async () => {
+      const { text } = (
+        await handleUpdateNode(
+          { nodeId: PHANTOM, patch: { opacity: 0.5 } },
+          scoped,
+        )
+      ).content[0]
+      expect(text).toContain('549:17625')
+      expect(text).toContain('549:17459')
+      expect(text).toContain('does not render')
+    })
+
+    it('is refused as a create PARENT too — B73 arrived by that door', async () => {
+      // Live it answered `in appendChild: The node I549:17201;549:17145 does
+      // not exist`, quoting an id the caller had never written.
+      const { text } = (
+        await handleCreateNode(
+          {
+            parentId: PHANTOM,
+            spec: { type: 'FRAME', name: 'Cell' },
+          },
+          scoped,
+        )
+      ).content[0]
+      expect(text).toContain('Refusing to write to')
+      expect(text).toContain(PHANTOM)
+    })
   })
 })

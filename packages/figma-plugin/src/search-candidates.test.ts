@@ -344,7 +344,7 @@ describe('repairScan — repair without downgrading (C1)', () => {
 
   it('honours the repair cap and keeps the uncovered failures as warnings', async () => {
     const asked: number[] = []
-    const { warnings } = await repairScan({
+    const { warnings, incomplete } = await repairScan({
       ...frameHosted(),
       // Two disjoint hosts — the healthy instances stand in as hosts here.
       failures: [
@@ -364,7 +364,75 @@ describe('repairScan — repair without downgrading (C1)', () => {
       },
     })
     expect(asked).toEqual([1])
-    expect(warnings).toEqual(['second'])
+    // B72 — the cut is stated as well as counted. A budget that silently stops
+    // repairing returns a short set that looks whole.
+    expect(warnings[0]).toBe('second')
+    expect(warnings[1]).toContain('per-scan budget')
+    expect(incomplete).toBe(true)
+  })
+
+  // ── B72: a short set says it is short ────────────────────────────────────
+  //
+  // The 2026-08-30 document scan lost 8% of instances, 13% of nodes and 17% of
+  // TEXT while answering `truncated:false`. It carried 192 warnings naming 13
+  // parents, and NONE of the 91 dropped TEXT nodes descended from any of the
+  // 13 — so prose could not have told the caller either. Two rubric categories
+  // were scored to a false FAIL off it; one of them is a gate condition.
+  describe('repairScan — incomplete', () => {
+    it('a clean scan is not incomplete', async () => {
+      const fixture = frameHosted()
+      const { incomplete } = await repairScan({
+        ...fixture,
+        failures: [],
+        exportHost: async () => undefined,
+      })
+      expect(incomplete).toBe(false)
+    })
+
+    it('a repaired failure is not incomplete — nothing was lost', async () => {
+      const fixture = frameHosted()
+      const { incomplete } = await repairScan({
+        ...fixture,
+        exportHost: async () => ({ document: frameDoc() }),
+      })
+      expect(incomplete).toBe(false)
+    })
+
+    it('a failure no export covered makes the set incomplete', async () => {
+      const fixture = frameHosted()
+      const { incomplete, warnings } = await repairScan({
+        ...fixture,
+        // The host cannot describe itself either, so the subtree stays lost.
+        exportHost: async () => undefined,
+      })
+      expect(incomplete).toBe(true)
+      expect(warnings.length).toBeGreaterThan(0)
+    })
+
+    it('a TRADED row is not incompleteness — it is present, only thinner', async () => {
+      const fixture = frameHosted()
+      fixture.candidates[3] = live('298:7519', {
+        name: 'Chip',
+        context: 'a slot-hosted chip',
+      })
+      fixture.failures = [
+        {
+          at: -1,
+          host: 3,
+          message: 'search: skipped I298:7519;298:7510',
+        },
+      ]
+      const { incomplete, warnings } = await repairScan({
+        ...fixture,
+        exportHost: async () => ({
+          document: (frameDoc().children as RawNode[])[2],
+        }),
+      })
+      expect(
+        warnings.some(w => w.includes('cannot carry')),
+      ).toBe(true)
+      expect(incomplete).toBe(false)
+    })
   })
 
   it('a scan with no failures is returned untouched', async () => {
