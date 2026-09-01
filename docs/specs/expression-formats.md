@@ -341,6 +341,16 @@ Read back on the `grids` field of a FRAME node. Write: supply in `create_node`/`
 
 SVG-path atom for VECTOR nodes. `windingRule` is one of `NONZERO | EVENODD | NONE`; `data` is the SVG path data string (spaces as coordinate separators — commas are normalized to spaces on write).
 
+**The command set is normalized on write (B77).** Figma's own converter takes `M`, `L`, `C`, `Q` and
+`Z` (relative forms included) and refuses `H`, `V` and `A` outright — *"Failed to convert path.
+Invalid command at H"*, with the node landed and its geometry dropped. Each refused command, and the
+two shorthand curves `S`/`T`, is **pure syntax sugar** over one Figma accepts: `H x` is `L x <current
+y>`, `S`/`T` are `C`/`Q` with one control point mirrored, and an elliptical arc has the standard
+cubic decomposition (SVG 1.1 F.6.5, split at 90°). A caller handed the refusal can do nothing with it
+except perform that same conversion by hand, so the write face performs it. **Data with none of the
+five is passed through byte-for-byte**, which is what keeps the read→write round trip below exact. An
+unparseable string is still forwarded unchanged, so an engine refusal remains Figma's to make.
+
 Example: `path(NONZERO,"M0 0 L100 0 L100 100 Z")`
 
 Read back on the `vectorPaths` field of a VECTOR node. Write: supply in `create_node`/`update_node` spec as `vectorPaths: [path(...), ...]`.
