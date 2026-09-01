@@ -162,6 +162,16 @@ geometry**.
 applied after the geometry — state both and the size you asked for is the one you get. A
 path aimed at a node type that carries none is named in `warnings[]`, not swallowed.
 
+**Path data carries its own origin, and `position` translates it.** Assigning `vectorPaths`
+also **walks the node to the path minimum**, so data written in the parent's coordinates
+(`M 60 76 … L 700 185 Z`) lands at those numbers. The final placement is `stated + that
+walk`: 0-based data is unaffected, data in parent coordinates with `position:[0,0]` lands
+where its numbers say, and stating both adds them. State one or the other.
+
+**`position` and `layoutPositioning` in one patch.** State both together and both land —
+the patch is judged on what it leaves behind, not on what the node held when it arrived.
+You do not have to send `layoutPositioning:'ABSOLUTE'` first and the position second.
+
 ---
 
 ## A write into a slot is read back, then trusted

@@ -46,6 +46,8 @@ import {
   applyGrids,
   capabilityWarnings,
   discardedPositionsWarning,
+  patchPositionIgnored,
+  type PlacedTarget,
   repinFixedSize,
   verifyCreatedSize,
   type Placement,
@@ -4751,12 +4753,11 @@ const handleCommand = async (
       const parent = node.parent as ParentNode | null
 
       // warn-on-no-op: x/y on an auto-layout flow child is ignored by Figma.
+      // Judged on what the patch LEAVES BEHIND, never on what the node holds
+      // now — `layoutPositioning` is written by this same patch, further down
+      // this same handler (B76). See patchPositionIgnored.
       if (
-        spec.position !== undefined &&
-        parent !== null &&
-        'layoutMode' in parent &&
-        (parent as FrameNode).layoutMode !== 'NONE' &&
-        (node as FrameNode).layoutPositioning !== 'ABSOLUTE'
+        patchPositionIgnored(spec, node as PlacedTarget, parent)
       ) {
         warnings.push(
           'x/y ignored on an auto-layout child (set layoutPositioning:ABSOLUTE first)',

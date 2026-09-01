@@ -810,6 +810,52 @@ export const statedPositionWarning = (
   )
 }
 
+/**
+ * Will an auto-layout parent throw away the `position` this PATCH states?
+ *
+ * The update face's twin of `discardedPosition`, and it asks the question one
+ * beat later: not *what is this node now* but *what will it be when this patch
+ * has landed*. `layoutPositioning` is written by the same patch, further down
+ * the same handler, so reading the node's CURRENT value answered about a node
+ * that is on its way out of existence (B76).
+ *
+ * The cost was a surface arguing with itself. `update_node 549:17000
+ * {layoutPositioning:'ABSOLUTE', position:[0,10], …}` answered *"x/y ignored on
+ * an auto-layout child (set layoutPositioning:ABSOLUTE first)"* — the remedy
+ * the patch was already applying — and dropped the position, defeating the
+ * ABSOLUTE re-apply that exists to land it. Re-sending the identical patch
+ * WITHOUT `layoutPositioning` then worked.
+ *
+ * Rule-checked, not value-checked, and it has to be: this runs BEFORE anything
+ * is applied, so there is no landed x/y to compare against yet. The create
+ * path's check runs after and stays value-based.
+ */
+export const patchPositionIgnored = (
+  spec: Partial<{
+    position: unknown
+    layoutPositioning: unknown
+  }>,
+  node: PlacedTarget,
+  parent: unknown,
+): boolean => {
+  if (spec.position === undefined) return false
+  const layoutMode =
+    parent !== null && typeof parent === 'object'
+      ? (parent as { layoutMode?: unknown }).layoutMode
+      : undefined
+  if (
+    typeof layoutMode !== 'string' ||
+    layoutMode === 'NONE'
+  ) {
+    return false
+  }
+  // A patch that STATES the field owns the answer; one that does not falls
+  // back to what the node already holds.
+  const effective =
+    spec.layoutPositioning ?? node.layoutPositioning
+  return effective !== 'ABSOLUTE'
+}
+
 /** One child as the placement check sees it: what it asked for, and what it is. */
 export type Placement = {
   position: unknown

@@ -6,6 +6,7 @@ import {
   applySizeVerified,
   applySizing,
   hugFillCollapseWarning,
+  patchPositionIgnored,
   applyStrokeGeometry,
   applyStrokeWeights,
   applyExportSettings,
@@ -1164,6 +1165,88 @@ test('applySizing: B80 — a refused write is never also called a collapse', () 
   applySizing(node, ['FILL', 'HUG'], warnings)
   expect(warnings).toHaveLength(1)
   expect(warnings[0]).toContain('sizing not applicable')
+})
+
+// ─── B76: the patch that carried its own remedy ─────────────────────────────
+//
+// `update_node 549:17000 {layoutPositioning:'ABSOLUTE', position:[0,10],
+// size:[2,20], constraints:['MIN','CENTER']}` answered ok with the warning
+// "x/y ignored on an auto-layout child (set layoutPositioning:ABSOLUTE first)"
+// — the remedy the patch itself was applying — and dropped `position`, which
+// defeated the ABSOLUTE re-apply that exists to land it. Re-sending the
+// identical patch WITHOUT `layoutPositioning` then worked: the surface
+// disagreeing with itself, and a round trip for nothing.
+
+const stackParent = { layoutMode: 'VERTICAL' }
+
+test('patchPositionIgnored: B76 — a patch that sets ABSOLUTE keeps its own position', () => {
+  expect(
+    patchPositionIgnored(
+      { position: [0, 10], layoutPositioning: 'ABSOLUTE' },
+      { layoutPositioning: 'AUTO' },
+      stackParent,
+    ),
+  ).toBe(false)
+})
+
+test('patchPositionIgnored: a flow child that states no positioning is still warned', () => {
+  expect(
+    patchPositionIgnored(
+      { position: [0, 10] },
+      { layoutPositioning: 'AUTO' },
+      stackParent,
+    ),
+  ).toBe(true)
+})
+
+test('patchPositionIgnored: a patch may also take the escape hatch AWAY', () => {
+  // `{layoutPositioning:'AUTO'}` on an already-ABSOLUTE node puts it back in
+  // the flow, so its stated x/y really will be ignored. Reading the node alone
+  // would have missed this one in the other direction.
+  expect(
+    patchPositionIgnored(
+      { position: [0, 10], layoutPositioning: 'AUTO' },
+      { layoutPositioning: 'ABSOLUTE' },
+      stackParent,
+    ),
+  ).toBe(true)
+})
+
+test('patchPositionIgnored: an already-ABSOLUTE node is untouched', () => {
+  expect(
+    patchPositionIgnored(
+      { position: [0, 10] },
+      { layoutPositioning: 'ABSOLUTE' },
+      stackParent,
+    ),
+  ).toBe(false)
+})
+
+test('patchPositionIgnored: a parent that arranges nothing never warns', () => {
+  for (const parent of [
+    { layoutMode: 'NONE' },
+    { type: 'PAGE' },
+    null,
+    undefined,
+  ]) {
+    expect(
+      patchPositionIgnored(
+        { position: [0, 10] },
+        { layoutPositioning: 'AUTO' },
+        parent,
+      ),
+    ).toBe(false)
+  }
+})
+
+test('patchPositionIgnored: a patch that states no position has nothing to lose', () => {
+  expect(
+    patchPositionIgnored(
+      { layoutPositioning: 'AUTO' },
+      { layoutPositioning: 'ABSOLUTE' },
+      stackParent,
+    ),
+  ).toBe(false)
 })
 
 test('hugFillCollapseWarning: a parent that refuses every read is not a finding', () => {

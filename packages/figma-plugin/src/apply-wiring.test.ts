@@ -794,6 +794,19 @@ describe('vector origin wiring (B79)', () => {
 // is a green module over a read that still answers from the wrong oracle. The
 // symptom is a dropped CHILD, which no unit test of the read face can see
 // because `code.ts` owns which export the read is built from.
+// B76 — the predicate is pure and green on its own; what decides the bug is
+// whether the UPDATE arm asks it instead of reading the node's current
+// `layoutPositioning` directly.
+describe('patch-position wiring (B76)', () => {
+  it('the update arm asks about the PATCH, not about the node alone', () => {
+    expect(code).toContain('patchPositionIgnored(')
+    // The old reading, which answered about a node the patch was replacing.
+    expect(code).not.toContain(
+      "(node as FrameNode).layoutPositioning !== 'ABSOLUTE'",
+    )
+  })
+})
+
 describe('read-oracle wiring (B78)', () => {
   const readDoc = between(
     'const readNodeDocument = async (',
