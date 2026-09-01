@@ -34,6 +34,16 @@ instance to discover it. Call `get_node` on the **master component** once to fin
 text node id (`masterTextNodeId`), then build the compound id for each instance by
 combining with that instance's id.
 
+**What this route cannot carry: vector geometry.** Text, fills, strokes and the rest
+override through a compound id normally. `vectorPaths` does not — Figma seals vector data
+in an instance and refuses the write (*"This property cannot be overridden in an instance:
+vector-data"*), on the instance and on its nested VECTOR sublayer alike. A read of that
+same child still emits `vectorPaths`, so the round-trip looks open until you write. Shape
+that varies per instance is a **variant of a COMPONENT_SET** (or content placed through a
+**SLOT**) — decide that at modelling time, not at content time: four KPI sparklines were
+built as one component plus per-instance shape overrides and had to be rebuilt as a
+five-variant set.
+
 **Full text patch.** When updating instance text, always supply a **complete** text
 patch (content + font + color). A content-only patch (`raw.trim()`) errors when the
 existing text has mixed styles. Patch shape:

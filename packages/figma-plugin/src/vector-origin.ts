@@ -52,7 +52,47 @@
 export type OriginNode = Partial<{
   x: unknown
   y: unknown
+  /** Read only to word a refusal (I83) — never written. */
+  id: unknown
 }>
+
+/**
+ * What a `vectorPaths` refusal says, and what to do about it (I83).
+ *
+ * Figma seals vector data inside an INSTANCE: `update_node` on an instance's
+ * nested VECTOR sublayer answers *"This property cannot be overridden in an
+ * instance: vector-data"*. That refusal is correct and B45 already ruled the
+ * degrade correct — what was missing is that the message stopped there, while
+ * the guidance pointed the other way (`grammar.md` promised a verbatim
+ * round-trip, and a read of that same instance child DOES emit `vectorPaths`).
+ * Four KPI sparklines were modelled as one component plus per-instance shape
+ * overrides on the strength of it, hit the refusal at content time, and had to
+ * be rebuilt as a five-variant set.
+ *
+ * So the sealed case names the ways through, the way the sealed-instance append
+ * refusal does. Keyed on the id's SHAPE rather than on Figma's wording: only a
+ * node inside an instance carries a compound id, and matching English would
+ * break on the next Figma release.
+ */
+export const pathRefusalMessage = (
+  reason: string,
+  nodeId: unknown,
+): string => {
+  const base = 'vectorPaths rejected by Figma: ' + reason
+  const sealed =
+    typeof nodeId === 'string' &&
+    nodeId.startsWith('I') &&
+    nodeId.includes(';')
+  return sealed
+    ? base +
+        '. Vector geometry is SEALED in an instance — Figma allows no ' +
+        'vector-data override on an instance or on its nested VECTOR ' +
+        'sublayer, however the id is spelled. Three ways through: edit the ' +
+        'MASTER’s vector (every instance follows); make the shapes variants ' +
+        'of a COMPONENT_SET and swap the variant; or build the vector ' +
+        'outside the instance and place it through a SLOT.'
+    : base
+}
 
 /** As much of a VECTOR as this module writes to. */
 export type PathTarget = OriginNode &
@@ -129,7 +169,10 @@ export const assignVectorPaths = (
     // path is read-only, and calling that "invalid path data" would send the
     // agent to fix a string that is already correct.
     warnings?.push(
-      'vectorPaths rejected by Figma: ' + String(e),
+      pathRefusalMessage(
+        String(e),
+        (node as { id?: unknown }).id,
+      ),
     )
     return { applied: false, offset: [0, 0] }
   }

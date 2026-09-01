@@ -166,11 +166,20 @@ path(EVENODD,"M0 0 L100 0 L100 100 Z"){corners=[0:12,2:4]}
   the surface performs the rewrite rather than handing you a refusal you could only answer
   by doing it yourself. Data with none of them is passed through unchanged.
 - The field is an array — `vectorPaths: [path(…), path(…)]` — and both `create_node` and
-  `update_node` write it, so the `vectorPaths` a read emits is writable back verbatim.
-  On an update the assignment rebuilds the node's network **and resizes the node to the
-  new path bounds**, so a `size` in the same patch is applied after the geometry — and it
-  **walks the node to the path minimum**, so `position` translates the frame the data
-  already set (`final = stated + that walk`) rather than replacing it.
+  `update_node` write it, so the `vectorPaths` a read emits is writable back verbatim
+  **everywhere except inside an INSTANCE**. On an update the assignment rebuilds the
+  node's network **and resizes the node to the new path bounds**, so a `size` in the same
+  patch is applied after the geometry — and it **walks the node to the path minimum**, so
+  `position` translates the frame the data already set (`final = stated + that walk`)
+  rather than replacing it.
+- **Vector geometry is SEALED in an instance.** Figma allows no vector-data override
+  there — not on the instance, and not on its nested VECTOR sublayer, however the id is
+  spelled (`update_node` on `I<instance>;…;<vector>` answers *"This property cannot be
+  overridden in an instance: vector-data"*). This is the one field the compound-id
+  override route cannot carry, and it is worth knowing BEFORE you model with it: a read of
+  an instance's vector child happily emits `vectorPaths`, so the round-trip looks open.
+  Shape that varies per instance is a **variant of a COMPONENT_SET**, or content placed
+  through a **SLOT** — not an override. Text, fills and strokes all override normally.
 
 **Per-point detail rides in the `{…}` channel, sparsely** — three index-keyed lists
 naming only the points that differ from the node's own value:
