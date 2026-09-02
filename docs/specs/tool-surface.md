@@ -219,7 +219,14 @@ node, and the live-only fields the handle refused. It also costs only what it lo
 answers `id`, `name`, `type` and the size while refusing `parent`, `children` and
 `getSharedPluginData`, so each field group is read on its own and one refusal never empties the
 row (580 rows on the 2026-09-01 artifact came back holding nothing but the message, with their
-size, vector geometry and text runs all still readable).
+size, vector geometry and text runs all still readable). **The `children` refusal is worded the
+same way.** A handle that will not list its children raises the identical throw, and that path
+was still passing it through: 69 of the 300 readErrors on the 2026-09-02 artifact quoted a
+two-segment id `get_node` answers "does not exist" for, while the row's own four-segment
+canonical id resolved. It now names the emitted id, the field groups the same handle refused,
+and the fact that the children on that row come from the file's own export. A `children` failure
+that is **not** that signature — a node deleted mid-read — keeps Figma's own sentence, which is
+the most specific thing anyone has about it.
 
 ### Defaults by job (D4)
 

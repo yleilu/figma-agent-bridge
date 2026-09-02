@@ -192,6 +192,40 @@ export const partialLiveReadMessage = (
   'that answers.'
 
 /**
+ * What a row says when its live handle would not LIST ITS CHILDREN (B65).
+ *
+ * The fourth wording of one loss, and the last read path that was still
+ * handing Figma's own sentence through. That sentence quotes the address
+ * Figma composed off a pre-append id — `I571:32063;571:32007`, two segments —
+ * and the address names no node: `get_node` on it answers *"does not exist"*.
+ * 69 of the 300 readErrors on the 2026-09-02 artifact were this throw,
+ * verbatim, while the row's own canonical id (four segments) resolved fine.
+ *
+ * So the id here is the one the read EMITS for this node, and what the row
+ * lost is named rather than quoted. The children below it are not lost: the
+ * pairing keeps walking the EXPORT, so each one arrives served from the
+ * ancestor's export and says so in its own words.
+ *
+ * `fields` carries the property groups the same handle also refused, when it
+ * refused any — one node, one sentence, rather than a refusal that hides
+ * another.
+ */
+export const refusedChildrenMessage = (
+  nodeId: string,
+  fields: readonly string[] = [],
+): string =>
+  'the live handle for ' +
+  nodeId +
+  ' refused to list its children' +
+  (fields.length > 0
+    ? ', and refused ' + fields.join(', ')
+    : '') +
+  ' — Figma composed its address from a pre-append id. The children on this ' +
+  'row come from the file’s own export, without the fields only a live read ' +
+  'can supply. Read the enclosing INSTANCE (get_node, depth:-1) to see this ' +
+  'subtree through a handle that answers.'
+
+/**
  * How many ancestors an id walk will climb before it gives up.
  *
  * A Figma tree is a few dozen levels at worst. The bound is here so a cyclic or

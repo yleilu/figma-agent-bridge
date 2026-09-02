@@ -103,7 +103,9 @@ import {
 } from './canonical-ids'
 import {
   partialLiveReadMessage,
+  refusedChildrenMessage,
   slicedReadMessage,
+  staleHandleThrow,
 } from './resolve-node'
 
 export type { LiveNode, RawNode }
@@ -748,7 +750,16 @@ const collectOne = (
       refused.push('the live variable bindings')
     }
     if (pair.walkError !== undefined) {
-      patch.readError = pair.walkError
+      // B65 — the LAST truncation path on the read face. `walkError` is
+      // Figma's own throw, and when the walk failed because Figma composed
+      // this node's address off a pre-append id, that throw quotes the
+      // composed address: two segments, naming no node. 69 rows carried one on
+      // the 2026-09-02 artifact. Restated against the id the read emits, which
+      // is the id a caller holds — and only for THAT signature, because a node
+      // deleted mid-read is a different fact and Figma says it best.
+      patch.readError = staleHandleThrow(pair.walkError)
+        ? refusedChildrenMessage(id, refused)
+        : pair.walkError
     } else if (refused.length > 0) {
       // B65 — the loss is stated in OUR words, against the id the read emits.
       // Figma's own message quotes the address it composed off the pre-append
