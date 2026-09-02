@@ -74,7 +74,10 @@
 import { idOf, liveChildren } from './canonical-ids'
 import type { LiveNode } from './canonical-ids'
 import { sealedInstanceHost } from './instance-ceiling'
-import { leadingInstanceId } from './resolve-node'
+import {
+  detachedFromDocument,
+  leadingInstanceId,
+} from './resolve-node'
 
 /** A live node, seen structurally so a test can stand one up. */
 export type LandingNode = LiveNode
@@ -296,6 +299,74 @@ export const landedChildId = (
   return fresh.length === 1 && fresh[0].length > 0
     ? fresh[0]
     : undefined
+}
+
+/**
+ * Figma's own words when a node refuses to list its children, or undefined.
+ *
+ * The throw is QUOTED, never paraphrased. This is the B81 zombie signature — a
+ * handle that answers `id`, `name` and `type` and refuses `parent` and
+ * `children` — and what Figma says about it is the only evidence anyone has.
+ */
+export const childrenRefusal = (
+  node: LandingNode,
+): string | undefined => {
+  try {
+    if (!('children' in node)) return undefined
+    void node.children
+    return undefined
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
+}
+
+/**
+ * Why the WALKED append target cannot take a child, or undefined (B81/B94).
+ *
+ * THIS IS THE ONLY PLACE THE DROPPED-HANDLE CHECK BELONGS. It was tried in the
+ * resolver's write gate and it was wrong twice over, live: it refused the id
+ * `get_node` EMITS for a live Cell after a staged move — leaving a sublayer of
+ * a filled instance with no id that writes at all — and it fired before the
+ * create door's downward walk could run, so not one probe arm reached Figma.
+ * Here the target has already been WALKED to, from a live ancestor, so a
+ * refusal is a fact about the node this call is actually about.
+ *
+ * The two answers are different and must not be conflated:
+ *
+ *   DROPPED   Figma says the node is gone (`removed`). Nothing can be appended
+ *             to it, and nothing about it is in doubt.
+ *   ZOMBIE    the node is right there and reads its own identity, and refuses
+ *             to list its children — the B81 class. Figma's own sentence is
+ *             quoted, because that sentence IS the finding: it tells the
+ *             dispatcher's probe exactly what the runtime said.
+ */
+export const landingTargetRefusal = (
+  target: LandingNode,
+  statedId: string,
+): string | undefined => {
+  if (detachedFromDocument(target)) {
+    return (
+      'Cannot create into ' +
+      statedId +
+      ': that id names a node Figma no longer holds — a node moved into an ' +
+      'instance slot is re-minted, so an id read before such a move addresses ' +
+      'nothing. Read the enclosing INSTANCE (get_node, depth:-1) and address ' +
+      'the target by the id that read emits.'
+    )
+  }
+  const refusal = childrenRefusal(target)
+  if (refusal === undefined) return undefined
+  return (
+    'Cannot create into ' +
+    statedId +
+    ': the live handle for that node answers its own id, name and type and ' +
+    'refuses to list its children, so nothing can be appended through it. ' +
+    'Figma said: ' +
+    refusal +
+    ' — that is the address Figma composed off a pre-append id. Build the ' +
+    'content at page level and move it in with reparent_node, or drive it ' +
+    'through the enclosing instance’s own override.'
+  )
 }
 
 /**
@@ -526,9 +597,10 @@ export const stagedLandingMessage = ({
   hostId +
   ') and Figma refuses an append straight into a slot there. This is the ' +
   'build-then-reparent remedy, paid by the tool instead of by the caller. ' +
-  'Figma re-mints a node on the way into a slot, so the id in this reply was ' +
-  'read back off the parent AFTER the move — it is the node’s real id, and it ' +
-  'is not the id the node had while it was being built.'
+  'The id in this reply was READ BACK off the parent after the move and named ' +
+  'the way the file names it — Figma re-mints a node on the way into a slot, ' +
+  'and the landed node often answers a plain alias besides, so neither the id ' +
+  'the node was built with nor the one its handle answers is the id to use.'
 
 /**
  * What the reply says when the move happened and the landed node could not be

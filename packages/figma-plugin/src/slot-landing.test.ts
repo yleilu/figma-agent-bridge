@@ -51,7 +51,9 @@ import {
   SLOT_ROUTE_KEY,
   appendVia,
   childIdsOf,
+  childrenRefusal,
   descendToTarget,
+  landingTargetRefusal,
   landedChildId,
   needsStaging,
   readSlotRoute,
@@ -416,6 +418,63 @@ describe('B94 — the id a staged create answers is the id the node HAS', () => 
   })
 })
 
+describe('B81/B94 — the WALKED handle is what gets checked', () => {
+  it('says nothing about a healthy target', () => {
+    const { a } = cardRowFile()
+    const chain = descendToTarget(a, CELL_ID)
+    expect(
+      landingTargetRefusal(chain!.target, CELL_ID),
+    ).toBeUndefined()
+  })
+
+  it("names Figma's OWN words when the walked target refuses its children", () => {
+    // The zombie signature the live probe read back: `get_node` on that id
+    // answers id/name/type and carries `readError: the live handle … refused to
+    // list its children`. If the append target is one of those, SAY SO — that
+    // is the investigation's answer, not a sentence about a dropped node.
+    const zombie: LandingNode = {
+      id: CELL_ID,
+      name: 'Cell',
+      type: 'SLOT',
+      get children(): never {
+        throw new Error(
+          'in get_children: The node (instance sublayer or table cell) with id ' +
+            '"I586:73515;586:73507" does not exist',
+        )
+      },
+    }
+    const refusal = landingTargetRefusal(zombie, CELL_ID)
+    expect(refusal).toContain(CELL_ID)
+    expect(refusal).toContain(
+      'instance sublayer or table cell',
+    )
+    // It must NOT claim the node is gone: it is right there, and it reads.
+    expect(refusal).not.toContain('no longer holds')
+  })
+
+  it('names a genuinely DROPPED target as dropped', () => {
+    const dropped: LandingNode = {
+      id: '585:73437',
+      type: 'FRAME',
+      removed: true,
+      children: [],
+    }
+    expect(
+      landingTargetRefusal(dropped, '585:73437'),
+    ).toContain('no longer holds')
+  })
+
+  it('reports the throw itself, so nothing is paraphrased away', () => {
+    const zombie: LandingNode = {
+      get children(): never {
+        throw new Error('in get_children: boom')
+      },
+    }
+    expect(childrenRefusal(zombie)).toContain('boom')
+    expect(childrenRefusal({ children: [] })).toBeUndefined()
+  })
+})
+
 describe('B81 — what the reply says', () => {
   it('the staged create names the route, the host and the id it hands back', () => {
     const message = stagedLandingMessage({
@@ -491,5 +550,30 @@ describe('B81 — code.ts actually takes the route', () => {
     expect(src).toContain('landedChildId(')
     expect(src).toContain('childIdsOf(')
     expect(src).toContain('unverifiedLandingMessage(')
+  })
+
+  it('answers the COMPOSED id, which is what the reply sentence promises', () => {
+    // The landed child answers a plain alias while the file names it by the
+    // instance chain. The reply says "the id AFTER the move", so it has to be
+    // the id the file uses — the same oracle B89 renamed search rows with.
+    expect(src).toContain('canonicalIdFor(')
+  })
+
+  it('WALKS before it resolves, so no gate can pre-empt the walk', () => {
+    const arm = src.slice(
+      src.indexOf('case COMMANDS.CREATE_NODE:'),
+      src.indexOf('case COMMANDS.CREATE_TREE:'),
+    )
+    const walk = arm.indexOf('walkToLandingTarget(')
+    const resolve = arm.indexOf('resolveNodeId(')
+    expect(walk).toBeGreaterThan(-1)
+    expect(resolve).toBeGreaterThan(-1)
+    // Live: the resolver's own gate refused the target before the walk ran,
+    // and all four probe arms made no Figma call.
+    expect(walk).toBeLessThan(resolve)
+  })
+
+  it('checks the WALKED handle, not the resolver’s', () => {
+    expect(src).toContain('landingTargetRefusal(')
   })
 })

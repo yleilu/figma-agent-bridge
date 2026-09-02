@@ -746,11 +746,16 @@ export const createNodeResolver = (
     if (!handleAnswers(node)) {
       throw new Error(deadHandleMessage(nodeId))
     }
-    // B94 — a handle Figma has dropped still answers id, name and type, so
-    // nothing above can tell it from a live one. It cannot take a write.
-    if (detachedFromDocument(node)) {
-      throw new Error(droppedHandleMessage(nodeId))
-    }
+    // NO DROPPED-HANDLE PROBE HERE. It was tried and it was wrong, twice over
+    // (live 2026-09-03): it fired on `I586:73508;586:73503;586:73515;586:73507`
+    // — the id `get_node` EMITS for a live Cell after a staged move, i.e. the
+    // id this surface tells the caller to use — and it fired before the create
+    // door's downward walk could run, so not one probe arm reached Figma. What
+    // it was naming is the B81 zombie class (answers id/name/type, refuses
+    // `parent` and `children`), and B81's ruling is that such a handle is
+    // PROVISIONAL, never refused up front: the refusal has to be earned by a
+    // write that did not land. A dropped target is checked where the check can
+    // be earned instead — on the WALKED handle, at the append (slot-landing.ts).
     if (
       !parentAnswers(node) &&
       !provisional.includes(nodeId)
@@ -831,17 +836,11 @@ export const createNodeResolver = (
         ) {
           throw new Error(ambiguousHandleMessage(nodeId))
         }
-        // B94 — and the id a staged create used to answer was exactly this
-        // shape: a plain local id whose handle Figma dropped when the node was
-        // re-minted into the slot. `update_node` on it acked and reached
-        // nothing.
-        if (
-          strict &&
-          plain !== null &&
-          detachedFromDocument(plain)
-        ) {
-          throw new Error(droppedHandleMessage(nodeId))
-        }
+        // And no dropped-handle probe here either. The plain id a staged fill
+        // answers is a working ALIAS — live: `update_node(586:73517, name)`
+        // landed on the rendered node and read back — so refusing it would
+        // break the one route into a slot subtree that works, which is the
+        // paragraph above.
         return plain
       }
       const instance = await deps.getNodeById(instanceId)

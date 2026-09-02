@@ -40,7 +40,11 @@ import {
   slicedReadMessage,
   staleHandleThrow,
 } from './resolve-node'
-import type { LiveNode, RawNode } from './canonical-ids'
+import {
+  idOf as idOfNode,
+  type LiveNode,
+  type RawNode,
+} from './canonical-ids'
 
 /**
  * A handle Figma composed from a stale parent id: every NODE read throws.
@@ -494,69 +498,95 @@ describe('B93 — two handles, one id', () => {
 // The dropped handle keeps answering id, name and type, so `update_node` on the
 // id a staged create had just answered came back `{id, name, warnings:[]}` and
 // reached nothing. A phantom write, live 2026-09-03.
-describe('B94 — a dropped handle cannot take a write', () => {
-  /** What Figma leaves behind after a re-mint: answers itself, parents nothing. */
-  const dropped = (id: string): LiveNode => ({
-    id,
-    name: 'Row content',
-    type: 'FRAME',
-    parent: null,
-  })
-
-  it('refuses a write to a handle Figma no longer holds', async () => {
-    const resolver = createNodeResolver({
-      getNodeById: async () => dropped('585:73446'),
-      exportOf: async () => undefined,
-    })
-    resolver.setStrict(true)
-    await expect(
-      resolver.resolve('585:73446'),
-    ).rejects.toThrow('re-minted')
-  })
-
-  it('refuses one Figma reports as removed, whatever its parent says', async () => {
-    const resolver = createNodeResolver({
-      getNodeById: async () => ({
-        id: '585:73437',
-        type: 'FRAME',
-        removed: true,
-        parent: { id: '0:1', type: 'PAGE' },
-      }),
-      exportOf: async () => undefined,
-    })
-    resolver.setStrict(true)
-    await expect(
-      resolver.resolve('585:73437'),
-    ).rejects.toThrow('no longer holds')
-  })
-
-  it('a READ of the same id still answers — reads are unaffected', async () => {
-    const ghost = dropped('585:73446')
-    const resolver = createNodeResolver({
-      getNodeById: async () => ghost,
-      exportOf: async () => undefined,
-    })
-    expect(await resolver.resolve('585:73446')).toBe(ghost)
-  })
-
-  it('does NOT refuse a handle whose .parent merely THROWS (the B81 class)', () => {
-    // B81's whole finding: probing `.parent` cost 48 refused writes and bent a
-    // build's topology. A throw is an unknown, and an unknown is not a finding.
-    const refusesParent = new Proxy({} as LiveNode, {
+// B94 — a dropped-handle WRITE GATE was tried here and it was wrong. Live
+// 2026-09-03, twice over:
+//
+//   it refused `I586:73508;586:73503;586:73515;586:73507` — the id `get_node`
+//   EMITS for a live Cell after a staged move, i.e. the id this surface tells
+//   the caller to use. After a staged fill a sublayer of the filled instance
+//   then had NO id that writes: the alias refuses (rightly, B74) and the
+//   canonical refused too.
+//
+//   it refused before the create door's downward walk could run, so all four
+//   probe arms made no Figma call at all.
+//
+//   and the plain alias it was meant to catch WRITES: `update_node(586:73517,
+//   name)` landed on the rendered node and read back.
+//
+// What it was naming is the B81 zombie class — answers id/name/type, refuses
+// `parent` and `children` — and B81's ruling is that such a handle is
+// PROVISIONAL, never refused up front. The refusal has to be EARNED by a write
+// that did not land. The predicate survives for the one place the check can be
+// earned: the append target in slot-landing.ts.
+describe('B94 — the refusal is earned, not probed', () => {
+  /** The zombie: answers its identity, refuses its ancestry and its children. */
+  const zombie = (id: string): LiveNode =>
+    new Proxy({} as LiveNode, {
       get: (_t, prop) => {
-        if (prop === 'id') return 'I1:2;3:4'
-        if (prop === 'type') return 'FRAME'
-        if (prop === 'removed') return undefined
+        if (prop === 'id') return id
+        if (prop === 'name') return 'Value'
+        if (prop === 'type') return 'TEXT'
         if (typeof prop === 'symbol' || prop === 'then') {
           return undefined
         }
         throw new Error(
-          'in get_parent: The node (instance sublayer or table cell) does not exist',
+          'in get_' +
+            String(prop) +
+            ': The node (instance sublayer or table cell) with id "' +
+            id +
+            '" does not exist',
         )
       },
       has: () => true,
     })
-    expect(detachedFromDocument(refusesParent)).toBe(false)
+
+  it('a WRITE to the canonical id of a zombie-handled node is NOT refused up front', async () => {
+    // The exact id the read face emits after a staged move. Refusing it left
+    // the node with no writable id at all.
+    const id = 'I586:73508;586:73503;586:73522;581:57949'
+    const host: LiveNode = {
+      id: '586:73508',
+      type: 'INSTANCE',
+      children: [zombie(id)],
+    }
+    const resolver = createNodeResolver({
+      getNodeById: async () => host,
+      exportOf: async () => undefined,
+    })
+    resolver.setStrict(true)
+    const handle = await resolver.resolve(id)
+    expect(idOfNode(handle)).toBe(id)
+  })
+
+  it('a WRITE to the plain alias a staged fill answers is NOT refused — it lands live', async () => {
+    const alias: LiveNode = {
+      id: '586:73517',
+      name: 'fill',
+      type: 'FRAME',
+      parent: null,
+    }
+    const resolver = createNodeResolver({
+      getNodeById: async () => alias,
+      exportOf: async () => undefined,
+    })
+    resolver.setStrict(true)
+    expect(await resolver.resolve('586:73517')).toBe(alias)
+  })
+
+  it('still identifies a genuinely dropped handle, for the append site to use', () => {
+    expect(
+      detachedFromDocument({
+        id: '585:73437',
+        type: 'FRAME',
+        removed: true,
+      }),
+    ).toBe(true)
+  })
+
+  it('never calls the B81 zombie dropped — an unknown is not a finding', () => {
+    expect(
+      detachedFromDocument(zombie('I1:2;3:4')),
+    ).toBe(false)
   })
 
   it('never accuses a PAGE, which legitimately has no parent', () => {
@@ -565,16 +595,6 @@ describe('B94 — a dropped handle cannot take a write', () => {
         id: '0:1',
         type: 'PAGE',
         parent: null,
-      }),
-    ).toBe(false)
-  })
-
-  it('leaves an ordinary parented node alone', () => {
-    expect(
-      detachedFromDocument({
-        id: '1:2',
-        type: 'FRAME',
-        parent: { id: '0:1', type: 'PAGE' },
       }),
     ).toBe(false)
   })

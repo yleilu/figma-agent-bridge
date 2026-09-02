@@ -90,6 +90,7 @@ import {
   descendToTarget,
   landedChildId,
   landingHostOf,
+  landingTargetRefusal,
   needsStaging,
   readSlotRoute,
   unverifiedLandingMessage,
@@ -2837,7 +2838,7 @@ let stagedRootSpec: Record<string, unknown> | undefined
  * ceiling sentence, and the caller removes what it built (T7/B14 — a create
  * either lands or leaves the document as it found it).
  */
-const landStagedRoot = ({
+const landStagedRoot = async ({
   node,
   spec,
   parent,
@@ -2851,9 +2852,10 @@ const landStagedRoot = ({
   statedParentId: string
   operation: string
   warnings: string[]
-}):
+}): Promise<
   | { id: string; name: SceneNode['name']; type: SceneNode['type'] }
-  | undefined => {
+  | undefined
+> => {
   const where: LandingChain =
     landingChain !== undefined
       ? landingChain
@@ -2895,6 +2897,17 @@ const landStagedRoot = ({
   )
   const finished = (landed ??
     node) as unknown as SceneNode
+  // B94 — the id the reply hands back is the id THE FILE uses. The landed child
+  // often answers a plain ALIAS (live: the fill answered `586:73516` while
+  // `get_node` names it `I586:73508;586:73503;586:73517`), and the sentence
+  // below promises "the id after the move" — so it has to be the composed one.
+  // Same oracle B89 renames search rows with, and this dispatch has already
+  // paid for that export whenever it resolved anything under this instance.
+  const lead = leadingInstanceId(statedParentId)
+  const composedId =
+    landed === undefined || lead === undefined
+      ? undefined
+      : await nodeResolver.canonicalIdFor(landed, lead)
   // NOW the parent-dependent fields mean what the caller meant by them, and
   // they are written to the node that is actually in the slot.
   applyPostAppendProperties(finished, spec, warnings)
@@ -2919,7 +2932,7 @@ const landStagedRoot = ({
     )
   }
   return {
-    id: landedId,
+    id: composedId ?? landedId,
     name: finished.name,
     type: finished.type,
   }
@@ -4247,10 +4260,22 @@ const dispatchCommand = async (
     // ordering). Children are out of scope (the server strips them) — guard and
     // warn if any slip through; never recurse. Returns {id,name,type,warnings}.
     case COMMANDS.CREATE_NODE: {
+      // B81 — THE WALK COMES FIRST. `resolveNodeId` runs the write gate, and a
+      // gate that fires before the walk means the walk never happens: live, the
+      // resolver refused every one of the four probe arms on the id `get_node`
+      // itself emits, so not one arm made a Figma call. A compound id leads with
+      // an instance `getNodeByIdAsync` answers, and the rest of it is a path
+      // through `children` — the read these handles do answer — so the target is
+      // reached without asking the resolver anything at all.
+      landingChain = await walkToLandingTarget(
+        params.parentId as string | undefined,
+      )
       const parentNode =
-        params.parentId !== undefined
-          ? await resolveNodeId(params.parentId as string)
-          : figma.currentPage
+        landingChain !== undefined
+          ? (landingChain.target as unknown as BaseNode)
+          : params.parentId !== undefined
+            ? await resolveNodeId(params.parentId as string)
+            : figma.currentPage
       if (!parentNode || !('appendChild' in parentNode)) {
         return {
           error:
@@ -4279,18 +4304,27 @@ const dispatchCommand = async (
       // the tool now pays it, in one call, instead of the caller paying it in
       // three (152 `reparent_node` calls in the 2026-09-03 build).
       //
-      // The target is reached DOWNWARD, from the live ancestor the caller's id
-      // leads with. The upward walk that used to choose the route reads
-      // `.parent`, which these handles refuse — so it answered "no instance"
-      // for exactly the targets that need this most, and every route fell
-      // through to one plain append.
+      // The target was reached DOWNWARD above, from the live ancestor the
+      // caller's id leads with. The upward walk that used to choose the route
+      // reads `.parent`, which these handles refuse — so it answered "no
+      // instance" for exactly the targets that need this most, and every route
+      // fell through to one plain append.
       const statedParentId =
         (params.parentId as string | undefined) ?? parent.id
-      landingChain = await walkToLandingTarget(
-        params.parentId as string | undefined,
+      const landingParent = parent
+      // B94 — and the WALKED handle is what gets checked, never the resolver's.
+      // A target Figma has dropped cannot take a child; a target that answers
+      // its identity and refuses to list its children is the B81 zombie, and
+      // Figma's own sentence about it is the finding, not a story about a
+      // deleted node.
+      const targetRefusal = landingTargetRefusal(
+        landingParent as unknown as LandingNode,
+        statedParentId,
       )
-      const landingParent = (landingChain?.target ??
-        parent) as unknown as ParentNode
+      if (targetRefusal !== undefined) {
+        landingChain = undefined
+        return { error: targetRefusal }
+      }
       const stageCreate = needsStaging(
         slotRoute,
         params.parentId as string | undefined,
@@ -4321,7 +4355,7 @@ const dispatchCommand = async (
         }
         if (stageCreate) {
           stagedNode = created
-          const landed = landStagedRoot({
+          const landed = await landStagedRoot({
             node: created,
             spec,
             parent: landingParent,
@@ -4400,10 +4434,16 @@ const dispatchCommand = async (
     // level and loadFontAsync before text. `{ ref }` rebuilds refs[key] fresh;
     // `{ id }` clones the existing node.
     case COMMANDS.CREATE_TREE: {
+      // B81 — the walk first, for the reason the single create states.
+      landingChain = await walkToLandingTarget(
+        params.parentId as string | undefined,
+      )
       const treeParentNode =
-        params.parentId !== undefined
-          ? await resolveNodeId(params.parentId as string)
-          : figma.currentPage
+        landingChain !== undefined
+          ? (landingChain.target as unknown as BaseNode)
+          : params.parentId !== undefined
+            ? await resolveNodeId(params.parentId as string)
+            : figma.currentPage
       if (
         !treeParentNode ||
         !('appendChild' in treeParentNode)
@@ -4442,11 +4482,15 @@ const dispatchCommand = async (
       const treeStatedParentId =
         (params.parentId as string | undefined) ??
         treeParent.id
-      landingChain = await walkToLandingTarget(
-        params.parentId as string | undefined,
+      const treeLandingParent = treeParent
+      const treeTargetRefusal = landingTargetRefusal(
+        treeLandingParent as unknown as LandingNode,
+        treeStatedParentId,
       )
-      const treeLandingParent = (landingChain?.target ??
-        treeParent) as unknown as ParentNode
+      if (treeTargetRefusal !== undefined) {
+        landingChain = undefined
+        return { error: treeTargetRefusal }
+      }
       const stageTree = needsStaging(
         slotRoute,
         params.parentId as string | undefined,
@@ -4481,7 +4525,7 @@ const dispatchCommand = async (
           type: treeResult.type,
         }
         if (stageTree) {
-          const landed = landStagedRoot({
+          const landed = await landStagedRoot({
             node: treeResult,
             spec: treeSpec,
             parent: treeLandingParent,
