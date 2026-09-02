@@ -334,3 +334,141 @@ export const variableIdsInExport = (
   }
   return [...ids]
 }
+
+/** The last `;`-separated segment of an id. */
+export const localSegmentOf = (id: string): string =>
+  id.slice(id.lastIndexOf(';') + 1)
+
+/** Which rule matched a level of the descent. */
+export type ChainMatch =
+  | 'id'
+  | 'local-segment'
+  | 'only-child'
+  | 'none'
+
+/** One level of a chain descent: the node it found, and by which rule. */
+export type ChainStep = {
+  node?: LiveNode
+  matchedBy: ChainMatch
+}
+
+/**
+ * The child that a compound id's level names.
+ *
+ * ONE AUTHOR FOR THE RULES. The resolver descends by these on every compound
+ * id, and the diagnostic `trace` route reports them; two copies would let the
+ * trace describe a walk the resolver does not make, which is the one thing a
+ * diagnostic must never do.
+ *
+ * Three ways to match, in this order and never out of it:
+ *
+ *   the child whose id IS the prefix   the ordinary case.
+ *   the child whose own LOCAL segment  Figma RE-MINTS a node's local segment
+ *   equals this level's segment        when it enters an instance slot, so an
+ *                                      id a read emitted can name a segment the
+ *                                      live tree no longer uses.
+ *   the ONLY child there is            when a whole middle segment was
+ *                                      re-minted neither id matches, and a
+ *                                      level holding exactly one node has
+ *                                      exactly one way down.
+ *
+ * The only-child arm is doubly gated, and both gates were earned:
+ *
+ *   `anchored`   a master-derived sublayer's id is composed off its instance
+ *                and is never re-minted, so a real path matches SOME level by
+ *                id. An unanchored walk down a single-child spine is a wrong id
+ *                rather than a re-mint.
+ *   NOT FINAL    a canonical chain COLLAPSES levels — the alias node between
+ *                `I305:8637;305:8427` and `…;305:8883` gets no segment of its
+ *                own — so a final segment satisfied by "the only child" lands
+ *                on the node ABOVE the one that was asked for. It cost the
+ *                B53 fixture its `Total value`. The last segment must be
+ *                MATCHED, never inferred; a chain that cannot match it declines
+ *                and lets the export pairing answer.
+ *
+ * A level holding several children and matching no id is ambiguous, and answers
+ * nothing rather than guessing.
+ */
+export const matchChildForSegment = (
+  children: readonly LiveNode[],
+  prefix: string,
+  segment: string,
+  anchored: boolean,
+  allowOnlyChild = true,
+): ChainStep => {
+  const byPrefix = children.find(c => idOf(c) === prefix)
+  if (byPrefix !== undefined) {
+    return { node: byPrefix, matchedBy: 'id' }
+  }
+  const byLocal = children.find(c => {
+    const id = idOf(c)
+    return (
+      id !== undefined && localSegmentOf(id) === segment
+    )
+  })
+  if (byLocal !== undefined) {
+    return { node: byLocal, matchedBy: 'local-segment' }
+  }
+  if (allowOnlyChild && anchored && children.length === 1) {
+    return { node: children[0], matchedBy: 'only-child' }
+  }
+  return { matchedBy: 'none' }
+}
+
+/** A node reached by descending a chain, with every node passed through. */
+export type ChainDescent = {
+  target: LiveNode
+  chain: LiveNode[]
+}
+
+/**
+ * Walk DOWN from a live ancestor to the node a compound id names.
+ *
+ * `I<lead>;<s1>;<s2>;…` is a PATH, one segment per level, and this walks it —
+ * touching only `children`, never `.parent`.
+ *
+ * THIS IS THE PRIMARY WAY TO REACH AN INSTANCE SUBLAYER, proven live
+ * (2026-09-02T17:40Z): the handle a descent yields for a depth-2 slot LISTS its
+ * children and TAKES an `appendChild`, while `getNodeByIdAsync` on the very
+ * same composed id returns a handle that throws on every read. The whole
+ * "an instance sublayer cannot be written" tax — 152 `reparent_node` calls in
+ * one build — was this project fetching the handle the wrong way.
+ *
+ * `undefined` for a plain id (no chain to walk) and for a path that leads
+ * nowhere: a walk that found nothing has learned nothing, and substituting some
+ * other node on a guess would move the write.
+ */
+export const descendByChain = (
+  host: LiveNode,
+  statedId: string,
+): ChainDescent | undefined => {
+  const sep = statedId.indexOf(';')
+  if (!statedId.startsWith('I') || sep <= 1) return undefined
+  const lead = statedId.slice(1, sep)
+  const segments = statedId.slice(sep + 1).split(';')
+  if (segments.length === 0) return undefined
+  const chain: LiveNode[] = [host]
+  let current = host
+  let prefix = 'I' + lead
+  let anchored = false
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i]
+    prefix += ';' + segment
+    const { node, matchedBy } = matchChildForSegment(
+      liveChildren(current),
+      prefix,
+      segment,
+      anchored,
+      // The FINAL segment is never inferred — see `matchChildForSegment`.
+      i < segments.length - 1,
+    )
+    if (node === undefined) return undefined
+    if (matchedBy !== 'only-child') anchored = true
+    // Follow the id the tree actually uses, so the next level's prefix is built
+    // from what is there rather than from what the caller remembered.
+    prefix = idOf(node) ?? prefix
+    current = node
+    chain.push(current)
+  }
+  return { target: current, chain }
+}

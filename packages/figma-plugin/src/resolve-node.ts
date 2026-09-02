@@ -37,6 +37,7 @@
 // without a Figma runtime.
 
 import {
+  descendByChain,
   idOf,
   indexByCanonicalId,
   liveChildren,
@@ -858,16 +859,29 @@ export const createNodeResolver = (
           ),
         )
       }
-      // The cheap half first: a master-derived sublayer answers its own
-      // compound id, so one guarded walk finds it and nothing is exported.
-      // Nothing here is budgeted — the walk is free, so a call naming a
-      // thousand ordinary sublayers is unaffected by the cap below.
+      // B81 — THE CHAIN DESCENT IS THE PRIMARY PATH, and the trace proved why
+      // (live 2026-09-02T17:40Z). A compound id is a PATH, and the handle a
+      // descent yields for a depth-2 slot lists its children and takes an
+      // `appendChild`, while `getNodeByIdAsync` on the very same composed id
+      // returns a handle that throws on every read. Every "an instance sublayer
+      // cannot be written" refusal this project has ever issued — and the 152
+      // `reparent_node` calls one build paid to route around them — came from
+      // fetching the handle the other way.
       //
-      // B93 — but only when the walk found ONE. Same-component nesting puts two
-      // handles under one id, and the cheap walk has no way to tell them apart:
-      // it knows ids, and the thing that separates these two nodes is their
-      // POSITION IN THE CHAIN. So an ambiguous id falls through to the export,
-      // which is the only oracle that knows chain position.
+      // It is also free and unbudgeted, so it costs nothing on the common case
+      // and saves an export on the hard one.
+      const descended = descendByChain(instance, nodeId)
+      if (descended !== undefined) {
+        return vouch(descended.target, nodeId)
+      }
+      // The exact-id walk second: it reaches a master-derived sublayer the
+      // descent may decline (an ambiguous level), and it is equally free.
+      //
+      // B93 — but only when it found ONE. Same-component nesting puts two
+      // handles under one id, and neither walk can tell them apart: they know
+      // ids, and the thing that separates those two nodes is their POSITION IN
+      // THE CHAIN. So an ambiguous id falls through to the export, which is the
+      // only oracle that knows chain position.
       const direct = findLiveMatches(instance, nodeId, 2)
       if (direct.length === 1) return vouch(direct[0], nodeId)
       if (overBudget(instanceId)) {

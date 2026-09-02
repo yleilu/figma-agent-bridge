@@ -2952,6 +2952,36 @@ const runSlotRouteTrace = async (
 }
 
 /**
+ * The id THE FILE uses for a node just created inside an instance (B94).
+ *
+ * A node appended into a slot answers an alias as readily as a moved one does,
+ * so the reply cannot hand back `node.id` and call it the address. The oracle
+ * is the enclosing instance's export — the same one B89 renames search rows
+ * with, and one this dispatch has usually already paid for.
+ *
+ * Undefined when the parent id is plain (nothing renamed the node) or the
+ * export cannot answer; the caller then keeps the live id, which is what it
+ * always had.
+ */
+const composedIdOf = async (
+  node: SceneNode,
+  statedParentId: string,
+): Promise<string | undefined> => {
+  const lead = leadingInstanceId(statedParentId)
+  if (lead === undefined) return undefined
+  try {
+    return await nodeResolver.canonicalIdFor(
+      node as unknown as LandingNode,
+      lead,
+    )
+  } catch {
+    // An export budget or a host that will not describe itself. The live id
+    // stands; it is not worse than what this door answered before.
+    return undefined
+  }
+}
+
+/**
  * The spec whose post-append pass is WAITING for a staged move (B81).
  *
  * A staged create is built under the page, so every parent-dependent field —
@@ -4478,10 +4508,17 @@ const dispatchCommand = async (
         landingChain = undefined
         return { error: targetRefusal }
       }
+      // B81 CLOSED — when the DOWNWARD walk reached the target, the create
+      // appends straight through that handle. The trace proved it live: a plain
+      // `appendChild` on a walked handle lands into a depth-2 slot, so the
+      // build-then-move dance was never a Figma limit, only this surface
+      // fetching the handle the wrong way. Staging survives as the fallback for
+      // a target the walk could not reach.
       const stageCreate = needsStaging(
         slotRoute,
         params.parentId as string | undefined,
         landingParent as unknown as LandingNode,
+        landingChain !== undefined,
       )
       const createParent = stageCreate
         ? (figma.currentPage as unknown as ParentNode)
@@ -4527,6 +4564,16 @@ const dispatchCommand = async (
             }
           }
           answer = landed
+        } else {
+          // B94 on the DIRECT path too. A node appended into a slot answers an
+          // alias as readily as a moved one does, and the reply must hand back
+          // the id the FILE uses — the same oracle B89 renames search rows with.
+          answer = {
+            ...answer,
+            id:
+              (await composedIdOf(created, statedParentId)) ??
+              answer.id,
+          }
         }
         const inheritedNote =
           constructionDefaultsWarning(defaults)
@@ -4648,6 +4695,7 @@ const dispatchCommand = async (
         slotRoute,
         params.parentId as string | undefined,
         treeLandingParent as unknown as LandingNode,
+        landingChain !== undefined,
       )
       const treeBuildParent = stageTree
         ? (figma.currentPage as unknown as ParentNode)
@@ -4701,6 +4749,17 @@ const dispatchCommand = async (
           // node has, not the one it was built with.
           if (createdIds.length > 0) {
             createdIds[0] = landed.id
+          }
+        } else {
+          const composed = await composedIdOf(
+            treeResult,
+            treeStatedParentId,
+          )
+          if (composed !== undefined) {
+            treeAnswer = { ...treeAnswer, id: composed }
+            if (createdIds.length > 0) {
+              createdIds[0] = composed
+            }
           }
         }
         const treeInherited =

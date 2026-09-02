@@ -71,7 +71,12 @@
 // the walk are testable without a Figma runtime — which is the point, since
 // `code.ts` cannot be imported outside Figma.
 
-import { idOf, liveChildren } from './canonical-ids'
+import {
+  descendByChain,
+  idOf,
+  liveChildren,
+  matchChildForSegment,
+} from './canonical-ids'
 import type { LiveNode } from './canonical-ids'
 import { sealedInstanceHost } from './instance-ceiling'
 import {
@@ -182,82 +187,18 @@ const typeOf = (node: LandingNode): string | undefined => {
   }
 }
 
-/** The last `;`-separated segment of an id. */
-const localSegment = (id: string): string =>
-  id.slice(id.lastIndexOf(';') + 1)
-
 /**
  * Walk DOWN from a live ancestor to the node a compound id names.
  *
- * `I<lead>;<s1>;<s2>;…` is a PATH, one segment per level, so the walk descends
- * one level per segment and never reads `.parent` — which is exactly what these
- * handles refuse, and exactly what the first version of this module died on.
- *
- * Three ways to match a level, in this order and never out of it:
- *
- *   the child whose id IS the prefix        — the ordinary case.
- *   the child whose own LOCAL segment       — Figma RE-MINTS a node's local
- *   equals this level's segment               segment when it enters an
- *                                             instance slot, so an id read
- *                                             before a move can name a segment
- *                                             the tree has since changed.
- *   the ONLY child there is                 — when a whole middle segment was
- *                                             re-minted (73437 → 73440, live)
- *                                             neither id matches, and a level
- *                                             holding exactly one node has
- *                                             exactly one way down. A level
- *                                             holding several is ambiguous and
- *                                             answers nothing.
- *
- * `undefined` for a plain id (no chain to walk) and for a path that does not
- * lead anywhere: a walk that found nothing has learned nothing, and substituting
- * some other node on a guess would move the write.
+ * The rules live in canonical-ids.ts, because the RESOLVER descends by them too
+ * now — one author, so the diagnostic `trace` route can never describe a walk
+ * the resolver does not make.
  */
 export const descendToTarget = (
   host: LandingNode,
   statedId: string,
-): LandingChain | undefined => {
-  const lead = leadingInstanceId(statedId)
-  if (lead === undefined) return undefined
-  const segments = statedId.slice(1).split(';').slice(1)
-  if (segments.length === 0) return undefined
-  const chain: LandingNode[] = [host]
-  let current = host
-  let prefix = 'I' + lead
-  /** Has some level matched by ID yet? The only-child arm needs an anchor. */
-  let anchored = false
-  for (const segment of segments) {
-    prefix += ';' + segment
-    const children = liveChildren(current)
-    const byId =
-      children.find(c => idOf(c) === prefix) ??
-      children.find(c => {
-        const id = idOf(c)
-        return (
-          id !== undefined && localSegment(id) === segment
-        )
-      })
-    // The only-child arm runs only on a path an id has already anchored. A
-    // master-derived sublayer's id is composed off the instance and is never
-    // re-minted, so the FIRST level always matches by id on a real path —
-    // which means an unanchored walk down a single-child spine is a wrong id,
-    // not a re-mint, and must answer nothing rather than some node.
-    const found =
-      byId ??
-      (anchored && children.length === 1
-        ? children[0]
-        : undefined)
-    if (byId !== undefined) anchored = true
-    if (found === undefined) return undefined
-    const byLocal = found
-    // Follow the id the tree actually uses, so the next level's prefix is built
-    // from what is there rather than from what the caller remembered.
-    prefix = idOf(byLocal) ?? prefix
-    current = byLocal
-    chain.push(current)
-  }
-  return { target: current, chain }
-}
+): LandingChain | undefined =>
+  descendByChain(host, statedId)
 
 /** One level of the walk, as it actually executed. */
 export type TraceStep = {
@@ -296,32 +237,21 @@ export const traceDescent = (
   let current = host
   let prefix = 'I' + lead
   let anchored = false
-  for (const segment of segments) {
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i]
     prefix += ';' + segment
     const refusal = childrenRefusal(current)
     const children = liveChildren(current)
-    const byPrefix = children.find(c => idOf(c) === prefix)
-    const byLocal =
-      byPrefix ??
-      children.find(c => {
-        const id = idOf(c)
-        return (
-          id !== undefined && localSegment(id) === segment
-        )
-      })
-    const found =
-      byLocal ??
-      (anchored && children.length === 1
-        ? children[0]
-        : undefined)
-    const matchedBy: TraceStep['matchedBy'] =
-      byPrefix !== undefined
-        ? 'id'
-        : byLocal !== undefined
-          ? 'local-segment'
-          : found !== undefined
-            ? 'only-child'
-            : 'none'
+    // THE SAME MATCHER THE RESOLVER USES. A trace that described a walk the
+    // resolver does not make would be worse than no trace at all — that is the
+    // one failure mode a diagnostic may not have.
+    const { node: found, matchedBy } = matchChildForSegment(
+      children,
+      prefix,
+      segment,
+      anchored,
+      i < segments.length - 1,
+    )
     steps.push({
       asked: prefix,
       ...(found !== undefined
@@ -344,7 +274,7 @@ export const traceDescent = (
       steps[steps.length - 1].type = typeOf(current)
     }
     if (found === undefined) return { steps }
-    if (byLocal !== undefined) anchored = true
+    if (matchedBy !== 'only-child') anchored = true
     prefix = idOf(found) ?? prefix
     current = found
     chain.push(current)
@@ -676,8 +606,20 @@ export const needsStaging = (
   route: SlotRoute,
   statedParentId: string | undefined,
   parent: LandingNode | null | undefined,
+  /**
+   * Did the DOWNWARD walk reach this target? (B81, closed.)
+   *
+   * When it did, nothing needs staging. The trace settled it live: the handle a
+   * descent yields for a depth-2 slot takes a plain `appendChild`, so the
+   * build-then-move dance is not a Figma requirement at all — it was this
+   * surface fetching the handle the wrong way, and charging 152 calls a build
+   * for the mistake. Staging survives only as the fallback for a target the
+   * walk could not reach, or an append Figma really does throw on.
+   */
+  walkReached = false,
 ): boolean => {
   if (route !== 'stage-then-move') return false
+  if (walkReached) return false
   if (
     statedParentId !== undefined &&
     leadingInstanceId(statedParentId) !== undefined

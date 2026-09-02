@@ -419,33 +419,63 @@ describe('B93 — two handles, one id', () => {
     ).toBe(innerLabel)
   })
 
-  it('a WRITE through an ambiguous id is refused, naming the collision', async () => {
-    const { outer } = sameComponentNest()
-    const resolver = createNodeResolver({
-      getNodeById: async id =>
-        id === '581:100' ? outer : null,
-      // No oracle: the host will not export, so nothing can disambiguate.
-      exportOf: async () => undefined,
-    })
-    resolver.setStrict(true)
-    await expect(
-      resolver.resolve('I581:100;300:2'),
-    ).rejects.toThrow('581:100')
-    await expect(
-      resolver.resolve('I581:100;300:2'),
-    ).rejects.toThrow('two')
-  })
-
-  it('a READ through the same id takes the shallowest and does not throw', async () => {
+  it('the CHAIN DESCENT settles it: the host’s own child, not the nested copy’s', async () => {
+    // B81 made the descent primary, and it disambiguates for free: descending
+    // one level from the host reaches the host’s own Label and never sees
+    // the nested copy’s. Chain position is exactly what separates them, so
+    // the refusal below is now only for what the descent cannot reach.
     const { outer, outerLabel } = sameComponentNest()
     const resolver = createNodeResolver({
       getNodeById: async id =>
         id === '581:100' ? outer : null,
       exportOf: async () => undefined,
     })
+    resolver.setStrict(true)
     expect(await resolver.resolve('I581:100;300:2')).toBe(
       outerLabel,
     )
+  })
+
+  it('a WRITE through an id only the ambiguous WALK can reach is still refused', async () => {
+    // The gate now guards exactly what the chain declines. This id's FINAL
+    // segment matches nothing along the path, so the descent stands down — and
+    // two handles elsewhere in the subtree answer it, which is the collision.
+    const { outer, inner, innerSlot } = sameComponentNest()
+    const twinId = 'I581:100;300:3;300:2'
+    ;(inner.children as LiveNode[]).push({
+      id: twinId,
+      name: 'Twin',
+    })
+    ;(innerSlot.children as LiveNode[]).push({
+      id: twinId,
+      name: 'Twin',
+    })
+    const resolver = createNodeResolver({
+      getNodeById: async id =>
+        id === '581:100' ? outer : null,
+      exportOf: async () => undefined,
+    })
+    resolver.setStrict(true)
+    await expect(resolver.resolve(twinId)).rejects.toThrow(
+      'two nodes',
+    )
+  })
+
+  it('a READ of that same id takes the shallowest and does not throw', async () => {
+    const { outer, inner, innerSlot } = sameComponentNest()
+    const twinId = 'I581:100;300:3;300:2'
+    const shallow = { id: twinId, name: 'Twin' }
+    // `inner` sits one level above `innerSlot`, so this is the shallower twin.
+    ;(inner.children as LiveNode[]).push(shallow)
+    ;(innerSlot.children as LiveNode[]).push({
+      id: twinId,
+      name: 'Twin',
+    })
+    const resolver = createNodeResolver({
+      getNodeById: async () => outer,
+      exportOf: async () => undefined,
+    })
+    expect(await resolver.resolve(twinId)).toBe(shallow)
   })
 
   it('does not call a node an ALIAS because an ancestor answers its own id', () => {
@@ -597,6 +627,146 @@ describe('B94 — the refusal is earned, not probed', () => {
         parent: null,
       }),
     ).toBe(false)
+  })
+})
+
+// B81 CLOSED — the trace answered it (live 2026-09-02T17:40Z, target Cell
+// `I587:73529;587:73525;587:73534;587:73528`):
+//
+//   leading instance 587:73529: answered, type INSTANCE
+//   level 1 … matched by id; children listed: 1
+//   level 2 … matched by id; children listed: 2
+//   level 3 … matched by id; children listed: 1
+//   the walk REACHED the target.
+//     direct:        NO THROW. landed child = 588:73539
+//     insert-child:  NO THROW. landed child = 588:73542
+//     inner-handle:  NO THROW. landed child = 588:73544
+//     slot-property: THREW — in setProperties: Slot component property values
+//                    cannot be edited
+//
+// THE HANDLE OBTAINED BY WALKING DOWN IS HEALTHY, and a plain `appendChild` on
+// it lands into a depth-2 slot. The zombie is only ever what
+// `getNodeByIdAsync` returns for the COMPOSED id. So the reparent tax was an
+// artifact of this resolver, not a Figma limit — 152 calls in one build, for a
+// handle we were fetching the wrong way.
+//
+// The descent is therefore the PRIMARY path for a compound id, on reads and
+// writes alike, and the composed-id lookup is only the fallback.
+describe('B81 — the descent is the primary path for a compound id', () => {
+  /**
+   * The live shape, exactly as the trace found it.
+   *
+   * A3 answers its own plain id. Under it a staged chip answers a RE-MINTED
+   * local segment, so the caller's composed id matches no live id anywhere —
+   * the exact-id walk misses it, and only a segment-wise descent reaches it.
+   * Its Value child is HEALTHY: it lists, it answers its type, it takes writes.
+   */
+  const stagedChipFile = () => {
+    const value: LiveNode = {
+      id: 'I587:73540;581:57949',
+      name: 'Value',
+      type: 'TEXT',
+      children: [],
+    }
+    const chip: LiveNode = {
+      // Figma re-minted the local segment on the way into the slot.
+      id: 'I587:73529;587:73525;587:73540',
+      name: 'Chip',
+      type: 'INSTANCE',
+      children: [value],
+    }
+    const body: LiveNode = {
+      id: 'I587:73529;587:73525',
+      name: 'Body',
+      type: 'SLOT',
+      children: [chip],
+    }
+    const a3: LiveNode = {
+      id: '587:73529',
+      name: 'Card',
+      type: 'INSTANCE',
+      children: [body],
+    }
+    return { a3, body, chip, value }
+  }
+
+  /** The id the read face emits, carrying the PRE-mint segment 587:73538. */
+  const VALUE_ID =
+    'I587:73529;587:73525;587:73538;581:57949'
+
+  /** What the export pairs that id with: a handle that answers nothing. */
+  const zombieExport = () => ({
+    id: '587:73529',
+    children: [
+      {
+        id: 'I587:73529;587:73525',
+        children: [
+          {
+            id: 'I587:73529;587:73525;587:73538',
+            children: [{ id: VALUE_ID }],
+          },
+        ],
+      },
+    ],
+  })
+
+  it('reaches a healthy sublayer the composed-id lookup cannot', async () => {
+    const { a3, value } = stagedChipFile()
+    const resolver = createNodeResolver({
+      getNodeById: async id =>
+        id === '587:73529' ? a3 : null,
+      exportOf: async () => zombieExport(),
+    })
+    resolver.setStrict(true)
+    // This is the write that had no id: a sublayer of a staged instance.
+    expect(await resolver.resolve(VALUE_ID)).toBe(value)
+  })
+
+  it('costs NO export when the descent reaches — the walk is free', async () => {
+    const { a3 } = stagedChipFile()
+    let exports = 0
+    const resolver = createNodeResolver({
+      getNodeById: async id =>
+        id === '587:73529' ? a3 : null,
+      exportOf: async () => {
+        exports += 1
+        return zombieExport()
+      },
+    })
+    expect(await resolver.resolve(VALUE_ID)).toBeDefined()
+    expect(exports).toBe(0)
+  })
+
+  it('serves a READ the same way — one path, both contracts', async () => {
+    const { a3, value } = stagedChipFile()
+    const resolver = createNodeResolver({
+      getNodeById: async () => a3,
+      exportOf: async () => zombieExport(),
+    })
+    expect(await resolver.resolve(VALUE_ID)).toBe(value)
+  })
+
+  it('falls back to the EXPORT when the descent cannot reach', async () => {
+    const { a3, body } = stagedChipFile()
+    let exports = 0
+    const resolver = createNodeResolver({
+      getNodeById: async () => a3,
+      exportOf: async () => {
+        exports += 1
+        return {
+          id: '587:73529',
+          children: [{ id: 'I587:73529;404:1' }],
+        }
+      },
+    })
+    // Nothing under A3 answers `404:1` by prefix or by local segment, and the
+    // only-child arm is never allowed to satisfy a FINAL segment, so the
+    // descent declines and the pairing answers — which is the point: the
+    // descent ADDS reach, it does not take the export away.
+    expect(
+      await resolver.resolve('I587:73529;404:1'),
+    ).toBe(body)
+    expect(exports).toBe(1)
   })
 })
 

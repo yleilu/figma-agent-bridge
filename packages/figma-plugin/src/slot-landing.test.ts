@@ -278,13 +278,21 @@ describe('B81 — reaching the target DOWNWARD (the live-wrong half)', () => {
 })
 
 describe('B81 — when a create has to be staged', () => {
-  it('stages a COMPOUND parent id even though .parent refuses', () => {
-    // The exact live-wrong condition: `sealedInstanceHost` cannot answer, so
-    // the first version skipped staging entirely and every arm fell to
-    // `direct`. A compound id says "inside an instance" without any walk.
+  it('does NOT stage when the walk REACHED the target (B81 closed)', () => {
+    // The trace settled it live: a plain `appendChild` on the walked handle
+    // lands into a depth-2 slot. Staging that write would pay the 152-call tax
+    // for a limit Figma does not have.
     const { cell } = cardRowFile()
     expect(
-      needsStaging('stage-then-move', CELL_ID, cell),
+      needsStaging('stage-then-move', CELL_ID, cell, true),
+    ).toBe(false)
+  })
+
+  it('stages a COMPOUND parent id the walk could NOT reach', () => {
+    // The fallback, and the only thing staging is for now.
+    const { cell } = cardRowFile()
+    expect(
+      needsStaging('stage-then-move', CELL_ID, cell, false),
     ).toBe(true)
   })
 
@@ -706,5 +714,15 @@ describe('B81 — code.ts actually takes the route', () => {
     expect(src).toContain('TRACE_ROUTE')
     expect(src).toContain('traceDescent(')
     expect(src).toContain('runSlotRouteTrace')
+  })
+
+  it('appends DIRECTLY when the walk reached — staging is the fallback', () => {
+    // B81 closed. `walkReached` short-circuits staging, so a create into a
+    // depth-2 slot is one append and no warning.
+    expect(src).toContain('landingChain !== undefined,')
+  })
+
+  it('answers the composed id on the DIRECT path too', () => {
+    expect(src).toContain('composedIdOf(')
   })
 })
