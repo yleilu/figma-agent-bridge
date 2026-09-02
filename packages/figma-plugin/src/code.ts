@@ -129,6 +129,7 @@ import {
   createNodeResolver,
   declareDegradedRead,
   isAliasHandle,
+  restatedRefusal,
   servedByAncestorExport,
   slicedReadMessage,
 } from './resolve-node'
@@ -147,7 +148,11 @@ import {
 } from './root-overlap'
 import { projectComponentDefs } from './project-component-defs'
 import { rollbackCreated } from './rollback'
-import { resolveInstanceProps } from './resolve-instance-props'
+import {
+  propertiesNotAppliedMessage,
+  propertiesNotLanded,
+  resolveInstanceProps,
+} from './resolve-instance-props'
 import {
   isTargetMismatch,
   targetGuardError,
@@ -2790,7 +2795,7 @@ const resolveStyle = async (entry: {
   )
 }
 
-const handleCommand = async (
+const dispatchCommand = async (
   command: string,
   params: Record<string, unknown>,
   writer: string,
@@ -4816,6 +4821,33 @@ const handleCommand = async (
           } catch (e) {
             siWarnings.push(
               'setProperties failed: ' + String(e),
+            )
+          }
+          // B81 — the write proves itself, through the SAME handle. The strict
+          // resolver stopped refusing a handle whose ancestry will not read,
+          // so a set_instance on a slot-nested sublayer now runs instead of
+          // being refused before it was tried. That is only honest while a
+          // no-op is caught: read the properties back and name what did not
+          // take. An unreadable read-back proves nothing and says nothing —
+          // `propertiesNotLanded` keeps those two apart.
+          let siAfter:
+            | Record<string, { value?: unknown }>
+            | undefined
+          try {
+            siAfter = inst2.componentProperties as unknown as Record<
+              string,
+              { value?: unknown }
+            >
+          } catch {
+            siAfter = undefined
+          }
+          const siMissed = propertiesNotLanded(
+            resolved,
+            siAfter,
+          )
+          if (siMissed.length > 0) {
+            siWarnings.push(
+              propertiesNotAppliedMessage(siMissed),
             )
           }
         }
@@ -7416,6 +7448,42 @@ const handleCommand = async (
 
     default:
       return { error: 'Unknown command: ' + command }
+  }
+}
+
+/**
+ * One command, with a write's refusal worded against the caller's own id
+ * (B81).
+ *
+ * The strict resolver no longer refuses a handle whose ANCESTRY will not read
+ * — it hands it back and names it provisional, because a `.parent` that throws
+ * says nothing about whether a write lands, and refusing on it cost the
+ * 2026-09-02 build 48 writes and a flattened app shell. The write is therefore
+ * attempted. If Figma refuses it, the throw quotes the address Figma composed
+ * off a pre-append id — two segments, naming no node — and that id is useless
+ * to the caller. This puts our sentence back in its place: the id the caller
+ * sent, and the reparent-out / write / reparent-back way through.
+ *
+ * NOTHING ELSE IS TOUCHED. A dispatch that resolved no provisional handle, or
+ * a throw without Figma's stale-handle signature, comes through exactly as it
+ * was — the restatement is earned by both halves or it does not happen.
+ */
+const handleCommand = async (
+  command: string,
+  params: Record<string, unknown>,
+  writer: string,
+): Promise<unknown> => {
+  try {
+    return await dispatchCommand(command, params, writer)
+  } catch (err) {
+    const restated = restatedRefusal(
+      err,
+      nodeResolver.provisionalIds(),
+    )
+    if (restated !== undefined) {
+      throw new Error(restated)
+    }
+    throw err
   }
 }
 
