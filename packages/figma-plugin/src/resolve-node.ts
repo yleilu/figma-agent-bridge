@@ -61,25 +61,54 @@ export const leadingInstanceId = (
 }
 
 /**
- * The node in `root`'s subtree whose LIVE id is `id`, or undefined.
+ * Every node in `root`'s subtree whose LIVE id is `id`, SHALLOWEST FIRST.
+ *
+ * BREADTH-FIRST, and that is the whole point (B93). The walk used to run off a
+ * stack, which descends the LAST child's subtree before the first child — so on
+ * a repeated id it answered with a node at an arbitrary depth. An instance of X
+ * placed inside a SLOT of another instance of X shares every local id with its
+ * host, so the repeat is not hypothetical: the page enumerated the nested
+ * copy's chain in the host's place, and `clone_node` on the host answered with
+ * the nested copy's clone. With two DIFFERENT components none of it happens,
+ * which is what made it invisible until a two-arm discriminator ran.
+ *
+ * `limit` stops the walk early: a caller that only needs to know whether the id
+ * is AMBIGUOUS asks for two.
  *
  * Every read is guarded (`idOf`, `liveChildren`): one stale handle inside the
  * subtree must not cost the search for a healthy node beside it.
  */
+export const findLiveMatches = (
+  root: LiveNode,
+  id: string,
+  limit = Number.POSITIVE_INFINITY,
+): LiveNode[] => {
+  const found: LiveNode[] = []
+  const queue: LiveNode[] = [root]
+  for (let i = 0; i < queue.length; i++) {
+    const node = queue[i]
+    if (idOf(node) === id) {
+      found.push(node)
+      if (found.length >= limit) return found
+    }
+    for (const child of liveChildren(node)) {
+      queue.push(child)
+    }
+  }
+  return found
+}
+
+/**
+ * The node in `root`'s subtree whose LIVE id is `id`, or undefined.
+ *
+ * The SHALLOWEST one when more than one answers — the same rule
+ * `indexByCanonicalId` states, and the one a caller means. A caller that has to
+ * KNOW there were two asks `findLiveMatches`.
+ */
 export const findLiveById = (
   root: LiveNode,
   id: string,
-): LiveNode | undefined => {
-  const stack: LiveNode[] = [root]
-  while (stack.length > 0) {
-    const node = stack.pop() as LiveNode
-    if (idOf(node) === id) return node
-    for (const child of liveChildren(node)) {
-      stack.push(child)
-    }
-  }
-  return undefined
-}
+): LiveNode | undefined => findLiveMatches(root, id, 1)[0]
 
 /**
  * How many INSTANCES one dispatch may export.
@@ -289,8 +318,70 @@ export const isAliasHandle = (node: LiveNode): boolean => {
   const id = idOf(node)
   if (id === undefined) return false
   if (leadingInstanceId(id) !== undefined) return false
-  return outerInstanceOf(node) !== undefined
+  const outer = outerInstanceOf(node)
+  if (outer === undefined) return false
+  // B93 — an ancestor answering THIS NODE'S OWN id is an id collision, not an
+  // alias. Same-component nesting produces one: an instance of X inside a slot
+  // of another instance of X shares every local id with its host, and the gate
+  // then refused a write with "its leading instance 581:100 is content inside
+  // INSTANCE 581:100" — an accusation about a node against itself. An unknown
+  // must never be reported as a finding, which is this predicate's own stated
+  // law; the ambiguity is refused on its own terms by `shadowedByAncestor`.
+  return outer !== id
 }
+
+/**
+ * Whether some ANCESTOR of `node` answers the same id `node` does (B93).
+ *
+ * Two nodes answering one plain id is not a shape this surface can address its
+ * way out of: `figma.getNodeByIdAsync` returns one of them and there is no
+ * parameter that says which. It IS a shape this surface can SEE, from either
+ * node, by walking up — and seeing it is enough, because a write that cannot
+ * say which of two nodes it lands on must not be made.
+ *
+ * Live: `clone_node` on the host answered with the nested copy's clone.
+ *
+ * Guarded and bounded at every hop, like every other ancestor walk here.
+ */
+export const shadowedByAncestor = (
+  node: LiveNode,
+): boolean => {
+  const id = idOf(node)
+  if (id === undefined) return false
+  let current: LiveNode = node
+  for (let hop = 0; hop < MAX_ANCESTOR_HOPS; hop++) {
+    let parent: unknown
+    try {
+      parent = (current as { parent?: unknown }).parent
+    } catch {
+      return false
+    }
+    if (typeof parent !== 'object' || parent === null) {
+      return false
+    }
+    const p = parent as LiveNode
+    if (idOf(p) === id) return true
+    current = p
+  }
+  return false
+}
+
+/**
+ * What a WRITE is told when two live nodes answer one id (B93).
+ *
+ * Exported so the message has ONE author — the `exportBudgetMessage` rule.
+ */
+export const ambiguousHandleMessage = (
+  nodeId: string,
+): string =>
+  'Refusing to write to ' +
+  nodeId +
+  ': two nodes in this file answer that id, so no write can say which one it ' +
+  'lands on. This happens when a component is nested inside ITSELF — an ' +
+  'instance placed in a slot of another instance of the same component shares ' +
+  'every local id with its host. Read the enclosing INSTANCE (get_node, ' +
+  'depth:-1) and address the node by the id that read emits, which names its ' +
+  'position in the chain; or make the nested one a different component.'
 
 /**
  * Whether a live handle answers ANYTHING — the only thing a write may be
@@ -656,7 +747,20 @@ export const createNodeResolver = (
         // that refusing every such write would break the one route into a slot
         // subtree that works (the reparent-out / write / reparent-back
         // workaround the 2026-08-30 build had to adopt).
-        return deps.getNodeById(nodeId)
+        const plain = await deps.getNodeById(nodeId)
+        // B93 — with ONE exception, and it is not about the id's shape: an
+        // ANCESTOR answering the same id means two nodes answer it, Figma
+        // picked one, and no write can say which. A read still takes what came
+        // back — the wrong one of two identical nodes still describes the
+        // design — but a write that cannot name its target is not made.
+        if (
+          strict &&
+          plain !== null &&
+          shadowedByAncestor(plain)
+        ) {
+          throw new Error(ambiguousHandleMessage(nodeId))
+        }
+        return plain
       }
       const instance = await deps.getNodeById(instanceId)
       if (instance === null) return null
@@ -677,15 +781,39 @@ export const createNodeResolver = (
       // compound id, so one guarded walk finds it and nothing is exported.
       // Nothing here is budgeted — the walk is free, so a call naming a
       // thousand ordinary sublayers is unaffected by the cap below.
-      const direct = findLiveById(instance, nodeId)
-      if (direct !== undefined) return vouch(direct, nodeId)
+      //
+      // B93 — but only when the walk found ONE. Same-component nesting puts two
+      // handles under one id, and the cheap walk has no way to tell them apart:
+      // it knows ids, and the thing that separates these two nodes is their
+      // POSITION IN THE CHAIN. So an ambiguous id falls through to the export,
+      // which is the only oracle that knows chain position.
+      const direct = findLiveMatches(instance, nodeId, 2)
+      if (direct.length === 1) return vouch(direct[0], nodeId)
       if (overBudget(instanceId)) {
+        if (direct.length > 1) {
+          // Nothing can disambiguate this. A read takes the shallowest, which
+          // is the one a caller means; a write is refused rather than aimed.
+          if (strict) {
+            throw new Error(
+              ambiguousHandleMessage(nodeId),
+            )
+          }
+          return vouch(direct[0], nodeId)
+        }
         throw new Error(
           exportBudgetMessage(nodeId, maxExports),
         )
       }
       const index = await indexFor(instanceId, instance)
-      return vouch(index?.live.get(nodeId) ?? null, nodeId)
+      const paired = index?.live.get(nodeId)
+      if (paired !== undefined) return vouch(paired, nodeId)
+      if (direct.length > 1) {
+        if (strict) {
+          throw new Error(ambiguousHandleMessage(nodeId))
+        }
+        return vouch(direct[0], nodeId)
+      }
+      return vouch(null, nodeId)
     },
     exportedNode: async (nodeId: string) => {
       const instanceId = leadingInstanceId(nodeId)

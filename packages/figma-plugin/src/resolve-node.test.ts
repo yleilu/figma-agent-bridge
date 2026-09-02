@@ -27,6 +27,7 @@ import {
   deadHandleMessage,
   exportBudgetMessage,
   findLiveById,
+  findLiveMatches,
   handleAnswers,
   isAliasHandle,
   leadingInstanceId,
@@ -273,6 +274,217 @@ describe('createNodeResolver — canonicalIdFor (B89)', () => {
     expect(
       await resolver.canonicalIdFor(plot, '305:8637'),
     ).toBeUndefined()
+  })
+})
+
+// B93 — SAME-COMPONENT NESTING. An instance of X placed inside a SLOT of
+// another instance of X shares every local id with its host, and the pairing
+// collapsed them: the page enumerated the inner instance's canonical chain in
+// the outer's place, the alias gate blamed the outer instance as "content
+// inside" the inner, and `clone_node` on the outer answered with the INNER's
+// clone. With two DIFFERENT components none of it happens — live-verified,
+// both arms, 2026-09-03.
+//
+// The fake models the collision itself, because the collision IS the bug: two
+// live handles in one subtree answering one id. A fixture with distinct ids
+// cannot see any of this, which is exactly why the two-arm discriminator was
+// needed to find it.
+
+/** Host and nested copy of ONE component, sharing every local id. */
+const sameComponentNest = () => {
+  const innerLabel: LiveNode = {
+    id: 'I581:100;300:2',
+    name: 'Label',
+    type: 'TEXT',
+  }
+  const innerSlot: LiveNode = {
+    id: 'I581:100;300:3',
+    name: 'Body',
+    type: 'SLOT',
+    children: [],
+  }
+  const inner: LiveNode = {
+    id: '581:100',
+    name: 'Card',
+    type: 'INSTANCE',
+    children: [innerLabel, innerSlot],
+  }
+  const outerLabel: LiveNode = {
+    id: 'I581:100;300:2',
+    name: 'Label',
+    type: 'TEXT',
+  }
+  const outerSlot: LiveNode = {
+    id: 'I581:100;300:3',
+    name: 'Body',
+    type: 'SLOT',
+    children: [inner],
+  }
+  const outer: LiveNode = {
+    id: '581:100',
+    name: 'Card',
+    type: 'INSTANCE',
+    children: [outerLabel, outerSlot],
+  }
+  innerLabel.parent = inner
+  innerSlot.parent = inner
+  inner.parent = outerSlot
+  outerLabel.parent = outer
+  outerSlot.parent = outer
+  return {
+    outer,
+    outerLabel,
+    outerSlot,
+    inner,
+    innerLabel,
+    innerSlot,
+  }
+}
+
+/** What the EXPORT calls the same tree: one id per chain position. */
+const sameComponentExport = (): RawNode => ({
+  id: '581:100',
+  name: 'Card',
+  children: [
+    { id: 'I581:100;300:2', name: 'Label' },
+    {
+      id: 'I581:100;300:3',
+      name: 'Body',
+      children: [
+        {
+          id: 'I581:100;300:3;581:150',
+          name: 'Card',
+          children: [
+            {
+              id: 'I581:100;300:3;581:150;300:2',
+              name: 'Label',
+            },
+            {
+              id: 'I581:100;300:3;581:150;300:3',
+              name: 'Body',
+            },
+          ],
+        },
+      ],
+    },
+  ],
+})
+
+describe('B93 — two handles, one id', () => {
+  it('the walk answers the SHALLOWEST, not whichever the stack reached first', () => {
+    const { outer, outerLabel } = sameComponentNest()
+    // Depth-first off a stack descends the LAST child first, so it used to
+    // reach the nested copy's Label before the host's own.
+    expect(findLiveById(outer, 'I581:100;300:2')).toBe(
+      outerLabel,
+    )
+  })
+
+  it('names every handle that answers, so a caller can be told there were two', () => {
+    const { outer, outerLabel, innerLabel } =
+      sameComponentNest()
+    expect(findLiveMatches(outer, 'I581:100;300:2')).toEqual(
+      [outerLabel, innerLabel],
+    )
+  })
+
+  it('is not confused by a tree whose ids are distinct (the control arm)', () => {
+    const { outer } = sameComponentNest()
+    expect(
+      findLiveMatches(outer, 'I581:100;300:3'),
+    ).toHaveLength(2)
+    expect(
+      findLiveMatches(outer, 'I999:1;300:2'),
+    ).toEqual([])
+  })
+
+  it('lets the EXPORT settle an ambiguous id — it is the only oracle that knows chain position', async () => {
+    const { outer, innerLabel } = sameComponentNest()
+    const resolver = createNodeResolver({
+      getNodeById: async id =>
+        id === '581:100' ? outer : null,
+      exportOf: async () => sameComponentExport(),
+    })
+    // The inner Label, addressed the way a read emits it. The live walk cannot
+    // tell it from the host's own Label; the export can.
+    expect(
+      await resolver.resolve(
+        'I581:100;300:3;581:150;300:2',
+      ),
+    ).toBe(innerLabel)
+  })
+
+  it('a WRITE through an ambiguous id is refused, naming the collision', async () => {
+    const { outer } = sameComponentNest()
+    const resolver = createNodeResolver({
+      getNodeById: async id =>
+        id === '581:100' ? outer : null,
+      // No oracle: the host will not export, so nothing can disambiguate.
+      exportOf: async () => undefined,
+    })
+    resolver.setStrict(true)
+    await expect(
+      resolver.resolve('I581:100;300:2'),
+    ).rejects.toThrow('581:100')
+    await expect(
+      resolver.resolve('I581:100;300:2'),
+    ).rejects.toThrow('two')
+  })
+
+  it('a READ through the same id takes the shallowest and does not throw', async () => {
+    const { outer, outerLabel } = sameComponentNest()
+    const resolver = createNodeResolver({
+      getNodeById: async id =>
+        id === '581:100' ? outer : null,
+      exportOf: async () => undefined,
+    })
+    expect(await resolver.resolve('I581:100;300:2')).toBe(
+      outerLabel,
+    )
+  })
+
+  it('does not call a node an ALIAS because an ancestor answers its own id', () => {
+    // The alias finding is "this node is content that kept a pre-append id
+    // inside some instance". A host answering the SAME id as the node is an id
+    // collision, and an unknown must never be reported as a finding — that is
+    // how the gate came to blame the outer instance for being content inside
+    // the inner.
+    const { inner } = sameComponentNest()
+    expect(isAliasHandle(inner)).toBe(false)
+  })
+
+  it('a WRITE to a plain id an ancestor also answers is refused, not silently aimed', async () => {
+    // `clone_node` on the outer answered with the INNER's clone: one plain id,
+    // two nodes, and Figma picked. A refusal naming the collision is the only
+    // honest answer — the surface never acks a write onto a node nobody meant.
+    const { inner } = sameComponentNest()
+    const resolver = createNodeResolver({
+      getNodeById: async () => inner,
+      exportOf: async () => undefined,
+    })
+    resolver.setStrict(true)
+    await expect(resolver.resolve('581:100')).rejects.toThrow(
+      'two nodes',
+    )
+  })
+
+  it('a READ of that same plain id still answers (reads are unaffected)', async () => {
+    const { inner } = sameComponentNest()
+    const resolver = createNodeResolver({
+      getNodeById: async () => inner,
+      exportOf: async () => undefined,
+    })
+    expect(await resolver.resolve('581:100')).toBe(inner)
+  })
+
+  it('leaves an ordinary plain id alone in write mode (the control arm)', async () => {
+    const plain: LiveNode = { id: '1:2', type: 'FRAME' }
+    const resolver = createNodeResolver({
+      getNodeById: async () => plain,
+      exportOf: async () => undefined,
+    })
+    resolver.setStrict(true)
+    expect(await resolver.resolve('1:2')).toBe(plain)
   })
 })
 

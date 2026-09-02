@@ -241,6 +241,15 @@ export type IdentityIndex = {
  *
  * The FIRST pair wins on a repeated id. `pairWithExport` is pre-order, so that
  * is the shallowest node, which is the one a caller means.
+ *
+ * And it is a BIJECTION on the live side (B93): one handle answers for one
+ * canonical id, the shallowest it was paired against. Same-component nesting —
+ * an instance of X inside a SLOT of another instance of X — gives the two
+ * copies identical local ids, so the by-id fallback in `pairWithExport` can
+ * hand one handle to two different exported rows. Left unguarded, the deeper
+ * row's address then resolved to the shallower node: a write, a clone and a
+ * page enumeration all landed on the wrong one of a pair nothing else can tell
+ * apart.
  */
 export const indexByCanonicalId = (
   live: LiveNode | undefined,
@@ -251,11 +260,17 @@ export const indexByCanonicalId = (
     live: new Map(),
     exported: new Map(),
   }
+  const claimed = new Set<LiveNode>()
   for (const pair of pairWithExport(live, exported, depth)) {
     const { id } = pair
     if (id === undefined) continue
-    if (pair.live !== undefined && !index.live.has(id)) {
+    if (
+      pair.live !== undefined &&
+      !index.live.has(id) &&
+      !claimed.has(pair.live)
+    ) {
       index.live.set(id, pair.live)
+      claimed.add(pair.live)
     }
     if (
       pair.exported !== undefined &&
