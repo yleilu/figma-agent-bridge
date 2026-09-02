@@ -89,6 +89,7 @@ export type SlotRoute =
   | 'insert-child'
   | 'inner-handle'
   | 'slot-property'
+  | 'trace'
 
 /**
  * Every route, in the order a live probe should try them.
@@ -114,6 +115,20 @@ export const DEFAULT_SLOT_ROUTE: SlotRoute =
   'stage-then-move'
 
 /**
+ * The DIAGNOSTIC route. Not a landing route and deliberately not in
+ * `SLOT_ROUTES`: it never leaves a node behind, so a probe cycling the arms
+ * must not cycle through it.
+ *
+ * Four rounds of live probes were each stopped before they reached Figma — by a
+ * resolver gate, then by an upward walk, then by a drop check reading `removed`
+ * on a zombie. Every fix was made blind, from this side of the wire. This route
+ * stops guessing: it reports what the walk actually did, level by level, and
+ * what each arm actually called and what Figma actually said, in Figma's own
+ * words. Then it removes everything it made.
+ */
+export const TRACE_ROUTE: SlotRoute = 'trace'
+
+/**
  * The plugin-data key that selects a route.
  *
  * INTERNAL, deliberately. It is not a tool parameter and must not become one:
@@ -132,6 +147,7 @@ export const SLOT_ROUTE_KEY = 'figma-bridge:slotRoute'
  * rather than to a refusal nobody can explain.
  */
 export const readSlotRoute = (raw: unknown): SlotRoute => {
+  if (raw === TRACE_ROUTE) return TRACE_ROUTE
   const named = SLOT_ROUTES.find(r => r === raw)
   return named ?? DEFAULT_SLOT_ROUTE
 }
@@ -243,6 +259,119 @@ export const descendToTarget = (
   return { target: current, chain }
 }
 
+/** One level of the walk, as it actually executed. */
+export type TraceStep = {
+  /** The id this level asked for. */
+  asked: string
+  /** The id of the handle it got, when it got one. */
+  got?: string
+  /** That handle's type, when it will say. */
+  type?: string
+  /** How many children it listed. */
+  children?: number
+  /** Figma's VERBATIM throw when it would not list them. */
+  refusal?: string
+  /** Which rule matched: the full prefix, the local segment, the only child, or nothing. */
+  matchedBy: 'id' | 'local-segment' | 'only-child' | 'none'
+}
+
+/**
+ * The walk, executed and RECORDED (the `trace` route).
+ *
+ * Same rules as `descendToTarget`, step for step — deliberately, because a
+ * trace of a different walk would answer a question nobody asked. It records
+ * rather than returns early, so a failure shows the level it failed at, what
+ * that level held, and what Figma said about it.
+ */
+export const traceDescent = (
+  host: LandingNode,
+  statedId: string,
+): { steps: TraceStep[]; chain?: LandingChain } => {
+  const steps: TraceStep[] = []
+  const lead = leadingInstanceId(statedId)
+  if (lead === undefined) return { steps }
+  const segments = statedId.slice(1).split(';').slice(1)
+  if (segments.length === 0) return { steps }
+  const chain: LandingNode[] = [host]
+  let current = host
+  let prefix = 'I' + lead
+  let anchored = false
+  for (const segment of segments) {
+    prefix += ';' + segment
+    const refusal = childrenRefusal(current)
+    const children = liveChildren(current)
+    const byPrefix = children.find(c => idOf(c) === prefix)
+    const byLocal =
+      byPrefix ??
+      children.find(c => {
+        const id = idOf(c)
+        return (
+          id !== undefined && localSegment(id) === segment
+        )
+      })
+    const found =
+      byLocal ??
+      (anchored && children.length === 1
+        ? children[0]
+        : undefined)
+    const matchedBy: TraceStep['matchedBy'] =
+      byPrefix !== undefined
+        ? 'id'
+        : byLocal !== undefined
+          ? 'local-segment'
+          : found !== undefined
+            ? 'only-child'
+            : 'none'
+    steps.push({
+      asked: prefix,
+      ...(found !== undefined
+        ? {
+            got: idOf(found),
+            ...(typeOf(found) !== undefined
+              ? { type: typeOf(found) }
+              : {}),
+          }
+        : {}),
+      ...(refusal === undefined
+        ? { children: children.length }
+        : { refusal }),
+      matchedBy,
+    })
+    // The parent's own refusal is recorded against the level that asked it, so
+    // a trace shows WHICH node would not open.
+    if (refusal !== undefined && steps.length > 0) {
+      steps[steps.length - 1].got = idOf(current)
+      steps[steps.length - 1].type = typeOf(current)
+    }
+    if (found === undefined) return { steps }
+    if (byLocal !== undefined) anchored = true
+    prefix = idOf(found) ?? prefix
+    current = found
+    chain.push(current)
+  }
+  return { steps, chain: { target: current, chain } }
+}
+
+/** One line of a trace, for the reply. */
+export const formatTraceStep = (
+  step: TraceStep,
+  index: number,
+): string =>
+  'level ' +
+  (index + 1) +
+  ': asked ' +
+  step.asked +
+  ' → ' +
+  (step.got ?? '(nothing matched)') +
+  (step.type !== undefined ? ' (' + step.type + ')' : '') +
+  ', matched by ' +
+  step.matchedBy +
+  (step.refusal !== undefined
+    ? '; children REFUSED — Figma said: ' + step.refusal
+    : step.children !== undefined
+      ? '; children listed: ' + step.children
+      : '')
+
 /**
  * The ids of a node's children, or undefined when it will not list them.
  *
@@ -344,6 +473,29 @@ export const landingTargetRefusal = (
   target: LandingNode,
   statedId: string,
 ): string | undefined => {
+  // THE CHILDREN REFUSAL IS CHECKED FIRST, and that order is the whole fix.
+  // `removed` reads TRUE on these handles — Figma considers a re-minted-away
+  // node gone — so a drop check that ran first swallowed every zombie and
+  // answered a sentence that names no remedy and sends the caller in a loop:
+  // "read the enclosing INSTANCE and address the target by the id that read
+  // emits", which is the id they already had. Four rounds of probes died on it.
+  const refusal = childrenRefusal(target)
+  if (refusal !== undefined) {
+    return (
+      'Cannot create into ' +
+      statedId +
+      ': the live handle for that node answers its own id, name and type and ' +
+      'refuses to list its children, so nothing can be appended through it. ' +
+      'Figma said: ' +
+      refusal +
+      ' — that is the address Figma composed off a pre-append id. THE WAY ' +
+      'THROUGH: reparent_node the subtree out of the slot, write there, and ' +
+      'reparent it back; or build the content at page level and let a create ' +
+      'with this parentId stage it in for you; or drive the value through the ' +
+      'enclosing instance’s own override / component property.'
+    )
+  }
+  // Only a handle that answers everything AND is gone gets the re-mint story.
   if (detachedFromDocument(target)) {
     return (
       'Cannot create into ' +
@@ -354,19 +506,7 @@ export const landingTargetRefusal = (
       'the target by the id that read emits.'
     )
   }
-  const refusal = childrenRefusal(target)
-  if (refusal === undefined) return undefined
-  return (
-    'Cannot create into ' +
-    statedId +
-    ': the live handle for that node answers its own id, name and type and ' +
-    'refuses to list its children, so nothing can be appended through it. ' +
-    'Figma said: ' +
-    refusal +
-    ' — that is the address Figma composed off a pre-append id. Build the ' +
-    'content at page level and move it in with reparent_node, or drive it ' +
-    'through the enclosing instance’s own override.'
-  )
+  return undefined
 }
 
 /**

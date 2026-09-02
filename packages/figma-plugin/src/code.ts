@@ -92,6 +92,10 @@ import {
   landingHostOf,
   landingTargetRefusal,
   needsStaging,
+  formatTraceStep,
+  traceDescent,
+  SLOT_ROUTES,
+  TRACE_ROUTE,
   readSlotRoute,
   unverifiedLandingMessage,
   type LandingChain,
@@ -2816,6 +2820,138 @@ const walkToLandingTarget = async (
 }
 
 /**
+ * Run every arm against the real target and report what Figma said (B81).
+ *
+ * FOUR ROUNDS of live probes were each stopped before they reached Figma — by
+ * the resolver's write gate, then by an upward `.parent` walk, then by a drop
+ * check reading `removed` on a zombie. Every fix was made blind, from this side
+ * of the wire. This stops guessing: it reports the walk as it actually
+ * executed, level by level, then calls each of the four arms on its own probe
+ * frame and records the landed id or Figma's VERBATIM throw.
+ *
+ * It writes nothing the caller keeps: every frame it makes, and anything those
+ * frames turned into on the way in, is removed before it answers.
+ */
+const runSlotRouteTrace = async (
+  statedParentId: string,
+  resolved: ParentNode | null,
+): Promise<string[]> => {
+  const lines: string[] = [
+    'slot-route trace for ' +
+      statedParentId +
+      ' — NO WRITE WAS KEPT.',
+  ]
+  const lead = leadingInstanceId(statedParentId)
+  if (lead === undefined) {
+    lines.push(
+      'the id is PLAIN, so there is no chain to walk; the resolver answers it directly.',
+    )
+  } else {
+    const host = (await figma.getNodeByIdAsync(
+      lead,
+    )) as unknown as LandingNode | null
+    lines.push(
+      'leading instance ' +
+        lead +
+        ': ' +
+        (host === null
+          ? 'getNodeByIdAsync answered NOTHING'
+          : 'answered, type ' +
+            String(
+              (host as { type?: unknown }).type ??
+                '(unreadable)',
+            )),
+    )
+    if (host !== null) {
+      const { steps, chain } = traceDescent(
+        host,
+        statedParentId,
+      )
+      for (let i = 0; i < steps.length; i++) {
+        lines.push(formatTraceStep(steps[i], i))
+      }
+      lines.push(
+        chain === undefined
+          ? 'the walk did NOT reach the target; the create would fall back to the resolver’s handle.'
+          : 'the walk REACHED the target.',
+      )
+      const where =
+        chain ??
+        (resolved === null
+          ? undefined
+          : {
+              target: resolved as unknown as LandingNode,
+              chain: [resolved as unknown as LandingNode],
+            })
+      if (where === undefined) {
+        lines.push(
+          'no handle to try the arms on — nothing further to report.',
+        )
+        return lines
+      }
+      lines.push(
+        'arms tried on ' +
+          String(idOf(where.target) ?? '(unreadable id)') +
+          ':',
+      )
+      for (const route of SLOT_ROUTES) {
+        if (route === DEFAULT_SLOT_ROUTE) continue
+        const probe = figma.createFrame()
+        probe.name = 'slot-route-trace ' + route
+        probe.resize(10, 10)
+        const before = childIdsOf(where.target)
+        let landed: string | undefined
+        try {
+          appendVia(
+            route,
+            where,
+            probe as unknown as LandingNode,
+          )
+          landed = landedChildId(
+            before,
+            childIdsOf(where.target),
+          )
+          lines.push(
+            '  ' +
+              route +
+              ': NO THROW. landed child = ' +
+              (landed ?? '(none identified)'),
+          )
+        } catch (err) {
+          lines.push(
+            '  ' + route + ': THREW — ' + messageOf(err),
+          )
+        }
+        // Everything this arm made comes back out, whatever shape it took.
+        for (const id of [landed]) {
+          if (id === undefined) continue
+          try {
+            const made = await figma.getNodeByIdAsync(id)
+            if (made !== null && 'remove' in made) {
+              ;(made as SceneNode).remove()
+            }
+          } catch {
+            lines.push(
+              '  ' +
+                route +
+                ': could not remove the landed node ' +
+                id +
+                ' — remove it by hand.',
+            )
+          }
+        }
+        try {
+          if (!probe.removed) probe.remove()
+        } catch {
+          // Already consumed by the append (a re-mint drops the handle).
+        }
+      }
+    }
+  }
+  return lines
+}
+
+/**
  * The spec whose post-append pass is WAITING for a staged move (B81).
  *
  * A staged create is built under the page, so every parent-dependent field —
@@ -4270,6 +4406,23 @@ const dispatchCommand = async (
       landingChain = await walkToLandingTarget(
         params.parentId as string | undefined,
       )
+      // B81 — the DIAGNOSTIC route, FIRST, before any gate of ours can refuse
+      // and before anything is created. Four rounds of live probes were each
+      // stopped short of Figma by one of our own checks; this one reports what
+      // actually happens, in Figma's words, and keeps nothing.
+      if (
+        slotRoute === TRACE_ROUTE &&
+        params.parentId !== undefined
+      ) {
+        const trace = await runSlotRouteTrace(
+          params.parentId as string,
+          landingChain?.target === undefined
+            ? null
+            : (landingChain.target as unknown as ParentNode),
+        )
+        landingChain = undefined
+        return { error: trace.join('\n') }
+      }
       const parentNode =
         landingChain !== undefined
           ? (landingChain.target as unknown as BaseNode)

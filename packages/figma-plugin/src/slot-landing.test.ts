@@ -50,10 +50,12 @@ import {
   SLOT_ROUTES,
   SLOT_ROUTE_KEY,
   appendVia,
+  TRACE_ROUTE,
   childIdsOf,
   childrenRefusal,
   descendToTarget,
   landingTargetRefusal,
+  traceDescent,
   landedChildId,
   needsStaging,
   readSlotRoute,
@@ -427,6 +429,49 @@ describe('B81/B94 — the WALKED handle is what gets checked', () => {
     ).toBeUndefined()
   })
 
+  it('a ZOMBIE that Figma also calls `removed` is still a ZOMBIE', () => {
+    // THE FOURTH-ROUND DEFECT, exactly. `removed` reads TRUE on these handles,
+    // so the drop branch fired first and produced a sentence that names no
+    // remedy and sends the caller in a loop: "read the enclosing INSTANCE and
+    // address the target by the id that read emits" — which is the id they
+    // already had. The children refusal is the discriminator and it is checked
+    // FIRST; `removed` alone decides nothing.
+    const zombie: LandingNode = {
+      id: CELL_ID,
+      name: 'Cell',
+      type: 'SLOT',
+      removed: true,
+      get children(): never {
+        throw new Error(
+          'in get_children: The node (instance sublayer or table cell) with id ' +
+            '"I587:73534;587:73528" does not exist',
+        )
+      },
+    }
+    const refusal = landingTargetRefusal(zombie, CELL_ID)
+    expect(refusal).toContain(
+      'instance sublayer or table cell',
+    )
+    expect(refusal).not.toContain('no longer holds')
+    // …and it names the remedy that actually works.
+    expect(refusal).toContain('reparent_node')
+  })
+
+  it('names the working REMEDY, never just the diagnosis', () => {
+    const zombie: LandingNode = {
+      id: CELL_ID,
+      type: 'SLOT',
+      get children(): never {
+        throw new Error('in get_children: boom')
+      },
+    }
+    const refusal = landingTargetRefusal(zombie, CELL_ID)
+    // The old restated refusal named a remedy and this one dropped it. A
+    // refusal without a way through is worse than the bug it reports.
+    expect(refusal).toContain('reparent_node')
+    expect(refusal).toContain('page level')
+  })
+
   it("names Figma's OWN words when the walked target refuses its children", () => {
     // The zombie signature the live probe read back: `get_node` on that id
     // answers id/name/type and carries `readError: the live handle … refused to
@@ -452,7 +497,9 @@ describe('B81/B94 — the WALKED handle is what gets checked', () => {
     expect(refusal).not.toContain('no longer holds')
   })
 
-  it('names a genuinely DROPPED target as dropped', () => {
+  it('keeps "no longer holds" for a target that is REALLY gone', () => {
+    // Removed AND able to list its children: nothing zombie-ish about it, so
+    // the re-mint sentence is the right one.
     const dropped: LandingNode = {
       id: '585:73437',
       type: 'FRAME',
@@ -472,6 +519,84 @@ describe('B81/B94 — the WALKED handle is what gets checked', () => {
     }
     expect(childrenRefusal(zombie)).toContain('boom')
     expect(childrenRefusal({ children: [] })).toBeUndefined()
+  })
+})
+
+// The dispatcher has run four rounds of probes and every one of them was
+// stopped before it reached Figma. No more blind fixes: `trace` makes the
+// plugin report what it actually did, in Figma's own words, and writes nothing
+// the caller keeps.
+describe('B81 — the trace route', () => {
+  it('is selectable on the same key, and is NOT part of the probe order', () => {
+    expect(TRACE_ROUTE).toBe('trace')
+    expect(readSlotRoute('trace')).toBe('trace')
+    expect([...SLOT_ROUTES]).not.toContain(TRACE_ROUTE)
+  })
+
+  it('records every level the walk executed: asked, got, and the children count', () => {
+    const { a } = cardRowFile()
+    const { steps, chain } = traceDescent(a, CELL_ID)
+    expect(chain?.target).toBeDefined()
+    expect(steps).toHaveLength(3)
+    expect(steps[0].asked).toBe('I585:73434;585:73430')
+    expect(steps[0].got).toBe('I585:73434;585:73430')
+    expect(steps[0].type).toBe('SLOT')
+    expect(steps[0].children).toBe(1)
+    expect(steps[2].got).toBe(CELL_ID)
+    expect(steps[2].matchedBy).toBe('id')
+  })
+
+  it("records Figma's VERBATIM throw when a level will not list its children", () => {
+    const a = figmaParent({
+      id: '585:73434',
+      type: 'INSTANCE',
+      name: 'Card',
+    })
+    const zombie: LandingNode = {
+      id: 'I585:73434;585:73430',
+      name: 'Body',
+      type: 'SLOT',
+      get children(): never {
+        throw new Error(
+          'in get_children: The node (instance sublayer or table cell) with id ' +
+            '"I585:73440;585:73433" does not exist',
+        )
+      },
+    }
+    a.kids.push(zombie)
+    const { steps, chain } = traceDescent(a, CELL_ID)
+    expect(chain).toBeUndefined()
+    const refused = steps.find(
+      st => st.refusal !== undefined,
+    )
+    expect(refused?.refusal).toContain(
+      'instance sublayer or table cell',
+    )
+    expect(refused?.got).toBe('I585:73434;585:73430')
+  })
+
+  it('says WHY it could not reach the target, rather than going quiet', () => {
+    const { a } = cardRowFile()
+    const { steps, chain } = traceDescent(
+      a,
+      'I585:73434;999:1;999:2',
+    )
+    expect(chain).toBeUndefined()
+    expect(steps[steps.length - 1].matchedBy).toBe('none')
+  })
+
+  it('records which rule matched each level, so a re-mint is visible', () => {
+    const { a } = cardRowFile()
+    const stale =
+      'I585:73434;585:73430;585:73437;585:73433'
+    const { steps } = traceDescent(a, stale)
+    expect(steps[1].matchedBy).toBe('only-child')
+    expect(steps[1].asked).toBe(
+      'I585:73434;585:73430;585:73437',
+    )
+    expect(steps[1].got).toBe(
+      'I585:73434;585:73430;585:73440',
+    )
   })
 })
 
@@ -575,5 +700,11 @@ describe('B81 — code.ts actually takes the route', () => {
 
   it('checks the WALKED handle, not the resolver’s', () => {
     expect(src).toContain('landingTargetRefusal(')
+  })
+
+  it('runs the trace route, and cleans up after itself', () => {
+    expect(src).toContain('TRACE_ROUTE')
+    expect(src).toContain('traceDescent(')
+    expect(src).toContain('runSlotRouteTrace')
   })
 })
