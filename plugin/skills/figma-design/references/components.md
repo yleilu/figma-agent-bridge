@@ -217,7 +217,11 @@ ceiling as a Figma rule, and lists the three ways through (a SLOT ·
 trust that sentence over any older error text quoted in docs. So any region of a master that must
 receive content later — a header's trailing end, a card's action area —
 needs a slot (or a property-gated child) in the MASTER, at authoring
-time. A region without one is closed forever in every instance, and the
+time. **The same is true of geometry: an instance sublayer's SIZE is not
+overridable** (the write answers ok with "size not applied") — a per-instance
+difference in bar height, column width or track length is a VARIANT axis, a
+sizing property, or slot content, decided at modelling time; never an
+update_node on a compound id after placement. A region without one is closed forever in every instance, and the
 content ends up parked in whatever slot exists — the observed failure: a
 header-row button the brief named, built into the body slot, because the
 master's header had no slot and no property and the placed instances

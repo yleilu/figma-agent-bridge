@@ -269,7 +269,10 @@ the census (step 3, a step of its own) and the binding sweep's closing block
    paints bound · N of M text nodes styled · every file-defined style applied ≥1×
    · the census names N masters, `get_components` returns M — N == M, or the
    census's revision list explains the difference" (Verification discipline; the
-   count check is the same arithmetic honesty the rates are). A report without the closing block is not a report; a
+   count check is the same arithmetic honesty the rates are). **A revision you
+   discover at closing time is written INTO the DS note before the closing block is
+   emitted** — the note is the record; the closing block only reports it. A correct
+   subtraction in the report beside a stale note is still a census that lies. A report without the closing block is not a report; a
    build that looks right and is unbound is a failed build.
 
 ### The component census — two passes, both written
