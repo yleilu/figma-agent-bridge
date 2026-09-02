@@ -139,8 +139,10 @@ import {
   type ConstructionDefault,
 } from './construction-defaults'
 import {
+  applyStatedPosition,
   restoreAbsolutePositions,
   type PlacedChild,
+  type PositionTarget,
 } from './absolute-position'
 import {
   createNodeResolver,
@@ -5321,6 +5323,22 @@ const dispatchCommand = async (
         node as unknown as BindTargetNode,
         spec.bindings,
         wrapperBindDeps(),
+        warnings,
+      )
+      // B87, SECOND DOOR — the stated position, PROVEN, after every field of
+      // this patch that can move the node. `applyCommonProperties` wrote it
+      // near the top, and Figma then re-maps an ABSOLUTE child through its own
+      // constraints against the box the rest of the patch left behind: live,
+      // `position:[0,0]` read back `[0,-40]` and `[0,40]` read back `[0,0]` —
+      // one node height, deterministic, `warnings: []`. A position that
+      // survived the patch is not written again; one that drifted is corrected
+      // by the measured offset; one that will not settle is named. The
+      // `x/y ignored on an auto-layout child` gate above already removed
+      // `spec.position` for a flow child, so what reaches here is either an
+      // ABSOLUTE child or a child of a parent that does not place its children.
+      applyStatedPosition(
+        node as unknown as PositionTarget,
+        spec.position,
         warnings,
       )
       // I5 — LAST, after every field that can move a box: a size, a sizing, a

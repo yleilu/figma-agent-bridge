@@ -16,7 +16,10 @@
 import { describe, expect, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { restoreAbsolutePositions } from './absolute-position'
+import {
+  applyStatedPosition,
+  restoreAbsolutePositions,
+} from './absolute-position'
 
 /**
  * A child that re-anchors when its parent's height changes, the way a CENTER
@@ -174,6 +177,132 @@ describe('restoreAbsolutePositions', () => {
   })
 })
 
+// ─── B87, THE SECOND DOOR (reopened 2026-09-03) ────────────────────────────
+//
+// Same shape, different tool. The naive operator hit it through `update_node`
+// on an ABSOLUTE child of an auto-layout parent: writing `position:[0,0]` read
+// back **[0,-40]**, and writing `[0,40]` read back **[0,0]** — a constant
+// offset of exactly ONE NODE HEIGHT, deterministic, with `warnings: []`. It
+// cost a real chart defect (the treasury `Month ticks` row) and the operator
+// had to write every ABSOLUTE child with a compensating height offset for the
+// rest of the build.
+//
+// THE FAKE MODELS THE SETTER. `y` is not a stored field here any more than
+// `vectorPaths` is (B79): Figma re-maps the assignment through the child's own
+// constraint against a box the write itself moved, so what comes back out is
+// not what went in. A plain-object fake stores 0 and reads 0, and the defect
+// is invisible — which is precisely why it survived the create-door fix.
+
+/**
+ * A node whose `y` setter re-maps by one node height, the way the live one did.
+ *
+ * `drift` is applied on ASSIGNMENT and measured relatively, so a second write
+ * that compensates for it lands: `write(40)` → reads 0, which is the live
+ * observation the operator worked around by hand.
+ */
+const remappingChild = (
+  drift: number,
+  // Where the node stands BEFORE the patch. The live one stood at -40: the
+  // operator was correcting a row that had already been re-mapped once.
+  start = -40,
+  id = '581:9001',
+): Record<string, unknown> & { writes: number } => {
+  const node = {
+    id,
+    name: 'Month ticks',
+    height: 40,
+    stored: start,
+    writes: 0,
+    x: 0,
+  }
+  Object.defineProperty(node, 'y', {
+    configurable: true,
+    enumerable: true,
+    get: () => node.stored,
+    set: (v: number) => {
+      node.writes += 1
+      node.stored = v + drift
+    },
+  })
+  return node as never
+}
+
+describe('B87 second door — a stated position lands or says why', () => {
+  it('reproduces the live re-map: writing 0 reads back -40', () => {
+    const node = remappingChild(-40)
+    ;(node as unknown as { y: number }).y = 0
+    expect((node as unknown as { y: number }).y).toBe(-40)
+  })
+
+  it('compensates for the re-map, so the read-back IS the stated value', () => {
+    const node = remappingChild(-40)
+    const warnings: string[] = []
+    applyStatedPosition(node, [0, 0], warnings)
+    expect((node as unknown as { y: number }).y).toBe(0)
+    // Landed as stated, so nothing was lost and nothing is said.
+    expect(warnings).toEqual([])
+  })
+
+  it('writes nothing at all when the node already reads the stated value', () => {
+    // Assignment is where this campaign's surprises live (B68, B79, B69).
+    const node = remappingChild(-40, 12)
+    applyStatedPosition(node, [0, 12])
+    expect(node.writes).toBe(0)
+  })
+
+  it('takes at most one corrective write — never a chase', () => {
+    const node = remappingChild(-40)
+    applyStatedPosition(node, [0, 0])
+    expect(node.writes).toBe(2)
+  })
+
+  it('NAMES a position it could not land, instead of returning silence', () => {
+    // A node that answers the same y whatever is written to it: the second
+    // write proves the first was not a measurable drift but a refusal.
+    const node: Record<string, unknown> = {
+      id: '581:9002',
+      name: 'Pinned',
+      x: 0,
+    }
+    Object.defineProperty(node, 'y', {
+      get: () => -40,
+      set: () => {},
+    })
+    const warnings: string[] = []
+    applyStatedPosition(node, [0, 0], warnings)
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('581:9002')
+    expect(warnings[0]).toContain('[0, 0]')
+    expect(warnings[0]).toContain('[0, -40]')
+  })
+
+  it('names a REFUSAL in Figma’s own words rather than throwing', () => {
+    const node: Record<string, unknown> = {
+      id: '581:9003',
+      x: 0,
+    }
+    Object.defineProperty(node, 'y', {
+      get: () => 0,
+      set: () => {
+        throw new Error('in set_y: The node does not exist')
+      },
+    })
+    const warnings: string[] = []
+    expect(() =>
+      applyStatedPosition(node, [0, 10], warnings),
+    ).not.toThrow()
+    expect(warnings[0]).toContain('does not exist')
+  })
+
+  it('is not a request at all when no position was stated', () => {
+    const node = remappingChild(-40)
+    applyStatedPosition(node, undefined)
+    applyStatedPosition(node, [0])
+    applyStatedPosition(node, ['x', 'y'])
+    expect(node.writes).toBe(0)
+  })
+})
+
 // `code.ts` cannot be imported outside Figma — the house source-scan pattern.
 describe('create_tree wiring', () => {
   const source =
@@ -192,5 +321,38 @@ describe('create_tree wiring', () => {
     // Order is the entire fix: run it first and the hug re-maps the child
     // straight back out of the parent.
     expect(restore).toBeGreaterThan(resize)
+  })
+})
+
+describe('update_node wiring (B87 second door)', () => {
+  const source = readFileSync(
+    join(import.meta.dir, 'code.ts'),
+    'utf8',
+  )
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
+
+  it('read the file (liveness)', () => {
+    expect(source).toContain('case COMMANDS.UPDATE_NODE:')
+  })
+
+  it('proves the stated position AFTER everything that can move the node', () => {
+    const update = source.indexOf(
+      'case COMMANDS.UPDATE_NODE:',
+    )
+    const arm = source.slice(
+      update,
+      source.indexOf('case COMMANDS.BIND_VARIABLE:'),
+    )
+    const prove = arm.indexOf('applyStatedPosition(')
+    expect(prove).toBeGreaterThan(-1)
+    // The size write and the bindings both move a box, so a position proved
+    // before them is proved against a node that is about to move again.
+    expect(prove).toBeGreaterThan(
+      arm.indexOf('applySizeVerified('),
+    )
+    expect(prove).toBeGreaterThan(
+      arm.indexOf('applyWrapperBindings('),
+    )
   })
 })
