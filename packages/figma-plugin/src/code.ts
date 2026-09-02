@@ -83,6 +83,18 @@ import {
   sealedInstanceHost,
 } from './instance-ceiling'
 import {
+  DEFAULT_SLOT_ROUTE,
+  SLOT_ROUTE_KEY,
+  appendVia,
+  landingHost,
+  needsStaging,
+  readSlotRoute,
+  routeFellBackMessage,
+  stagedLandingMessage,
+  type LandingNode,
+  type SlotRoute,
+} from './slot-landing'
+import {
   modeIdFor,
   type ModeLike,
 } from './variable-modes'
@@ -2079,7 +2091,7 @@ const buildSingleNode = async (
   // descendants at runtime. Catch the raw throw and re-raise as a clear
   // structured message that callers convert to { error }.
   try {
-    parent.appendChild(node)
+    appendThroughRoute(parent, node, warnings)
   } catch (err) {
     // The node exists and cannot be placed. Removing it is the wrapper's job —
     // this rethrow only has to say WHY, in words the caller can act on. I66:
@@ -2104,7 +2116,13 @@ const buildSingleNode = async (
   // child of a SLOT, which Figma rejects ("node must be an auto-layout frame
   // or a child of an auto-layout frame"), leaving the node FIXED with no
   // notice. A build then ships a node sized differently than it asked for.
-  applyPostAppendProperties(node, spec, warnings, opts)
+  //
+  // B81 — unless this node is a STAGED ROOT. It is standing on the page while
+  // its subtree is built, and every field below is a fact about its parent, so
+  // the pass waits for the move (`landStagedRoot`).
+  if (spec !== stagedRootSpec) {
+    applyPostAppendProperties(node, spec, warnings, opts)
+  }
 
   // warn-on-no-op (T7, B35): the append just handed this node's x/y to the
   // parent's auto-layout, and the creation default (B29) is what put that
@@ -2133,7 +2151,7 @@ const buildSingleNode = async (
   // node with children) is judged by its caller, after the deferred collapse —
   // judging it here would call every hugging frame a failure in the window
   // between its own append and its children.
-  if (opts?.deferSizing !== true) {
+  if (opts?.deferSizing !== true && spec !== stagedRootSpec) {
     verifyCreatedSize(
       node as unknown as SizeTarget,
       spec.size,
@@ -2275,7 +2293,7 @@ const createTreeNode = async (
       ).createInstance()
       // T7: same instance-lock guard as createSingleNode — wrap and re-raise.
       try {
-        parent.appendChild(instance)
+        appendThroughRoute(parent, instance, warnings)
       } catch (err) {
         instance.remove()
         throw new Error(
@@ -2299,7 +2317,7 @@ const createTreeNode = async (
       if (mainComp) {
         const instance = mainComp.createInstance()
         try {
-          parent.appendChild(instance)
+          appendThroughRoute(parent, instance, warnings)
         } catch (err) {
           instance.remove()
           throw new Error(
@@ -2320,7 +2338,7 @@ const createTreeNode = async (
     // Default: clone
     const cloned = (existing as SceneNode).clone()
     try {
-      parent.appendChild(cloned)
+      appendThroughRoute(parent, cloned, warnings)
     } catch (err) {
       cloned.remove()
       throw new Error(
@@ -2667,6 +2685,149 @@ const resolveNodeId = async (
   )) as unknown as BaseNode | null
 
 /**
+ * The route a create takes into a component SLOT, for the length of one
+ * dispatch (B81). Set from plugin data at the top of `handleCommand`.
+ *
+ * A module-level value rather than a threaded parameter, for the same reason
+ * `nodeResolver.setStrict` is one: every append site has to be in step, and an
+ * append site that could forget is the one that would.
+ */
+let slotRoute: SlotRoute = DEFAULT_SLOT_ROUTE
+
+/**
+ * The route the document selects, or the default.
+ *
+ * INTERNAL and read-only from the tool surface's point of view: the dispatcher
+ * writes it with `set_plugin_data` on the DOCUMENT (`nodeId:'0:0'`) or on the
+ * current PAGE, runs its probe arm, and clears it. It is deliberately not a
+ * tool parameter — see slot-landing.ts.
+ */
+const readSlotRouteSetting = (): SlotRoute => {
+  const stored = (node: unknown): string => {
+    try {
+      const get = (
+        node as { getPluginData?: (k: string) => string }
+      )?.getPluginData
+      return typeof get === 'function'
+        ? (get.call(node, SLOT_ROUTE_KEY) ?? '')
+        : ''
+    } catch {
+      return ''
+    }
+  }
+  return readSlotRoute(
+    stored(figma.root) || stored(figma.currentPage),
+  )
+}
+
+/**
+ * Append `child` under `parent` through the dispatch's route.
+ *
+ * The default and `'direct'` are the same append this file has always made.
+ * A CANDIDATE route is tried, and a refusal falls back to the direct append
+ * with Figma's own words on the reply — a probe must never brick a build, and
+ * the sentence Figma refuses with is the whole answer the probe is after.
+ */
+const appendThroughRoute = (
+  parent: ParentNode,
+  child: SceneNode,
+  warnings?: string[],
+): void => {
+  const p = parent as unknown as LandingNode
+  const c = child as unknown as LandingNode
+  if (
+    slotRoute === DEFAULT_SLOT_ROUTE ||
+    slotRoute === 'direct'
+  ) {
+    appendVia('direct', p, c)
+    return
+  }
+  try {
+    appendVia(slotRoute, p, c)
+  } catch (err) {
+    warnings?.push(
+      routeFellBackMessage(slotRoute, messageOf(err)),
+    )
+    appendVia('direct', p, c)
+  }
+}
+
+/**
+ * The spec whose post-append pass is WAITING for a staged move (B81).
+ *
+ * A staged create is built under the page, so every parent-dependent field —
+ * `sizing`, the auto-layout clamps, `constraints`, a grid cell — would be
+ * written against a parent that is not the caller's. Writing them there and
+ * again after the move would put a bogus degrade on the reply of every staged
+ * build ("node must be an auto-layout frame or a child of an auto-layout
+ * frame"), so the ROOT's pass is skipped at page level and run once, after the
+ * move, where the answer is true.
+ *
+ * Keyed on the spec OBJECT, which is unique per call and reaches the builder
+ * unchanged — no new parameter on a recursion that already carries eight.
+ */
+let stagedRootSpec: Record<string, unknown> | undefined
+
+/**
+ * Move a staged root into the parent the caller asked for, then finish it.
+ *
+ * A refusal here is the create's refusal: it throws the shared per-instance
+ * ceiling sentence, and the caller removes what it built (T7/B14 — a create
+ * either lands or leaves the document as it found it).
+ */
+const landStagedRoot = ({
+  node,
+  spec,
+  parent,
+  operation,
+  warnings,
+}: {
+  node: SceneNode
+  spec: Record<string, unknown>
+  parent: ParentNode
+  operation: string
+  warnings: string[]
+}): void => {
+  const statedParentId =
+    nodeResolver.provisionalIds()[0] ?? parent.id
+  try {
+    appendVia(
+      'direct',
+      parent as unknown as LandingNode,
+      node as unknown as LandingNode,
+    )
+  } catch (err) {
+    throw new Error(
+      appendRefusal({
+        operation,
+        parentId: statedParentId,
+        parentType: parent.type,
+        host: sealedInstanceHost(parent),
+        raw: messageOf(err),
+      }),
+    )
+  }
+  // NOW the parent-dependent fields mean what the caller meant by them.
+  applyPostAppendProperties(node, spec, warnings)
+  verifyCreatedSize(
+    node as unknown as SizeTarget,
+    spec.size,
+    warnings,
+    spec.sizing,
+  )
+  const host = landingHost(parent as unknown as LandingNode)
+  if (host !== undefined) {
+    warnings.push(
+      stagedLandingMessage({
+        operation,
+        parentId: statedParentId,
+        host,
+      }),
+    )
+  }
+}
+
+/**
  * The box of the PAGE-ROOT frame a write is about to touch (I5).
  *
  * Taken BEFORE the write, and paired with `warnGrownIntoNeighbour` after it.
@@ -2837,6 +2998,11 @@ const dispatchCommand = async (
   // write door that can forget. `batch` re-dispatches per op, so each op sets
   // its own mode.
   nodeResolver.setStrict(isEventCausing(command))
+  // B81 — one slot route per dispatch, read from the document. The default is
+  // the working one; a live probe flips it to a candidate, runs its arm, and
+  // clears it. Read HERE for the same reason the strict mode is: every append
+  // site in one command has to agree, and none of them has to remember.
+  slotRoute = readSlotRouteSetting()
   switch (command) {
     case 'get_document_info':
       return {
@@ -3952,19 +4118,42 @@ const dispatchCommand = async (
       // it. A HUG frame grows when something is appended to it, and nothing
       // arranges page-root frames afterwards.
       const rootBefore = rootBoundsOf(parent)
+      // B81 — a target sealed inside an INSTANCE is BUILT AT PAGE LEVEL and
+      // moved in. That is the remedy the refusal has been teaching all along;
+      // the tool now pays it, in one call, instead of the caller paying it in
+      // three (152 `reparent_node` calls in the 2026-09-03 build).
+      const stageCreate = needsStaging(
+        slotRoute,
+        parent as unknown as LandingNode,
+      )
+      const createParent = stageCreate
+        ? (figma.currentPage as unknown as ParentNode)
+        : parent
+      let stagedNode: SceneNode | undefined
       try {
         // B35: one node, so the sink can only ever hold one entry — and
         // `discardedPositionsWarning` renders that as the singular sentence.
         const placed: Placement[] = []
         const defaults: ConstructionDefault[] = []
+        if (stageCreate) stagedRootSpec = spec
         const created = await createSingleNode(
           spec,
-          parent,
+          createParent,
           writer,
           warnings,
           placed,
           { defaults },
         )
+        if (stageCreate) {
+          stagedNode = created
+          landStagedRoot({
+            node: created,
+            spec,
+            parent,
+            operation: 'create_node',
+            warnings,
+          })
+        }
         const inheritedNote =
           constructionDefaultsWarning(defaults)
         if (inheritedNote !== undefined) {
@@ -3989,12 +4178,25 @@ const dispatchCommand = async (
         // returns a clear structured error, not a raw uncaught exception.
         // createSingleNode re-raises the clear slot-fill message (see the
         // appendChild wrap above); surface it directly as { error }.
+        //
+        // B81 — a STAGED node is already built and standing on the page when
+        // the move is refused, and `createSingleNode`'s own guard has already
+        // returned by then. It comes back out here: a create either lands or
+        // leaves the document as it found it (B14).
+        if (
+          stagedNode !== undefined &&
+          !stagedNode.removed
+        ) {
+          stagedNode.remove()
+        }
         return {
           error:
             err instanceof Error
               ? err.message
               : String(err),
         }
+      } finally {
+        stagedRootSpec = undefined
       }
     }
 
@@ -4039,6 +4241,16 @@ const dispatchCommand = async (
       // I5 — a whole subtree appended into a HUG section is the write that grew
       // one 2026-09-01 DS section 56px into its neighbour.
       const treeRootBefore = rootBoundsOf(treeParent)
+      // B81 — the same staging the single create takes, and for the same
+      // reason. Only the ROOT's append is staged: every deeper node appends
+      // into a parent this call just built, which no instance seals.
+      const stageTree = needsStaging(
+        slotRoute,
+        treeParent as unknown as LandingNode,
+      )
+      const treeBuildParent = stageTree
+        ? (figma.currentPage as unknown as ParentNode)
+        : treeParent
       try {
         // B35: the ROOT's own placement. Every deeper level is reported by the
         // parent that placed it, inside createTreeNode — this sink covers the
@@ -4047,9 +4259,10 @@ const dispatchCommand = async (
         // B86 — ONE sink for the whole tree, so sixteen unstated frames are one
         // line and not sixteen copies of it (the I41 noise rule).
         const treeDefaults: ConstructionDefault[] = []
+        if (stageTree) stagedRootSpec = treeSpec
         const treeResult = await createTreeNode(
           treeSpec,
-          treeParent,
+          treeBuildParent,
           writer,
           treeRefs,
           [],
@@ -4058,6 +4271,15 @@ const dispatchCommand = async (
           rootPlaced,
           treeDefaults,
         )
+        if (stageTree) {
+          landStagedRoot({
+            node: treeResult,
+            spec: treeSpec,
+            parent: treeParent,
+            operation: 'create_tree',
+            warnings: treeWarnings,
+          })
+        }
         const treeInherited =
           constructionDefaultsWarning(treeDefaults)
         if (treeInherited !== undefined) {
@@ -4110,6 +4332,8 @@ const dispatchCommand = async (
                 ')'
               : message,
         }
+      } finally {
+        stagedRootSpec = undefined
       }
     }
 
