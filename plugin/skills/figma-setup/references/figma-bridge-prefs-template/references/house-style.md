@@ -36,9 +36,11 @@ floor.
 - Every text-bearing master carries a min/max width contract.
 - Text measure cap: 420 px at 14 px body (scale with the ramp).
 - Breakpoint widths: 390 / 768 / 1200 / 1440 (edit to taste).
-- **A bar that runs out of room collapses its lesser trailing actions into one `⋯` overflow
-  menu** — never overhang, never clip, **never wrap taller**; a bar stays one line, and the most
-  important control and the identity mark survive longest.
+- **A bar shows only its essentials plus one `⋯` overflow menu — at every width.** Figma cannot
+  switch a bar's look by width (no container queries, no automatic variant switching), so the
+  collapse is not an event: the lesser actions live in the `⋯` menu always. Never overhang,
+  never clip, **never wrap taller**; a bar stays one line; the most important control and the
+  identity mark stay outside the menu.
 
 ## Concrete values
 
