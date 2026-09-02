@@ -1708,6 +1708,12 @@ export const createMockPlugin = (
               name: pageName,
               isCurrent: true,
               childCount: 3,
+              // I84 — a page carries its own note, and the SERVER caps it into
+              // `contextSummary`. Modelled here because the census note this
+              // exists for lives on a page, and `search` never returns a PAGE
+              // row for it.
+              context:
+                '---\nmasters: 43\n---\n\nThe census body, which a list read must not carry.',
             },
           ],
         }

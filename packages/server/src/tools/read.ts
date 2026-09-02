@@ -392,6 +392,8 @@ export const handleListPages = async (
         name: string
         isCurrent: boolean
         childCount: number
+        /** The page's own agent-authored note, when it has one (I84). */
+        context?: string
       }[]
     } | null
     if (raw === null) {
@@ -401,10 +403,26 @@ export const handleListPages = async (
       )
     }
 
+    // I84 — the page's own note, as the CAPPED summary a bounded reader
+    // carries (self-describing-nodes.md). The DS census note lives on a PAGE
+    // node and `search` never returns a PAGE row — 0 of 1533 on the 2026-09-02
+    // artifact, on both scopes — so a reviewer had to reconstruct that note
+    // from the operator's transcript to score the census reconciliation at all.
+    // `list_pages` is the read that already returns a row per page, so the
+    // summary rides there. The RAW note never does: `get_node` on the page id
+    // is where it is read in full.
+    const rows = (raw.results ?? []).map(page => {
+      const { context, ...rest } = page
+      const summary = contextSummaryOf(context)
+      return summary === undefined
+        ? rest
+        : { ...rest, contextSummary: summary }
+    })
+
     // T10 — bound the AGENT-CONTEXT: slice the page list to one page.
     let bounded
     try {
-      bounded = paginateList(raw.results ?? [], {
+      bounded = paginateList(rows, {
         limit,
         cursor,
       })

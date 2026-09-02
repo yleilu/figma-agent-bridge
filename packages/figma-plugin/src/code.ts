@@ -3058,14 +3058,23 @@ const dispatchCommand = async (
     case COMMANDS.LIST_PAGES:
       return {
         docName: figma.root.name,
-        results: figma.root.children.map(page => ({
-          id: page.id,
-          name: page.name,
-          isCurrent: page.id === figma.currentPage.id,
-          childCount: page.children
-            ? page.children.length
-            : 0,
-        })),
+        results: figma.root.children.map(page => {
+          // I84 — the page's own note travels with the row. `search` never
+          // returns a PAGE row (0 of 1533, both scopes, 2026-09-02), so a note
+          // written on the design-system page was reachable only by knowing
+          // its id in advance. The SERVER caps it into `contextSummary`; the
+          // raw note stays a `get_node` read.
+          const context = readContext(page)
+          return {
+            id: page.id,
+            name: page.name,
+            isCurrent: page.id === figma.currentPage.id,
+            childCount: page.children
+              ? page.children.length
+              : 0,
+            ...(context !== undefined ? { context } : {}),
+          }
+        }),
       }
 
     case COMMANDS.EXPORT: {
