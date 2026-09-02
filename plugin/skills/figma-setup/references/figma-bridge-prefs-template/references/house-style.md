@@ -37,8 +37,8 @@ floor.
 - Text measure cap: 420 px at 14 px body (scale with the ramp).
 - Breakpoint widths: 390 / 768 / 1200 / 1440 (edit to taste).
 - **A bar that runs out of room collapses its lesser trailing actions into one `⋯` overflow
-  menu** — never overhang, never clip; the most important control and the identity mark survive
-  longest.
+  menu** — never overhang, never clip, **never wrap taller**; a bar stays one line, and the most
+  important control and the identity mark survive longest.
 
 ## Concrete values
 
