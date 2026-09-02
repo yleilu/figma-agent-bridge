@@ -99,6 +99,10 @@ import {
   type ModeLike,
 } from './variable-modes'
 import {
+  emptySlotSizing,
+  placeholderHugMessage,
+} from './slot-placeholder'
+import {
   readSlotEntry,
   slotParentRefusal,
   type SlotEntry,
@@ -4652,6 +4656,9 @@ const dispatchCommand = async (
         | undefined
       const slotsCreated: string[] = []
       const slotsSkipped: string[] = []
+      // B92 — the slots that stated no size and therefore hug. Collected across
+      // the loop and declared ONCE: N slots taking one default is one fact.
+      const slotsHugged: string[] = []
       if (slotEntries && slotEntries.length > 0) {
         const slotNames = slotEntries.map(
           e => readSlotEntry(e).name,
@@ -4753,9 +4760,8 @@ const dispatchCommand = async (
                   }
                 }
               }
+              const slotNode = slot as unknown as SceneNode
               if (spec) {
-                const slotNode =
-                  slot as unknown as SceneNode
                 try {
                   await applyCommonProperties(
                     slotNode,
@@ -4801,12 +4807,31 @@ const dispatchCommand = async (
                   ...capabilityWarnings(slotNode, spec),
                 )
               }
+              // B92 — LAST, and only into a silence. `createSlot()` hands back
+              // a 100×100 FIXED node, and an EMPTY slot at that size consumes
+              // real layout space: 22 of 26 slots on the 2026-09-03 artifact
+              // sat at the placeholder, six masters overflowed their own box
+              // by it, and sixteen more published a resting height of exactly
+              // 100 that no author ever asked for. An entry that stated a size
+              // or a sizing owns its box and is left alone.
+              const hug = emptySlotSizing(spec)
+              if (hug !== undefined) {
+                applySizing(
+                  slotNode as FrameNode,
+                  hug,
+                  slotWarnings,
+                )
+                slotsHugged.push(name)
+              }
               for (const w of slotWarnings) {
                 ucWarnings.push('slot "' + name + '": ' + w)
               }
             }
           }
         }
+      }
+      if (slotsHugged.length > 0) {
+        ucWarnings.push(placeholderHugMessage(slotsHugged))
       }
       // update_component's `properties` projection (WRITE) — shares
       // projectComponentDefs with get_components (READ) so each added property's
