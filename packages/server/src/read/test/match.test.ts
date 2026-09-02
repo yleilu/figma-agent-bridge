@@ -125,6 +125,29 @@ describe('buildMatcher', () => {
         match(frame({ styleIds: ['S:9', 'S:8'] })),
       ).toBe(false)
     })
+
+    // B85 — a style reference reaches the matcher in two spellings now. A LIVE
+    // row carries the Plugin API's `fillStyleId`, which is `S:<key>,` — an
+    // `S:` prefix and a trailing comma. An EXPORT-served row carries what
+    // JSON_REST_V1 put under `styles`, and the two need not agree on the
+    // decoration. The KEY is what identifies the style, so the comparison is
+    // made on the key.
+    it('matches across the two spellings of one style reference', () => {
+      const match = buildMatcher({ styleId: 'S:60f91cd0,' })
+      expect(match(frame({ styleId: '60f91cd0' }))).toBe(
+        true,
+      )
+      expect(match(frame({ styleIds: ['60f91cd0'] }))).toBe(
+        true,
+      )
+      const bare = buildMatcher({ styleId: '60f91cd0' })
+      expect(bare(frame({ styleId: 'S:60f91cd0,' }))).toBe(
+        true,
+      )
+      expect(bare(frame({ styleId: 'S:60f91cd1,' }))).toBe(
+        false,
+      )
+    })
   })
 
   describe('variableId', () => {

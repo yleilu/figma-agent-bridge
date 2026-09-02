@@ -3783,6 +3783,10 @@ const dispatchCommand = async (
           characters: collectCharacters,
           variableIds: collectVariableId,
           componentRef: collectComponentRef,
+          // B85 — the export names each node's own style references, so a
+          // repaired row can answer `match:{styleId}` instead of reading like
+          // a node that carries no style.
+          styleIds: collectStyleId,
         },
         // B56 — a repaired INSTANCE names its main by id; `match:{instancesOf}`
         // matches on the NAME. A main component is a plain, top-level node, so

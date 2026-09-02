@@ -55,6 +55,8 @@ export type CandidateHints = {
   variableIds?: boolean
   /** B56 — carry each INSTANCE's main component id out for resolution. */
   componentRef?: boolean
+  /** B85 — carry the export's own per-node style references out. */
+  styleIds?: boolean
 }
 
 /**
@@ -197,6 +199,37 @@ const sizeOf = (
   return undefined
 }
 
+/**
+ * Every style reference an EXPORTED node carries, deduped (B85).
+ *
+ * JSON_REST_V1 puts them on the node as `styles: {fill, stroke, effect, grid,
+ * text}`. The field names are Figma's, not ours, so this reads whatever the
+ * map holds rather than naming five keys — a runtime that adds a sixth role
+ * still answers a census on it.
+ *
+ * Only strings. A `styles` entry that is not one describes nothing a matcher
+ * can test, and a fabricated reference is worse than an absent one (B26).
+ */
+export const styleIdsInExport = (n: RawNode): string[] => {
+  const styles = n.styles
+  if (
+    styles === null ||
+    styles === undefined ||
+    typeof styles !== 'object'
+  ) {
+    return []
+  }
+  const ids = new Set<string>()
+  for (const value of Object.values(
+    styles as Record<string, unknown>,
+  )) {
+    if (typeof value === 'string' && value !== '') {
+      ids.add(value)
+    }
+  }
+  return [...ids]
+}
+
 /** One exported node as a candidate, or undefined when it has no id. */
 export const candidateFromExport = (
   n: RawNode,
@@ -217,6 +250,19 @@ export const candidateFromExport = (
     const ids = variableIdsInExport(n)
     if (ids.length > 0) {
       candidate.variableIds = ids
+    }
+  }
+  // B85 — the node's own style references, off the export. JSON_REST_V1 names
+  // them per node under `styles` (`{fill, stroke, effect, grid, text}` → a
+  // style reference), which is the one live-only key of the four that the
+  // export can in fact answer. Without it a style census taken from `search`
+  // read `results: 1` where three nodes carried `Glow/Accent` and `results: 0`
+  // on a page whose designated carrier renders it — every miss a node served
+  // from a repaired subtree.
+  if (hints.styleIds === true) {
+    const ids = styleIdsInExport(n)
+    if (ids.length > 0) {
+      candidate.styleIds = ids
     }
   }
   // B56 — the instance's main component, by id. JSON_REST_V1 names it on every
@@ -435,6 +481,7 @@ const LIVE_ONLY_KEYS = [
 const liveOnlyKeysOf = (
   c: Candidate,
   refsResolvable: boolean,
+  stylesResolvable: boolean,
 ): string[] =>
   LIVE_ONLY_KEYS.filter(
     k =>
@@ -442,7 +489,13 @@ const liveOnlyKeysOf = (
       !(
         refsResolvable &&
         (k === 'componentKey' || k === 'instancesOf')
-      ),
+      ) &&
+      // B85 — `styleIds` stops counting as lost once the export names style
+      // references in this subtree: the row's export twin carries its own, so
+      // `match:{styleId}` finds the node under the id the file uses. An export
+      // that names none anywhere cannot answer for the key, and then the count
+      // must keep saying so.
+      !(stylesResolvable && k === 'styleIds'),
   )
 
 /**
@@ -491,6 +544,13 @@ export const repairScan = async ({
    */
   const refsResolvable = (): boolean =>
     componentRefOf !== undefined || exportRefs.size > 0
+  /**
+   * Whether an export-served row in this repair can answer
+   * `match:{styleId}` (B85) — i.e. some host's export actually named a style
+   * reference. Read at the point of use, like `refsResolvable`: it becomes
+   * true as hosts are exported.
+   */
+  let exportNamedStyles = false
   const covered = new Set<number>()
   const superseded = new Set<number>()
   /** Rows whose live-only keys rode over to their export twin (B85). */
@@ -555,6 +615,9 @@ export const repairScan = async ({
     // nothing back — and silence the failures too, since `covered` is what
     // decides that. Leave the scan exactly as it was.
     if (fromExport.length === 0) continue
+    if (fromExport.some(c => c.styleIds !== undefined)) {
+      exportNamedStyles = true
+    }
 
     const exportRoot =
       typeof fromExport[0].id === 'string'
@@ -606,7 +669,11 @@ export const repairScan = async ({
         liveIds.delete(liveId)
         const lost = carried.has(i)
           ? []
-          : liveOnlyKeysOf(liveRow, refsResolvable())
+          : liveOnlyKeysOf(
+              liveRow,
+              refsResolvable(),
+              exportNamedStyles,
+            )
         if (lost.length > 0) {
           traded.push(
             'search: repaired the subtree at ' +
