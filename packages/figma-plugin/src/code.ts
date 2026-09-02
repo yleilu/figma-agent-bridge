@@ -149,6 +149,12 @@ import {
 import { projectComponentDefs } from './project-component-defs'
 import { rollbackCreated } from './rollback'
 import {
+  nodeAt,
+  slotContentClonedMessage,
+  slotContentNotClonedMessage,
+  slotFillPlan,
+} from './clone-slots'
+import {
   propertiesNotAppliedMessage,
   propertiesNotLanded,
   resolveInstanceProps,
@@ -5664,6 +5670,7 @@ const dispatchCommand = async (
         id: string
         name: string
         type: string
+        warnings?: string[]
       }[] = []
       for (let i = 0; i < count; i++) {
         const clone = src.clone()
@@ -5673,10 +5680,58 @@ const dispatchCommand = async (
           dest.appendChild(clone)
         }
         writeScope.claim(writer, clone)
+        // B88 — Figma does not carry SLOT content onto a clone, so a clone of
+        // a filled card renders an empty one. The plan is a DIFFERENCE: on a
+        // runtime that does carry it, nothing is missing and nothing is
+        // appended. Guarded per node — a slot that will not take its content
+        // costs that content and is named, never the clone.
+        let carried = 0
+        let lost = 0
+        for (const fill of slotFillPlan(
+          src as unknown as LiveNode,
+          clone as unknown as LiveNode,
+        )) {
+          const slot = nodeAt(
+            clone as unknown as LiveNode,
+            fill.path,
+          ) as unknown as ParentNode | undefined
+          for (const missing of fill.missing) {
+            try {
+              if (
+                slot === undefined ||
+                !('appendChild' in slot)
+              ) {
+                throw new Error('no slot to append to')
+              }
+              slot.appendChild(
+                (
+                  missing as unknown as SceneNode
+                ).clone() as SceneNode,
+              )
+              carried += 1
+            } catch {
+              lost += 1
+            }
+          }
+        }
+        const cloneWarnings: string[] = []
+        if (carried > 0) {
+          cloneWarnings.push(
+            slotContentClonedMessage(carried),
+          )
+        }
+        if (lost > 0) {
+          cloneWarnings.push(
+            slotContentNotClonedMessage(lost),
+          )
+        }
         clones.push({
           id: clone.id,
           name: clone.name,
           type: clone.type,
+          ...(cloneWarnings.length > 0
+            ? { warnings: cloneWarnings }
+            : {}),
         })
       }
       return clones

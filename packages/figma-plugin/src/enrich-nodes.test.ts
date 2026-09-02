@@ -949,6 +949,40 @@ describe('collectPatches — one bad node costs one node (B31)', () => {
     expect(message).toContain('refused to list its children')
   })
 
+  it('an enrichment that throws OUTRIGHT never costs the document (B88)', async () => {
+    // B88's second aspect: a depth-2 read of a clone answered
+    // `PLUGIN_ERROR: cannot read property 'indexOf' of undefined` and returned
+    // NOTHING, while the export that describes the clone had already been
+    // produced. The enrichment is an addition to a document, so its failure
+    // may cost the additions and must never cost the document.
+    //
+    // MODELED: the throw is Figma's, from inside an API the enrichment calls,
+    // and no fake can reproduce which one. What is modeled is the SHAPE — an
+    // unguarded throw escaping the pass — because that shape is what turned a
+    // complete export into no answer at all.
+    const doc = { id: 'root', type: 'FRAME', name: 'root' }
+    const exploding = {
+      ...deps(),
+      get mixed(): symbol {
+        throw new TypeError(
+          "cannot read property 'indexOf' of undefined",
+        )
+      },
+    }
+    await enrichDocument(
+      node({ id: 'root', type: 'FRAME' }),
+      doc,
+      2,
+      exploding as unknown as ReturnType<typeof deps>,
+    )
+    expect(doc).toMatchObject({ id: 'root' })
+    expect(
+      (doc as Record<string, unknown>).readErrors,
+    ).toEqual([
+      "root: the read could not be enriched — TypeError: cannot read property 'indexOf' of undefined. This row is the file’s own export, without the fields only a live read can supply.",
+    ])
+  })
+
   it('a get_children failure that is NOT the slot signature keeps Figma’s words', async () => {
     // A node deleted mid-read is a different fact, and Figma's own sentence is
     // the most specific thing anyone has about it.

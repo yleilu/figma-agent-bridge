@@ -991,9 +991,36 @@ export const enrichDocument = async (
   depth: number,
   deps: EnrichDeps,
 ): Promise<void> => {
-  applyPatches(
-    doc,
-    await collectPatches(root, doc, depth, deps),
-    depth,
-  )
+  try {
+    applyPatches(
+      doc,
+      await collectPatches(root, doc, depth, deps),
+      depth,
+    )
+  } catch (err) {
+    // B88 — THE ENRICHMENT IS AN ADDITION TO A DOCUMENT, SO ITS FAILURE MAY
+    // COST THE ADDITIONS AND MUST NEVER COST THE DOCUMENT. Every node's own
+    // collection is already guarded (T7); what is guarded here is the pass
+    // itself, against a throw from inside a Figma API this walk calls that no
+    // per-node guard is in front of.
+    //
+    // Live, 2026-09-02: a depth-2 read of a clone answered `PLUGIN_ERROR:
+    // cannot read property 'indexOf' of undefined` and returned nothing at
+    // all, while the export that describes that clone had already been
+    // produced and was sitting in `doc`. A read that HAS an answer must not
+    // reply with a stack trace.
+    const existing = doc.readErrors
+    const failure =
+      'the read could not be enriched — ' +
+      (err instanceof Error ? String(err) : String(err)) +
+      '. This row is the file’s own export, without the fields only a live ' +
+      'read can supply.'
+    const line =
+      (typeof doc.id === 'string' ? doc.id : '(root)') +
+      ': ' +
+      failure
+    doc.readErrors = Array.isArray(existing)
+      ? [...existing, line]
+      : [line]
+  }
 }
