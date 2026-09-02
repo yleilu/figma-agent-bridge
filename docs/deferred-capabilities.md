@@ -52,6 +52,16 @@ Surfaced 2026-06-27 during the comprehensive live tool sweep + per-issue spec re
 | ---------- | ------------------------- | -------------- | ------------------------ |
 | **TEXT_PATH** (text on a path) | `figma.createTextPath(vector, startSegment, startPosition) → TextPathNode` (typings `^1.132.0`) | **Writer DEFERRED — M11 ship-gate failed live (2026-07-18):** `createTextPath` works + creates a TEXT_PATH, but `get_node` cannot recover the source-vector ref — `TextPathNode.vectorNodeId`/`startSegment`/`startPosition` are NOT exposed at runtime (and the node has no readable `vectorPaths`), so the write is write-only → deferred per T2 (never ship a write-only tool). Text content DOES read back; existing TEXT_PATH nodes still read type+text. ⚠️ **The claimed preserved branch does not exist.** `feat/m11-textpath` has ZERO commits not in `dev` and its tip is an unrelated M12 merge — verified 2026-08-05. History shows `a454c7f` adding `createTextPath` and `b28b93d` removing it again; nothing was kept. Building this means writing it fresh. ⚠️ **Also fails this file's first test** — the maintainer's stated reason for deferring is that it is too small to be worth building, which is *not* "we will ship it, blocked". Kept here pending a decision to drop it. **Re-verified 2026-08-05:** the branch still exists and is unmerged; `packages/` carries only comments explaining the absence. ⚠️ **The blocker may have moved.** The 2026-07-18 finding was against typings 1.123.0; in **1.132.0 `TextPathNode` declares `vectorPaths` AND `vectorNetwork` as readable**, so the node's GEOMETRY can be read back after all. Still absent: `vectorNodeId`/`startSegment`/`startPosition` — they exist only as `createTextPath` parameters — so which vector it was built from, and where along it, remain unrecoverable. A shape round-trip may now be possible where a construction round-trip is not. **Probe live before deciding** — typings and runtime disagreed on `PatternPaint` this same week. | Re-enable when the runtime surfaces the source-path ref on `TextPathNode` (then finish the export enrichment + merge `feat/m11-textpath`). |
 
+- **Fixed position on scroll** — Figma's `numberOfFixedChildren` (the prototype-time
+  "fix position when scrolling" flag on a scrolling frame's first N children) has no NodeSpec
+  field, so a bar that must stay pinned at the top cannot be authored, read, or scored. A
+  fixture states the design intent nowhere; the prefs carry it as house taste. → **I93**
+  (2026-09-03).
+- **Text truncation** — `textTruncation` / `maxLines` are absent from the text struct, so a
+  one-line text that ellipsizes when its FILL box shrinks cannot be built, read, or scored; the
+  standard responsive answer for a long title beside actions is unbuildable through the bridge.
+  → **I92** (2026-09-03).
+
 ### Blocked on an account we do not have
 
 - **Team-library component sourcing — cannot be verified.** `team-library-registry.md` specs

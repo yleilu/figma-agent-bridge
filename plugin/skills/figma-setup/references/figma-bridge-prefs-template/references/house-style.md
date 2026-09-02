@@ -36,11 +36,17 @@ floor.
 - Every text-bearing master carries a min/max width contract.
 - Text measure cap: 420 px at 14 px body (scale with the ramp).
 - Breakpoint widths: 390 / 768 / 1200 / 1440 (edit to taste).
-- **A bar shows only its essentials plus one `⋯` overflow menu — at every width.** Figma cannot
-  switch a bar's look by width (no container queries, no automatic variant switching), so the
-  collapse is not an event: the lesser actions live in the `⋯` menu always. Never overhang,
-  never clip, **never wrap taller**; a bar stays one line; the most important control and the
-  identity mark stay outside the menu.
+- **A bar that has lesser actions shows only its essentials plus one `⋯` overflow menu — at
+  every width.** Figma cannot switch a bar's look by width (no container queries, no automatic
+  variant switching), so the collapse is not an event: the lesser actions live in the `⋯` menu
+  always. Never overhang, never clip, **never wrap taller**; a bar stays one line; the most
+  important control and the identity mark stay outside the menu. **A bar with no lesser actions
+  carries no `⋯`.**
+- **A page title lives in the page** — a page header block at the top of the body, free to
+  wrap. The top bar holds header items only (identity, account, network state) and is pinned
+  to the top on scroll.
+- **A two-column row splits by fraction** (`1fr 2fr`, the narrower third to the text), never
+  by measuring content — content length is unknown.
 
 ## Concrete values
 
