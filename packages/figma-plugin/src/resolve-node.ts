@@ -37,6 +37,7 @@
 // without a Figma runtime.
 
 import {
+  descendByChain,
   idOf,
   indexByCanonicalId,
   liveChildren,
@@ -61,25 +62,54 @@ export const leadingInstanceId = (
 }
 
 /**
- * The node in `root`'s subtree whose LIVE id is `id`, or undefined.
+ * Every node in `root`'s subtree whose LIVE id is `id`, SHALLOWEST FIRST.
+ *
+ * BREADTH-FIRST, and that is the whole point (B93). The walk used to run off a
+ * stack, which descends the LAST child's subtree before the first child — so on
+ * a repeated id it answered with a node at an arbitrary depth. An instance of X
+ * placed inside a SLOT of another instance of X shares every local id with its
+ * host, so the repeat is not hypothetical: the page enumerated the nested
+ * copy's chain in the host's place, and `clone_node` on the host answered with
+ * the nested copy's clone. With two DIFFERENT components none of it happens,
+ * which is what made it invisible until a two-arm discriminator ran.
+ *
+ * `limit` stops the walk early: a caller that only needs to know whether the id
+ * is AMBIGUOUS asks for two.
  *
  * Every read is guarded (`idOf`, `liveChildren`): one stale handle inside the
  * subtree must not cost the search for a healthy node beside it.
  */
+export const findLiveMatches = (
+  root: LiveNode,
+  id: string,
+  limit = Number.POSITIVE_INFINITY,
+): LiveNode[] => {
+  const found: LiveNode[] = []
+  const queue: LiveNode[] = [root]
+  for (let i = 0; i < queue.length; i++) {
+    const node = queue[i]
+    if (idOf(node) === id) {
+      found.push(node)
+      if (found.length >= limit) return found
+    }
+    for (const child of liveChildren(node)) {
+      queue.push(child)
+    }
+  }
+  return found
+}
+
+/**
+ * The node in `root`'s subtree whose LIVE id is `id`, or undefined.
+ *
+ * The SHALLOWEST one when more than one answers — the same rule
+ * `indexByCanonicalId` states, and the one a caller means. A caller that has to
+ * KNOW there were two asks `findLiveMatches`.
+ */
 export const findLiveById = (
   root: LiveNode,
   id: string,
-): LiveNode | undefined => {
-  const stack: LiveNode[] = [root]
-  while (stack.length > 0) {
-    const node = stack.pop() as LiveNode
-    if (idOf(node) === id) return node
-    for (const child of liveChildren(node)) {
-      stack.push(child)
-    }
-  }
-  return undefined
-}
+): LiveNode | undefined => findLiveMatches(root, id, 1)[0]
 
 /**
  * How many INSTANCES one dispatch may export.
@@ -289,8 +319,136 @@ export const isAliasHandle = (node: LiveNode): boolean => {
   const id = idOf(node)
   if (id === undefined) return false
   if (leadingInstanceId(id) !== undefined) return false
-  return outerInstanceOf(node) !== undefined
+  const outer = outerInstanceOf(node)
+  if (outer === undefined) return false
+  // B93 — an ancestor answering THIS NODE'S OWN id is an id collision, not an
+  // alias. Same-component nesting produces one: an instance of X inside a slot
+  // of another instance of X shares every local id with its host, and the gate
+  // then refused a write with "its leading instance 581:100 is content inside
+  // INSTANCE 581:100" — an accusation about a node against itself. An unknown
+  // must never be reported as a finding, which is this predicate's own stated
+  // law; the ambiguity is refused on its own terms by `shadowedByAncestor`.
+  return outer !== id
 }
+
+/**
+ * Whether some ANCESTOR of `node` answers the same id `node` does (B93).
+ *
+ * Two nodes answering one plain id is not a shape this surface can address its
+ * way out of: `figma.getNodeByIdAsync` returns one of them and there is no
+ * parameter that says which. It IS a shape this surface can SEE, from either
+ * node, by walking up — and seeing it is enough, because a write that cannot
+ * say which of two nodes it lands on must not be made.
+ *
+ * Live: `clone_node` on the host answered with the nested copy's clone.
+ *
+ * Guarded and bounded at every hop, like every other ancestor walk here.
+ */
+export const shadowedByAncestor = (
+  node: LiveNode,
+): boolean => {
+  const id = idOf(node)
+  if (id === undefined) return false
+  let current: LiveNode = node
+  for (let hop = 0; hop < MAX_ANCESTOR_HOPS; hop++) {
+    let parent: unknown
+    try {
+      parent = (current as { parent?: unknown }).parent
+    } catch {
+      return false
+    }
+    if (typeof parent !== 'object' || parent === null) {
+      return false
+    }
+    const p = parent as LiveNode
+    if (idOf(p) === id) return true
+    current = p
+  }
+  return false
+}
+
+/**
+ * Whether a handle is no longer part of the document (B94).
+ *
+ * Not a shape test and not an ancestry test — a direct question, and the only
+ * one this class answers honestly. Figma RE-MINTS a node on the way into an
+ * instance slot: a new node appears under the instance's chain and the handle
+ * that went in is DROPPED. That handle keeps answering `id`, `name` and `type`,
+ * so `update_node` on the id a staged create had just answered came back
+ * `{id, name, warnings:[]}` and reached nothing. A phantom write, law 2.
+ *
+ * Two signals, either of which is conclusive:
+ *
+ *   `removed === true`   Figma's own answer for a node that is gone.
+ *   `parent === null`    a scene node with no parent is not in any page. NULL,
+ *                        never a THROW — a `.parent` that throws is the B81
+ *                        class, which must NOT be refused up front (it cost 48
+ *                        refused writes and bent a build's topology), and this
+ *                        deliberately does not look at it.
+ *
+ * A PAGE and the DOCUMENT legitimately have no parent, so they are exempt.
+ */
+export const detachedFromDocument = (
+  node: LiveNode,
+): boolean => {
+  try {
+    if ((node as { removed?: unknown }).removed === true) {
+      return true
+    }
+  } catch {
+    return false
+  }
+  let type: unknown
+  try {
+    type = (node as { type?: unknown }).type
+  } catch {
+    return false
+  }
+  if (type === 'PAGE' || type === 'DOCUMENT') return false
+  try {
+    return (
+      (node as { parent?: unknown }).parent === null &&
+      'parent' in node
+    )
+  } catch {
+    // The B81 class. Unknown is not a finding.
+    return false
+  }
+}
+
+/**
+ * What a WRITE is told when its handle is no longer in the document (B94).
+ *
+ * Exported so the message has ONE author — the `exportBudgetMessage` rule.
+ */
+export const droppedHandleMessage = (
+  nodeId: string,
+): string =>
+  'Refusing to write to ' +
+  nodeId +
+  ': that id names a node Figma no longer holds. A node MOVED INTO an instance ' +
+  'slot is re-minted — a new node appears under the instance’s own chain and ' +
+  'the original handle is dropped — so an id read before such a move addresses ' +
+  'nothing, and a write to it would be accepted and change nothing anyone can ' +
+  'see. Read the enclosing INSTANCE (get_node, depth:-1) and address the node ' +
+  'by the id that read emits.'
+
+/**
+ * What a WRITE is told when two live nodes answer one id (B93).
+ *
+ * Exported so the message has ONE author — the `exportBudgetMessage` rule.
+ */
+export const ambiguousHandleMessage = (
+  nodeId: string,
+): string =>
+  'Refusing to write to ' +
+  nodeId +
+  ': two nodes in this file answer that id, so no write can say which one it ' +
+  'lands on. This happens when a component is nested inside ITSELF — an ' +
+  'instance placed in a slot of another instance of the same component shares ' +
+  'every local id with its host. Read the enclosing INSTANCE (get_node, ' +
+  'depth:-1) and address the node by the id that read emits, which names its ' +
+  'position in the chain; or make the nested one a different component.'
 
 /**
  * Whether a live handle answers ANYTHING — the only thing a write may be
@@ -518,6 +676,31 @@ export type NodeResolver = {
   exportedNode: (
     nodeId: string,
   ) => Promise<RawNode | undefined>
+  /**
+   * The CANONICAL id the export gives this live handle, or undefined (B89).
+   *
+   * The inverse of `resolve`, and it exists because `search` had the opposite
+   * problem to every other read: it holds the HANDLE and emits whatever id the
+   * handle answers. For slot content that is a pre-append id the rest of the
+   * surface rejects — one reply carried 129 of them, 55 screen nodes came back
+   * unaddressable, and 12 writes were refused against ids `search` had just
+   * handed out. The export is the same oracle the read face uses, and this
+   * resolver already pays for it, so the answer costs one export per INSTANCE
+   * and nothing at all for a second handle under the same one.
+   *
+   * `instanceId` is the OUTERMOST instance the handle sits inside — the caller
+   * already walked for it (`outerInstanceOf`) to know the row was an alias at
+   * all, so it is passed rather than re-derived.
+   *
+   * DEGRADES rather than throws, unlike `resolve`. A budget refusal here means
+   * the row keeps the id it already had and the reply says so; killing a
+   * document-wide scan over an id SHAPE would be a far worse answer than the
+   * shape.
+   */
+  canonicalIdFor: (
+    node: LiveNode,
+    instanceId: string,
+  ) => Promise<string | undefined>
 }
 
 export const createNodeResolver = (
@@ -533,6 +716,14 @@ export const createNodeResolver = (
   let strict = false
   /** Ids handed back through a handle whose ancestry would not read (B81). */
   const provisional: string[] = []
+  /**
+   * instance id → live handle → the canonical id the export gives it (B89).
+   *
+   * Built once per instance from the SAME index `resolve` uses, so the two
+   * directions can never disagree, and memoised because a document scan asks
+   * about hundreds of handles under one instance.
+   */
+  const inverses = new Map<string, Map<LiveNode, string>>()
 
   /**
    * The handle, or a refusal — the write-mode gate (B73/B74/B81).
@@ -556,6 +747,16 @@ export const createNodeResolver = (
     if (!handleAnswers(node)) {
       throw new Error(deadHandleMessage(nodeId))
     }
+    // NO DROPPED-HANDLE PROBE HERE. It was tried and it was wrong, twice over
+    // (live 2026-09-03): it fired on `I586:73508;586:73503;586:73515;586:73507`
+    // — the id `get_node` EMITS for a live Cell after a staged move, i.e. the
+    // id this surface tells the caller to use — and it fired before the create
+    // door's downward walk could run, so not one probe arm reached Figma. What
+    // it was naming is the B81 zombie class (answers id/name/type, refuses
+    // `parent` and `children`), and B81's ruling is that such a handle is
+    // PROVISIONAL, never refused up front: the refusal has to be earned by a
+    // write that did not land. A dropped target is checked where the check can
+    // be earned instead — on the WALKED handle, at the append (slot-landing.ts).
     if (
       !parentAnswers(node) &&
       !provisional.includes(nodeId)
@@ -607,6 +808,7 @@ export const createNodeResolver = (
   return {
     reset: () => {
       indexes.clear()
+      inverses.clear()
       provisional.length = 0
       strict = false
     },
@@ -622,7 +824,25 @@ export const createNodeResolver = (
         // that refusing every such write would break the one route into a slot
         // subtree that works (the reparent-out / write / reparent-back
         // workaround the 2026-08-30 build had to adopt).
-        return deps.getNodeById(nodeId)
+        const plain = await deps.getNodeById(nodeId)
+        // B93 — with ONE exception, and it is not about the id's shape: an
+        // ANCESTOR answering the same id means two nodes answer it, Figma
+        // picked one, and no write can say which. A read still takes what came
+        // back — the wrong one of two identical nodes still describes the
+        // design — but a write that cannot name its target is not made.
+        if (
+          strict &&
+          plain !== null &&
+          shadowedByAncestor(plain)
+        ) {
+          throw new Error(ambiguousHandleMessage(nodeId))
+        }
+        // And no dropped-handle probe here either. The plain id a staged fill
+        // answers is a working ALIAS — live: `update_node(586:73517, name)`
+        // landed on the rendered node and read back — so refusing it would
+        // break the one route into a slot subtree that works, which is the
+        // paragraph above.
+        return plain
       }
       const instance = await deps.getNodeById(instanceId)
       if (instance === null) return null
@@ -639,19 +859,56 @@ export const createNodeResolver = (
           ),
         )
       }
-      // The cheap half first: a master-derived sublayer answers its own
-      // compound id, so one guarded walk finds it and nothing is exported.
-      // Nothing here is budgeted — the walk is free, so a call naming a
-      // thousand ordinary sublayers is unaffected by the cap below.
-      const direct = findLiveById(instance, nodeId)
-      if (direct !== undefined) return vouch(direct, nodeId)
+      // B81 — THE CHAIN DESCENT IS THE PRIMARY PATH, and the trace proved why
+      // (live 2026-09-02T17:40Z). A compound id is a PATH, and the handle a
+      // descent yields for a depth-2 slot lists its children and takes an
+      // `appendChild`, while `getNodeByIdAsync` on the very same composed id
+      // returns a handle that throws on every read. Every "an instance sublayer
+      // cannot be written" refusal this project has ever issued — and the 152
+      // `reparent_node` calls one build paid to route around them — came from
+      // fetching the handle the other way.
+      //
+      // It is also free and unbudgeted, so it costs nothing on the common case
+      // and saves an export on the hard one.
+      const descended = descendByChain(instance, nodeId)
+      if (descended !== undefined) {
+        return vouch(descended.target, nodeId)
+      }
+      // The exact-id walk second: it reaches a master-derived sublayer the
+      // descent may decline (an ambiguous level), and it is equally free.
+      //
+      // B93 — but only when it found ONE. Same-component nesting puts two
+      // handles under one id, and neither walk can tell them apart: they know
+      // ids, and the thing that separates those two nodes is their POSITION IN
+      // THE CHAIN. So an ambiguous id falls through to the export, which is the
+      // only oracle that knows chain position.
+      const direct = findLiveMatches(instance, nodeId, 2)
+      if (direct.length === 1) return vouch(direct[0], nodeId)
       if (overBudget(instanceId)) {
+        if (direct.length > 1) {
+          // Nothing can disambiguate this. A read takes the shallowest, which
+          // is the one a caller means; a write is refused rather than aimed.
+          if (strict) {
+            throw new Error(
+              ambiguousHandleMessage(nodeId),
+            )
+          }
+          return vouch(direct[0], nodeId)
+        }
         throw new Error(
           exportBudgetMessage(nodeId, maxExports),
         )
       }
       const index = await indexFor(instanceId, instance)
-      return vouch(index?.live.get(nodeId) ?? null, nodeId)
+      const paired = index?.live.get(nodeId)
+      if (paired !== undefined) return vouch(paired, nodeId)
+      if (direct.length > 1) {
+        if (strict) {
+          throw new Error(ambiguousHandleMessage(nodeId))
+        }
+        return vouch(direct[0], nodeId)
+      }
+      return vouch(null, nodeId)
     },
     exportedNode: async (nodeId: string) => {
       const instanceId = leadingInstanceId(nodeId)
@@ -663,6 +920,27 @@ export const createNodeResolver = (
       }
       const index = await indexFor(instanceId)
       return index?.exported.get(nodeId)
+    },
+    canonicalIdFor: async (
+      node: LiveNode,
+      instanceId: string,
+    ) => {
+      const cached = inverses.get(instanceId)
+      if (cached !== undefined) return cached.get(node)
+      // No throw. A scan holds the row already; the honest degrade is to keep
+      // the id the handle answers and let the reply name the disagreement.
+      if (overBudget(instanceId)) return undefined
+      const index = await indexFor(instanceId)
+      if (index === undefined) return undefined
+      const inverse = new Map<LiveNode, string>()
+      // FIRST wins, the same rule `indexByCanonicalId` states: the map is built
+      // pre-order, so the first id a handle appears under is the shallowest,
+      // which is the one a caller means.
+      for (const [id, live] of index.live) {
+        if (!inverse.has(live)) inverse.set(live, id)
+      }
+      inverses.set(instanceId, inverse)
+      return inverse.get(node)
     },
   }
 }

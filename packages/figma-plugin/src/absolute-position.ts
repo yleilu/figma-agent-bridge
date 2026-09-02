@@ -30,10 +30,179 @@
 // Structural (`Record<string, unknown>`), so it is testable without a Figma
 // runtime.
 
+// ─── THE SECOND DOOR (B87 reopened, 2026-09-03) ────────────────────────────
+//
+// The create-door fix held: no recurrence through `create_tree`. The naive
+// operator hit the same shape through `update_node` instead — an ABSOLUTE child
+// of an auto-layout parent, writing `position:[0,0]`, reading back `[0,-40]`;
+// writing `[0,40]`, reading back `[0,0]`. A constant offset of exactly one node
+// height, deterministic, with `warnings: []`. It cost a real chart defect (the
+// treasury `Month ticks` row) and the operator wrote every ABSOLUTE child with
+// a compensating height offset for the rest of the build.
+//
+// SAME FAMILY, DIFFERENT ARITHMETIC, AND THE DIFFERENCE DOES NOT MATTER. The
+// create door's cause is known exactly (a provisional box plus a CENTER
+// constraint); the update door's is not, and pinning it would mean
+// re-implementing a rule only Figma owns. What both doors need is the same
+// thing this surface already does for `size` (B46/B67) and for `vectorPaths`
+// (B79): write the stated value, READ IT BACK, and either correct by the
+// measured drift or say what did not land. A rule re-derived here would break
+// on the next Figma release; a measurement cannot.
+//
+// So the write is PROVEN rather than reasoned about, and the compensation is
+// measured relatively — which is exactly the arithmetic that lets one
+// implementation serve the create door and the update door alike.
+
+/** As much of a node as proving a position touches. */
+export type PositionTarget = Record<string, unknown>
+
 /** A child the tree created, with the spec that asked for it. */
 export type PlacedChild = {
   node: Record<string, unknown>
   spec: Record<string, unknown>
+}
+
+/** A stated `[x, y]`, or undefined for anything that is not one. */
+const statedPair = (
+  value: unknown,
+): [number, number] | undefined => {
+  if (!Array.isArray(value) || value.length < 2) {
+    return undefined
+  }
+  const [x, y] = value as unknown[]
+  return typeof x === 'number' && typeof y === 'number'
+    ? [x, y]
+    : undefined
+}
+
+/** A node's `[x, y]`, or undefined when it will not say. */
+const positionOf = (
+  node: PositionTarget,
+): [number, number] | undefined => {
+  try {
+    const { x, y } = node as { x?: unknown; y?: unknown }
+    return typeof x === 'number' && typeof y === 'number'
+      ? [x, y]
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+const pair = (p: readonly number[]): string =>
+  '[' + p[0] + ', ' + p[1] + ']'
+
+/**
+ * What a caller is told when a stated position did not land.
+ *
+ * Exported so the message has ONE author — the `exportBudgetMessage` rule
+ * (resolve-node.ts).
+ */
+export const positionMismatchWarning = (
+  nodeId: unknown,
+  stated: readonly number[],
+  reads: readonly number[],
+): string =>
+  'position not applied on ' +
+  (typeof nodeId === 'string' ? nodeId : '(unnamed node)') +
+  ': asked ' +
+  pair(stated) +
+  ', reads ' +
+  pair(reads) +
+  '. Figma re-maps an ABSOLUTE child’s position through its own constraints, ' +
+  'against the box the write left behind, and this one did not settle on the ' +
+  'stated value even after the offset was compensated. Set constraints:' +
+  '[\'MIN\',\'MIN\'] to pin it, or state the position the parent’s final box ' +
+  'expects.'
+
+/**
+ * Write a stated `[x, y]` and PROVE it, or name what did not land.
+ *
+ * Three outcomes, and no fourth:
+ *
+ *   it already reads the stated value  — nothing is written. Assignment is
+ *                                        where this campaign's surprises live
+ *                                        (B68's opacity reset, B79's path walk,
+ *                                        B69's FIXED freeze), so an untouched
+ *                                        node stays untouched.
+ *   it drifted                         — the drift is MEASURED and written off
+ *                                        against a second assignment. One
+ *                                        correction, never a chase: a value
+ *                                        that will not settle in two writes is
+ *                                        a refusal, not an offset.
+ *   it will not settle                 — the caller is told, with the ask and
+ *                                        the read-back in the sentence.
+ *
+ * A refusal is named rather than thrown, for the same reason
+ * `restoreAbsolutePositions` names one: the node exists and the patch has
+ * landed, and losing a whole update over one coordinate is a worse answer than
+ * a placed node with a line about it.
+ */
+export const applyStatedPosition = (
+  node: PositionTarget,
+  stated: unknown,
+  warnings?: string[],
+): boolean => {
+  const want = statedPair(stated)
+  if (want === undefined) return false
+  const before = positionOf(node)
+  if (
+    before !== undefined &&
+    before[0] === want[0] &&
+    before[1] === want[1]
+  ) {
+    return false
+  }
+  const write = (x: number, y: number): boolean => {
+    try {
+      node.x = x
+      node.y = y
+      return true
+    } catch (err) {
+      warnings?.push(
+        'position ' +
+          pair(want) +
+          ' rejected by Figma on ' +
+          String(node.id) +
+          ': ' +
+          (err instanceof Error ? err.message : String(err)),
+      )
+      return false
+    }
+  }
+  if (!write(want[0], want[1])) return false
+  const landed = positionOf(node)
+  if (landed === undefined) {
+    // A node that will not state its own origin cannot be judged, and an
+    // unverifiable outcome is not a failure — it is unverifiable. Saying
+    // nothing here is the honest answer: the write was made and nothing
+    // contradicts it.
+    return true
+  }
+  if (landed[0] === want[0] && landed[1] === want[1]) {
+    return true
+  }
+  // The drift, measured rather than derived. Written off relatively, so the
+  // same arithmetic serves a node standing anywhere.
+  if (
+    !write(
+      want[0] - (landed[0] - want[0]),
+      want[1] - (landed[1] - want[1]),
+    )
+  ) {
+    return true
+  }
+  const settled = positionOf(node)
+  if (
+    settled === undefined ||
+    (settled[0] === want[0] && settled[1] === want[1])
+  ) {
+    return true
+  }
+  warnings?.push(
+    positionMismatchWarning(node.id, want, landed),
+  )
+  return true
 }
 
 /** The stated `[x, y]` of an ABSOLUTE child, or undefined for anything else. */
@@ -70,25 +239,11 @@ export const restoreAbsolutePositions = (
   for (const { node, spec } of children) {
     const stated = absolutePositionOf(spec)
     if (stated === undefined) continue
-    const [x, y] = stated
-    try {
-      if (node.x === x && node.y === y) continue
-      node.x = x
-      node.y = y
+    // ONE author for the behaviour, since B87's second door (below): the create
+    // door and the update door prove a stated position exactly the same way, so
+    // neither can quietly stop doing it while the other keeps its tests green.
+    if (applyStatedPosition(node, stated, warnings)) {
       moved.push(String(node.id))
-    } catch (err) {
-      warnings?.push(
-        'position [' +
-          x +
-          ', ' +
-          y +
-          '] could not be restored on the ABSOLUTE child ' +
-          String(node.id) +
-          ' after its parent resized: ' +
-          (err instanceof Error
-            ? err.message
-            : String(err)),
-      )
     }
   }
   return moved

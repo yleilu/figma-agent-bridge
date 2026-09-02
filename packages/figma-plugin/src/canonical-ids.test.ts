@@ -327,4 +327,39 @@ describe('indexByCanonicalId — addressing the paired tree', () => {
     expect(index.live.get('305:8880')?.id).toBe('305:8880')
     expect(index.exported.size).toBe(0)
   })
+
+  // B93 — an instance of X inside a SLOT of another instance of X shares every
+  // local id with its host. Two chain positions, one live id; and a pairing
+  // that let ONE handle answer for TWO canonical ids sent a write, a clone and
+  // a page enumeration to the wrong one of a pair nothing else can tell apart.
+  it('binds each live handle to ONE canonical id — the shallowest', () => {
+    // The live tree presents ONE handle at TWO chain positions — which is what
+    // "the pairing collapses them" means, and why `clone_node` on the host
+    // answered with the nested copy's clone. The export knows the two
+    // positions apart; without the guard the deeper id resolved to the same
+    // handle as the shallower one, so a write aimed at one landed on the other.
+    const shared = live('581:100')
+    const index = indexByCanonicalId(
+      {
+        id: '581:1',
+        children: [shared, { id: '300:3', children: [shared] }],
+      },
+      exported('581:1', [
+        exported('I581:1;581:100'),
+        exported('I581:1;300:3', [
+          exported('I581:1;300:3;581:150'),
+        ]),
+      ]),
+      -1,
+    )
+    const bound = [...index.live.entries()].filter(
+      ([, node]) => node === shared,
+    )
+    expect(bound).toHaveLength(1)
+    expect(bound[0][0]).toBe('I581:1;581:100')
+    // …and the deeper address does NOT resolve to the shallower node.
+    expect(
+      index.live.get('I581:1;300:3;581:150'),
+    ).toBeUndefined()
+  })
 })

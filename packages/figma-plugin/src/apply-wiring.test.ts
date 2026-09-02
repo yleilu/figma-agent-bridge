@@ -229,8 +229,10 @@ describe('min/max clamp wiring (B59)', () => {
     expect(postAppendApply).toContain('applyMinMax(')
     // …and that applier only ever runs after the append.
     expect(buildSingle.length).toBeGreaterThan(200)
+    // The append goes through the slot-route seam since B81 — same append,
+    // one place that can choose which route Figma is asked through.
     const theAppend = buildSingle.indexOf(
-      'parent.appendChild(node)',
+      'appendThroughRoute(parent, node',
     )
     expect(theAppend).toBeGreaterThan(0)
     expect(

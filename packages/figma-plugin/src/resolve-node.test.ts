@@ -18,13 +18,17 @@
 // per B53's `305:8853` vs `…;305:8854`).
 
 import { describe, expect, it } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   aliasAddressMessage,
   createNodeResolver,
   declareDegradedRead,
   deadHandleMessage,
+  detachedFromDocument,
   exportBudgetMessage,
   findLiveById,
+  findLiveMatches,
   handleAnswers,
   isAliasHandle,
   leadingInstanceId,
@@ -36,7 +40,11 @@ import {
   slicedReadMessage,
   staleHandleThrow,
 } from './resolve-node'
-import type { LiveNode, RawNode } from './canonical-ids'
+import {
+  idOf as idOfNode,
+  type LiveNode,
+  type RawNode,
+} from './canonical-ids'
 
 /**
  * A handle Figma composed from a stale parent id: every NODE read throws.
@@ -204,6 +212,599 @@ describe('findLiveById', () => {
         'I305:8637;305:8427;305:8881',
       ),
     ).toBeUndefined()
+  })
+})
+
+// B89 — `search` handed out the id the LIVE HANDLE answers, and for slot
+// content that is a pre-append id the rest of the surface rejects. One reply
+// carried 129 of them; 55 screen nodes came back under an id `get_node` will
+// not accept (`block/kpi-card` is `581:58274` in search and
+// `I581:58099;…;581:58287` in get_node), and the write side refused 12 writes
+// to ids search itself had just emitted. The warning was excellent and the
+// defect was that a sibling tool rejected the answer. The oracle that can fix
+// it is the one the read face already holds: the export names every node
+// canonically, and this resolver already pays for that export.
+describe('createNodeResolver — canonicalIdFor (B89)', () => {
+  it('names an alias handle the way the FILE names it', async () => {
+    const { resolver, root } = harness()
+    // `Plot` is slot-override content: it answers its pre-append `305:8880`
+    // while the export calls it `I305:8637;305:8427;305:8881`.
+    const plot = findLiveById(root, '305:8880') as LiveNode
+    expect(
+      await resolver.canonicalIdFor(plot, '305:8637'),
+    ).toBe('I305:8637;305:8427;305:8881')
+  })
+
+  it('pays for ONE export however many handles it is asked about', async () => {
+    const { resolver, root, calls } = harness()
+    for (const id of ['305:8880', '305:8882', '305:8896']) {
+      const node = findLiveById(root, id) as LiveNode
+      expect(
+        await resolver.canonicalIdFor(node, '305:8637'),
+      ).toBeDefined()
+    }
+    expect(calls.exportOf).toBe(1)
+  })
+
+  it('answers undefined for a handle the export does not describe', async () => {
+    const { resolver } = harness()
+    expect(
+      await resolver.canonicalIdFor(
+        { id: '999:1' },
+        '305:8637',
+      ),
+    ).toBeUndefined()
+  })
+
+  it('DEGRADES on the budget rather than throwing — a scan must not die of it', async () => {
+    // `resolve` throws on the budget, because a caller that cannot tell a
+    // refusal from a miss would report a node as missing. A search row is the
+    // opposite case: the row is already in hand, and the worst honest answer is
+    // to keep the alias id and say so.
+    const root = liveTree()
+    const resolver = createNodeResolver({
+      getNodeById: async () => root,
+      exportOf: async () => exportedTree(),
+      maxExports: 0,
+    })
+    const plot = findLiveById(root, '305:8880') as LiveNode
+    expect(
+      await resolver.canonicalIdFor(plot, '305:8637'),
+    ).toBeUndefined()
+  })
+
+  it('answers undefined when the instance cannot export itself', async () => {
+    const { resolver, root } = harness({ exportFails: true })
+    const plot = findLiveById(root, '305:8880') as LiveNode
+    expect(
+      await resolver.canonicalIdFor(plot, '305:8637'),
+    ).toBeUndefined()
+  })
+})
+
+// B93 — SAME-COMPONENT NESTING. An instance of X placed inside a SLOT of
+// another instance of X shares every local id with its host, and the pairing
+// collapsed them: the page enumerated the inner instance's canonical chain in
+// the outer's place, the alias gate blamed the outer instance as "content
+// inside" the inner, and `clone_node` on the outer answered with the INNER's
+// clone. With two DIFFERENT components none of it happens — live-verified,
+// both arms, 2026-09-03.
+//
+// The fake models the collision itself, because the collision IS the bug: two
+// live handles in one subtree answering one id. A fixture with distinct ids
+// cannot see any of this, which is exactly why the two-arm discriminator was
+// needed to find it.
+
+/** Host and nested copy of ONE component, sharing every local id. */
+const sameComponentNest = () => {
+  const innerLabel: LiveNode = {
+    id: 'I581:100;300:2',
+    name: 'Label',
+    type: 'TEXT',
+  }
+  const innerSlot: LiveNode = {
+    id: 'I581:100;300:3',
+    name: 'Body',
+    type: 'SLOT',
+    children: [],
+  }
+  const inner: LiveNode = {
+    id: '581:100',
+    name: 'Card',
+    type: 'INSTANCE',
+    children: [innerLabel, innerSlot],
+  }
+  const outerLabel: LiveNode = {
+    id: 'I581:100;300:2',
+    name: 'Label',
+    type: 'TEXT',
+  }
+  const outerSlot: LiveNode = {
+    id: 'I581:100;300:3',
+    name: 'Body',
+    type: 'SLOT',
+    children: [inner],
+  }
+  const outer: LiveNode = {
+    id: '581:100',
+    name: 'Card',
+    type: 'INSTANCE',
+    children: [outerLabel, outerSlot],
+  }
+  innerLabel.parent = inner
+  innerSlot.parent = inner
+  inner.parent = outerSlot
+  outerLabel.parent = outer
+  outerSlot.parent = outer
+  return {
+    outer,
+    outerLabel,
+    outerSlot,
+    inner,
+    innerLabel,
+    innerSlot,
+  }
+}
+
+/** What the EXPORT calls the same tree: one id per chain position. */
+const sameComponentExport = (): RawNode => ({
+  id: '581:100',
+  name: 'Card',
+  children: [
+    { id: 'I581:100;300:2', name: 'Label' },
+    {
+      id: 'I581:100;300:3',
+      name: 'Body',
+      children: [
+        {
+          id: 'I581:100;300:3;581:150',
+          name: 'Card',
+          children: [
+            {
+              id: 'I581:100;300:3;581:150;300:2',
+              name: 'Label',
+            },
+            {
+              id: 'I581:100;300:3;581:150;300:3',
+              name: 'Body',
+            },
+          ],
+        },
+      ],
+    },
+  ],
+})
+
+describe('B93 — two handles, one id', () => {
+  it('the walk answers the SHALLOWEST, not whichever the stack reached first', () => {
+    const { outer, outerLabel } = sameComponentNest()
+    // Depth-first off a stack descends the LAST child first, so it used to
+    // reach the nested copy's Label before the host's own.
+    expect(findLiveById(outer, 'I581:100;300:2')).toBe(
+      outerLabel,
+    )
+  })
+
+  it('names every handle that answers, so a caller can be told there were two', () => {
+    const { outer, outerLabel, innerLabel } =
+      sameComponentNest()
+    expect(findLiveMatches(outer, 'I581:100;300:2')).toEqual(
+      [outerLabel, innerLabel],
+    )
+  })
+
+  it('is not confused by a tree whose ids are distinct (the control arm)', () => {
+    const { outer } = sameComponentNest()
+    expect(
+      findLiveMatches(outer, 'I581:100;300:3'),
+    ).toHaveLength(2)
+    expect(
+      findLiveMatches(outer, 'I999:1;300:2'),
+    ).toEqual([])
+  })
+
+  it('lets the EXPORT settle an ambiguous id — it is the only oracle that knows chain position', async () => {
+    const { outer, innerLabel } = sameComponentNest()
+    const resolver = createNodeResolver({
+      getNodeById: async id =>
+        id === '581:100' ? outer : null,
+      exportOf: async () => sameComponentExport(),
+    })
+    // The inner Label, addressed the way a read emits it. The live walk cannot
+    // tell it from the host's own Label; the export can.
+    expect(
+      await resolver.resolve(
+        'I581:100;300:3;581:150;300:2',
+      ),
+    ).toBe(innerLabel)
+  })
+
+  it('the CHAIN DESCENT settles it: the host’s own child, not the nested copy’s', async () => {
+    // B81 made the descent primary, and it disambiguates for free: descending
+    // one level from the host reaches the host’s own Label and never sees
+    // the nested copy’s. Chain position is exactly what separates them, so
+    // the refusal below is now only for what the descent cannot reach.
+    const { outer, outerLabel } = sameComponentNest()
+    const resolver = createNodeResolver({
+      getNodeById: async id =>
+        id === '581:100' ? outer : null,
+      exportOf: async () => undefined,
+    })
+    resolver.setStrict(true)
+    expect(await resolver.resolve('I581:100;300:2')).toBe(
+      outerLabel,
+    )
+  })
+
+  it('a WRITE through an id only the ambiguous WALK can reach is still refused', async () => {
+    // The gate now guards exactly what the chain declines. This id's FINAL
+    // segment matches nothing along the path, so the descent stands down — and
+    // two handles elsewhere in the subtree answer it, which is the collision.
+    const { outer, inner, innerSlot } = sameComponentNest()
+    const twinId = 'I581:100;300:3;300:2'
+    ;(inner.children as LiveNode[]).push({
+      id: twinId,
+      name: 'Twin',
+    })
+    ;(innerSlot.children as LiveNode[]).push({
+      id: twinId,
+      name: 'Twin',
+    })
+    const resolver = createNodeResolver({
+      getNodeById: async id =>
+        id === '581:100' ? outer : null,
+      exportOf: async () => undefined,
+    })
+    resolver.setStrict(true)
+    await expect(resolver.resolve(twinId)).rejects.toThrow(
+      'two nodes',
+    )
+  })
+
+  it('a READ of that same id takes the shallowest and does not throw', async () => {
+    const { outer, inner, innerSlot } = sameComponentNest()
+    const twinId = 'I581:100;300:3;300:2'
+    const shallow = { id: twinId, name: 'Twin' }
+    // `inner` sits one level above `innerSlot`, so this is the shallower twin.
+    ;(inner.children as LiveNode[]).push(shallow)
+    ;(innerSlot.children as LiveNode[]).push({
+      id: twinId,
+      name: 'Twin',
+    })
+    const resolver = createNodeResolver({
+      getNodeById: async () => outer,
+      exportOf: async () => undefined,
+    })
+    expect(await resolver.resolve(twinId)).toBe(shallow)
+  })
+
+  it('does not call a node an ALIAS because an ancestor answers its own id', () => {
+    // The alias finding is "this node is content that kept a pre-append id
+    // inside some instance". A host answering the SAME id as the node is an id
+    // collision, and an unknown must never be reported as a finding — that is
+    // how the gate came to blame the outer instance for being content inside
+    // the inner.
+    const { inner } = sameComponentNest()
+    expect(isAliasHandle(inner)).toBe(false)
+  })
+
+  it('a WRITE to a plain id an ancestor also answers is refused, not silently aimed', async () => {
+    // `clone_node` on the outer answered with the INNER's clone: one plain id,
+    // two nodes, and Figma picked. A refusal naming the collision is the only
+    // honest answer — the surface never acks a write onto a node nobody meant.
+    const { inner } = sameComponentNest()
+    const resolver = createNodeResolver({
+      getNodeById: async () => inner,
+      exportOf: async () => undefined,
+    })
+    resolver.setStrict(true)
+    await expect(resolver.resolve('581:100')).rejects.toThrow(
+      'two nodes',
+    )
+  })
+
+  it('a READ of that same plain id still answers (reads are unaffected)', async () => {
+    const { inner } = sameComponentNest()
+    const resolver = createNodeResolver({
+      getNodeById: async () => inner,
+      exportOf: async () => undefined,
+    })
+    expect(await resolver.resolve('581:100')).toBe(inner)
+  })
+
+  it('leaves an ordinary plain id alone in write mode (the control arm)', async () => {
+    const plain: LiveNode = { id: '1:2', type: 'FRAME' }
+    const resolver = createNodeResolver({
+      getNodeById: async () => plain,
+      exportOf: async () => undefined,
+    })
+    resolver.setStrict(true)
+    expect(await resolver.resolve('1:2')).toBe(plain)
+  })
+})
+
+// B94 — Figma RE-MINTS a node on the way into an instance slot: a new node
+// appears under the instance's chain and the handle that went in is DROPPED.
+// The dropped handle keeps answering id, name and type, so `update_node` on the
+// id a staged create had just answered came back `{id, name, warnings:[]}` and
+// reached nothing. A phantom write, live 2026-09-03.
+// B94 — a dropped-handle WRITE GATE was tried here and it was wrong. Live
+// 2026-09-03, twice over:
+//
+//   it refused `I586:73508;586:73503;586:73515;586:73507` — the id `get_node`
+//   EMITS for a live Cell after a staged move, i.e. the id this surface tells
+//   the caller to use. After a staged fill a sublayer of the filled instance
+//   then had NO id that writes: the alias refuses (rightly, B74) and the
+//   canonical refused too.
+//
+//   it refused before the create door's downward walk could run, so all four
+//   probe arms made no Figma call at all.
+//
+//   and the plain alias it was meant to catch WRITES: `update_node(586:73517,
+//   name)` landed on the rendered node and read back.
+//
+// What it was naming is the B81 zombie class — answers id/name/type, refuses
+// `parent` and `children` — and B81's ruling is that such a handle is
+// PROVISIONAL, never refused up front. The refusal has to be EARNED by a write
+// that did not land. The predicate survives for the one place the check can be
+// earned: the append target in slot-landing.ts.
+describe('B94 — the refusal is earned, not probed', () => {
+  /** The zombie: answers its identity, refuses its ancestry and its children. */
+  const zombie = (id: string): LiveNode =>
+    new Proxy({} as LiveNode, {
+      get: (_t, prop) => {
+        if (prop === 'id') return id
+        if (prop === 'name') return 'Value'
+        if (prop === 'type') return 'TEXT'
+        if (typeof prop === 'symbol' || prop === 'then') {
+          return undefined
+        }
+        throw new Error(
+          'in get_' +
+            String(prop) +
+            ': The node (instance sublayer or table cell) with id "' +
+            id +
+            '" does not exist',
+        )
+      },
+      has: () => true,
+    })
+
+  it('a WRITE to the canonical id of a zombie-handled node is NOT refused up front', async () => {
+    // The exact id the read face emits after a staged move. Refusing it left
+    // the node with no writable id at all.
+    const id = 'I586:73508;586:73503;586:73522;581:57949'
+    const host: LiveNode = {
+      id: '586:73508',
+      type: 'INSTANCE',
+      children: [zombie(id)],
+    }
+    const resolver = createNodeResolver({
+      getNodeById: async () => host,
+      exportOf: async () => undefined,
+    })
+    resolver.setStrict(true)
+    const handle = await resolver.resolve(id)
+    expect(idOfNode(handle)).toBe(id)
+  })
+
+  it('a WRITE to the plain alias a staged fill answers is NOT refused — it lands live', async () => {
+    const alias: LiveNode = {
+      id: '586:73517',
+      name: 'fill',
+      type: 'FRAME',
+      parent: null,
+    }
+    const resolver = createNodeResolver({
+      getNodeById: async () => alias,
+      exportOf: async () => undefined,
+    })
+    resolver.setStrict(true)
+    expect(await resolver.resolve('586:73517')).toBe(alias)
+  })
+
+  it('still identifies a genuinely dropped handle, for the append site to use', () => {
+    expect(
+      detachedFromDocument({
+        id: '585:73437',
+        type: 'FRAME',
+        removed: true,
+      }),
+    ).toBe(true)
+  })
+
+  it('never calls the B81 zombie dropped — an unknown is not a finding', () => {
+    expect(
+      detachedFromDocument(zombie('I1:2;3:4')),
+    ).toBe(false)
+  })
+
+  it('never accuses a PAGE, which legitimately has no parent', () => {
+    expect(
+      detachedFromDocument({
+        id: '0:1',
+        type: 'PAGE',
+        parent: null,
+      }),
+    ).toBe(false)
+  })
+})
+
+// B81 CLOSED — the trace answered it (live 2026-09-02T17:40Z, target Cell
+// `I587:73529;587:73525;587:73534;587:73528`):
+//
+//   leading instance 587:73529: answered, type INSTANCE
+//   level 1 … matched by id; children listed: 1
+//   level 2 … matched by id; children listed: 2
+//   level 3 … matched by id; children listed: 1
+//   the walk REACHED the target.
+//     direct:        NO THROW. landed child = 588:73539
+//     insert-child:  NO THROW. landed child = 588:73542
+//     inner-handle:  NO THROW. landed child = 588:73544
+//     slot-property: THREW — in setProperties: Slot component property values
+//                    cannot be edited
+//
+// THE HANDLE OBTAINED BY WALKING DOWN IS HEALTHY, and a plain `appendChild` on
+// it lands into a depth-2 slot. The zombie is only ever what
+// `getNodeByIdAsync` returns for the COMPOSED id. So the reparent tax was an
+// artifact of this resolver, not a Figma limit — 152 calls in one build, for a
+// handle we were fetching the wrong way.
+//
+// The descent is therefore the PRIMARY path for a compound id, on reads and
+// writes alike, and the composed-id lookup is only the fallback.
+describe('B81 — the descent is the primary path for a compound id', () => {
+  /**
+   * The live shape, exactly as the trace found it.
+   *
+   * A3 answers its own plain id. Under it a staged chip answers a RE-MINTED
+   * local segment, so the caller's composed id matches no live id anywhere —
+   * the exact-id walk misses it, and only a segment-wise descent reaches it.
+   * Its Value child is HEALTHY: it lists, it answers its type, it takes writes.
+   */
+  const stagedChipFile = () => {
+    const value: LiveNode = {
+      id: 'I587:73540;581:57949',
+      name: 'Value',
+      type: 'TEXT',
+      children: [],
+    }
+    const chip: LiveNode = {
+      // Figma re-minted the local segment on the way into the slot.
+      id: 'I587:73529;587:73525;587:73540',
+      name: 'Chip',
+      type: 'INSTANCE',
+      children: [value],
+    }
+    const body: LiveNode = {
+      id: 'I587:73529;587:73525',
+      name: 'Body',
+      type: 'SLOT',
+      children: [chip],
+    }
+    const a3: LiveNode = {
+      id: '587:73529',
+      name: 'Card',
+      type: 'INSTANCE',
+      children: [body],
+    }
+    return { a3, body, chip, value }
+  }
+
+  /** The id the read face emits, carrying the PRE-mint segment 587:73538. */
+  const VALUE_ID =
+    'I587:73529;587:73525;587:73538;581:57949'
+
+  /** What the export pairs that id with: a handle that answers nothing. */
+  const zombieExport = () => ({
+    id: '587:73529',
+    children: [
+      {
+        id: 'I587:73529;587:73525',
+        children: [
+          {
+            id: 'I587:73529;587:73525;587:73538',
+            children: [{ id: VALUE_ID }],
+          },
+        ],
+      },
+    ],
+  })
+
+  it('reaches a healthy sublayer the composed-id lookup cannot', async () => {
+    const { a3, value } = stagedChipFile()
+    const resolver = createNodeResolver({
+      getNodeById: async id =>
+        id === '587:73529' ? a3 : null,
+      exportOf: async () => zombieExport(),
+    })
+    resolver.setStrict(true)
+    // This is the write that had no id: a sublayer of a staged instance.
+    expect(await resolver.resolve(VALUE_ID)).toBe(value)
+  })
+
+  it('costs NO export when the descent reaches — the walk is free', async () => {
+    const { a3 } = stagedChipFile()
+    let exports = 0
+    const resolver = createNodeResolver({
+      getNodeById: async id =>
+        id === '587:73529' ? a3 : null,
+      exportOf: async () => {
+        exports += 1
+        return zombieExport()
+      },
+    })
+    expect(await resolver.resolve(VALUE_ID)).toBeDefined()
+    expect(exports).toBe(0)
+  })
+
+  it('serves a READ the same way — one path, both contracts', async () => {
+    const { a3, value } = stagedChipFile()
+    const resolver = createNodeResolver({
+      getNodeById: async () => a3,
+      exportOf: async () => zombieExport(),
+    })
+    expect(await resolver.resolve(VALUE_ID)).toBe(value)
+  })
+
+  it('falls back to the EXPORT when the descent cannot reach', async () => {
+    const { a3, body } = stagedChipFile()
+    let exports = 0
+    const resolver = createNodeResolver({
+      getNodeById: async () => a3,
+      exportOf: async () => {
+        exports += 1
+        return {
+          id: '587:73529',
+          children: [{ id: 'I587:73529;404:1' }],
+        }
+      },
+    })
+    // Nothing under A3 answers `404:1` by prefix or by local segment, and the
+    // only-child arm is never allowed to satisfy a FINAL segment, so the
+    // descent declines and the pairing answers — which is the point: the
+    // descent ADDS reach, it does not take the export away.
+    expect(
+      await resolver.resolve('I587:73529;404:1'),
+    ).toBe(body)
+    expect(exports).toBe(1)
+  })
+})
+
+// `code.ts` cannot be imported outside Figma — the house source-scan pattern,
+// with its own liveness assertion so an empty scan cannot look like a pass.
+describe('B89 — search actually renames its alias rows', () => {
+  const searchArm = (() => {
+    const src = readFileSync(
+      join(import.meta.dir, 'code.ts'),
+      'utf8',
+    )
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '')
+    return src.slice(
+      src.indexOf('case COMMANDS.SEARCH:'),
+      src.indexOf('case COMMANDS.CREATE_NODE:'),
+    )
+  })()
+
+  it('read the search arm (liveness)', () => {
+    expect(searchArm).toContain('isAliasHandle(')
+    expect(searchArm.length).toBeGreaterThan(1000)
+  })
+
+  it('asks the export for the canonical id of an alias row', () => {
+    expect(searchArm).toContain('nodeResolver.canonicalIdFor(')
+    expect(searchArm).toContain('outerInstanceOf(')
+  })
+
+  it('corrects the SCAN’s id too, so the repair pass keeps the live row', () => {
+    // The repair compares a row's id against the export's own ids to decide
+    // whether the export supersedes it. A renamed row that still carried its
+    // alias in `scanned` would be superseded and come back twice.
+    expect(searchArm).toContain('scanned[index].id = canonical')
+  })
+
+  it('warns only about what it could NOT rename', () => {
+    expect(searchArm).toContain('are still pre-append ids')
   })
 })
 
