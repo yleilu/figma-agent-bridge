@@ -45,6 +45,7 @@ import {
   applyExportSettings,
   applyGrids,
   capabilityWarnings,
+  deadWrapWarning,
   discardedPositionsWarning,
   patchPositionIgnored,
   type PlacedTarget,
@@ -1046,6 +1047,16 @@ const applyCommonProperties = async (
       spec.layout as AppliedLayout,
       warnings,
     )
+    // I86 — a wrap nothing bounds. `applySizing` runs the same check after the
+    // sizing lands, which is the moment that decides it; this covers the call
+    // that states a layout and no sizing, where that moment never comes. The
+    // two conditions are disjoint, so the warning is never said twice.
+    if (spec.sizing === undefined) {
+      const deadWrap = deadWrapWarning(node)
+      if (deadWrap !== undefined) {
+        warnings?.push(deadWrap)
+      }
+    }
   }
 
   // The four auto-layout size clamps are NOT applied here (B59). Figma judges
