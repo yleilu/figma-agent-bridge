@@ -103,6 +103,11 @@ import {
   placeholderHugMessage,
 } from './slot-placeholder'
 import {
+  renameOnSwap,
+  swapRenameMessage,
+  type MainDescriptor,
+} from './instance-name'
+import {
   readSlotEntry,
   slotParentRefusal,
   type SlotEntry,
@@ -2834,6 +2839,32 @@ const landStagedRoot = ({
 }
 
 /**
+ * A main component as a derived instance name is built from it (I91).
+ *
+ * Guarded on every read: this runs on a handle that may already be gone (the
+ * OLD main of a swap), and a name that cannot be read is answered as "no
+ * descriptor", which `renameOnSwap` treats as "leave the name alone".
+ */
+const describeMain = (
+  main: { name?: unknown; parent?: unknown } | null,
+): MainDescriptor | undefined => {
+  if (main === null) return undefined
+  try {
+    const name = main.name
+    if (typeof name !== 'string') return undefined
+    const setName = componentSetOf(
+      main as { name?: unknown; parent?: unknown },
+    )
+    return {
+      name,
+      ...(setName !== undefined ? { setName } : {}),
+    }
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * The box of the PAGE-ROOT frame a write is about to touch (I5).
  *
  * Taken BEFORE the write, and paired with `warnGrownIntoNeighbour` after it.
@@ -4981,6 +5012,15 @@ const dispatchCommand = async (
       }
       const scWarnings: string[] = []
       const inst = scInst as InstanceNode
+      // I91 — read BEFORE the swap. Afterwards the old main is gone from this
+      // instance, and with it the only evidence of whether the layer's name was
+      // derived from it or authored by the caller.
+      const scNameBefore = inst.name
+      const scMainBefore = describeMain(
+        await inst
+          .getMainComponentAsync()
+          .catch(() => null),
+      )
       const scMainId = params.mainComponentId as
         | string
         | undefined
@@ -5053,6 +5093,31 @@ const dispatchCommand = async (
       const swapped = await inst
         .getMainComponentAsync()
         .catch(() => null)
+      // I91 — the layer tree must not name a variant this instance no longer
+      // holds. Six instances on the 2026-09-03 build did, found independently
+      // by two reviewers; text, paint and variantProperties were all correct
+      // and only the name lied. A name the CALLER authored is left exactly as
+      // it is — renameOnSwap answers undefined for anything it cannot derive.
+      const scRenamed = renameOnSwap({
+        before: scNameBefore,
+        from: scMainBefore,
+        to: describeMain(swapped ?? scMain),
+      })
+      if (scRenamed !== undefined) {
+        try {
+          inst.name = scRenamed
+          scWarnings.push(
+            swapRenameMessage(scNameBefore, scRenamed),
+          )
+        } catch (e) {
+          scWarnings.push(
+            'the instance still carries the name "' +
+              scNameBefore +
+              '", which describes the component it no longer holds: ' +
+              String(e),
+          )
+        }
+      }
       return {
         id: inst.id,
         mainComponent: swapped ? swapped.id : scMain.id,
