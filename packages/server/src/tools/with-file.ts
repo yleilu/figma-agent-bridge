@@ -30,6 +30,7 @@ import {
   errorEnvelope,
   type ToolResult,
 } from './shared'
+import { withCollapsedErrors } from './collapse-validation'
 
 /**
  * The params a FILE-ADDRESSED handler actually receives: the schema's inferred
@@ -167,7 +168,7 @@ export const registerFileTool = <S extends ZodRawShape, R>(
   // to the SDK signature, it does not erase that binding.
   server.registerTool(
     name,
-    { inputSchema: schema },
+    { inputSchema: withCollapsedErrors(schema) },
     withFile(
       client,
       handler,
@@ -206,7 +207,7 @@ export const registerSessionTool = <S extends ZodRawShape>(
 ): void => {
   server.registerTool(
     name,
-    { inputSchema: schema },
+    { inputSchema: withCollapsedErrors(schema) },
     handler,
   )
 }

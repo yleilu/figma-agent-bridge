@@ -29,6 +29,7 @@ import {
   textResult,
   type ToolResult,
 } from './shared'
+import { withCollapsedErrors } from './collapse-validation'
 
 export type BufferContext = {
   fileKey: string
@@ -127,7 +128,7 @@ export const registerBufferTool = <
 ): void => {
   server.registerTool(
     name,
-    { inputSchema: schema },
+    { inputSchema: withCollapsedErrors(schema) },
     withBuffer(
       client,
       feed,
