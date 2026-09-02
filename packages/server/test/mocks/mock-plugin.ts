@@ -3354,12 +3354,31 @@ export const createMockPlugin = (
             'combine_variants ignored ' +
               cvDropped.length +
               ' id(s) that are not a COMPONENT: ' +
-              cvDropped.join(', '),
+              cvDropped
+                .map(id => id + ' (INSTANCE)')
+                .join(', '),
           )
         }
         if (cvKept.length < 2) {
+          // I88 — the refusal names the id and its TYPE. A `bad:` id models a
+          // node that resolves and is not a COMPONENT (live: an INSTANCE id
+          // picked out of `create_tree`'s positional `ids` array).
           error =
-            'Need at least 2 components for combine_variants'
+            'combine_variants needs at least 2 COMPONENT ids and found ' +
+            cvKept.length +
+            '.' +
+            (cvDropped.length > 0
+              ? ' ' +
+                cvDropped
+                  .map(
+                    id =>
+                      id +
+                      ' is a INSTANCE, not a COMPONENT',
+                  )
+                  .join('; ') +
+                '.'
+              : '') +
+            ' Pass the id of each component MASTER — `get_components`, or the reply from `create_component`.'
           break
         }
         // Multi-axis nudge: KEPT ids prefixed `noaxis:` model component names

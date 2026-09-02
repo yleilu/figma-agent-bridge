@@ -156,6 +156,10 @@ import {
   slotFillPlan,
 } from './clone-slots'
 import {
+  combineVariantsRefusal,
+  type RejectedId,
+} from './combine-variants'
+import {
   propertiesNotAppliedMessage,
   propertiesNotLanded,
   resolveInstanceProps,
@@ -4594,14 +4598,19 @@ const dispatchCommand = async (
     case COMMANDS.COMBINE_VARIANTS: {
       const cvIds = (params.componentIds as string[]) ?? []
       const cvComps: ComponentNode[] = []
-      const cvDropped: string[] = []
+      // I88 — the TYPE travels with the id. A count error for a type fault
+      // sent the operator to re-count an array that was never wrong.
+      const cvDropped: RejectedId[] = []
       const cvWarnings: string[] = []
       for (const cid of cvIds) {
         const n = await resolveNodeId(cid)
         if (n && n.type === 'COMPONENT') {
           cvComps.push(n as ComponentNode)
         } else {
-          cvDropped.push(cid)
+          cvDropped.push({
+            id: cid,
+            ...(n ? { type: n.type } : {}),
+          })
         }
       }
       if (cvDropped.length > 0) {
@@ -4609,13 +4618,21 @@ const dispatchCommand = async (
           'combine_variants ignored ' +
             cvDropped.length +
             ' id(s) that are not a COMPONENT: ' +
-            cvDropped.join(', '),
+            cvDropped
+              .map(d =>
+                d.type === undefined
+                  ? d.id
+                  : d.id + ' (' + d.type + ')',
+              )
+              .join(', '),
         )
       }
       if (cvComps.length < 2) {
         return {
-          error:
-            'Need at least 2 components for combine_variants',
+          error: combineVariantsRefusal(
+            cvDropped,
+            cvComps.length,
+          ),
         }
       }
       const cvParentNode =
