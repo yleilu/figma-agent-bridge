@@ -153,6 +153,7 @@ import {
   createNodeResolver,
   declareDegradedRead,
   isAliasHandle,
+  outerInstanceOf,
   restatedRefusal,
   servedByAncestorExport,
   slicedReadMessage,
@@ -3973,15 +3974,43 @@ const dispatchCommand = async (
             }
           }
 
-          // B72 — this row's id is an ALIAS: the node answers a pre-append
-          // plain id while sitting inside an INSTANCE, so `search` emits an id
-          // `get_node` does not use for the same node, and every id-join
-          // between the two channels breaks on it (34–35 nodes on the
-          // 2026-08-30 artifact). The row is KEPT — it is a real node and its
-          // live-only keys are worth more than the id shape — and the
-          // disagreement is named once, below, rather than per row.
+          // B72/B89 — this row's id is an ALIAS: the node answers a pre-append
+          // plain id while sitting inside an INSTANCE, so `search` emitted an
+          // id `get_node` does not use for the same node, and every id-join
+          // between the two channels broke on it (34–35 nodes on the
+          // 2026-08-30 artifact; 129 ids and 55 unaddressable screen nodes on
+          // 2026-09-03, plus 12 writes refused against ids search itself had
+          // just handed out).
+          //
+          // B89 — so the row is now NAMED THE WAY THE FILE NAMES IT. The export
+          // is the oracle the read face already uses, and the resolver already
+          // pays for it, so one export per enclosing INSTANCE answers every
+          // alias row under it. `scanned[index].id` is corrected too: the
+          // repair pass downstream compares a row's id against the export's own
+          // ids to decide whether the export supersedes it, and a row that now
+          // agrees with the export is a row it correctly KEEPS — with the
+          // live-only keys an export cannot carry.
+          //
+          // The warning stays for what could not be renamed — a spent export
+          // budget, or a handle the export does not describe. Loud
+          // incompleteness beats quiet incompleteness.
           if (isAliasHandle(fn as unknown as LiveNode)) {
-            aliasIds.push(candidate.id as string)
+            const outerId = outerInstanceOf(
+              fn as unknown as LiveNode,
+            )
+            const canonical =
+              outerId === undefined
+                ? undefined
+                : await nodeResolver.canonicalIdFor(
+                    fn as unknown as LiveNode,
+                    outerId,
+                  )
+            if (canonical === undefined) {
+              aliasIds.push(candidate.id as string)
+            } else {
+              candidate.id = canonical
+              scanned[index].id = canonical
+            }
           }
           candidates[index] = candidate
         } catch (err) {
@@ -4080,12 +4109,16 @@ const dispatchCommand = async (
         skipped.push(
           'search: ' +
             aliasIds.length +
-            ' result id(s) are pre-append ids the file does not use for those ' +
-            'nodes (e.g. ' +
+            ' result id(s) are still pre-append ids the file does not use for ' +
+            'those nodes (e.g. ' +
             aliasIds.slice(0, 3).join(', ') +
-            '). get_node names them by their instance chain instead, so an ' +
-            'id-join between search and a read will miss them. Read the ' +
-            'enclosing INSTANCE to get the canonical id.',
+            '). Every other alias row in this reply was renamed to the id the ' +
+            'file uses; these could not be, because their enclosing INSTANCE ' +
+            'could not be exported (the per-command export budget, or a host ' +
+            'that refuses to describe itself). get_node names them by their ' +
+            'instance chain instead, so an id-join between search and a read ' +
+            'will miss these rows. Read the enclosing INSTANCE to get the ' +
+            'canonical id.',
         )
       }
 

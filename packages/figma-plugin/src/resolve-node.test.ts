@@ -18,6 +18,8 @@
 // per B53's `305:8853` vs `…;305:8854`).
 
 import { describe, expect, it } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   aliasAddressMessage,
   createNodeResolver,
@@ -204,6 +206,111 @@ describe('findLiveById', () => {
         'I305:8637;305:8427;305:8881',
       ),
     ).toBeUndefined()
+  })
+})
+
+// B89 — `search` handed out the id the LIVE HANDLE answers, and for slot
+// content that is a pre-append id the rest of the surface rejects. One reply
+// carried 129 of them; 55 screen nodes came back under an id `get_node` will
+// not accept (`block/kpi-card` is `581:58274` in search and
+// `I581:58099;…;581:58287` in get_node), and the write side refused 12 writes
+// to ids search itself had just emitted. The warning was excellent and the
+// defect was that a sibling tool rejected the answer. The oracle that can fix
+// it is the one the read face already holds: the export names every node
+// canonically, and this resolver already pays for that export.
+describe('createNodeResolver — canonicalIdFor (B89)', () => {
+  it('names an alias handle the way the FILE names it', async () => {
+    const { resolver, root } = harness()
+    // `Plot` is slot-override content: it answers its pre-append `305:8880`
+    // while the export calls it `I305:8637;305:8427;305:8881`.
+    const plot = findLiveById(root, '305:8880') as LiveNode
+    expect(
+      await resolver.canonicalIdFor(plot, '305:8637'),
+    ).toBe('I305:8637;305:8427;305:8881')
+  })
+
+  it('pays for ONE export however many handles it is asked about', async () => {
+    const { resolver, root, calls } = harness()
+    for (const id of ['305:8880', '305:8882', '305:8896']) {
+      const node = findLiveById(root, id) as LiveNode
+      expect(
+        await resolver.canonicalIdFor(node, '305:8637'),
+      ).toBeDefined()
+    }
+    expect(calls.exportOf).toBe(1)
+  })
+
+  it('answers undefined for a handle the export does not describe', async () => {
+    const { resolver } = harness()
+    expect(
+      await resolver.canonicalIdFor(
+        { id: '999:1' },
+        '305:8637',
+      ),
+    ).toBeUndefined()
+  })
+
+  it('DEGRADES on the budget rather than throwing — a scan must not die of it', async () => {
+    // `resolve` throws on the budget, because a caller that cannot tell a
+    // refusal from a miss would report a node as missing. A search row is the
+    // opposite case: the row is already in hand, and the worst honest answer is
+    // to keep the alias id and say so.
+    const root = liveTree()
+    const resolver = createNodeResolver({
+      getNodeById: async () => root,
+      exportOf: async () => exportedTree(),
+      maxExports: 0,
+    })
+    const plot = findLiveById(root, '305:8880') as LiveNode
+    expect(
+      await resolver.canonicalIdFor(plot, '305:8637'),
+    ).toBeUndefined()
+  })
+
+  it('answers undefined when the instance cannot export itself', async () => {
+    const { resolver, root } = harness({ exportFails: true })
+    const plot = findLiveById(root, '305:8880') as LiveNode
+    expect(
+      await resolver.canonicalIdFor(plot, '305:8637'),
+    ).toBeUndefined()
+  })
+})
+
+// `code.ts` cannot be imported outside Figma — the house source-scan pattern,
+// with its own liveness assertion so an empty scan cannot look like a pass.
+describe('B89 — search actually renames its alias rows', () => {
+  const searchArm = (() => {
+    const src = readFileSync(
+      join(import.meta.dir, 'code.ts'),
+      'utf8',
+    )
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '')
+    return src.slice(
+      src.indexOf('case COMMANDS.SEARCH:'),
+      src.indexOf('case COMMANDS.CREATE_NODE:'),
+    )
+  })()
+
+  it('read the search arm (liveness)', () => {
+    expect(searchArm).toContain('isAliasHandle(')
+    expect(searchArm.length).toBeGreaterThan(1000)
+  })
+
+  it('asks the export for the canonical id of an alias row', () => {
+    expect(searchArm).toContain('nodeResolver.canonicalIdFor(')
+    expect(searchArm).toContain('outerInstanceOf(')
+  })
+
+  it('corrects the SCAN’s id too, so the repair pass keeps the live row', () => {
+    // The repair compares a row's id against the export's own ids to decide
+    // whether the export supersedes it. A renamed row that still carried its
+    // alias in `scanned` would be superseded and come back twice.
+    expect(searchArm).toContain('scanned[index].id = canonical')
+  })
+
+  it('warns only about what it could NOT rename', () => {
+    expect(searchArm).toContain('are still pre-append ids')
   })
 })
 

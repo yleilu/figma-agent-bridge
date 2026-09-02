@@ -518,6 +518,31 @@ export type NodeResolver = {
   exportedNode: (
     nodeId: string,
   ) => Promise<RawNode | undefined>
+  /**
+   * The CANONICAL id the export gives this live handle, or undefined (B89).
+   *
+   * The inverse of `resolve`, and it exists because `search` had the opposite
+   * problem to every other read: it holds the HANDLE and emits whatever id the
+   * handle answers. For slot content that is a pre-append id the rest of the
+   * surface rejects — one reply carried 129 of them, 55 screen nodes came back
+   * unaddressable, and 12 writes were refused against ids `search` had just
+   * handed out. The export is the same oracle the read face uses, and this
+   * resolver already pays for it, so the answer costs one export per INSTANCE
+   * and nothing at all for a second handle under the same one.
+   *
+   * `instanceId` is the OUTERMOST instance the handle sits inside — the caller
+   * already walked for it (`outerInstanceOf`) to know the row was an alias at
+   * all, so it is passed rather than re-derived.
+   *
+   * DEGRADES rather than throws, unlike `resolve`. A budget refusal here means
+   * the row keeps the id it already had and the reply says so; killing a
+   * document-wide scan over an id SHAPE would be a far worse answer than the
+   * shape.
+   */
+  canonicalIdFor: (
+    node: LiveNode,
+    instanceId: string,
+  ) => Promise<string | undefined>
 }
 
 export const createNodeResolver = (
@@ -533,6 +558,14 @@ export const createNodeResolver = (
   let strict = false
   /** Ids handed back through a handle whose ancestry would not read (B81). */
   const provisional: string[] = []
+  /**
+   * instance id → live handle → the canonical id the export gives it (B89).
+   *
+   * Built once per instance from the SAME index `resolve` uses, so the two
+   * directions can never disagree, and memoised because a document scan asks
+   * about hundreds of handles under one instance.
+   */
+  const inverses = new Map<string, Map<LiveNode, string>>()
 
   /**
    * The handle, or a refusal — the write-mode gate (B73/B74/B81).
@@ -607,6 +640,7 @@ export const createNodeResolver = (
   return {
     reset: () => {
       indexes.clear()
+      inverses.clear()
       provisional.length = 0
       strict = false
     },
@@ -663,6 +697,27 @@ export const createNodeResolver = (
       }
       const index = await indexFor(instanceId)
       return index?.exported.get(nodeId)
+    },
+    canonicalIdFor: async (
+      node: LiveNode,
+      instanceId: string,
+    ) => {
+      const cached = inverses.get(instanceId)
+      if (cached !== undefined) return cached.get(node)
+      // No throw. A scan holds the row already; the honest degrade is to keep
+      // the id the handle answers and let the reply name the disagreement.
+      if (overBudget(instanceId)) return undefined
+      const index = await indexFor(instanceId)
+      if (index === undefined) return undefined
+      const inverse = new Map<LiveNode, string>()
+      // FIRST wins, the same rule `indexByCanonicalId` states: the map is built
+      // pre-order, so the first id a handle appears under is the shallowest,
+      // which is the one a caller means.
+      for (const [id, live] of index.live) {
+        if (!inverse.has(live)) inverse.set(live, id)
+      }
+      inverses.set(instanceId, inverse)
+      return inverse.get(node)
     },
   }
 }
