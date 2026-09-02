@@ -86,9 +86,14 @@ import {
   DEFAULT_SLOT_ROUTE,
   SLOT_ROUTE_KEY,
   appendVia,
-  landingHost,
+  childIdsOf,
+  descendToTarget,
+  landedChildId,
+  landingHostOf,
   needsStaging,
   readSlotRoute,
+  unverifiedLandingMessage,
+  type LandingChain,
   routeFellBackMessage,
   stagedLandingMessage,
   type LandingNode,
@@ -153,12 +158,17 @@ import {
   createNodeResolver,
   declareDegradedRead,
   isAliasHandle,
+  leadingInstanceId,
   outerInstanceOf,
   restatedRefusal,
   servedByAncestorExport,
   slicedReadMessage,
 } from './resolve-node'
-import type { RawNode } from './canonical-ids'
+import {
+  idOf,
+  liveChildren,
+  type RawNode,
+} from './canonical-ids'
 import {
   assignVectorPaths,
   positionOverOffset,
@@ -2747,21 +2757,61 @@ const appendThroughRoute = (
 ): void => {
   const p = parent as unknown as LandingNode
   const c = child as unknown as LandingNode
+  // B81 — the CHAIN the create door walked, when this is the append it walked
+  // for. Every other append in a build is into a parent this same call just
+  // made, where there is no instance and no chain to have.
+  const where =
+    landingChain !== undefined &&
+    landingChain.target === p
+      ? landingChain
+      : { target: p, chain: [p] }
   if (
     slotRoute === DEFAULT_SLOT_ROUTE ||
     slotRoute === 'direct'
   ) {
-    appendVia('direct', p, c)
+    appendVia('direct', where, c)
     return
   }
   try {
-    appendVia(slotRoute, p, c)
+    appendVia(slotRoute, where, c)
   } catch (err) {
     warnings?.push(
       routeFellBackMessage(slotRoute, messageOf(err)),
     )
-    appendVia('direct', p, c)
+    appendVia('direct', where, c)
   }
+}
+
+/**
+ * The walk from a live ancestor down to this create's append target (B81).
+ *
+ * Set by the create doors, cleared per call. It exists because the arms cannot
+ * be chosen by an UPWARD walk: `sealedInstanceHost` reads `.parent`, and the
+ * handles this whole item is about refuse `.parent` — so every route used to
+ * answer "no instance", staging was skipped, and all five configurations fell
+ * through to one plain append and one refusal. Not one arm ran.
+ */
+let landingChain: LandingChain | undefined
+
+/**
+ * Walk down to the target the caller named, from the nearest LIVE ancestor.
+ *
+ * `I<lead>;…` leads with an instance id that `getNodeByIdAsync` answers, and
+ * the rest of the id is a path through `children` — the one read these handles
+ * do answer. Undefined for a plain id, or when the path leads nowhere; the
+ * caller then uses the handle the resolver gave it, exactly as before.
+ */
+const walkToLandingTarget = async (
+  statedParentId: string | undefined,
+): Promise<LandingChain | undefined> => {
+  if (statedParentId === undefined) return undefined
+  const lead = leadingInstanceId(statedParentId)
+  if (lead === undefined) return undefined
+  const host = (await figma.getNodeByIdAsync(
+    lead,
+  )) as unknown as LandingNode | null
+  if (host === null) return undefined
+  return descendToTarget(host, statedParentId)
 }
 
 /**
@@ -2791,23 +2841,33 @@ const landStagedRoot = ({
   node,
   spec,
   parent,
+  statedParentId,
   operation,
   warnings,
 }: {
   node: SceneNode
   spec: Record<string, unknown>
   parent: ParentNode
+  statedParentId: string
   operation: string
   warnings: string[]
-}): void => {
-  const statedParentId =
-    nodeResolver.provisionalIds()[0] ?? parent.id
+}):
+  | { id: string; name: SceneNode['name']; type: SceneNode['type'] }
+  | undefined => {
+  const where: LandingChain =
+    landingChain !== undefined
+      ? landingChain
+      : {
+          target: parent as unknown as LandingNode,
+          chain: [parent as unknown as LandingNode],
+        }
+  // B94 — read the parent's children BEFORE the move. Figma RE-MINTS a node on
+  // the way into an instance slot: a NEW node appears under the parent's own
+  // chain and the handle that went in is dropped. The only way to name what
+  // landed is to see what appeared.
+  const before = childIdsOf(where.target)
   try {
-    appendVia(
-      'direct',
-      parent as unknown as LandingNode,
-      node as unknown as LandingNode,
-    )
+    appendVia('direct', where, node as unknown as LandingNode)
   } catch (err) {
     throw new Error(
       appendRefusal({
@@ -2819,23 +2879,49 @@ const landStagedRoot = ({
       }),
     )
   }
-  // NOW the parent-dependent fields mean what the caller meant by them.
-  applyPostAppendProperties(node, spec, warnings)
+  const landedId = landedChildId(
+    before,
+    childIdsOf(where.target),
+  )
+  if (landedId === undefined) {
+    // The move happened and the result cannot be named. That is not a failed
+    // write, and it must not be reported as a success either: answering the
+    // staged id is exactly the defect — Figma dropped that handle, and a write
+    // to it is accepted and reaches nothing.
+    return undefined
+  }
+  const landed = liveChildren(where.target).find(
+    child => idOf(child) === landedId,
+  )
+  const finished = (landed ??
+    node) as unknown as SceneNode
+  // NOW the parent-dependent fields mean what the caller meant by them, and
+  // they are written to the node that is actually in the slot.
+  applyPostAppendProperties(finished, spec, warnings)
   verifyCreatedSize(
-    node as unknown as SizeTarget,
+    finished as unknown as SizeTarget,
     spec.size,
     warnings,
     spec.sizing,
   )
-  const host = landingHost(parent as unknown as LandingNode)
+  const host = landingHostOf(
+    where.chain,
+    parent as unknown as LandingNode,
+  )
   if (host !== undefined) {
     warnings.push(
       stagedLandingMessage({
         operation,
         parentId: statedParentId,
-        host,
+        hostName: host.name,
+        hostId: host.id,
       }),
     )
+  }
+  return {
+    id: landedId,
+    name: finished.name,
+    type: finished.type,
   }
 }
 
@@ -4192,13 +4278,27 @@ const dispatchCommand = async (
       // moved in. That is the remedy the refusal has been teaching all along;
       // the tool now pays it, in one call, instead of the caller paying it in
       // three (152 `reparent_node` calls in the 2026-09-03 build).
+      //
+      // The target is reached DOWNWARD, from the live ancestor the caller's id
+      // leads with. The upward walk that used to choose the route reads
+      // `.parent`, which these handles refuse — so it answered "no instance"
+      // for exactly the targets that need this most, and every route fell
+      // through to one plain append.
+      const statedParentId =
+        (params.parentId as string | undefined) ?? parent.id
+      landingChain = await walkToLandingTarget(
+        params.parentId as string | undefined,
+      )
+      const landingParent = (landingChain?.target ??
+        parent) as unknown as ParentNode
       const stageCreate = needsStaging(
         slotRoute,
-        parent as unknown as LandingNode,
+        params.parentId as string | undefined,
+        landingParent as unknown as LandingNode,
       )
       const createParent = stageCreate
         ? (figma.currentPage as unknown as ParentNode)
-        : parent
+        : landingParent
       let stagedNode: SceneNode | undefined
       try {
         // B35: one node, so the sink can only ever hold one entry — and
@@ -4214,15 +4314,32 @@ const dispatchCommand = async (
           placed,
           { defaults },
         )
+        let answer = {
+          id: created.id,
+          name: created.name,
+          type: created.type,
+        }
         if (stageCreate) {
           stagedNode = created
-          landStagedRoot({
+          const landed = landStagedRoot({
             node: created,
             spec,
-            parent,
+            parent: landingParent,
+            statedParentId,
             operation: 'create_node',
             warnings,
           })
+          // B94 — the move happened and nothing can name what landed. The
+          // staged id is NOT an acceptable answer: Figma dropped that handle,
+          // and `update_node` on it acked `{id, name, warnings:[]}` while
+          // reaching nothing.
+          if (landed === undefined) {
+            return {
+              error:
+                unverifiedLandingMessage(statedParentId),
+            }
+          }
+          answer = landed
         }
         const inheritedNote =
           constructionDefaultsWarning(defaults)
@@ -4230,19 +4347,18 @@ const dispatchCommand = async (
           warnings.push(inheritedNote)
         }
         const discarded = discardedPositionsWarning(
-          parent,
+          landingParent,
           placed,
         )
         if (discarded !== undefined) {
           warnings.push(discarded)
         }
-        warnGrownIntoNeighbour(parent, rootBefore, warnings)
-        return {
-          id: created.id,
-          name: created.name,
-          type: created.type,
+        warnGrownIntoNeighbour(
+          landingParent,
+          rootBefore,
           warnings,
-        }
+        )
+        return { ...answer, warnings }
       } catch (err) {
         // T7: a blocked append (e.g. into a non-SLOT instance descendant)
         // returns a clear structured error, not a raw uncaught exception.
@@ -4253,11 +4369,17 @@ const dispatchCommand = async (
         // the move is refused, and `createSingleNode`'s own guard has already
         // returned by then. It comes back out here: a create either lands or
         // leaves the document as it found it (B14).
-        if (
-          stagedNode !== undefined &&
-          !stagedNode.removed
-        ) {
-          stagedNode.remove()
+        // Guarded twice: a re-minted staged node is already dropped, and a
+        // dropped handle can throw on `.removed` as readily as on anything else.
+        try {
+          if (
+            stagedNode !== undefined &&
+            !stagedNode.removed
+          ) {
+            stagedNode.remove()
+          }
+        } catch {
+          // Nothing to clean up that we can still reach.
         }
         return {
           error:
@@ -4267,6 +4389,7 @@ const dispatchCommand = async (
         }
       } finally {
         stagedRootSpec = undefined
+        landingChain = undefined
       }
     }
 
@@ -4313,14 +4436,25 @@ const dispatchCommand = async (
       const treeRootBefore = rootBoundsOf(treeParent)
       // B81 — the same staging the single create takes, and for the same
       // reason. Only the ROOT's append is staged: every deeper node appends
-      // into a parent this call just built, which no instance seals.
+      // into a parent this call just built, which no instance seals. The
+      // target is reached DOWNWARD, from the live ancestor, for the reason the
+      // single create states.
+      const treeStatedParentId =
+        (params.parentId as string | undefined) ??
+        treeParent.id
+      landingChain = await walkToLandingTarget(
+        params.parentId as string | undefined,
+      )
+      const treeLandingParent = (landingChain?.target ??
+        treeParent) as unknown as ParentNode
       const stageTree = needsStaging(
         slotRoute,
-        treeParent as unknown as LandingNode,
+        params.parentId as string | undefined,
+        treeLandingParent as unknown as LandingNode,
       )
       const treeBuildParent = stageTree
         ? (figma.currentPage as unknown as ParentNode)
-        : treeParent
+        : treeLandingParent
       try {
         // B35: the ROOT's own placement. Every deeper level is reported by the
         // parent that placed it, inside createTreeNode — this sink covers the
@@ -4341,14 +4475,36 @@ const dispatchCommand = async (
           rootPlaced,
           treeDefaults,
         )
+        let treeAnswer = {
+          id: treeResult.id,
+          name: treeResult.name,
+          type: treeResult.type,
+        }
         if (stageTree) {
-          landStagedRoot({
+          const landed = landStagedRoot({
             node: treeResult,
             spec: treeSpec,
-            parent: treeParent,
+            parent: treeLandingParent,
+            statedParentId: treeStatedParentId,
             operation: 'create_tree',
             warnings: treeWarnings,
           })
+          // B94 — see the single create. The staged id names a handle Figma
+          // dropped on the way in, and handing it out is a phantom.
+          if (landed === undefined) {
+            return {
+              error: unverifiedLandingMessage(
+                treeStatedParentId,
+              ),
+            }
+          }
+          treeAnswer = landed
+          // `ids[]` leads with the root, and the root's id changed under the
+          // move. A caller addressing the tree by `ids[0]` must get the id the
+          // node has, not the one it was built with.
+          if (createdIds.length > 0) {
+            createdIds[0] = landed.id
+          }
         }
         const treeInherited =
           constructionDefaultsWarning(treeDefaults)
@@ -4356,21 +4512,19 @@ const dispatchCommand = async (
           treeWarnings.push(treeInherited)
         }
         const rootDiscarded = discardedPositionsWarning(
-          treeParent,
+          treeLandingParent,
           rootPlaced,
         )
         if (rootDiscarded !== undefined) {
           treeWarnings.push(rootDiscarded)
         }
         warnGrownIntoNeighbour(
-          treeParent,
+          treeLandingParent,
           treeRootBefore,
           treeWarnings,
         )
         return {
-          id: treeResult.id,
-          name: treeResult.name,
-          type: treeResult.type,
+          ...treeAnswer,
           ids: createdIds,
           ...(treeWarnings.length > 0
             ? { warnings: treeWarnings }
@@ -4404,6 +4558,7 @@ const dispatchCommand = async (
         }
       } finally {
         stagedRootSpec = undefined
+        landingChain = undefined
       }
     }
 

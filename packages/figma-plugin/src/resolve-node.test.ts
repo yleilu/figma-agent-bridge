@@ -25,6 +25,7 @@ import {
   createNodeResolver,
   declareDegradedRead,
   deadHandleMessage,
+  detachedFromDocument,
   exportBudgetMessage,
   findLiveById,
   findLiveMatches,
@@ -485,6 +486,97 @@ describe('B93 — two handles, one id', () => {
     })
     resolver.setStrict(true)
     expect(await resolver.resolve('1:2')).toBe(plain)
+  })
+})
+
+// B94 — Figma RE-MINTS a node on the way into an instance slot: a new node
+// appears under the instance's chain and the handle that went in is DROPPED.
+// The dropped handle keeps answering id, name and type, so `update_node` on the
+// id a staged create had just answered came back `{id, name, warnings:[]}` and
+// reached nothing. A phantom write, live 2026-09-03.
+describe('B94 — a dropped handle cannot take a write', () => {
+  /** What Figma leaves behind after a re-mint: answers itself, parents nothing. */
+  const dropped = (id: string): LiveNode => ({
+    id,
+    name: 'Row content',
+    type: 'FRAME',
+    parent: null,
+  })
+
+  it('refuses a write to a handle Figma no longer holds', async () => {
+    const resolver = createNodeResolver({
+      getNodeById: async () => dropped('585:73446'),
+      exportOf: async () => undefined,
+    })
+    resolver.setStrict(true)
+    await expect(
+      resolver.resolve('585:73446'),
+    ).rejects.toThrow('re-minted')
+  })
+
+  it('refuses one Figma reports as removed, whatever its parent says', async () => {
+    const resolver = createNodeResolver({
+      getNodeById: async () => ({
+        id: '585:73437',
+        type: 'FRAME',
+        removed: true,
+        parent: { id: '0:1', type: 'PAGE' },
+      }),
+      exportOf: async () => undefined,
+    })
+    resolver.setStrict(true)
+    await expect(
+      resolver.resolve('585:73437'),
+    ).rejects.toThrow('no longer holds')
+  })
+
+  it('a READ of the same id still answers — reads are unaffected', async () => {
+    const ghost = dropped('585:73446')
+    const resolver = createNodeResolver({
+      getNodeById: async () => ghost,
+      exportOf: async () => undefined,
+    })
+    expect(await resolver.resolve('585:73446')).toBe(ghost)
+  })
+
+  it('does NOT refuse a handle whose .parent merely THROWS (the B81 class)', () => {
+    // B81's whole finding: probing `.parent` cost 48 refused writes and bent a
+    // build's topology. A throw is an unknown, and an unknown is not a finding.
+    const refusesParent = new Proxy({} as LiveNode, {
+      get: (_t, prop) => {
+        if (prop === 'id') return 'I1:2;3:4'
+        if (prop === 'type') return 'FRAME'
+        if (prop === 'removed') return undefined
+        if (typeof prop === 'symbol' || prop === 'then') {
+          return undefined
+        }
+        throw new Error(
+          'in get_parent: The node (instance sublayer or table cell) does not exist',
+        )
+      },
+      has: () => true,
+    })
+    expect(detachedFromDocument(refusesParent)).toBe(false)
+  })
+
+  it('never accuses a PAGE, which legitimately has no parent', () => {
+    expect(
+      detachedFromDocument({
+        id: '0:1',
+        type: 'PAGE',
+        parent: null,
+      }),
+    ).toBe(false)
+  })
+
+  it('leaves an ordinary parented node alone', () => {
+    expect(
+      detachedFromDocument({
+        id: '1:2',
+        type: 'FRAME',
+        parent: { id: '0:1', type: 'PAGE' },
+      }),
+    ).toBe(false)
   })
 })
 

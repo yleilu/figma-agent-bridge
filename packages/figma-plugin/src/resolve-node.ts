@@ -367,6 +367,72 @@ export const shadowedByAncestor = (
 }
 
 /**
+ * Whether a handle is no longer part of the document (B94).
+ *
+ * Not a shape test and not an ancestry test — a direct question, and the only
+ * one this class answers honestly. Figma RE-MINTS a node on the way into an
+ * instance slot: a new node appears under the instance's chain and the handle
+ * that went in is DROPPED. That handle keeps answering `id`, `name` and `type`,
+ * so `update_node` on the id a staged create had just answered came back
+ * `{id, name, warnings:[]}` and reached nothing. A phantom write, law 2.
+ *
+ * Two signals, either of which is conclusive:
+ *
+ *   `removed === true`   Figma's own answer for a node that is gone.
+ *   `parent === null`    a scene node with no parent is not in any page. NULL,
+ *                        never a THROW — a `.parent` that throws is the B81
+ *                        class, which must NOT be refused up front (it cost 48
+ *                        refused writes and bent a build's topology), and this
+ *                        deliberately does not look at it.
+ *
+ * A PAGE and the DOCUMENT legitimately have no parent, so they are exempt.
+ */
+export const detachedFromDocument = (
+  node: LiveNode,
+): boolean => {
+  try {
+    if ((node as { removed?: unknown }).removed === true) {
+      return true
+    }
+  } catch {
+    return false
+  }
+  let type: unknown
+  try {
+    type = (node as { type?: unknown }).type
+  } catch {
+    return false
+  }
+  if (type === 'PAGE' || type === 'DOCUMENT') return false
+  try {
+    return (
+      (node as { parent?: unknown }).parent === null &&
+      'parent' in node
+    )
+  } catch {
+    // The B81 class. Unknown is not a finding.
+    return false
+  }
+}
+
+/**
+ * What a WRITE is told when its handle is no longer in the document (B94).
+ *
+ * Exported so the message has ONE author — the `exportBudgetMessage` rule.
+ */
+export const droppedHandleMessage = (
+  nodeId: string,
+): string =>
+  'Refusing to write to ' +
+  nodeId +
+  ': that id names a node Figma no longer holds. A node MOVED INTO an instance ' +
+  'slot is re-minted — a new node appears under the instance’s own chain and ' +
+  'the original handle is dropped — so an id read before such a move addresses ' +
+  'nothing, and a write to it would be accepted and change nothing anyone can ' +
+  'see. Read the enclosing INSTANCE (get_node, depth:-1) and address the node ' +
+  'by the id that read emits.'
+
+/**
  * What a WRITE is told when two live nodes answer one id (B93).
  *
  * Exported so the message has ONE author — the `exportBudgetMessage` rule.
@@ -680,6 +746,11 @@ export const createNodeResolver = (
     if (!handleAnswers(node)) {
       throw new Error(deadHandleMessage(nodeId))
     }
+    // B94 — a handle Figma has dropped still answers id, name and type, so
+    // nothing above can tell it from a live one. It cannot take a write.
+    if (detachedFromDocument(node)) {
+      throw new Error(droppedHandleMessage(nodeId))
+    }
     if (
       !parentAnswers(node) &&
       !provisional.includes(nodeId)
@@ -759,6 +830,17 @@ export const createNodeResolver = (
           shadowedByAncestor(plain)
         ) {
           throw new Error(ambiguousHandleMessage(nodeId))
+        }
+        // B94 — and the id a staged create used to answer was exactly this
+        // shape: a plain local id whose handle Figma dropped when the node was
+        // re-minted into the slot. `update_node` on it acked and reached
+        // nothing.
+        if (
+          strict &&
+          plain !== null &&
+          detachedFromDocument(plain)
+        ) {
+          throw new Error(droppedHandleMessage(nodeId))
         }
         return plain
       }

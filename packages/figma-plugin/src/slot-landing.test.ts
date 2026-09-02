@@ -1,26 +1,45 @@
-// slot-landing.test.ts — B81: a create into a slot LANDS, and the route it
-// took is selectable so a live probe can retire the default.
+// slot-landing.test.ts — B81/B94: a create into a slot LANDS, the route it took
+// is selectable so a live probe can retire the default, and the id it answers
+// is the id the node actually has.
 //
-// THE FAKES MODEL FIGMA, NOT A PLAIN OBJECT, and they have to.
+// WHAT THE FIRST VERSION GOT WRONG, AND THE LIVE RUN PROVED (2026-09-03):
 //
-//   `appendChild` MOVES a node. It is not a list push: Figma detaches the child
-//   from its old parent first. A plain-object fake pushes and leaves the node in
-//   both places, which would let the staged route look like it worked while the
-//   page kept a duplicate — the exact debris B14 is about.
+//   THE ARMS NEVER RAN. Every route was chosen off `sealedInstanceHost`, an
+//   UPWARD `.parent` walk — and the handles this whole item exists for refuse
+//   `.parent`. So the walk answered "no instance", staging was skipped, the
+//   candidate arms threw "not available here", and all five configurations
+//   fell through to the same `direct` append and the same refusal:
+//   `Cannot create into I585:73434;585:73430;585:73440;585:73433 (SLOT):
+//   Refusing to write to …: the file describes this node, but no live handle
+//   answers it`. Not one arm made a meaningful Figma call.
 //
-//   `appendChild` REFUSES on a nested slot, in Figma's own words, quoting an
-//   address Figma composed off the inner instance's PRE-APPEND id:
-//   *"in appendChild: The node (instance sublayer or table cell) with id
-//   'I581:58099;581:58287' does not exist"*. Two segments, naming no node. That
-//   sentence is live evidence (2026-09-03, and 69 of the 2026-09-02 artifact's
-//   300 readErrors quote the same shape from other verbs), and it is what every
-//   candidate route here is being tested against.
+//   So the target is now reached the way the coordinator's probe reached it:
+//   DOWNWARD, from the nearest LIVE ancestor. `585:73434` (the outer instance
+//   A) answers `getNodeByIdAsync`, and walking its children — Body → B → Cell —
+//   reaches a handle Figma's own tree holds. No `.parent` read anywhere.
 //
-//   The handle a LOOKUP returns and the handle the live TREE holds are
-//   different objects for slot content — the file says `I<outer>;<mid>;<leaf>`
-//   and the handle answers a plain pre-append id (canonical-ids.ts). The
-//   'inner-handle' arm exists only because of that, so the fake keeps them
-//   distinct.
+//   THE STAGED ANSWER WAS A DEAD ID. The one-level fill into A's Body answered
+//   `585:73437` while the live id was `I585:73434;585:73430;585:73440` — Figma
+//   RE-MINTS the node when it enters an instance slot, and the local segment
+//   changed 73437 → 73440. Re-checked: answered `585:73446`, live
+//   `I585:73434;585:73430;585:73447`. And `update_node` on the answered id
+//   ACKED `{id, name, warnings:[]}` — a phantom write, law 2 (B94).
+//
+// THE FAKES MODEL FIGMA, NOT A PLAIN OBJECT.
+//
+//   `appendChild` MOVES a node — it detaches the child from its old parent
+//   first. A list-push fake would let the staged route look right while the
+//   page kept a duplicate (B14's debris).
+//
+//   `appendChild` INTO AN INSTANCE SLOT re-mints: a NEW node with a new local
+//   id appears in the slot and the staged handle is dropped. That is the whole
+//   of B94 and a plain-object fake cannot show it.
+//
+//   `appendChild` REFUSES on a nested slot in Figma's own words, quoting an
+//   address composed off a pre-append id: *"in appendChild: The node (instance
+//   sublayer or table cell) with id 'I581:58099;581:58287' does not exist"*.
+//
+//   The handles refuse `.parent` — the live signature every upward walk died on.
 
 import { describe, expect, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
@@ -31,14 +50,15 @@ import {
   SLOT_ROUTES,
   SLOT_ROUTE_KEY,
   appendVia,
-  landingHost,
-  liveHandleFor,
+  childIdsOf,
+  descendToTarget,
+  landedChildId,
   needsStaging,
   readSlotRoute,
   routeFellBackMessage,
   routeUnavailableMessage,
-  sealingInstanceNode,
   stagedLandingMessage,
+  unverifiedLandingMessage,
   type LandingNode,
 } from './slot-landing'
 
@@ -47,35 +67,59 @@ const FIGMA_REFUSAL =
   'in appendChild: The node (instance sublayer or table cell) with id ' +
   '"I581:58099;581:58287" does not exist'
 
+/** What a handle whose ancestry Figma composed off a stale id says. */
+const REFUSES_PARENT = {
+  get parent(): never {
+    throw new Error(
+      'in get_parent: The node (instance sublayer or table cell) does not exist',
+    )
+  },
+}
+
 /**
- * A container whose `appendChild` behaves the way Figma's does: it DETACHES the
- * child from whatever held it, then takes it.
+ * A container that behaves the way Figma's does.
  *
- * `refuses` models the other live behaviour of the same method on a nested
- * slot — the node keeps its old parent, and nothing moved.
+ * `refuses`  — the nested-slot append, in Figma's own words.
+ * `reminting` — an INSTANCE slot: the append creates a NEW node with a new
+ *               local id and DROPS the handle it was given (B94).
+ * Every one of these refuses `.parent`, which is the live signature that
+ * defeated the first version's upward walk.
  */
 const figmaParent = ({
   id,
   type = 'FRAME',
   name = 'box',
-  parent,
   refuses = false,
+  reminting,
 }: {
   id: string
   type?: string
   name?: string
-  parent?: LandingNode
   refuses?: boolean
+  /** The local segment the re-mint gives the landed node. */
+  reminting?: string
 }): LandingNode & { kids: LandingNode[] } => {
   const kids: LandingNode[] = []
   const node = {
     id,
     name,
     type,
-    parent,
     kids,
-    appendChild(child: LandingNode) {
+    appendChild(child: LandingNode & { kids?: LandingNode[] }) {
       if (refuses) throw new Error(FIGMA_REFUSAL)
+      if (reminting !== undefined) {
+        // Figma re-mints: a NEW node, under the parent's own chain.
+        kids.push({
+          id: node.id + ';' + reminting,
+          name: child.name,
+          type: child.type,
+          kids: child.kids ?? [],
+        })
+        // …and the handle we were given is dropped.
+        child.removed = true
+        child.parent = null
+        return
+      }
       const held = child.parent as
         | (LandingNode & { kids?: LandingNode[] })
         | undefined
@@ -86,9 +130,11 @@ const figmaParent = ({
       child.parent = node
       kids.push(child)
     },
-    insertChild(index: number, child: LandingNode) {
+    insertChild(
+      index: number,
+      child: LandingNode & { kids?: LandingNode[] },
+    ) {
       if (refuses) throw new Error(FIGMA_REFUSAL)
-      child.parent = node
       kids.splice(index, 0, child)
     },
   }
@@ -97,57 +143,63 @@ const figmaParent = ({
     enumerable: true,
     get: () => kids,
   })
+  Object.defineProperty(
+    node,
+    'parent',
+    Object.getOwnPropertyDescriptor(
+      REFUSES_PARENT,
+      'parent',
+    ) as PropertyDescriptor,
+  )
   return node as LandingNode & { kids: LandingNode[] }
 }
 
-/** A page, an outer INSTANCE, its SLOT, an inner INSTANCE and ITS slot. */
-const nestedSlotFile = (opts?: {
-  refuseInnerSlot?: boolean
-}) => {
-  const page = figmaParent({ id: '0:1', type: 'PAGE', name: 'Overview' })
-  const outer = figmaParent({
-    id: '581:58099',
+/**
+ * The coordinator's own construction, with its own ids.
+ *
+ *   A  = Card instance                585:73434
+ *   ├─ Body  SLOT                     I585:73434;585:73430
+ *   │   └─ B = Row instance           I585:73434;585:73430;585:73440
+ *   │        └─ Cell SLOT             I585:73434;585:73430;585:73440;585:73433
+ */
+const cardRowFile = (opts?: { refuseCell?: boolean }) => {
+  const a = figmaParent({
+    id: '585:73434',
     type: 'INSTANCE',
-    name: 'Chart card',
-    parent: page,
+    name: 'Card',
   })
-  page.kids.push(outer)
-  const outerSlot = figmaParent({
-    id: 'I581:58099;581:58200',
+  const body = figmaParent({
+    id: 'I585:73434;585:73430',
     type: 'SLOT',
     name: 'Body',
-    parent: outer,
+    reminting: '585:73440',
   })
-  outer.kids.push(outerSlot)
-  const inner = figmaParent({
-    id: '581:58274',
+  a.kids.push(body)
+  const b = figmaParent({
+    id: 'I585:73434;585:73430;585:73440',
     type: 'INSTANCE',
-    name: 'Table',
-    parent: outerSlot,
+    name: 'Row',
   })
-  outerSlot.kids.push(inner)
-  // The handle the LIVE TREE holds for the inner slot: its id is composed off
-  // the inner instance's pre-append id, the way Figma composes them.
-  const innerSlotLive = figmaParent({
-    id: 'I581:58274;581:58287',
+  body.kids.push(b)
+  const cell = figmaParent({
+    id: 'I585:73434;585:73430;585:73440;585:73433',
     type: 'SLOT',
-    name: 'Rows',
-    parent: inner,
-    refuses: opts?.refuseInnerSlot ?? false,
+    name: 'Cell',
+    refuses: opts?.refuseCell ?? false,
   })
-  inner.kids.push(innerSlotLive)
-  return { page, outer, outerSlot, inner, innerSlotLive }
+  b.kids.push(cell)
+  return { a, body, b, cell }
 }
 
-/** A freshly created node, parented to the page the way Figma parents one. */
-const freshNode = (page: LandingNode & { kids: LandingNode[] }) => {
-  const node: LandingNode = {
-    id: '900:1',
-    name: 'Row',
+const CELL_ID = 'I585:73434;585:73430;585:73440;585:73433'
+
+const freshNode = (id = '585:73437') => {
+  const node: LandingNode & { kids: LandingNode[] } = {
+    id,
+    name: 'Row content',
     type: 'FRAME',
-    parent: page,
+    kids: [],
   }
-  page.kids.push(node)
   return node
 }
 
@@ -161,9 +213,6 @@ describe('B81 — the route enumeration', () => {
       'stage-then-move',
     ])
     expect(DEFAULT_SLOT_ROUTE).toBe('stage-then-move')
-    expect(SLOT_ROUTES[SLOT_ROUTES.length - 1]).toBe(
-      DEFAULT_SLOT_ROUTE,
-    )
   })
 
   it('reads an override off plugin data, and a typo degrades to the working route', () => {
@@ -174,140 +223,136 @@ describe('B81 — the route enumeration', () => {
     expect(readSlotRoute('inner_handle')).toBe(
       DEFAULT_SLOT_ROUTE,
     )
-    expect(readSlotRoute(undefined)).toBe(DEFAULT_SLOT_ROUTE)
+  })
+})
+
+describe('B81 — reaching the target DOWNWARD (the live-wrong half)', () => {
+  it('walks Body → B → Cell from the live ancestor, with no .parent read', () => {
+    const { a, body, b, cell } = cardRowFile()
+    const found = descendToTarget(a, CELL_ID)
+    expect(found?.target).toBe(cell)
+    // The chain is what the arms use to find an enclosing INSTANCE without
+    // ever reading `.parent` — the read that defeated the first version.
+    expect(found?.chain).toEqual([a, body, b, cell])
+  })
+
+  it('recovers when a MIDDLE segment was re-minted', () => {
+    // The caller states an id read before the move; Figma has since re-minted
+    // the instance's own segment (73437 → 73440), so neither the prefix nor
+    // the local segment matches at that level. One child, one way down.
+    const { a, cell } = cardRowFile()
+    const stale =
+      'I585:73434;585:73430;585:73437;585:73433'
+    expect(descendToTarget(a, stale)?.target).toBe(cell)
+  })
+
+  it('will not GUESS past an ambiguous level', () => {
+    const { a, body } = cardRowFile()
+    body.kids.push(
+      figmaParent({
+        id: 'I585:73434;585:73430;585:73441',
+        type: 'INSTANCE',
+        name: 'Row',
+      }),
+    )
+    const stale =
+      'I585:73434;585:73430;585:73437;585:73433'
+    expect(descendToTarget(a, stale)).toBeUndefined()
+  })
+
+  it('answers undefined when nothing on the chain matches', () => {
+    const { a } = cardRowFile()
+    expect(
+      descendToTarget(a, 'I585:73434;999:1;999:2'),
+    ).toBeUndefined()
+  })
+
+  it('answers undefined for a plain id — there is no chain to walk', () => {
+    const { a } = cardRowFile()
+    expect(descendToTarget(a, '585:73434')).toBeUndefined()
   })
 })
 
 describe('B81 — when a create has to be staged', () => {
-  it('stages an append into a slot INSIDE an instance', () => {
-    const { innerSlotLive, outerSlot } = nestedSlotFile()
-    expect(needsStaging('stage-then-move', innerSlotLive)).toBe(
-      true,
-    )
-    expect(needsStaging('stage-then-move', outerSlot)).toBe(
-      true,
-    )
+  it('stages a COMPOUND parent id even though .parent refuses', () => {
+    // The exact live-wrong condition: `sealedInstanceHost` cannot answer, so
+    // the first version skipped staging entirely and every arm fell to
+    // `direct`. A compound id says "inside an instance" without any walk.
+    const { cell } = cardRowFile()
+    expect(
+      needsStaging('stage-then-move', CELL_ID, cell),
+    ).toBe(true)
   })
 
-  it('does NOT stage a plain frame — nothing seals it, so nothing is moved', () => {
-    const page = figmaParent({ id: '0:1', type: 'PAGE' })
-    const frame = figmaParent({
-      id: '1:2',
-      type: 'FRAME',
-      parent: page,
-    })
-    expect(needsStaging('stage-then-move', frame)).toBe(false)
-    expect(landingHost(frame)).toBeUndefined()
+  it('does NOT stage a plain frame — nothing seals it', () => {
+    const frame = figmaParent({ id: '1:2', type: 'FRAME' })
+    expect(
+      needsStaging('stage-then-move', '1:2', frame),
+    ).toBe(false)
   })
 
   it('does NOT stage when a candidate route is selected — the probe wants the raw answer', () => {
-    const { innerSlotLive } = nestedSlotFile()
+    const { cell } = cardRowFile()
     for (const route of SLOT_ROUTES) {
       if (route === DEFAULT_SLOT_ROUTE) continue
-      expect(needsStaging(route, innerSlotLive)).toBe(false)
+      expect(needsStaging(route, CELL_ID, cell)).toBe(false)
     }
-  })
-
-  it('names the sealing INSTANCE, so the staged message can say which one', () => {
-    const { innerSlotLive, inner } = nestedSlotFile()
-    expect(landingHost(innerSlotLive)).toEqual({
-      id: inner.id as string,
-      name: 'Table',
-    })
-    expect(sealingInstanceNode(innerSlotLive)).toBe(inner)
   })
 })
 
-describe('B81 — the routes themselves', () => {
-  it("'direct': Figma's refusal is Figma's, raised unchanged for the caller to restate", () => {
-    const { page, innerSlotLive } = nestedSlotFile({
-      refuseInnerSlot: true,
-    })
-    const child = freshNode(page)
+describe('B81 — the routes, each on the WALKED handle', () => {
+  it("'direct': raises Figma's refusal unchanged for the caller to restate", () => {
+    const { a } = cardRowFile({ refuseCell: true })
+    const chain = descendToTarget(a, CELL_ID)
     expect(() =>
-      appendVia('direct', innerSlotLive, child),
+      appendVia('direct', chain!, freshNode()),
     ).toThrow(FIGMA_REFUSAL)
-    // Nothing moved: the node is still where the create left it.
-    expect(child.parent).toBe(page)
   })
 
-  it("'direct': lands, and the child LEAVES the page (appendChild moves, it does not copy)", () => {
-    const { page, innerSlotLive } = nestedSlotFile()
-    const child = freshNode(page)
-    appendVia('direct', innerSlotLive, child)
-    expect(
-      (innerSlotLive as { kids: LandingNode[] }).kids,
-    ).toContain(child)
-    expect(page.kids).not.toContain(child)
+  it("'direct': lands on the handle the downward walk found", () => {
+    const { a, cell } = cardRowFile()
+    const chain = descendToTarget(a, CELL_ID)
+    const child = freshNode()
+    appendVia('direct', chain!, child)
+    expect(cell.kids).toContain(child)
   })
 
   it("'insert-child': goes through insertChild, not appendChild", () => {
-    const { page, innerSlotLive } = nestedSlotFile()
-    const sibling = { id: '800:1', name: 'Head', type: 'FRAME' }
-    ;(innerSlotLive as { kids: LandingNode[] }).kids.push(
-      sibling,
-    )
-    const child = freshNode(page)
-    appendVia('insert-child', innerSlotLive, child)
-    expect(
-      (innerSlotLive as { kids: LandingNode[] }).kids[0],
-    ).toBe(child)
+    const { a, cell } = cardRowFile()
+    cell.kids.push({ id: '800:1', name: 'Head' })
+    const chain = descendToTarget(a, CELL_ID)
+    const child = freshNode()
+    appendVia('insert-child', chain!, child)
+    expect(cell.kids[0]).toBe(child)
   })
 
-  it("'inner-handle': appends through the handle the LIVE TREE holds, not the one handed in", () => {
-    const { page, inner, innerSlotLive } = nestedSlotFile()
-    // What a lookup on the canonical id returns: a different object, answering
-    // the id the EXPORT gives the node. It refuses the append — the B81 fact.
-    const paired = figmaParent({
-      id: 'I581:58099;581:58200;581:58274;581:58287',
-      type: 'SLOT',
-      name: 'Rows',
-      parent: inner,
-      refuses: true,
-    })
-    const child = freshNode(page)
-    appendVia('inner-handle', paired, child)
-    // It landed on the tree's own handle, and nothing was written to the
-    // paired one.
-    expect(
-      (innerSlotLive as { kids: LandingNode[] }).kids,
-    ).toContain(child)
-    expect((paired as { kids: LandingNode[] }).kids).toEqual(
-      [],
-    )
-  })
-
-  it("'inner-handle': prefers an EXACT id match over a same-tail one", () => {
-    const { inner, innerSlotLive } = nestedSlotFile()
-    const decoy = figmaParent({
-      id: 'I999:1;581:58287',
-      type: 'SLOT',
-      name: 'Rows',
-      parent: inner,
-    })
-    inner.kids.unshift(decoy)
-    expect(liveHandleFor(inner, innerSlotLive)).toBe(
-      innerSlotLive,
-    )
+  it("'inner-handle': appends through the ENCLOSING INSTANCE's own child, re-read at append time", () => {
+    const { a, cell } = cardRowFile()
+    const chain = descendToTarget(a, CELL_ID)
+    const child = freshNode()
+    appendVia('inner-handle', chain!, child)
+    // B is the nearest INSTANCE on the chain, and the handle it hands back for
+    // Cell is the one Figma's tree holds right now.
+    expect(cell.kids).toContain(child)
   })
 
   it("'slot-property': drives the content through the instance's own override surface", () => {
-    const { page, inner, innerSlotLive } = nestedSlotFile()
+    const { a, b } = cardRowFile()
     const written: Record<string, unknown>[] = []
-    inner.componentProperties = { 'Rows#12:3': {} }
-    inner.setProperties = (v: Record<string, unknown>) => {
+    b.componentProperties = { 'Cell#12:3': {} }
+    b.setProperties = (v: Record<string, unknown>) => {
       written.push(v)
     }
-    const child = freshNode(page)
-    appendVia('slot-property', innerSlotLive, child)
-    expect(written).toEqual([{ 'Rows#12:3': '900:1' }])
+    const chain = descendToTarget(a, CELL_ID)
+    appendVia('slot-property', chain!, freshNode())
+    expect(written).toEqual([{ 'Cell#12:3': '585:73437' }])
   })
 
   it("'slot-property': a route the runtime cannot offer SAYS SO — silence would read as success", () => {
-    const { page, innerSlotLive } = nestedSlotFile()
-    const child = freshNode(page)
+    const { a } = cardRowFile()
+    const chain = descendToTarget(a, CELL_ID)
     expect(() =>
-      appendVia('slot-property', innerSlotLive, child),
+      appendVia('slot-property', chain!, freshNode()),
     ).toThrow(
       routeUnavailableMessage(
         'slot-property',
@@ -316,16 +361,58 @@ describe('B81 — the routes themselves', () => {
     )
   })
 
-  it("'inner-handle' outside any instance says so rather than appending somewhere", () => {
-    const page = figmaParent({ id: '0:1', type: 'PAGE' })
-    const frame = figmaParent({
-      id: '1:2',
-      type: 'FRAME',
-      parent: page,
-    })
+  it("'inner-handle' with no INSTANCE on the chain says so rather than appending somewhere", () => {
+    const frame = figmaParent({ id: '1:2', type: 'FRAME' })
     expect(() =>
-      appendVia('inner-handle', frame, { id: '9:9' }),
-    ).toThrow('no INSTANCE encloses the target')
+      appendVia(
+        'inner-handle',
+        { target: frame, chain: [frame] },
+        freshNode(),
+      ),
+    ).toThrow('no INSTANCE')
+  })
+})
+
+describe('B94 — the id a staged create answers is the id the node HAS', () => {
+  it('reads the landed id off the parent, because Figma RE-MINTS on the way in', () => {
+    const { a, body } = cardRowFile()
+    const chain = descendToTarget(
+      a,
+      'I585:73434;585:73430',
+    )
+    const staged = freshNode('585:73437')
+    const before = childIdsOf(chain!.target)
+    appendVia('direct', chain!, staged)
+    const after = childIdsOf(chain!.target)
+    // The staged handle is gone and a new node is in the slot.
+    expect(staged.removed).toBe(true)
+    expect(landedChildId(before, after)).toBe(
+      'I585:73434;585:73430;585:73440',
+    )
+    // …which is NOT the id the create would have answered.
+    expect(landedChildId(before, after)).not.toBe(
+      '585:73437',
+    )
+    // B was already there; the landed node joins it rather than replacing it.
+    expect(body.kids).toHaveLength(2)
+    expect(body.kids).not.toContain(staged)
+  })
+
+  it('answers undefined when no new child can be identified — an unverifiable landing is not a success', () => {
+    expect(landedChildId(['a'], ['a'])).toBeUndefined()
+    expect(
+      landedChildId(['a'], ['a', 'b', 'c']),
+    ).toBeUndefined()
+    expect(landedChildId(undefined, ['a', 'b'])).toBeUndefined()
+  })
+
+  it('reads a parent that refuses its children as UNKNOWN, not as empty', () => {
+    const refusing: LandingNode = {
+      get children(): never {
+        throw new Error('in get_children: does not exist')
+      },
+    }
+    expect(childIdsOf(refusing)).toBeUndefined()
   })
 })
 
@@ -333,13 +420,24 @@ describe('B81 — what the reply says', () => {
   it('the staged create names the route, the host and the id it hands back', () => {
     const message = stagedLandingMessage({
       operation: 'create_tree',
-      parentId: 'I581:58274;581:58287',
-      host: { id: '581:58274', name: 'Table' },
+      parentId: CELL_ID,
+      hostName: 'Row',
+      hostId: 'I585:73434;585:73430;585:73440',
     })
-    expect(message).toContain('built at page level and moved into')
-    expect(message).toContain('I581:58274;581:58287')
-    expect(message).toContain('"Table" (581:58274)')
-    expect(message).toContain('AFTER the move')
+    expect(message).toContain(
+      'built at page level and moved into',
+    )
+    expect(message).toContain(CELL_ID)
+    expect(message).toContain(
+      '"Row" (I585:73434;585:73430;585:73440)',
+    )
+    expect(message).toContain('re-mints')
+  })
+
+  it('an unverifiable landing says so, and names what to read', () => {
+    const message = unverifiedLandingMessage(CELL_ID)
+    expect(message).toContain(CELL_ID)
+    expect(message).toContain('could not')
   })
 
   it("a refused candidate route quotes Figma's own words for the probe to read", () => {
@@ -374,11 +472,12 @@ describe('B81 — code.ts actually takes the route', () => {
   it('selects the route from plugin data, not from a tool parameter', () => {
     expect(src).toContain('readSlotRoute(')
     expect(src).toContain('SLOT_ROUTE_KEY')
-    // A public param would put a Figma-runtime unknown into the tool surface.
     expect(src).not.toContain('params.slotRoute')
   })
 
-  it('stages the create doors, and says so on the reply', () => {
+  it('reaches the target by the DOWNWARD walk, from the live ancestor', () => {
+    expect(src).toContain('descendToTarget(')
+    // The upward walk must not be what decides the route any more.
     expect(src).toContain('needsStaging(')
     expect(src).toContain('stagedLandingMessage(')
   })
@@ -386,5 +485,11 @@ describe('B81 — code.ts actually takes the route', () => {
   it('sends the append through the seam, so a candidate route reaches Figma', () => {
     expect(src).toContain('appendVia(')
     expect(src).toContain('routeFellBackMessage(')
+  })
+
+  it('answers the id read back off the parent, never the staged one', () => {
+    expect(src).toContain('landedChildId(')
+    expect(src).toContain('childIdsOf(')
+    expect(src).toContain('unverifiedLandingMessage(')
   })
 })
