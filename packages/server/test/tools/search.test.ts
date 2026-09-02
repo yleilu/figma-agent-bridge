@@ -567,6 +567,38 @@ describe('handleSearch — projection past the scan row (B50)', () => {
     ])
   })
 
+  // I85 — the two read channels do not mean the same thing by `position`, and
+  // nothing said so. A `search` row is hydrated by a read ENTERED at that node,
+  // so it has no parent bbox to subtract and its position is ABSOLUTE; a
+  // `get_node` tree's children are PARENT-RELATIVE. Two reviewers mis-scored on
+  // it in one round, on exactly the overflow / alignment / containment checks
+  // three rubric categories are made of.
+  it('names the frame of reference beside a position it returns (I85)', async () => {
+    const result = await handleSearch(
+      { fields: ['id', 'position'] },
+      twoStepClient({}),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: {
+        position?: [number, number]
+        positionFrame?: string
+      }[]
+    }
+    expect(out.results[0].position).toEqual([0, 0])
+    expect(out.results[0].positionFrame).toBe('absolute')
+  })
+
+  it('says nothing about a frame for a row that carries no position', async () => {
+    const result = await handleSearch(
+      { fields: ['id', 'name'] },
+      twoStepClient({}),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: Record<string, unknown>[]
+    }
+    expect('positionFrame' in out.results[0]).toBe(false)
+  })
+
   it('projects a `profile` preset the same way', async () => {
     const result = await handleSearch(
       { profile: 'layout' },

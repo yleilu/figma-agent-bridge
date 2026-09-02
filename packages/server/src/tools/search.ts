@@ -461,6 +461,21 @@ export const handleSearch = async (
       if (summary !== undefined) {
         out.contextSummary = summary
       }
+      // I85 — a `position` on a search row is ABSOLUTE, and a `position` in a
+      // `get_node` tree is PARENT-RELATIVE, because a search row is hydrated by
+      // a read ENTERED at that node: there is no parent bbox to subtract from
+      // it (node-spec-reader.ts, `positionOf`). Nothing said so, and two
+      // reviewers mis-scored a round on it — every overflow, alignment and
+      // containment check reads one number against the other. Emitted only
+      // beside a position, so a row that carries none says nothing, and
+      // server-derived like `contextSummary` rather than a NodeSpec field.
+      if (
+        (out as { position?: unknown }).position !==
+        undefined
+      ) {
+        ;(out as { positionFrame?: string }).positionFrame =
+          'absolute'
+      }
       return out
     })
 
