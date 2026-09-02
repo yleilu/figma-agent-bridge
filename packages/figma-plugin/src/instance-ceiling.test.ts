@@ -74,6 +74,32 @@ describe('sealedInstanceHost (I66)', () => {
 })
 
 describe('appendRefusal (I66)', () => {
+  it('restates a pre-append refusal against the id the caller sent (B73 on the create door)', () => {
+    const message = appendRefusal({
+      operation: 'create',
+      parentId: 'I579:57440;579:57439;579:57450;579:57447',
+      parentType: 'SLOT',
+      host: undefined,
+      raw: 'in appendChild: The node (instance sublayer or table cell) with id "I579:57448;579:57447" does not exist',
+    })
+    expect(message).toContain(
+      'I579:57440;579:57439;579:57450;579:57447',
+    )
+    expect(message).not.toContain('I579:57448;579:57447')
+    expect(message).toContain('pre-append')
+  })
+  it('keeps Figma\'s own words for a refusal that is not the pre-append signature', () => {
+    const message = appendRefusal({
+      operation: 'create',
+      parentId: '1:2',
+      parentType: 'TEXT',
+      host: undefined,
+      raw: 'in appendChild: Cannot add children to a TEXT node',
+    })
+    expect(message).toContain('Cannot add children to a TEXT node')
+    expect(message).not.toContain('pre-append')
+  })
+
   it('names the ceiling, the host, and the taught workaround', () => {
     const message = appendRefusal({
       operation: 'create',

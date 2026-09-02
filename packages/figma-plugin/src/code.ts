@@ -2088,7 +2088,7 @@ const buildSingleNode = async (
     throw new Error(
       appendRefusal({
         operation: 'create',
-        parentId: parent.id,
+        parentId: nodeResolver.provisionalIds()[0] ?? parent.id,
         parentType: parent.type,
         host: sealedInstanceHost(parent),
         raw: messageOf(err),
@@ -2281,7 +2281,7 @@ const createTreeNode = async (
         throw new Error(
           appendRefusal({
             operation: 'create',
-            parentId: parent.id,
+            parentId: nodeResolver.provisionalIds()[0] ?? parent.id,
             parentType: parent.type,
             host: sealedInstanceHost(parent),
             raw: messageOf(err),
@@ -2305,7 +2305,7 @@ const createTreeNode = async (
           throw new Error(
             appendRefusal({
               operation: 'create',
-              parentId: parent.id,
+              parentId: nodeResolver.provisionalIds()[0] ?? parent.id,
               parentType: parent.type,
               host: sealedInstanceHost(parent),
               raw: messageOf(err),
@@ -2326,7 +2326,7 @@ const createTreeNode = async (
       throw new Error(
         appendRefusal({
           operation: 'create',
-          parentId: parent.id,
+          parentId: nodeResolver.provisionalIds()[0] ?? parent.id,
           parentType: parent.type,
           host: sealedInstanceHost(parent),
           raw: messageOf(err),
@@ -5827,7 +5827,7 @@ const dispatchCommand = async (
         return {
           error: appendRefusal({
             operation: 'move ' + child.id,
-            parentId: parent.id,
+            parentId: nodeResolver.provisionalIds()[0] ?? parent.id,
             parentType: parent.type,
             host: sealedInstanceHost(parent),
             raw: messageOf(err),
@@ -5862,7 +5862,7 @@ const dispatchCommand = async (
         id: child.id,
         name: child.name,
         type: child.type,
-        parentId: parent.id,
+        parentId: nodeResolver.provisionalIds()[0] ?? parent.id,
         // T7 — reparent_node had no warnings channel at all, which is a gap
         // rather than a decision: it is a WRITE, and a write that degrades
         // silently is the one thing no door on this surface may do. Omitted
@@ -5928,7 +5928,7 @@ const dispatchCommand = async (
         }
       }
       return {
-        parentId: parent.id,
+        parentId: nodeResolver.provisionalIds()[0] ?? parent.id,
         order: parent.children.map(c => c.id),
         warnings,
       }
