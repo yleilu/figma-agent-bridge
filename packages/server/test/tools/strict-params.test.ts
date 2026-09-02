@@ -242,7 +242,7 @@ describe('every tool params schema is strict (M22b)', () => {
 })
 
 describe('strictness survives registration (the B52 trap)', () => {
-  it('registerFileTool hands the SDK the schema object itself', () => {
+  it('registerFileTool keeps the schema’s own shape and strictness', () => {
     const sink: Registered[] = []
     registerFileTool(
       captureServer(sink),
@@ -251,12 +251,22 @@ describe('strictness survives registration (the B52 trap)', () => {
       toolParams.updateComponentParamsSchema,
       async () => textResult('ran'),
     )
-    expect(sink[0].config.inputSchema).toBe(
-      toolParams.updateComponentParamsSchema,
+    // I87 wraps the schema so a refusal carries ONE line instead of the 6KB
+    // union dump — a prototype wrapper, not a re-wrap, so what B52 actually
+    // guards is the invariant asserted here: the modifiers survive.
+    expect(sink[0].config.inputSchema.shape).toBe(
+      toolParams.updateComponentParamsSchema.shape,
     )
+    expect(
+      sink[0].config.inputSchema.safeParse({
+        fileKey: 'fk',
+        componentId: '453:4107',
+        nope: 1,
+      }).success,
+    ).toBe(false)
   })
 
-  it('registerSessionTool hands the SDK the schema object itself', () => {
+  it('registerSessionTool keeps the schema’s own shape and strictness', () => {
     const sink: Registered[] = []
     registerSessionTool(
       captureServer(sink),
@@ -264,12 +274,12 @@ describe('strictness survives registration (the B52 trap)', () => {
       toolParams.recordFeedbackParamsSchema,
       async () => textResult('ran'),
     )
-    expect(sink[0].config.inputSchema).toBe(
-      toolParams.recordFeedbackParamsSchema,
+    expect(sink[0].config.inputSchema.shape).toBe(
+      toolParams.recordFeedbackParamsSchema.shape,
     )
   })
 
-  it('registerBufferTool hands the SDK the schema object itself', () => {
+  it('registerBufferTool keeps the schema’s own shape and strictness', () => {
     const sink: Registered[] = []
     registerBufferTool(
       captureServer(sink),
@@ -279,8 +289,8 @@ describe('strictness survives registration (the B52 trap)', () => {
       toolParams.pullChangesParamsSchema,
       async () => textResult('ran'),
     )
-    expect(sink[0].config.inputSchema).toBe(
-      toolParams.pullChangesParamsSchema,
+    expect(sink[0].config.inputSchema.shape).toBe(
+      toolParams.pullChangesParamsSchema.shape,
     )
   })
 

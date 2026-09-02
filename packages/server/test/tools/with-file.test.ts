@@ -205,12 +205,16 @@ describe('registerFileTool', () => {
     )
   }
 
-  it('hands the MCP server the schema object itself', () => {
+  it('hands the MCP server the schema’s own shape, modifiers intact', () => {
+    // I87 wraps the schema so a refusal carries one line instead of the 6KB
+    // union dump. It is a PROTOTYPE wrapper, not a re-wrap: the invariant B52
+    // exists for — the modifiers survive, `.strict()` above all — is what the
+    // next case asserts, and the shape below is the same object.
     const sink: Registered[] = []
     registerSearch(sink)
     expect(sink[0].name).toBe('search')
-    expect(sink[0].config.inputSchema).toBe(
-      searchParamsSchema,
+    expect(sink[0].config.inputSchema.shape).toBe(
+      searchParamsSchema.shape,
     )
   })
 

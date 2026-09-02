@@ -24,10 +24,12 @@ import {
   type ScopedFigmaClient,
 } from '@figma-agent-bridge/server/figma-client'
 import {
+  handleCloneNode,
   handleDeleteNode,
   handleSetFocus,
   handleReparentNode,
 } from '@figma-agent-bridge/server/tools/structure'
+import { handleGetNode } from '@figma-agent-bridge/server/tools/read'
 import { withFile } from '@figma-agent-bridge/server/tools/with-file'
 import { createMockPlugin } from '../mocks/mock-plugin'
 
@@ -234,6 +236,42 @@ describe('delete_node routing through the scoped client', () => {
     expect(JSON.parse(res.content[0].text).code).toBe(
       'WRONG_FILE',
     )
+  })
+
+  // B88 — a clone of a SLOT-FILLED INSTANCE. Live 2026-09-02 the clone came
+  // back with an EMPTY slot and a depth-2 read of it answered
+  // `PLUGIN_ERROR: cannot read property 'indexOf' of undefined`. The mock
+  // could not represent the shape at all until now — every clone fixture was
+  // a plain frame or slot content, never an instance whose slot held
+  // something — which is why the headless suite never saw it.
+  it('a clone of a slot-filled instance keeps its slot content, and says it had to be copied', async () => {
+    const scoped = client.forFile(FK)
+    const res = await handleCloneNode(
+      { nodeId: '600:100' },
+      scoped,
+    )
+    const clones = JSON.parse(res.content[0].text) as {
+      id: string
+      warnings?: string[]
+    }[]
+    expect(clones[0].id).toBe('600:200')
+    expect(clones[0].warnings?.[0]).toContain(
+      'did not carry',
+    )
+  })
+
+  it('…and the clone READS at depth 2, with the slot content on it', async () => {
+    const scoped = client.forFile(FK)
+    const res = await handleGetNode(
+      { nodeId: '600:200', depth: 2 },
+      scoped,
+    )
+    const spec = JSON.parse(res.content[0].text) as {
+      children?: { name?: string; children?: unknown[] }[]
+    }
+    const slot = spec.children?.[0]
+    expect(slot?.name).toBe('Body')
+    expect(slot?.children).toHaveLength(1)
   })
 })
 

@@ -895,6 +895,116 @@ describe('collectPatches — one bad node costs one node (B31)', () => {
     expect(patches.get('sibling')?.pointCount).toBe(7)
   })
 
+  it('restates the SLOT-address get_children refusal against the id the read emits (B65)', async () => {
+    // The last truncation path on reads. 69 of the 300 readErrors on the
+    // 2026-09-02 artifact were this exact throw passed straight through, and
+    // every one of the ids it quotes has two segments and resolves to nothing
+    // (`get_node('I571:32095;571:31931')` → "does not exist", live). The row's
+    // own canonical id is four segments and DOES resolve — so the message has
+    // to name that one.
+    const refusing: LiveNode = {
+      id: '571:32007',
+      type: 'INSTANCE',
+      name: 'Icon/Nav',
+    }
+    Object.defineProperty(refusing, 'children', {
+      get() {
+        throw new Error(
+          'in get_children: The node (instance sublayer or table cell) with id ' +
+            '"I571:32063;571:32007" does not exist',
+        )
+      },
+      enumerable: true,
+      configurable: true,
+    })
+    const root = node({ id: 'root', type: 'FRAME' }, [
+      refusing,
+    ])
+    const exported = {
+      id: 'root',
+      type: 'FRAME',
+      children: [
+        {
+          id: 'I571:32054;571:32051;571:32069;571:32007',
+          type: 'INSTANCE',
+          name: 'Icon/Nav',
+        },
+      ],
+    }
+
+    const patches = await collectPatches(
+      root,
+      exported,
+      -1,
+      deps(),
+    )
+
+    const message = patches.get(
+      'I571:32054;571:32051;571:32069;571:32007',
+    )?.readError
+    expect(message).toContain(
+      'I571:32054;571:32051;571:32069;571:32007',
+    )
+    expect(message).not.toContain('I571:32063;571:32007')
+    expect(message).toContain('refused to list its children')
+  })
+
+  it('an enrichment that throws OUTRIGHT never costs the document (B88)', async () => {
+    // B88's second aspect: a depth-2 read of a clone answered
+    // `PLUGIN_ERROR: cannot read property 'indexOf' of undefined` and returned
+    // NOTHING, while the export that describes the clone had already been
+    // produced. The enrichment is an addition to a document, so its failure
+    // may cost the additions and must never cost the document.
+    //
+    // MODELED: the throw is Figma's, from inside an API the enrichment calls,
+    // and no fake can reproduce which one. What is modeled is the SHAPE — an
+    // unguarded throw escaping the pass — because that shape is what turned a
+    // complete export into no answer at all.
+    const doc = { id: 'root', type: 'FRAME', name: 'root' }
+    const exploding = {
+      ...deps(),
+      get mixed(): symbol {
+        throw new TypeError(
+          "cannot read property 'indexOf' of undefined",
+        )
+      },
+    }
+    await enrichDocument(
+      node({ id: 'root', type: 'FRAME' }),
+      doc,
+      2,
+      exploding as unknown as ReturnType<typeof deps>,
+    )
+    expect(doc).toMatchObject({ id: 'root' })
+    expect(
+      (doc as Record<string, unknown>).readErrors,
+    ).toEqual([
+      "root: the read could not be enriched — TypeError: cannot read property 'indexOf' of undefined. This row is the file’s own export, without the fields only a live read can supply.",
+    ])
+  })
+
+  it('a get_children failure that is NOT the slot signature keeps Figma’s words', async () => {
+    // A node deleted mid-read is a different fact, and Figma's own sentence is
+    // the most specific thing anyone has about it.
+    const broken: LiveNode = { id: 'gone', type: 'FRAME' }
+    Object.defineProperty(broken, 'children', {
+      get() {
+        throw new Error('Node not found: gone')
+      },
+      enumerable: true,
+      configurable: true,
+    })
+    const patches = await collectPatches(
+      node({ id: 'root', type: 'FRAME' }, [broken]),
+      undefined,
+      -1,
+      deps(),
+    )
+    expect(patches.get('gone')?.readError).toBe(
+      'Error: Node not found: gone',
+    )
+  })
+
   it('a resolver that throws SYNCHRONOUSLY still loses only its own name', async () => {
     const patches = await collectPatches(
       node({
@@ -1231,8 +1341,15 @@ describe('enrichDocument — the alias subtree (B41)', () => {
       variables: { [VAR]: 'probe/cyan' },
     })
     // …and the loss that IS real is named on the node that suffered it,
-    // instead of on the root as an id the caller cannot find (I48).
-    expect(label.readError).toContain('does not exist')
+    // instead of on the root as an id the caller cannot find (I48) — against
+    // the id the READ emits, never the address Figma composed off the
+    // pre-append one (B65).
+    expect(label.readError).toContain(
+      'I298:7517;298:7516;298:7523;298:7510',
+    )
+    expect(label.readError).not.toContain(
+      'I298:7519;298:7510',
+    )
     expect('readErrors' in doc).toBe(false)
   })
 

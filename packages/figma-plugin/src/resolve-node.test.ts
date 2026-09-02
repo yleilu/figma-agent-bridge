@@ -30,8 +30,11 @@ import {
   leadingInstanceId,
   MAX_INSTANCE_EXPORTS,
   outerInstanceOf,
+  parentAnswers,
+  restatedRefusal,
   servedByAncestorExport,
   slicedReadMessage,
+  staleHandleThrow,
 } from './resolve-node'
 import type { LiveNode, RawNode } from './canonical-ids'
 
@@ -572,6 +575,76 @@ const linkParents = (root: LiveNode): LiveNode => {
 /** The cell handle paired opposite the canonical id: it refuses everything. */
 const CELL_DEAD = unreadable(CELL_ALIAS)
 
+/**
+ * The handle B81 is about: it answers its own identity and TYPE, refuses every
+ * read Figma has to resolve through an ANCESTOR, and takes a write.
+ *
+ * OBSERVED, 2026-09-02 read-back census
+ * (`runs/2026-09-02-dashboard/readbacks/08-b65-readerrors.json`): on the 51
+ * `live-handle-refused-fields` rows the enrichment listed `context`, `the
+ * unrotated size`, `style() names` and nine more groups as refused, while
+ * `vector geometry` and `text runs` were NOT listed — and both of those groups
+ * read `node.type` as their first statement. So `type` answers on this class
+ * and `width` / `getSharedPluginData` / `parent` do not.
+ *
+ * MODELED, NOT OBSERVED: that the SETTER lands. Nothing headless can settle
+ * whether Figma resolves a node for a write it refused for a read — that is
+ * the dispatcher's live probe 1. This fake takes the write so the resolver can
+ * be held to the rule that matters either way: never refuse a handle before
+ * the write has been tried, and never ack one that did not land.
+ */
+const parentRefusing = (
+  id: string,
+  options: { writable?: boolean } = {},
+): LiveNode => {
+  const own: Record<string, unknown> = {
+    id,
+    name: 'Amount',
+    type: 'TEXT',
+  }
+  const refuse = (verb: string, prop: string): never => {
+    throw new Error(
+      'in ' +
+        verb +
+        '_' +
+        prop +
+        ': The node (instance sublayer or table cell) with id "' +
+        CELL_ALIAS +
+        '" does not exist',
+    )
+  }
+  return new Proxy(own, {
+    get: (target, prop) => {
+      if (typeof prop === 'symbol' || prop === 'then') {
+        return undefined
+      }
+      if (prop in target) return target[prop as string]
+      if (
+        prop === 'parent' ||
+        prop === 'width' ||
+        prop === 'height' ||
+        prop === 'getSharedPluginData'
+      ) {
+        refuse('get', String(prop))
+      }
+      return undefined
+    },
+    set: (target, prop, value) => {
+      if (options.writable === false) {
+        refuse('set', String(prop))
+      }
+      target[prop as string] = value
+      return true
+    },
+    has: () => true,
+  })
+}
+
+/** The same handle, refusing the write too — the hypothesis's other half. */
+const CELL_WRITE_REFUSING = parentRefusing(CELL_ALIAS, {
+  writable: false,
+})
+
 const deepLive = (): LiveNode =>
   linkParents({
     id: CARD,
@@ -649,12 +722,18 @@ const deepExport = (): RawNode => ({
 })
 
 /** A resolver over the deep fixture; `dead` swaps the ghost for a refusal. */
-const deepHarness = (options: { dead?: boolean } = {}) => {
+const deepHarness = (
+  options: { dead?: boolean; parentless?: LiveNode } = {},
+) => {
   const root = deepLive()
   const doc = deepExport()
   if (options.dead === true) {
     const row = findLiveById(root, '549:17625') as LiveNode
     ;(row.children as LiveNode[])[0] = CELL_DEAD
+  }
+  if (options.parentless !== undefined) {
+    const row = findLiveById(root, '549:17625') as LiveNode
+    ;(row.children as LiveNode[])[0] = options.parentless
   }
   const resolver = createNodeResolver({
     getNodeById: async id => {
@@ -705,16 +784,80 @@ describe('outerInstanceOf / isAliasHandle — an alias is a fact about ancestry'
   })
 })
 
-describe('handleAnswers — the discriminator a write needs', () => {
-  it('a live handle answers type and parent', () => {
+describe('handleAnswers — a handle that answers NOTHING (B81)', () => {
+  it('a live handle answers', () => {
     expect(handleAnswers(deepLive())).toBe(true)
   })
 
-  it('a fabricated address refuses `parent` — the live B74 signature', () => {
-    // "in get_parent: The node with id `I549:17613;549:17265` does not exist",
-    // live 2026-08-30. `parent` is the read such a handle will not serve, which
-    // is what makes it the cheap universal probe.
+  it('a handle that refuses even its own type is dead', () => {
     expect(handleAnswers(CELL_DEAD)).toBe(false)
+  })
+
+  it('a handle that refuses only its ANCESTRY still answers', () => {
+    // B81 — this is the class the old `.parent` probe rejected. `parent` is a
+    // fact about the chain above the node; a write touches the node.
+    expect(handleAnswers(parentRefusing(CELL_ALIAS))).toBe(
+      true,
+    )
+  })
+})
+
+describe('parentAnswers — advisory, never a write gate (B81)', () => {
+  it('a healthy handle answers its parent', () => {
+    expect(
+      parentAnswers(
+        findLiveById(deepLive(), '549:17625') as LiveNode,
+      ),
+    ).toBe(true)
+  })
+
+  it('the B74 signature refuses it', () => {
+    expect(parentAnswers(CELL_DEAD)).toBe(false)
+  })
+
+  it('so does the handle that answers everything else', () => {
+    expect(parentAnswers(parentRefusing(CELL_ALIAS))).toBe(
+      false,
+    )
+  })
+})
+
+describe('staleHandleThrow / restatedRefusal — the id a caller can use', () => {
+  const figmaThrow = new Error(
+    'in set_layoutMode: The node (instance sublayer or table cell) with id ' +
+      '"I571:32063;571:32007" does not exist',
+  )
+
+  it('recognises Figma’s own stale-handle throw', () => {
+    expect(staleHandleThrow(figmaThrow)).toBe(true)
+  })
+
+  it('does not claim an unrelated failure', () => {
+    expect(
+      staleHandleThrow(new Error('Unsupported node type')),
+    ).toBe(false)
+  })
+
+  it('restates it against the id the CALLER sent', () => {
+    // Figma quotes the 2-segment address it composed off a pre-append id, and
+    // that address resolves to nothing (69 such rows, 2026-09-02). The caller
+    // gets our sentence, naming its own id and the way out.
+    expect(restatedRefusal(figmaThrow, [CELL_C])).toBe(
+      deadHandleMessage(CELL_C),
+    )
+  })
+
+  it('leaves the throw alone when no id was provisional', () => {
+    expect(restatedRefusal(figmaThrow, [])).toBeUndefined()
+  })
+
+  it('leaves an unrelated throw alone', () => {
+    expect(
+      restatedRefusal(
+        new Error('Unsupported node type'),
+        [CELL_C],
+      ),
+    ).toBeUndefined()
   })
 })
 
@@ -745,12 +888,73 @@ describe('the write face refuses what it cannot address (B73/B74)', () => {
     expect(message).toContain(CARD)
   })
 
-  it('WRITE mode refuses a canonical id whose handle refuses', async () => {
+  it('WRITE mode refuses a canonical id whose handle answers NOTHING', async () => {
     const { resolver } = deepHarness({ dead: true })
     resolver.setStrict(true)
     expect(resolver.resolve(CELL_C)).rejects.toThrow(
       deadHandleMessage(CELL_C),
     )
+  })
+
+  it('WRITE mode HANDS BACK a handle that only refuses its ancestry (B81)', async () => {
+    // The top row. 48 live refusals in one build forced every slot to be
+    // built-then-reparented and the app shell flattened — for a handle the
+    // probe never asked to take a write. A refusal has to be earned by a
+    // write that did not land, not by a `.parent` that would not read.
+    const { resolver } = deepHarness({
+      parentless: parentRefusing(CELL_ALIAS),
+    })
+    resolver.setStrict(true)
+    expect((await resolver.resolve(CELL_C))?.name).toBe(
+      'Amount',
+    )
+  })
+
+  it('…and NAMES it provisional, so the write face can restate a refusal', async () => {
+    const { resolver } = deepHarness({
+      parentless: parentRefusing(CELL_ALIAS),
+    })
+    resolver.setStrict(true)
+    await resolver.resolve(CELL_C)
+    expect(resolver.provisionalIds()).toEqual([CELL_C])
+  })
+
+  it('a handle that refuses the WRITE is still refused — in OUR words', async () => {
+    // The other half of the hypothesis. Figma throws quoting the composed
+    // 2-segment address; the caller is handed the id it sent instead.
+    const { resolver } = deepHarness({
+      parentless: CELL_WRITE_REFUSING,
+    })
+    resolver.setStrict(true)
+    const handle = (await resolver.resolve(
+      CELL_C,
+    )) as LiveNode
+    let thrown: unknown
+    try {
+      ;(handle as Record<string, unknown>).layoutMode = 'H'
+    } catch (err) {
+      thrown = err
+    }
+    expect(
+      restatedRefusal(thrown, resolver.provisionalIds()),
+    ).toBe(deadHandleMessage(CELL_C))
+  })
+
+  it('a healthy write names no provisional id at all', async () => {
+    const { resolver } = deepHarness()
+    resolver.setStrict(true)
+    await resolver.resolve(SLOT_C)
+    expect(resolver.provisionalIds()).toEqual([])
+  })
+
+  it('reset() drops the provisional list with the exports', async () => {
+    const { resolver } = deepHarness({
+      parentless: parentRefusing(CELL_ALIAS),
+    })
+    resolver.setStrict(true)
+    await resolver.resolve(CELL_C)
+    resolver.reset()
+    expect(resolver.provisionalIds()).toEqual([])
   })
 
   it('READ mode still hands the dead handle back, so the slice can degrade', async () => {

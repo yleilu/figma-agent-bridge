@@ -103,7 +103,9 @@ import {
 } from './canonical-ids'
 import {
   partialLiveReadMessage,
+  refusedChildrenMessage,
   slicedReadMessage,
+  staleHandleThrow,
 } from './resolve-node'
 
 export type { LiveNode, RawNode }
@@ -748,7 +750,16 @@ const collectOne = (
       refused.push('the live variable bindings')
     }
     if (pair.walkError !== undefined) {
-      patch.readError = pair.walkError
+      // B65 — the LAST truncation path on the read face. `walkError` is
+      // Figma's own throw, and when the walk failed because Figma composed
+      // this node's address off a pre-append id, that throw quotes the
+      // composed address: two segments, naming no node. 69 rows carried one on
+      // the 2026-09-02 artifact. Restated against the id the read emits, which
+      // is the id a caller holds — and only for THAT signature, because a node
+      // deleted mid-read is a different fact and Figma says it best.
+      patch.readError = staleHandleThrow(pair.walkError)
+        ? refusedChildrenMessage(id, refused)
+        : pair.walkError
     } else if (refused.length > 0) {
       // B65 — the loss is stated in OUR words, against the id the read emits.
       // Figma's own message quotes the address it composed off the pre-append
@@ -980,9 +991,36 @@ export const enrichDocument = async (
   depth: number,
   deps: EnrichDeps,
 ): Promise<void> => {
-  applyPatches(
-    doc,
-    await collectPatches(root, doc, depth, deps),
-    depth,
-  )
+  try {
+    applyPatches(
+      doc,
+      await collectPatches(root, doc, depth, deps),
+      depth,
+    )
+  } catch (err) {
+    // B88 — THE ENRICHMENT IS AN ADDITION TO A DOCUMENT, SO ITS FAILURE MAY
+    // COST THE ADDITIONS AND MUST NEVER COST THE DOCUMENT. Every node's own
+    // collection is already guarded (T7); what is guarded here is the pass
+    // itself, against a throw from inside a Figma API this walk calls that no
+    // per-node guard is in front of.
+    //
+    // Live, 2026-09-02: a depth-2 read of a clone answered `PLUGIN_ERROR:
+    // cannot read property 'indexOf' of undefined` and returned nothing at
+    // all, while the export that describes that clone had already been
+    // produced and was sitting in `doc`. A read that HAS an answer must not
+    // reply with a stack trace.
+    const existing = doc.readErrors
+    const failure =
+      'the read could not be enriched — ' +
+      (err instanceof Error ? String(err) : String(err)) +
+      '. This row is the file’s own export, without the fields only a live ' +
+      'read can supply.'
+    const line =
+      (typeof doc.id === 'string' ? doc.id : '(root)') +
+      ': ' +
+      failure
+    doc.readErrors = Array.isArray(existing)
+      ? [...existing, line]
+      : [line]
+  }
 }

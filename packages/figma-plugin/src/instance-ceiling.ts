@@ -26,6 +26,11 @@
 // Structural on both sides, so both are testable without a Figma runtime.
 
 /** As much of a node as the ancestor walk touches. */
+import {
+  deadHandleMessage,
+  staleHandleThrow,
+} from './resolve-node'
+
 export type AncestorNode = {
   id?: unknown
   name?: unknown
@@ -115,6 +120,22 @@ export const appendRefusal = ({
     (parentType ?? 'unknown type') +
     ')'
   if (host === undefined) {
+    // Figma refused an address it composed off a pre-append id (B81/B73):
+    // its sentence quotes a two-segment id the caller never sent and no
+    // read answers. Restate it against the id the caller DID send — the
+    // same restatement the write doors get from `restatedRefusal` — so the
+    // create/move door keeps B73's promise too (live 2026-09-03: the nested
+    // slot create quoted `I<preappend>;<local>` verbatim).
+    if (parentId !== undefined && staleHandleThrow(raw)) {
+      return (
+        'Cannot ' +
+        operation +
+        ' ' +
+        target +
+        ': ' +
+        deadHandleMessage(parentId)
+      )
+    }
     // No instance is responsible, so do not blame one. This branch is the
     // whole point of checking: the old text claimed the instance rule from a
     // discarded error, and sent callers hunting a slot that was never involved.

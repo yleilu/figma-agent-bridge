@@ -12,6 +12,7 @@ import {
   applyExportSettings,
   applyGrids,
   capabilityWarnings,
+  deadWrapWarning,
   discardedPositionsWarning,
   repinFixedSize,
   statedPositionWarning,
@@ -1628,4 +1629,92 @@ test('applyMinMax: omission ≠ clear, and null IS a clear', () => {
   applyMinMax(node, { maxWidth: null })
   expect(node.minWidth).toBe(200)
   expect(node.maxWidth).toBeNull()
+})
+
+// ─── deadWrapWarning (I86) ─────────────────────────────────────────────────
+//
+// The mirror of the FILL-in-HUG collapse above, and the trap that defeated
+// S58. A HUG container sizes to its content, so nothing ever bounds the line
+// and `wrap:true` can never fire. Operator-filed 2026-09-02: it set wrap on
+// the top-bar action cluster and a segmented-control track expecting reflow at
+// narrow widths; the only symptom was silent overhang and clipping, caught by
+// its own squeeze probe at 469px of content against 432px of inner width.
+
+const wrapNode = (over: Record<string, unknown> = {}) => ({
+  type: 'FRAME',
+  name: 'Actions',
+  layoutMode: 'HORIZONTAL',
+  layoutWrap: 'WRAP',
+  layoutSizingHorizontal: 'HUG',
+  ...over,
+})
+
+test('deadWrapWarning: wrap on a HUG main axis can never fire', () => {
+  const warning = deadWrapWarning(wrapNode())
+  expect(warning).toContain('"Actions"')
+  expect(warning).toContain('wrap')
+  expect(warning).toContain('HUG')
+  expect(warning).toContain('maxWidth')
+})
+
+test('deadWrapWarning: a FILL main axis is bounded, so nothing is said', () => {
+  expect(
+    deadWrapWarning(
+      wrapNode({ layoutSizingHorizontal: 'FILL' }),
+    ),
+  ).toBeUndefined()
+})
+
+test('deadWrapWarning: a maxWidth bounds the line even under HUG', () => {
+  expect(
+    deadWrapWarning(wrapNode({ maxWidth: 432 })),
+  ).toBeUndefined()
+})
+
+test('deadWrapWarning: no wrap, no finding', () => {
+  expect(
+    deadWrapWarning(wrapNode({ layoutWrap: 'NO_WRAP' })),
+  ).toBeUndefined()
+})
+
+test('deadWrapWarning: a VERTICAL frame does not wrap at all', () => {
+  // Figma offers wrap on a horizontal auto-layout only, so a vertical frame
+  // carrying the flag is a different question and not this one.
+  expect(
+    deadWrapWarning(wrapNode({ layoutMode: 'VERTICAL' })),
+  ).toBeUndefined()
+})
+
+test('deadWrapWarning: the legacy sizing field answers when the new one is absent', () => {
+  const node = wrapNode()
+  delete (node as Record<string, unknown>)
+    .layoutSizingHorizontal
+  expect(
+    deadWrapWarning({
+      ...node,
+      primaryAxisSizingMode: 'AUTO',
+    }),
+  ).toContain('wrap')
+})
+
+test('deadWrapWarning: a node that refuses every read is not a finding', () => {
+  const hostile = new Proxy(
+    {},
+    {
+      get: () => {
+        throw new Error('The node does not exist')
+      },
+      has: () => true,
+    },
+  )
+  expect(deadWrapWarning(hostile)).toBeUndefined()
+})
+
+test('applySizing: the dead-wrap warning rides the sizing write', () => {
+  const node = wrapNode() as Record<string, unknown>
+  const warnings: string[] = []
+  applySizing(node, ['HUG', 'HUG'], warnings)
+  expect(
+    warnings.some(w => w.includes('never wrap')),
+  ).toBe(true)
 })

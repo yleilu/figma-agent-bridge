@@ -795,6 +795,77 @@ export const createMockPlugin = (
     ],
   })
 
+  // ── A SLOT-FILLED INSTANCE AND ITS CLONE (B88) ────────────────────────────
+  //
+  // The mock could not represent this shape at all, and that gap is why the
+  // headless suite never caught B88: every clone fixture above is either a
+  // plain frame or slot CONTENT, never an instance whose SLOT holds something.
+  // Live, 2026-09-02 — component with a `Body` slot → instance → tree into the
+  // slot → `clone_node` → the clone showed no slot content, and a depth-2 read
+  // of the clone answered `PLUGIN_ERROR: cannot read property 'indexOf' of
+  // undefined`.
+  //
+  // What the mock models is the FIXED contract, which is what a server test
+  // can hold: the clone carries the same slot content under its own ids, the
+  // reply says the plugin had to copy it in, and the clone reads at depth 2.
+  const SLOT_FILLED_ID = '600:100'
+  const SLOT_FILLED_CLONE_ID = '600:200'
+
+  /** A card whose `Body` SLOT holds a table, rooted wherever the caller says. */
+  const slotFilledExport = (
+    rootId: string,
+  ): Record<string, unknown> => ({
+    id: rootId,
+    name: 'Chart card',
+    type: 'INSTANCE',
+    absoluteBoundingBox: {
+      x: 0,
+      y: 0,
+      width: 320,
+      height: 180,
+    },
+    children: [
+      {
+        id: rootId + ';600:110',
+        name: 'Body',
+        type: 'SLOT',
+        absoluteBoundingBox: {
+          x: 0,
+          y: 40,
+          width: 320,
+          height: 140,
+        },
+        children: [
+          {
+            id: rootId + ';600:111',
+            name: 'Table',
+            type: 'FRAME',
+            absoluteBoundingBox: {
+              x: 0,
+              y: 40,
+              width: 320,
+              height: 140,
+            },
+            children: [
+              {
+                id: rootId + ';600:112',
+                name: 'Amount',
+                type: 'TEXT',
+                characters: '940,000 USDC',
+                absoluteBoundingBox: {
+                  x: 8,
+                  y: 48,
+                  width: 120,
+                  height: 16,
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  })
+
   // ── THREE-LEVEL NESTING: instance → SLOT → created subtree (B53) ───────────
   //
   // The fixture above is TWO levels, and B53 is what the third one costs. This
@@ -1024,6 +1095,14 @@ export const createMockPlugin = (
     }
     if (id === SLOT_CLONE_ID) {
       return slotChipExport(SLOT_CLONE_ID)
+    }
+    // B88 — the slot-filled card and its clone both read, at every depth, and
+    // the clone carries the same content under its own ids.
+    if (id === SLOT_FILLED_ID) {
+      return slotFilledExport(SLOT_FILLED_ID)
+    }
+    if (id === SLOT_FILLED_CLONE_ID) {
+      return slotFilledExport(SLOT_FILLED_CLONE_ID)
     }
     // SLOT_CANONICAL_ID is deliberately absent — see the note above.
     return undefined
@@ -1629,6 +1708,12 @@ export const createMockPlugin = (
               name: pageName,
               isCurrent: true,
               childCount: 3,
+              // I84 — a page carries its own note, and the SERVER caps it into
+              // `contextSummary`. Modelled here because the census note this
+              // exists for lives on a page, and `search` never returns a PAGE
+              // row for it.
+              context:
+                '---\nmasters: 43\n---\n\nThe census body, which a list read must not carry.',
             },
           ],
         }
@@ -2867,6 +2952,23 @@ export const createMockPlugin = (
           ]
           break
         }
+        // B88 — a clone of a SLOT-FILLED instance. Figma does not carry the
+        // slot content onto the clone, so the plugin copies it in and SAYS so
+        // on that clone's own entry. The warning is per clone, not per call:
+        // `count` may ask for several and each one is a separate repair.
+        if (cmd.params?.nodeId === SLOT_FILLED_ID) {
+          result = [
+            {
+              id: SLOT_FILLED_CLONE_ID,
+              name: 'Chart card',
+              type: 'INSTANCE',
+              warnings: [
+                'clone_node: Figma did not carry 1 node(s) of slot content onto the clone, so they were copied in. The clone now matches the source; its slot content has NEW ids, which the clone’s own read emits.',
+              ],
+            },
+          ]
+          break
+        }
         for (let i = 0; i < cloneCount; i++) {
           cloneArr.push({
             id: `clone:${i}:${Math.random().toString(36).slice(2, 8)}`,
@@ -3258,12 +3360,31 @@ export const createMockPlugin = (
             'combine_variants ignored ' +
               cvDropped.length +
               ' id(s) that are not a COMPONENT: ' +
-              cvDropped.join(', '),
+              cvDropped
+                .map(id => id + ' (INSTANCE)')
+                .join(', '),
           )
         }
         if (cvKept.length < 2) {
+          // I88 — the refusal names the id and its TYPE. A `bad:` id models a
+          // node that resolves and is not a COMPONENT (live: an INSTANCE id
+          // picked out of `create_tree`'s positional `ids` array).
           error =
-            'Need at least 2 components for combine_variants'
+            'combine_variants needs at least 2 COMPONENT ids and found ' +
+            cvKept.length +
+            '.' +
+            (cvDropped.length > 0
+              ? ' ' +
+                cvDropped
+                  .map(
+                    id =>
+                      id +
+                      ' is a INSTANCE, not a COMPONENT',
+                  )
+                  .join('; ') +
+                '.'
+              : '') +
+            ' Pass the id of each component MASTER — `get_components`, or the reply from `create_component`.'
           break
         }
         // Multi-axis nudge: KEPT ids prefixed `noaxis:` model component names

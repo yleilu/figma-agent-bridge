@@ -1,6 +1,10 @@
 import { expect, test } from 'bun:test'
 
-import { resolveInstanceProps } from './resolve-instance-props'
+import {
+  propertiesNotAppliedMessage,
+  propertiesNotLanded,
+  resolveInstanceProps,
+} from './resolve-instance-props'
 
 // resolveInstanceProps bridges friendly component-property NAMES to the EXACT
 // keys instance.setProperties requires (#11). Exact keys and VARIANT bare names
@@ -101,4 +105,66 @@ test('returns empty result for empty input', () => {
     resolved: {},
     warnings: [],
   })
+})
+
+// ─── the landing check (B81) ─────────────────────────────────────────────────
+//
+// The strict resolver now hands a write the handle whose ancestry would not
+// read, instead of refusing it before the write is tried. That trade is only
+// honest if the write PROVES itself, so set_instance reads the properties back
+// through the same handle and reports what did not take. 10 of the 48 refusals
+// the 2026-09-02 build met were set_instance calls on 4-segment sublayer ids.
+
+test('a property that reads back as asked has landed', () => {
+  expect(
+    propertiesNotLanded(
+      { 'Glyph#1:0': 'Payments' },
+      { 'Glyph#1:0': { value: 'Payments' } },
+    ),
+  ).toEqual([])
+})
+
+test('a property that reads back unchanged did NOT land', () => {
+  expect(
+    propertiesNotLanded(
+      { 'Glyph#1:0': 'Payments' },
+      { 'Glyph#1:0': { value: 'Accounts' } },
+    ),
+  ).toEqual(['Glyph#1:0'])
+})
+
+test('a boolean property compares by value', () => {
+  expect(
+    propertiesNotLanded(
+      { 'Disabled#7:3': true },
+      { 'Disabled#7:3': { value: true } },
+    ),
+  ).toEqual([])
+})
+
+test('a property the read-back does not name at all did not land', () => {
+  expect(
+    propertiesNotLanded({ 'Glyph#1:0': 'Payments' }, {}),
+  ).toEqual(['Glyph#1:0'])
+})
+
+test('an unreadable read-back proves nothing, so it names nothing', () => {
+  // undefined is "could not verify", which is not "did not land". Reporting a
+  // no-op nobody can see is the mirror of acking a write nobody can see.
+  expect(
+    propertiesNotLanded(
+      { 'Glyph#1:0': 'Payments' },
+      undefined,
+    ),
+  ).toEqual([])
+})
+
+test('the message names every property that did not take', () => {
+  const message = propertiesNotAppliedMessage([
+    'Glyph#1:0',
+    'Size',
+  ])
+  expect(message).toContain('Glyph#1:0')
+  expect(message).toContain('Size')
+  expect(message).toContain('read back unchanged')
 })

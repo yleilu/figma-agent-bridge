@@ -1230,6 +1230,60 @@ export const fillCollapseWarning = (
 }
 
 /**
+ * A `wrap` that can never fire, because nothing bounds the line (I86).
+ *
+ * The exact mirror of `fillCollapseWarning` above, and the trap that defeated
+ * S58. A HUG container sizes to its content, so a horizontal row of children
+ * that overflows simply makes the container wider — there is no width for a
+ * line to run out of, and wrap is dead. Operator-filed 2026-09-02: `wrap:true`
+ * on the top-bar action cluster and on a segmented-control track, expecting
+ * reflow at narrow widths. The only symptom was silent overhang and clipping,
+ * found by the operator's own squeeze probe at 469px of content against 432px
+ * of inner width.
+ *
+ * A MAXWIDTH IS A BOUND. `maxWidth` on a HUG frame caps the line, so wrap does
+ * fire and there is nothing to report — which is also half the remedy the
+ * message names.
+ *
+ * HORIZONTAL only, because that is the only mode Figma offers wrap on. A
+ * vertical frame carrying the flag is a different question and this does not
+ * claim to answer it.
+ *
+ * READ AFTER THE WRITE, off the node itself rather than off the spec: `layout`
+ * and `sizing` are two halves of one instruction that land at different times
+ * on the create path (B60), and only the node knows what it ended up with.
+ */
+export const deadWrapWarning = (
+  node: unknown,
+): string | undefined => {
+  let wrap: unknown
+  let mode: unknown
+  let max: unknown
+  try {
+    const f = node as Record<string, unknown>
+    wrap = f.layoutWrap
+    mode = f.layoutMode
+    max = f.maxWidth
+  } catch {
+    // A node that will not answer cannot be judged, and an unknown must not
+    // read as a finding.
+    return undefined
+  }
+  if (wrap !== 'WRAP' || mode !== 'HORIZONTAL') {
+    return undefined
+  }
+  if (typeof max === 'number') return undefined
+  if (hugsAxis(node, 0) !== true) return undefined
+  return (
+    nodeLabel(node as { name?: unknown }) +
+    ' sets wrap while it HUGS its horizontal axis, so nothing bounds the ' +
+    'line and its children never wrap — the row just gets wider, and ' +
+    'overflows whatever holds it. Give this node a FILL or FIXED horizontal ' +
+    'size, or a maxWidth.'
+  )
+}
+
+/**
  * Apply `sizing: [horizontal, vertical]` — the auto-layout FIXED/HUG/FILL pair.
  *
  * Both axes go in ONE try, exactly as this write has always been made: Figma
@@ -1269,6 +1323,12 @@ export const applySizing = (
   const collapse = fillCollapseWarning(node, sizing)
   if (collapse !== undefined) {
     warnings?.push(collapse)
+  }
+  // I86 — the mirror finding, on the same read-after-write. `sizing` is the
+  // half that decides it, so this is the moment the node's wrap can be judged.
+  const deadWrap = deadWrapWarning(node)
+  if (deadWrap !== undefined) {
+    warnings?.push(deadWrap)
   }
 }
 

@@ -16,8 +16,10 @@
 //   viewport). This moves the CANVAS only (scroll + zoom) — it does NOT change
 //   the selection (pair with set_selection for that).
 // clone_node: COMMANDS.CLONE_NODE with {nodeId,parentId?,index?,count?} →
-//   [{id,…}] (one entry per clone). Plugin node.clone() + optional reparent/
-//   index/count.
+//   [{id,…,warnings?}] (one entry per clone). Plugin node.clone() + optional
+//   reparent/index/count. B88 — Figma's clone() does not carry SLOT content,
+//   so the plugin copies in what is missing and names the repair on that
+//   clone's own `warnings[]`; content it could not copy is named too.
 // reparent_node: COMMANDS.REPARENT_NODE with {nodeId,parentId,index?} →
 //   {id,…,parentId}. Plugin appendChild / insertChild (re-flows under the new
 //   parent).

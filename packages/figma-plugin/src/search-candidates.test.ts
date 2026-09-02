@@ -104,6 +104,64 @@ describe('candidateFromExport', () => {
     expect('characters' in bare!).toBe(false)
     expect('variableIds' in bare!).toBe(false)
   })
+
+  // B85 — the completeness half. A style census taken from `search` read
+  // `results: 1` on Overview where three nodes carried `Glow/Accent`, and
+  // `results: 0` on Payments where a designated carrier renders it: every
+  // missing carrier sat inside a repaired subtree, and the export row that
+  // stood for it carried no style reference for `match:{styleId}` to test.
+  // JSON_REST_V1 DOES name them, per node, under `styles`.
+  it('carries the export’s own per-node style references (B85)', () => {
+    expect(
+      candidateFromExport(
+        {
+          id: 'n',
+          styles: {
+            fill: 'S:60f91cd0,',
+            effect: 'S:aab12233,',
+          },
+        },
+        { styleIds: true },
+      )?.styleIds,
+    ).toEqual(['S:60f91cd0,', 'S:aab12233,'])
+  })
+
+  it('only when the scan asked for them', () => {
+    expect(
+      'styleIds' in
+        candidateFromExport({
+          id: 'n',
+          styles: { fill: 'S:60f91cd0,' },
+        })!,
+    ).toBe(false)
+  })
+
+  it('omits the key on a node the export gives no styles', () => {
+    expect(
+      'styleIds' in
+        candidateFromExport(
+          { id: 'n' },
+          { styleIds: true },
+        )!,
+    ).toBe(false)
+  })
+
+  it('takes only string references, and each one once', () => {
+    expect(
+      candidateFromExport(
+        {
+          id: 'n',
+          styles: {
+            fill: 'S:1,',
+            stroke: 'S:1,',
+            text: 7,
+            grid: null,
+          },
+        },
+        { styleIds: true },
+      )?.styleIds,
+    ).toEqual(['S:1,'])
+  })
 })
 
 describe('candidatesFromExport — the whole subtree, canonically', () => {
@@ -536,6 +594,61 @@ describe('repairScan — repair without downgrading (C1)', () => {
       expect(traded[0]).toContain(key)
     }
     expect(degraded).toBe(1)
+  })
+
+  // B85, the completeness half. The row above cannot be PAIRED — but it does
+  // not have to be, because the export names each node's own style references.
+  // A census on `match:{styleId}` then finds the carrier under the id the file
+  // uses, which is the whole of what the row asked for.
+  it('serves styleIds off the export, so the trade no longer costs them', async () => {
+    const fixture = frameHosted()
+    fixture.candidates[3] = live('298:7519', {
+      name: 'Chip',
+      componentKey: 'k-chip',
+      instancesOf: 'Chip',
+      styleIds: ['S:60f91cd0,'],
+      context: 'a slot-hosted chip',
+    })
+    const doc = frameDoc()
+    const chipDocNode = (doc.children as RawNode[])[2]
+    chipDocNode.styles = { effect: 'S:60f91cd0,' }
+    const { results, warnings, degraded } =
+      await repairScan({
+        ...fixture,
+        hints: { styleIds: true },
+        exportHost: async () => ({ document: doc }),
+      })
+    // The carrier is in `results`, addressable, and matchable by style.
+    expect(
+      results.find(r => r.id === CANON)?.styleIds,
+    ).toEqual(['S:60f91cd0,'])
+    // …so `styleIds` is no longer named as lost. `context` still is: nothing
+    // in an export carries agent-authored plugin data.
+    const traded = warnings.filter(w =>
+      w.includes('298:7519'),
+    )
+    expect(traded).toHaveLength(1)
+    expect(traded[0]).not.toContain('styleIds')
+    expect(traded[0]).toContain('context')
+    expect(degraded).toBe(1)
+  })
+
+  it('still counts styleIds lost when the export names no style at all', async () => {
+    // The honest half stays honest: an export with no `styles` anywhere cannot
+    // answer for the key, and `degraded` must keep saying so.
+    const fixture = frameHosted()
+    fixture.candidates[3] = live('298:7519', {
+      name: 'Chip',
+      styleIds: ['S:chip'],
+    })
+    const { warnings } = await repairScan({
+      ...fixture,
+      hints: { styleIds: true },
+      exportHost: async () => ({ document: frameDoc() }),
+    })
+    expect(
+      warnings.filter(w => w.includes('298:7519'))[0],
+    ).toContain('styleIds')
   })
 
   it('says nothing when the dropped row carried no live-only key', async () => {

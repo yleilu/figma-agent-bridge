@@ -192,6 +192,40 @@ export const partialLiveReadMessage = (
   'that answers.'
 
 /**
+ * What a row says when its live handle would not LIST ITS CHILDREN (B65).
+ *
+ * The fourth wording of one loss, and the last read path that was still
+ * handing Figma's own sentence through. That sentence quotes the address
+ * Figma composed off a pre-append id — `I571:32063;571:32007`, two segments —
+ * and the address names no node: `get_node` on it answers *"does not exist"*.
+ * 69 of the 300 readErrors on the 2026-09-02 artifact were this throw,
+ * verbatim, while the row's own canonical id (four segments) resolved fine.
+ *
+ * So the id here is the one the read EMITS for this node, and what the row
+ * lost is named rather than quoted. The children below it are not lost: the
+ * pairing keeps walking the EXPORT, so each one arrives served from the
+ * ancestor's export and says so in its own words.
+ *
+ * `fields` carries the property groups the same handle also refused, when it
+ * refused any — one node, one sentence, rather than a refusal that hides
+ * another.
+ */
+export const refusedChildrenMessage = (
+  nodeId: string,
+  fields: readonly string[] = [],
+): string =>
+  'the live handle for ' +
+  nodeId +
+  ' refused to list its children' +
+  (fields.length > 0
+    ? ', and refused ' + fields.join(', ')
+    : '') +
+  ' — Figma composed its address from a pre-append id. The children on this ' +
+  'row come from the file’s own export, without the fields only a live read ' +
+  'can supply. Read the enclosing INSTANCE (get_node, depth:-1) to see this ' +
+  'subtree through a handle that answers.'
+
+/**
  * How many ancestors an id walk will climb before it gives up.
  *
  * A Figma tree is a few dozen levels at worst. The bound is here so a cyclic or
@@ -259,20 +293,47 @@ export const isAliasHandle = (node: LiveNode): boolean => {
 }
 
 /**
- * Whether a live handle will answer a property read at all.
+ * Whether a live handle answers ANYTHING — the only thing a write may be
+ * refused on BEFORE it is tried (B81).
  *
- * `parent` is the discriminator, and the live evidence names it: a write to a
- * fabricated address answered *"in get_parent: The node … does not exist"*
- * (B74, 2026-08-30), and a create into one answered *"in appendChild: …"*
- * (B73). Such a handle still serves `id`, `name`, `type` and its size — enough
- * to look complete to a scan — so a probe on any of those would pass it.
+ * This probe used to read `parent` as well, and that over-rejected. `parent`
+ * is a fact about the chain ABOVE a node: Figma composes an instance
+ * sublayer's address from its parent's id, so a stale link anywhere up the
+ * chain makes `.parent` throw on a node that is itself perfectly addressable.
+ * A write touches the node, not its ancestry.
  *
- * `type` is read too: it costs nothing and it covers a runtime that refuses a
- * different member first.
+ * The cost of asking the wrong question was measured. 48 live `PLUGIN_ERROR`
+ * refusals in one 2026-09-02 build, none of which had tried a write; the
+ * operator answered them by ordering every slot build-then-reparent and
+ * FLATTENING the app shell so no slot nested more than one instance level
+ * deep. A probe was dictating the component topology of builds.
+ *
+ * So the gate now asks only whether there is a handle here at all. A node that
+ * refuses its own `type` answers nothing and can be refused for free; anything
+ * else is PROVISIONAL — the write is attempted, and the refusal, if there is
+ * one, is earned by a write that did not land (see `restatedRefusal`).
  */
 export const handleAnswers = (node: LiveNode): boolean => {
   try {
     void (node as { type?: unknown }).type
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether a handle will read its own `parent` — ADVISORY, never a write gate.
+ *
+ * It still discriminates: the B74 signature refuses it (*"in get_parent: The
+ * node … does not exist"*, live 2026-08-30), and so does the 2026-09-02
+ * read-back class that answers `id` and `type` and throws on `width`,
+ * `getSharedPluginData` and `parent`. What it does NOT tell anyone is whether
+ * a write lands, which is why its answer MARKS a handle rather than refusing
+ * it.
+ */
+export const parentAnswers = (node: LiveNode): boolean => {
+  try {
     void (node as { parent?: unknown }).parent
     return true
   } catch {
@@ -320,6 +381,52 @@ export const deadHandleMessage = (nodeId: string): string =>
   'the ancestor export. To change it: reparent_node the subtree out of the ' +
   'slot, write there, and reparent it back — or set the value through the ' +
   'instance override / component property on the instance above it.'
+
+/**
+ * Whether a throw is Figma refusing an address it composed off a pre-append id.
+ *
+ * The signature is Figma's own and it is stable across verbs — `get_parent`,
+ * `get_children`, `appendChild` and `set_*` all word it the same way:
+ *
+ *   in get_children: The node (instance sublayer or table cell) with id
+ *   "I571:32063;571:32007" does not exist
+ *
+ * The parenthetical is the load-bearing half. A plain "does not exist" is also
+ * what Figma says about an id a caller simply got wrong, and restating THAT as
+ * a slot-address refusal would send someone hunting a mechanism that is not
+ * there.
+ */
+export const staleHandleThrow = (err: unknown): boolean => {
+  const text =
+    err instanceof Error ? err.message : String(err)
+  return (
+    text.includes('instance sublayer or table cell') &&
+    text.includes('does not exist')
+  )
+}
+
+/**
+ * Our sentence for a write Figma refused through a PROVISIONAL handle, or
+ * undefined when the throw is not ours to restate (B81).
+ *
+ * Figma's own message quotes the address it composed — two segments, naming no
+ * node (69 such ids on the 2026-09-02 artifact, every one of which `get_node`
+ * answers "does not exist" for). Handing that through gives a caller an id it
+ * cannot act on. This restates the same refusal against the id the caller
+ * SENT, with the way out on it.
+ *
+ * Only for an id this dispatch resolved through a handle whose ancestry would
+ * not read. Everything else keeps Figma's words: a message we did not earn the
+ * right to replace is a message we must not replace.
+ */
+export const restatedRefusal = (
+  err: unknown,
+  provisional: readonly string[],
+): string | undefined => {
+  if (provisional.length === 0) return undefined
+  if (!staleHandleThrow(err)) return undefined
+  return deadHandleMessage(provisional[0])
+}
 
 /**
  * Whether `nodeId` must be described by its ANCESTOR's export rather than by
@@ -394,6 +501,15 @@ export type NodeResolver = {
    */
   resolve: (nodeId: string) => Promise<LiveNode | null>
   /**
+   * The ids this dispatch resolved through a handle it could not vouch for
+   * (B81), in resolve order.
+   *
+   * A write through one of these is ATTEMPTED, not refused — and if Figma
+   * throws, `restatedRefusal` uses this list to word the refusal against an id
+   * the caller can act on. Empty for every ordinary dispatch.
+   */
+  provisionalIds: () => string[]
+  /**
    * What the export says about `nodeId`, for a node whose live handle cannot
    * describe itself. Undefined for a plain id — that node answers its own read.
    *
@@ -415,12 +531,22 @@ export const createNodeResolver = (
     Promise<IdentityIndex | undefined>
   >()
   let strict = false
+  /** Ids handed back through a handle whose ancestry would not read (B81). */
+  const provisional: string[] = []
 
   /**
-   * The handle, or a refusal — the write-mode gate (B73/B74).
+   * The handle, or a refusal — the write-mode gate (B73/B74/B81).
    *
    * Read mode is unchanged: it takes whatever came back, and the read face
    * declares what the handle could not answer.
+   *
+   * Write mode refuses ONE thing up front: a handle that answers nothing at
+   * all, which cannot take a write by any road. A handle that answers itself
+   * and refuses its ancestry is handed back and REMEMBERED — the write is
+   * tried, and the refusal, if Figma issues one, is restated against the
+   * caller's own id. Refusing that class before the attempt is what B81 cost:
+   * 48 writes refused in one build, and a component topology bent around a
+   * probe.
    */
   const vouch = (
     node: LiveNode | null,
@@ -429,6 +555,12 @@ export const createNodeResolver = (
     if (!strict || node === null) return node
     if (!handleAnswers(node)) {
       throw new Error(deadHandleMessage(nodeId))
+    }
+    if (
+      !parentAnswers(node) &&
+      !provisional.includes(nodeId)
+    ) {
+      provisional.push(nodeId)
     }
     return node
   }
@@ -475,8 +607,10 @@ export const createNodeResolver = (
   return {
     reset: () => {
       indexes.clear()
+      provisional.length = 0
       strict = false
     },
+    provisionalIds: () => [...provisional],
     setStrict: (on: boolean) => {
       strict = on
     },

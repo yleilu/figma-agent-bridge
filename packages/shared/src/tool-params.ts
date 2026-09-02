@@ -233,6 +233,10 @@ export const SEARCH_FIELDS: ReadonlySet<string> = new Set(
     // refusing this name while emitting the field was the same lie as
     // accepting `context` and deleting it — pointed the other way.
     'contextSummary',
+    // Same rule, same reason (I85): a row that carries a `position` also
+    // carries the frame that position is measured in, so the name has to be
+    // askable.
+    'positionFrame',
   ].filter(f => !SEARCH_UNPROJECTABLE.has(f)),
 )
 
@@ -308,7 +312,7 @@ export const searchParamsSchema = z
     // `batch` entry and a direct call are refused on the same terms as an MCP
     // call.
     fields: listReadParamsSchema.shape.fields.describe(
-      'Exact allow-list of fields per result — an entry outside the vocabulary is REFUSED, never dropped. Any NodeSpec field except `context`, plus `characters` (a TEXT node’s copy), `childCount` (how many children the result has — the way to rebuild the tree from this flat list) and `contextSummary` (the capped note a search row carries; ask get_node for the note in full).',
+      'Exact allow-list of fields per result — an entry outside the vocabulary is REFUSED, never dropped. Any NodeSpec field except `context`, plus `characters` (a TEXT node’s copy), `childCount` (how many children the result has — the way to rebuild the tree from this flat list) `contextSummary` (the capped note a search row carries; ask get_node for the note in full) and `positionFrame` (the frame a row’s `position` is measured in — a search row’s is ABSOLUTE, a get_node tree’s is parent-relative).',
     ),
     // `profile` rides here rather than on listReadParamsSchema: the presets are
     // NodeSpec field sets, so they mean something for `search`'s node results and

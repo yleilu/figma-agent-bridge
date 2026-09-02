@@ -81,6 +81,82 @@ describe('handleListPages (rebuilt — Rule A)', () => {
     expect(out.truncated).toBe(false)
   })
 
+  // I84 — the DS census note lives on a PAGE node, and `search` never returns
+  // a PAGE row: 0 of 1533 on the 2026-09-02 artifact, on both scopes. The
+  // reviewer could not score the census reconciliation from the read-backs at
+  // all and had to reconstruct the note from the operator's TRANSCRIPT — a
+  // channel no reviewer should depend on and one that will not exist for a
+  // build it did not watch. `list_pages` is the read that ALREADY returns a row
+  // per page, so the summary rides there.
+  it('carries each page’s contextSummary (I84)', async () => {
+    const result = await handleListPages(
+      {},
+      stubClient({
+        reply: {
+          docName: 'My Doc',
+          results: [
+            {
+              id: '0:1',
+              name: 'Design System',
+              isCurrent: true,
+              childCount: 3,
+              context:
+                '---\nmasters: 49\nrevisions: 6\n---\n\nThe long body nobody asked for.',
+            },
+          ],
+        },
+      }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: { contextSummary?: string }[]
+    }
+    expect(out.results[0].contextSummary).toBe(
+      'masters: 49\nrevisions: 6',
+    )
+  })
+
+  it('never leaks the raw page note — the capped summary only', async () => {
+    // The bounded-reader rule (self-describing-nodes.md): a list read carries
+    // `contextSummary`, and `get_node` on the page id is where the note is
+    // read in full.
+    const result = await handleListPages(
+      {},
+      stubClient({
+        reply: {
+          docName: 'My Doc',
+          results: [
+            {
+              id: '0:1',
+              name: 'Design System',
+              isCurrent: true,
+              childCount: 3,
+              context:
+                '---\nmasters: 49\n---\n\nBODY-MARKER',
+            },
+          ],
+        },
+      }),
+    )
+    expect(result.content[0].text).not.toContain(
+      'BODY-MARKER',
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: Record<string, unknown>[]
+    }
+    expect('context' in out.results[0]).toBe(false)
+  })
+
+  it('omits the key entirely on a page with no note', async () => {
+    const result = await handleListPages(
+      {},
+      stubClient({ reply }),
+    )
+    const out = YAML.parse(result.content[0].text) as {
+      results: Record<string, unknown>[]
+    }
+    expect('contextSummary' in out.results[0]).toBe(false)
+  })
+
   it('does not emit a cursor for a page set within the limit', async () => {
     const result = await handleListPages(
       {},

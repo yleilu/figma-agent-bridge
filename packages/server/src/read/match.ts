@@ -41,6 +41,27 @@ type MatchableNode = NodeSpec & {
   instancesOfSet?: string
 }
 
+/**
+ * The KEY inside a style reference, whichever spelling it arrives in (B85).
+ *
+ * Two channels now feed `styleIds`. A LIVE scan row carries the Plugin API's
+ * `fillStyleId` / `effectStyleId` — `S:<key>,`, with an `S:` prefix and a
+ * trailing comma. An EXPORT-served row carries what JSON_REST_V1 put under the
+ * node's `styles` map, and the two need not agree on that decoration. The key
+ * is what identifies the style in both, so both sides are reduced to it before
+ * they are compared — which also means a caller who pasted an id out of
+ * `get_styles` is not punished for the spelling it used.
+ */
+const styleKeyOf = (id: string): string => {
+  const withoutPrefix = id.startsWith('S:')
+    ? id.slice(2)
+    : id
+  const comma = withoutPrefix.indexOf(',')
+  return comma === -1
+    ? withoutPrefix
+    : withoutPrefix.slice(0, comma)
+}
+
 /** Convert a glob pattern (supports * wildcard) to an anchored RegExp. */
 const globToRegex = (glob: string): RegExp => {
   const escaped = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&')
@@ -99,12 +120,13 @@ export const buildMatcher = (
   }
 
   if (m.styleId !== undefined) {
-    const sid = m.styleId
+    const sid = styleKeyOf(m.styleId)
     predicates.push(
       n =>
-        n.styleId === sid ||
+        (n.styleId !== undefined &&
+          styleKeyOf(n.styleId) === sid) ||
         (Array.isArray(n.styleIds) &&
-          n.styleIds.includes(sid)),
+          n.styleIds.some(id => styleKeyOf(id) === sid)),
     )
   }
 

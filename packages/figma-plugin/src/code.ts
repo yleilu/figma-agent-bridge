@@ -45,6 +45,7 @@ import {
   applyExportSettings,
   applyGrids,
   capabilityWarnings,
+  deadWrapWarning,
   discardedPositionsWarning,
   patchPositionIgnored,
   type PlacedTarget,
@@ -129,6 +130,7 @@ import {
   createNodeResolver,
   declareDegradedRead,
   isAliasHandle,
+  restatedRefusal,
   servedByAncestorExport,
   slicedReadMessage,
 } from './resolve-node'
@@ -147,7 +149,21 @@ import {
 } from './root-overlap'
 import { projectComponentDefs } from './project-component-defs'
 import { rollbackCreated } from './rollback'
-import { resolveInstanceProps } from './resolve-instance-props'
+import {
+  nodeAt,
+  slotContentClonedMessage,
+  slotContentNotClonedMessage,
+  slotFillPlan,
+} from './clone-slots'
+import {
+  combineVariantsRefusal,
+  type RejectedId,
+} from './combine-variants'
+import {
+  propertiesNotAppliedMessage,
+  propertiesNotLanded,
+  resolveInstanceProps,
+} from './resolve-instance-props'
 import {
   isTargetMismatch,
   targetGuardError,
@@ -1035,6 +1051,16 @@ const applyCommonProperties = async (
       spec.layout as AppliedLayout,
       warnings,
     )
+    // I86 — a wrap nothing bounds. `applySizing` runs the same check after the
+    // sizing lands, which is the moment that decides it; this covers the call
+    // that states a layout and no sizing, where that moment never comes. The
+    // two conditions are disjoint, so the warning is never said twice.
+    if (spec.sizing === undefined) {
+      const deadWrap = deadWrapWarning(node)
+      if (deadWrap !== undefined) {
+        warnings?.push(deadWrap)
+      }
+    }
   }
 
   // The four auto-layout size clamps are NOT applied here (B59). Figma judges
@@ -2062,7 +2088,7 @@ const buildSingleNode = async (
     throw new Error(
       appendRefusal({
         operation: 'create',
-        parentId: parent.id,
+        parentId: nodeResolver.provisionalIds()[0] ?? parent.id,
         parentType: parent.type,
         host: sealedInstanceHost(parent),
         raw: messageOf(err),
@@ -2255,7 +2281,7 @@ const createTreeNode = async (
         throw new Error(
           appendRefusal({
             operation: 'create',
-            parentId: parent.id,
+            parentId: nodeResolver.provisionalIds()[0] ?? parent.id,
             parentType: parent.type,
             host: sealedInstanceHost(parent),
             raw: messageOf(err),
@@ -2279,7 +2305,7 @@ const createTreeNode = async (
           throw new Error(
             appendRefusal({
               operation: 'create',
-              parentId: parent.id,
+              parentId: nodeResolver.provisionalIds()[0] ?? parent.id,
               parentType: parent.type,
               host: sealedInstanceHost(parent),
               raw: messageOf(err),
@@ -2300,7 +2326,7 @@ const createTreeNode = async (
       throw new Error(
         appendRefusal({
           operation: 'create',
-          parentId: parent.id,
+          parentId: nodeResolver.provisionalIds()[0] ?? parent.id,
           parentType: parent.type,
           host: sealedInstanceHost(parent),
           raw: messageOf(err),
@@ -2790,7 +2816,7 @@ const resolveStyle = async (entry: {
   )
 }
 
-const handleCommand = async (
+const dispatchCommand = async (
   command: string,
   params: Record<string, unknown>,
   writer: string,
@@ -3032,14 +3058,23 @@ const handleCommand = async (
     case COMMANDS.LIST_PAGES:
       return {
         docName: figma.root.name,
-        results: figma.root.children.map(page => ({
-          id: page.id,
-          name: page.name,
-          isCurrent: page.id === figma.currentPage.id,
-          childCount: page.children
-            ? page.children.length
-            : 0,
-        })),
+        results: figma.root.children.map(page => {
+          // I84 — the page's own note travels with the row. `search` never
+          // returns a PAGE row (0 of 1533, both scopes, 2026-09-02), so a note
+          // written on the design-system page was reachable only by knowing
+          // its id in advance. The SERVER caps it into `contextSummary`; the
+          // raw note stays a `get_node` read.
+          const context = readContext(page)
+          return {
+            id: page.id,
+            name: page.name,
+            isCurrent: page.id === figma.currentPage.id,
+            childCount: page.children
+              ? page.children.length
+              : 0,
+            ...(context !== undefined ? { context } : {}),
+          }
+        }),
       }
 
     case COMMANDS.EXPORT: {
@@ -3778,6 +3813,10 @@ const handleCommand = async (
           characters: collectCharacters,
           variableIds: collectVariableId,
           componentRef: collectComponentRef,
+          // B85 — the export names each node's own style references, so a
+          // repaired row can answer `match:{styleId}` instead of reading like
+          // a node that carries no style.
+          styleIds: collectStyleId,
         },
         // B56 — a repaired INSTANCE names its main by id; `match:{instancesOf}`
         // matches on the NAME. A main component is a plain, top-level node, so
@@ -4568,14 +4607,19 @@ const handleCommand = async (
     case COMMANDS.COMBINE_VARIANTS: {
       const cvIds = (params.componentIds as string[]) ?? []
       const cvComps: ComponentNode[] = []
-      const cvDropped: string[] = []
+      // I88 — the TYPE travels with the id. A count error for a type fault
+      // sent the operator to re-count an array that was never wrong.
+      const cvDropped: RejectedId[] = []
       const cvWarnings: string[] = []
       for (const cid of cvIds) {
         const n = await resolveNodeId(cid)
         if (n && n.type === 'COMPONENT') {
           cvComps.push(n as ComponentNode)
         } else {
-          cvDropped.push(cid)
+          cvDropped.push({
+            id: cid,
+            ...(n ? { type: n.type } : {}),
+          })
         }
       }
       if (cvDropped.length > 0) {
@@ -4583,13 +4627,21 @@ const handleCommand = async (
           'combine_variants ignored ' +
             cvDropped.length +
             ' id(s) that are not a COMPONENT: ' +
-            cvDropped.join(', '),
+            cvDropped
+              .map(d =>
+                d.type === undefined
+                  ? d.id
+                  : d.id + ' (' + d.type + ')',
+              )
+              .join(', '),
         )
       }
       if (cvComps.length < 2) {
         return {
-          error:
-            'Need at least 2 components for combine_variants',
+          error: combineVariantsRefusal(
+            cvDropped,
+            cvComps.length,
+          ),
         }
       }
       const cvParentNode =
@@ -4816,6 +4868,33 @@ const handleCommand = async (
           } catch (e) {
             siWarnings.push(
               'setProperties failed: ' + String(e),
+            )
+          }
+          // B81 — the write proves itself, through the SAME handle. The strict
+          // resolver stopped refusing a handle whose ancestry will not read,
+          // so a set_instance on a slot-nested sublayer now runs instead of
+          // being refused before it was tried. That is only honest while a
+          // no-op is caught: read the properties back and name what did not
+          // take. An unreadable read-back proves nothing and says nothing —
+          // `propertiesNotLanded` keeps those two apart.
+          let siAfter:
+            | Record<string, { value?: unknown }>
+            | undefined
+          try {
+            siAfter = inst2.componentProperties as unknown as Record<
+              string,
+              { value?: unknown }
+            >
+          } catch {
+            siAfter = undefined
+          }
+          const siMissed = propertiesNotLanded(
+            resolved,
+            siAfter,
+          )
+          if (siMissed.length > 0) {
+            siWarnings.push(
+              propertiesNotAppliedMessage(siMissed),
             )
           }
         }
@@ -5628,6 +5707,7 @@ const handleCommand = async (
         id: string
         name: string
         type: string
+        warnings?: string[]
       }[] = []
       for (let i = 0; i < count; i++) {
         const clone = src.clone()
@@ -5637,10 +5717,58 @@ const handleCommand = async (
           dest.appendChild(clone)
         }
         writeScope.claim(writer, clone)
+        // B88 — Figma does not carry SLOT content onto a clone, so a clone of
+        // a filled card renders an empty one. The plan is a DIFFERENCE: on a
+        // runtime that does carry it, nothing is missing and nothing is
+        // appended. Guarded per node — a slot that will not take its content
+        // costs that content and is named, never the clone.
+        let carried = 0
+        let lost = 0
+        for (const fill of slotFillPlan(
+          src as unknown as LiveNode,
+          clone as unknown as LiveNode,
+        )) {
+          const slot = nodeAt(
+            clone as unknown as LiveNode,
+            fill.path,
+          ) as unknown as ParentNode | undefined
+          for (const missing of fill.missing) {
+            try {
+              if (
+                slot === undefined ||
+                !('appendChild' in slot)
+              ) {
+                throw new Error('no slot to append to')
+              }
+              slot.appendChild(
+                (
+                  missing as unknown as SceneNode
+                ).clone() as SceneNode,
+              )
+              carried += 1
+            } catch {
+              lost += 1
+            }
+          }
+        }
+        const cloneWarnings: string[] = []
+        if (carried > 0) {
+          cloneWarnings.push(
+            slotContentClonedMessage(carried),
+          )
+        }
+        if (lost > 0) {
+          cloneWarnings.push(
+            slotContentNotClonedMessage(lost),
+          )
+        }
         clones.push({
           id: clone.id,
           name: clone.name,
           type: clone.type,
+          ...(cloneWarnings.length > 0
+            ? { warnings: cloneWarnings }
+            : {}),
         })
       }
       return clones
@@ -5699,7 +5827,7 @@ const handleCommand = async (
         return {
           error: appendRefusal({
             operation: 'move ' + child.id,
-            parentId: parent.id,
+            parentId: nodeResolver.provisionalIds()[0] ?? parent.id,
             parentType: parent.type,
             host: sealedInstanceHost(parent),
             raw: messageOf(err),
@@ -5734,7 +5862,7 @@ const handleCommand = async (
         id: child.id,
         name: child.name,
         type: child.type,
-        parentId: parent.id,
+        parentId: nodeResolver.provisionalIds()[0] ?? parent.id,
         // T7 — reparent_node had no warnings channel at all, which is a gap
         // rather than a decision: it is a WRITE, and a write that degrades
         // silently is the one thing no door on this surface may do. Omitted
@@ -5800,7 +5928,7 @@ const handleCommand = async (
         }
       }
       return {
-        parentId: parent.id,
+        parentId: nodeResolver.provisionalIds()[0] ?? parent.id,
         order: parent.children.map(c => c.id),
         warnings,
       }
@@ -7416,6 +7544,42 @@ const handleCommand = async (
 
     default:
       return { error: 'Unknown command: ' + command }
+  }
+}
+
+/**
+ * One command, with a write's refusal worded against the caller's own id
+ * (B81).
+ *
+ * The strict resolver no longer refuses a handle whose ANCESTRY will not read
+ * — it hands it back and names it provisional, because a `.parent` that throws
+ * says nothing about whether a write lands, and refusing on it cost the
+ * 2026-09-02 build 48 writes and a flattened app shell. The write is therefore
+ * attempted. If Figma refuses it, the throw quotes the address Figma composed
+ * off a pre-append id — two segments, naming no node — and that id is useless
+ * to the caller. This puts our sentence back in its place: the id the caller
+ * sent, and the reparent-out / write / reparent-back way through.
+ *
+ * NOTHING ELSE IS TOUCHED. A dispatch that resolved no provisional handle, or
+ * a throw without Figma's stale-handle signature, comes through exactly as it
+ * was — the restatement is earned by both halves or it does not happen.
+ */
+const handleCommand = async (
+  command: string,
+  params: Record<string, unknown>,
+  writer: string,
+): Promise<unknown> => {
+  try {
+    return await dispatchCommand(command, params, writer)
+  } catch (err) {
+    const restated = restatedRefusal(
+      err,
+      nodeResolver.provisionalIds(),
+    )
+    if (restated !== undefined) {
+      throw new Error(restated)
+    }
+    throw err
   }
 }
 

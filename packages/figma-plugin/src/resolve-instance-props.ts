@@ -72,3 +72,47 @@ export const resolveInstanceProps = (
 
   return { resolved, warnings }
 }
+
+/** One entry of `instance.componentProperties`, as much as the check reads. */
+export type AppliedProperty = { value?: unknown }
+
+/**
+ * The property keys a `setProperties` asked for and the instance does NOT read
+ * back (B81).
+ *
+ * The write face no longer refuses a handle whose ancestry will not read — it
+ * attempts the write. So the write has to prove itself, and the proof is the
+ * same handle answering with the value that was asked for.
+ *
+ * `undefined` for the read-back means the handle would not describe itself
+ * afterwards. That is "could not verify", which is not "did not land", and the
+ * two must not be spelled the same: naming a no-op nobody can see is the exact
+ * mirror of acking a write nobody can see. The caller says so in its own words
+ * instead.
+ */
+export const propertiesNotLanded = (
+  asked: Record<string, string | boolean>,
+  after: Record<string, AppliedProperty> | undefined,
+): string[] => {
+  if (after === undefined) return []
+  return Object.keys(asked).filter(
+    key => after[key]?.value !== asked[key],
+  )
+}
+
+/**
+ * What the reply says about a property write that did not take.
+ *
+ * Exported so the message has ONE author — the `exportBudgetMessage` rule
+ * (resolve-node.ts).
+ */
+export const propertiesNotAppliedMessage = (
+  missed: readonly string[],
+): string =>
+  'set_instance: ' +
+  missed.join(', ') +
+  ' read back unchanged after setProperties, so ' +
+  (missed.length > 1 ? 'those writes' : 'that write') +
+  ' did not land. Inside a slot subtree Figma can compose this instance’s ' +
+  'address from a pre-append id and silently drop the change; reparent the ' +
+  'subtree out of the slot, write there, and reparent it back.'

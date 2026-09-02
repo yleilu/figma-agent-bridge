@@ -188,6 +188,10 @@ describe('M3 components tools e2e (mock plugin over real relay)', () => {
       code: string
     }
     expect(data.error).toContain('at least 2')
+    // I88 — and it names WHICH id and WHAT it is. The count alone sent an
+    // operator to re-count an array that was never wrong.
+    expect(data.error).toContain('bad:9')
+    expect(data.error).toContain('not a COMPONENT')
   })
 
   it('set_instance echo is SPLIT into the read-twin shape (C3 / T2)', async () => {
