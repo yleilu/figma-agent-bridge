@@ -21,9 +21,26 @@
 // geometry gate reads it as authored.
 //
 // The author cannot avoid the shape: the design brief REQUIRES those slots. So
-// the size has to stop being the plugin's. An empty slot hugs — it collapses to
-// nothing while it holds nothing, and grows to its content the moment content
-// arrives, which is the only resting size a slot can honestly have.
+// the size has to stop being the plugin's.
+//
+// HUG ALONE DOES NOT DO IT, and the live run proved that against this module's
+// first version. FIGMA KEEPS AN EMPTY AUTO-LAYOUT FRAME AT THE BOX IT ALREADY
+// HAS: there is no content to hug to, so the current size stands.
+// `update_component({slots:[{name:'Trailing'}]})` on a V master 240 wide left
+// `Trailing` reading `sizing HUG,HUG` and `size [100,100]`, and the master grew
+// 120 → 188 regardless. The sizing was set and nothing moved.
+//
+// SO THE ORDER IS THE FIX, and it is the remedy proven by hand on that same
+// master: write a TINY RESTING BOX first — `size [0.01,0.01]`, which pins the
+// slot FIXED and took the master to 88.01 — and write `sizing HUG,HUG` SECOND,
+// where it wins over the pin. With a 120×32 filler appended the slot then read
+// `[120,32] HUG,HUG` and the master read 120. Written the other way round, the
+// resize pins FIXED over the hug and the whole thing is lost.
+//
+// 0.01 rather than 0, because 0.01 is Figma's own floor for a frame dimension.
+// It is a RESTING box and not a collapse: the slot grows to its content the
+// moment content arrives, which is the only resting size a slot can honestly
+// have.
 //
 // ONLY INTO A SILENCE. An entry that states a `size` or a `sizing` is an author
 // asking for a box, and gets one; this fills the case where nobody asked, which
@@ -44,23 +61,49 @@ export const SLOT_PLACEHOLDER_BOX: readonly [
   number,
 ] = [100, 100]
 
+/**
+ * The resting box an unstated slot is pinned to before it hugs.
+ *
+ * Figma's own floor for a frame dimension — a stated 0 is rejected — so it is
+ * the smallest box a slot can rest at while it holds nothing.
+ */
+export const SLOT_RESTING_BOX: [number, number] = [
+  0.01, 0.01,
+]
+
 /** What an unstated slot is sized by. */
 export type HugSizing = ['HUG', 'HUG']
 
+/** The two writes an unstated slot takes, in the order they must be made. */
+export type SlotSizePlan = {
+  /** Written FIRST. Pins the slot FIXED at a box that costs no layout space. */
+  size: [number, number]
+  /** Written SECOND, where it wins over the pin the resize just set. */
+  sizing: HugSizing
+}
+
 /**
- * The sizing to write on a freshly created SLOT, or undefined to write none.
+ * The size plan for a freshly created SLOT, or undefined to write nothing.
+ *
+ * TWO writes, and the ORDER is the whole fix — see the note above. A hug on its
+ * own leaves an empty slot exactly where Figma put it, which is what the live
+ * run read back off the first version of this module.
  *
  * `undefined` for the spec means a BARE NAME — an older server sends one, and
  * the bare string IS `{name}`, so it takes the same default the object form
  * takes. One entry cannot mean two things depending on how it was spelled.
  */
-export const emptySlotSizing = (
+export const emptySlotPlan = (
   spec: Record<string, unknown> | undefined,
-): HugSizing | undefined => {
-  if (spec === undefined) return ['HUG', 'HUG']
+): SlotSizePlan | undefined => {
+  const plan: SlotSizePlan = {
+    size: SLOT_RESTING_BOX,
+    sizing: ['HUG', 'HUG'],
+  }
+  if (spec === undefined) return plan
   if (spec.size !== undefined) return undefined
   if (spec.sizing !== undefined) return undefined
-  return ['HUG', 'HUG']
+  return plan
 }
 
 /** How many slots a declaration names before it counts the rest (T4). */
@@ -90,13 +133,18 @@ export const placeholderHugMessage = (
     shown +
     (rest > 0 ? ' and ' + rest + ' more' : '') +
     ' stated no size, so ' +
+    (names.length === 1 ? 'it was' : 'they were') +
+    ' given a resting box of ' +
+    SLOT_RESTING_BOX[0] +
+    ' and then set to HUG: ' +
     (names.length === 1 ? 'it hugs' : 'they hug') +
-    ' — Figma creates a slot at ' +
+    ' once filled. Figma creates a slot at ' +
     SLOT_PLACEHOLDER_BOX[0] +
     '×' +
     SLOT_PLACEHOLDER_BOX[1] +
-    ' FIXED, and an empty one at that size consumes real layout space and can ' +
-    'push a master out of its own box. State size (or sizing) on the entry to ' +
-    'pin a resting box instead.'
+    ' FIXED; an empty one at that size consumes real layout space and can push ' +
+    'a master out of its own box, and HUG on its own does not move it — an ' +
+    'empty frame has no content to hug to, so it keeps the box it has. State ' +
+    'size (or sizing) on the entry to pin a resting box of your own instead.'
   )
 }

@@ -99,7 +99,7 @@ import {
   type ModeLike,
 } from './variable-modes'
 import {
-  emptySlotSizing,
+  emptySlotPlan,
   placeholderHugMessage,
 } from './slot-placeholder'
 import {
@@ -4880,11 +4880,24 @@ const dispatchCommand = async (
               // by it, and sixteen more published a resting height of exactly
               // 100 that no author ever asked for. An entry that stated a size
               // or a sizing owns its box and is left alone.
-              const hug = emptySlotSizing(spec)
-              if (hug !== undefined) {
+              //
+              // TWO WRITES, IN THIS ORDER, and the order is the fix. HUG on an
+              // EMPTY frame keeps the box Figma gave it — there is nothing to
+              // hug to — so the slot is first pinned to a resting box that
+              // costs no layout space, and the hug is written second, where it
+              // wins over the pin the resize just set. Written the other way
+              // round the resize pins FIXED over the hug and nothing moves,
+              // which is exactly what the live run measured.
+              const slotPlan = emptySlotPlan(spec)
+              if (slotPlan !== undefined) {
+                applySizeVerified(
+                  slotNode,
+                  slotPlan.size,
+                  slotWarnings,
+                )
                 applySizing(
                   slotNode as FrameNode,
-                  hug,
+                  slotPlan.sizing,
                   slotWarnings,
                 )
                 slotsHugged.push(name)
