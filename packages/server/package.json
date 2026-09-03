@@ -1,13 +1,36 @@
 {
   "name": "@figma-agent-bridge/server",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./tools/*": "./src/tools/*",
+    "./change-feed/*": "./src/change-feed/*.ts",
+    "./component-index/*": "./src/component-index/*",
+    "./ensure-relay": "./src/ensure-relay.ts",
+    "./figma-client": "./src/figma-client.ts",
+    "./feedback-store": "./src/feedback-store.ts",
+    "./credential-store": "./src/credential-store.ts",
+    "./github-client": "./src/github-client.ts",
+    "./worker-client": "./src/worker-client.ts",
+    "./parser": "./src/parser.ts",
+    "./expression-parser": "./src/expression-parser.ts"
+  },
   "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit --project tsconfig.src.json"
+  },
   "dependencies": {
+    "@figma-agent-bridge/relay": "workspace:*",
     "@figma-agent-bridge/shared": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.13.1",
-    "ws": "^8.16.0",
+    "minisearch": "^7.1.0",
+    "yaml": "^2.8.2",
     "zod": "^3.22.4"
-  }
+  },
+  "devDependencies": {}
 }

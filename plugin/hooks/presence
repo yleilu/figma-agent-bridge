@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+set -euo pipefail
+PORT="${FIGMA_BRIDGE_RELAY_PORT:-18080}"
+STATE_DIR="${PRESENCE_STATE_DIR:-$HOME/.figma-agent-bridge/hook}"
+LAST="$STATE_DIR/last-online.json"
+mkdir -p "$STATE_DIR"
+
+CHANGES_DIR="${FIGMA_BRIDGE_CHANGES_DIR:-$HOME/.figma-agent-bridge/changes}"
+# SENTINEL_TTL_MS / 1000 (12h). PINNED to the TS constant in
+# packages/shared/src/change-feed.ts by the TTL-parity test in
+# test/presence-hook.test.ts — never edit one side alone. Keep this assignment
+# at the start of a line and in this exact form; the test greps for it.
+SENTINEL_TTL_SEC=43200
+
+# The hook's native session_id (the same value the PreToolUse hook injects).
+# Fail OPEN: no stdin / malformed payload → empty sid → sentinel-only lookup.
+STDIN_PAYLOAD="$(cat 2>/dev/null || true)"
+SID="$(printf '%s' "$STDIN_PAYLOAD" | jq -r '.session_id // empty' 2>/dev/null || true)"
+
+# sanitizeKey's shell twin. LC_ALL=C is PINNED: the TS regex iterates UTF-16
+# code units while sed iterates characters or bytes depending on locale, so the
+# two agree only over the ASCII alphabet real keys are drawn from. The fixture
+# table that holds them together lives in test/presence-hook.test.ts and
+# packages/shared/test/paths.test.ts.
+sanitize() { printf '%s' "$1" | LC_ALL=C sed 's/[^A-Za-z0-9_-]/_/g'; }
+
+# Read one count file → its {pendingCount,state} object, or nothing.
+# An unreadable / malformed / schema-mismatched file is NO SIGNAL, never a wedge.
+#
+# Three things the guard must do, each because the alternative is a WEDGE (jq
+# throwing under `set -euo pipefail` takes out the whole block, not one field):
+#   - `-s` + `length == 1`: jq runs the program ONCE PER JSON DOCUMENT in the
+#     file and emits a line each time, so a file holding two records returns
+#     two lines — which pass `[ -n "$rec" ]` and then blow up `--argjson`
+#     below. Slurping makes the whole file one value, and a count file that is
+#     not exactly one record is malformed: no signal, structurally, rather than
+#     a guess at which of the two is current.
+#   - typed pendingCount / updatedAt: `.updatedAt` feeds bash arithmetic on the
+#     sentinel path, where a string is an "unbound variable" fatal.
+#   - state pinned to the VOCABULARY, not to `type == "string"`: the state is
+#     the one value rendered into the YAML raw, so an arbitrary string could
+#     inject keys into a block the agent reads every turn. These three are also
+#     the only YAML-safe plain scalars in the set — a future state must be added
+#     here AND must not be a YAML boolean (y/n/yes/no/on/off/true/false) or it
+#     needs `|@json` at the render site.
+read_count() {
+  local f="$1" allow_stale="$2"
+  [ -f "$f" ] || return 1
+  local rec
+  rec="$(jq -c -s 'if length == 1 then (.[0] | select(.schema == 1 and (.pendingCount|type) == "number" and (.updatedAt|type) == "number" and ((.state == "ok") or (.state == "no_baseline") or (.state == "gap"))) | {pendingCount, state, updatedAt}) else empty end' "$f" 2>/dev/null)" || return 1
+  [ -n "$rec" ] || return 1
+  if [ "$allow_stale" = "no" ]; then
+    local age now upd
+    upd="$(printf '%s' "$rec" | jq -r '.updatedAt // 0')"
+    now="$(( $(date +%s) * 1000 ))"
+    age=$(( (now - upd) / 1000 ))
+    [ "$age" -le "$SENTINEL_TTL_SEC" ] || return 1
+  fi
+  printf '%s' "$rec"
+}
+
+# Pre-pass: {fileKey: {pendingCount,state}} for every listed file — keyed by the
+# RAW key (only the PATH is sanitized), because the jq renderer looks the map up
+# under the raw `(.fileKey // .channel)` it already has.
+# jq CANNOT open a file at a path it computes, so this cannot live inside the
+# single jq program below.
+counts_for() {
+  local keys="$1" out='{}'
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    local dir rec
+    dir="$CHANGES_DIR/$(sanitize "$key")"
+    rec=""
+    if [ -n "$SID" ]; then
+      rec="$(read_count "$dir/$(sanitize "$SID").json" yes || true)"
+    fi
+    if [ -z "$rec" ]; then
+      rec="$(read_count "$dir/_unattributed.json" no || true)"
+    fi
+    [ -n "$rec" ] || continue
+    # Belt-and-braces: read_count's guard already makes $rec exactly one valid
+    # object, but a jq failure HERE must degrade this one file to "no signal"
+    # rather than kill the block — `out` keeps its last good value.
+    out="$(printf '%s' "$out" | jq -c --arg k "$key" --argjson v "$rec" '.[$k] = $v' 2>/dev/null || printf '%s' "$out")"
+  done <<< "$keys"
+  printf '%s' "$out"
+}
+
+# fetch /channels (test hook: PRESENCE_TEST_CHANNELS bypasses curl)
+if [[ -n "${PRESENCE_TEST_CHANNELS:-}" ]]; then CH="$PRESENCE_TEST_CHANNELS"; RELAY_OK=1
+elif CH="$(curl -fsS --max-time 3 "http://localhost:$PORT/channels" 2>/dev/null)"; then RELAY_OK=1
+else RELAY_OK=0; fi
+
+# degraded: relay unreachable — empty list, do NOT rewrite the baseline (survives the blip)
+if [[ "$RELAY_OK" -eq 0 ]]; then
+  printf 'figma_bridge:\n  relay: unreachable\n  online: []\n'
+  exit 0
+fi
+
+# online[] — jq @json quotes+escapes every string value → always YAML-safe (names with : # " etc.)
+if [[ "$(echo "$CH" | jq 'length')" -eq 0 ]]; then
+  printf 'figma_bridge:\n  relay: connected\n  online: []\n'
+else
+  # absent count file → BOTH fields omitted. "unknown, no signal" is not 0:
+  # rendering 0 would assert a continuous baseline the hook has no evidence for.
+  COUNTS="$(counts_for "$(echo "$CH" | jq -r '.[] | (.fileKey // .channel)')")"
+  echo "$CH" | jq -r --argjson counts "$COUNTS" '
+    "figma_bridge:",
+    "  relay: connected",
+    "  online:",
+    (.[] | (.fileKey // .channel) as $k | ($counts[$k]) as $c
+         | "    - name: " + ((.fileName // "(unsaved)")|@json)
+         + "\n      fileKey: " + ($k|@json)
+         + (if .version          then "\n      version: "      + (.version|@json)     else "" end)
+         + (if .currentPage      then "\n      current_page: " + (.currentPage|@json) else "" end)
+         + (if .selected != null then "\n      selected: "     + (.selected|tostring) else "" end)
+         + (if $c then "\n      pending_edits: " + ($c.pendingCount|tostring) else "" end)
+         + (if ($c and $c.state != "ok") then "\n      pending_edits_state: " + ($c.state) else "" end))
+  '
+fi
+
+# recently_offline: baseline {fileKey,name} whose fileKey is NOT in the current set (carry the name)
+# self-healing read: a killed-mid-write / garbage baseline parses as empty (2>/dev/null || '[]')
+# so a corrupt file never wedges the hook — it's overwritten by the atomic rewrite below.
+NOW_KEYS="$(echo "$CH" | jq '[ .[] | (.fileKey // .channel) ]')"
+if [[ -f "$LAST" ]]; then
+  GONE="$(jq --argjson now "$NOW_KEYS" '[ (.online // [])[] | select(.fileKey as $k | ($now | index($k)) | not) ]' "$LAST" 2>/dev/null || echo '[]')"
+  if [[ "$(echo "$GONE" | jq 'length')" -gt 0 ]]; then
+    # a file's BUFFER outlives its connection (the drain needs no liveness) and
+    # its count file still exists — so the same two fields render here too.
+    OFF_COUNTS="$(counts_for "$(echo "$GONE" | jq -r '.[].fileKey')")"
+    echo "  recently_offline:"
+    echo "$GONE" | jq -r --argjson counts "$OFF_COUNTS" '
+      .[] | .fileKey as $k | ($counts[$k]) as $c
+      | "    - name: " + (.name|@json)
+      + "\n      fileKey: " + ($k|@json)
+      + (if $c then "\n      pending_edits: " + ($c.pendingCount|tostring) else "" end)
+      + (if ($c and $c.state != "ok") then "\n      pending_edits_state: " + ($c.state) else "" end)'
+  fi
+fi
+
+# rewrite baseline as {fileKey,name} pairs (current set) so a future drop can render its name
+# atomic: write to .tmp then mv, so a kill mid-write can't leave a half-written (corrupt) baseline
+echo "$CH" | jq '{ online: [ .[] | { fileKey: (.fileKey // .channel), name: (.fileName // "(unsaved)") } ] }' > "$LAST.tmp" && mv -f "$LAST.tmp" "$LAST"

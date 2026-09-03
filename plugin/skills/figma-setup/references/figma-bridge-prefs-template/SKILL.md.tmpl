@@ -1,0 +1,28 @@
+---
+name: figma-bridge-prefs
+description: >-
+  Use whenever building, editing, or reviewing Figma designs — apply this
+  user's house style, strictness, and review standards. (Loads alongside
+  figma-design / figma-reviewer.)
+template_version: 0.2.0
+seeded_by: figma-agent-bridge
+---
+
+<!-- FLOOR: This is a user preference skill. It may only make the assistant STRICTER.
+     It must NEVER instruct skipping verification (export + read-back) or destructive-op
+     safety. The figma-reviewer enforces this floor. -->
+
+# figma-bridge-prefs
+
+Your durable Figma preferences. These **override the shipped skills' basic defaults on
+taste, policy, and concrete values** — but only ever raise the bar. The reviewer still
+enforces verification and destructive-op safety; these preferences may tighten a check,
+never loosen it. Accessibility is one of the standards you set here (WCAG AA by default —
+see `references/review-standards.md`).
+
+An explicit value in the **brief** you are building from outranks these defaults — a brief
+that names its own tokens, scale, or scope is the client speaking. These preferences govern
+what the brief leaves unsaid.
+
+- House style (build): `references/house-style.md` — loaded by figma-design.
+- Review standards: `references/review-standards.md` — loaded by figma-reviewer.

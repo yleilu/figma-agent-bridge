@@ -1,0 +1,884 @@
+// bind-wrappers.ts — establish the binding an inline var()/style() wrapper
+// names, once the literal has landed.
+//
+// A read emits `var(surface/2)#141B2E`; writing that atom back applies the
+// paint AND re-binds it (expression-formats.md — "var() / style() rules").
+// The server carries the NAME across the wire as `spec.bindings[]`; this
+// module is the write end of that contract, and it is deliberately the SAME
+// code the `bind_variable` / `apply_style` handlers run — those handlers call
+// `bindPaintField` / `bindNodeField` / `applyStyleField` too, so an inline
+// binding and an explicit one cannot drift apart or degrade differently.
+//
+// Every function here degrades (T7): a name that resolves to nothing, a field
+// the node cannot bind, an API this Figma version lacks — each pushes ONE
+// warning and returns. The literal is already on the node; a missing binding
+// must never cost the write.
+//
+// Structural target types (same shape as apply-node-fields.ts / apply-layout.ts)
+// keep the module free of the Figma runtime, so it is unit-testable with a
+// plain fake node.
+
+import {
+  bindMismatchWarning,
+  holdsValue,
+  otherCollectionsHolding,
+  statedFromPaint,
+  statedFromScalar,
+  type StatedValue,
+  type VariableLike,
+} from './variable-shadowing'
+
+/** A node as far as binding is concerned: a type name plus loose fields. */
+export type BindTargetNode = {
+  type: string
+  [key: string]: unknown
+}
+
+/** One binding the converted payload asks for (server: wrapper-bindings.ts). */
+export type WrapperBinding = {
+  kind: 'var' | 'style'
+  name: string
+  /** The plugin-side field: bind_variable's for `var`, apply_style's for `style`. */
+  field: string
+  /** Paint slot for an array field; absent means every paint in the array. */
+  index?: number
+  /** Gradient STOP of the paint at `index`, for a per-stop token (I59). */
+  stop?: number
+}
+
+/** The apply_style field vocabulary. */
+export type StyleField =
+  | 'fill'
+  | 'stroke'
+  | 'text'
+  | 'effect'
+  | 'grid'
+
+/** The local-style category each style field resolves against. */
+export type StyleCategory =
+  | 'paint'
+  | 'text'
+  | 'effect'
+  | 'grid'
+
+/** apply_style: field → the async setter that applies it. */
+export const STYLE_SETTERS: Record<StyleField, string> = {
+  fill: 'setFillStyleIdAsync',
+  stroke: 'setStrokeStyleIdAsync',
+  text: 'setTextStyleIdAsync',
+  effect: 'setEffectStyleIdAsync',
+  grid: 'setGridStyleIdAsync',
+}
+
+/** apply_style: field → the style TYPE it accepts (category guard). */
+export const STYLE_TYPES: Record<StyleField, string> = {
+  fill: 'PAINT',
+  stroke: 'PAINT',
+  text: 'TEXT',
+  effect: 'EFFECT',
+  grid: 'GRID',
+}
+
+/** apply_style field → the local-style lister that can resolve a NAME. */
+export const STYLE_CATEGORIES: Record<
+  StyleField,
+  StyleCategory
+> = {
+  fill: 'paint',
+  stroke: 'paint',
+  text: 'text',
+  effect: 'effect',
+  grid: 'grid',
+}
+
+/** The paint-array fields that bind per paint rather than per node field. */
+const PAINT_FIELDS = new Set(['fills', 'strokes'])
+
+export type PaintBindDeps = {
+  /**
+   * figma.variables.setBoundVariableForPaint — feature-detected (T7): paint
+   * fields are not VariableBindableNodeFields, so they bind through this and
+   * the array is re-assigned.
+   */
+  setBoundVariableForPaint?: (
+    paint: unknown,
+    field: 'color',
+    variable: unknown,
+  ) => unknown
+  /**
+   * figma.variables.createVariableAlias — the only sanctioned way to write a
+   * gradient STOP's binding (I59).
+   *
+   * A stop is not a paint, so `setBoundVariableForPaint` cannot reach one.
+   * Figma carries the binding on the ColorStop itself
+   * (`boundVariables.color`), and the value it takes there is a VariableAlias
+   * this factory mints. Feature-detected like every other gated member: absent,
+   * the literal colour still lands and one warning says the token did not.
+   */
+  createVariableAlias?: (variable: unknown) => unknown
+  /** figma.mixed — a paint array can be `mixed` on a multi-style text node. */
+  mixed: unknown
+}
+
+const isSolid = (paint: unknown): boolean =>
+  (paint as { type?: string } | null)?.type === 'SOLID'
+
+/**
+ * Give a freshly bound paint back the opacity the write stated (B68).
+ *
+ * A `var()` binds the COLOUR of a paint. It does not say anything about how
+ * opaque that paint is, and `{op=}` is the only thing that does. The drop is
+ * NOT in `setBoundVariableForPaint` — its returned paint keeps the stated
+ * opacity (live-proven 2026-08-29: before.op=0.5, bound.op=0.5). It is the
+ * paints SETTER: assigning a paint that transitions from unbound to
+ * colour-bound resets its opacity to 1, while re-assigning an already-bound
+ * paint keeps whatever opacity it carries. So the restore has to be a SECOND
+ * assignment, after the binding is stored: patch the opacity onto the bound
+ * paints Figma just normalized, and write them again. The binding survives
+ * that write — a bound→bound assignment does not reset.
+ *
+ * Only a STATED opacity is restored, and only where the setter did not keep
+ * it. A paint that carried none before the bind gets none after it: this puts
+ * back what the caller asked for, and never invents a value Figma is entitled
+ * to choose.
+ */
+const restoreStatedOpacity = (
+  node: BindTargetNode,
+  field: 'fills' | 'strokes',
+  statedOps: unknown[],
+  index?: number,
+): void => {
+  const stored = node[field]
+  if (!Array.isArray(stored)) {
+    return
+  }
+  let drifted = false
+  const patched = (
+    stored as Record<string, unknown>[]
+  ).map((p, i) => {
+    const stated = statedOps[i]
+    if (
+      (index !== undefined && i !== index) ||
+      !isSolid(p) ||
+      typeof stated !== 'number' ||
+      p.opacity === stated
+    ) {
+      return p
+    }
+    drifted = true
+    return { ...p, opacity: stated }
+  })
+  if (drifted) {
+    node[field] = patched
+  }
+}
+
+/** One gradient stop, as much of it as a binding touches. */
+type ColorStop = Record<string, unknown>
+
+const stopsOf = (
+  paint: unknown,
+): ColorStop[] | undefined => {
+  const stops = (
+    paint as { gradientStops?: unknown } | null
+  )?.gradientStops
+  return Array.isArray(stops)
+    ? (stops as ColorStop[])
+    : undefined
+}
+
+/**
+ * Bind ONE gradient stop's colour (I59).
+ *
+ * Figma will not tell you whether the runtime honoured this, so the write is
+ * READ BACK: a stop assigned with a `boundVariables.color` that is not there
+ * afterwards is a runtime that does not carry stop bindings, and the caller has
+ * to hear that rather than get a clean reply over a flat gradient. Every other
+ * degrade in this module is a feature-detect; this one can only be a verify.
+ */
+const bindGradientStop = (
+  node: BindTargetNode,
+  field: 'fills' | 'strokes',
+  paints: unknown[],
+  index: number,
+  stop: number,
+  variable: unknown,
+  deps: PaintBindDeps,
+  warnings: string[],
+): void => {
+  const where = field + '[' + index + '] stop ' + stop
+  const makeAlias = deps.createVariableAlias
+  if (typeof makeAlias !== 'function') {
+    warnings.push(
+      'createVariableAlias unavailable in this Figma version; ' +
+        where +
+        ' left unbound',
+    )
+    return
+  }
+  const stops = stopsOf(paints[index])
+  if (stops === undefined || stops[stop] === undefined) {
+    warnings.push(
+      where +
+        ' has no gradient stop to bind on ' +
+        node.type +
+        '; stop binding skipped',
+    )
+    return
+  }
+  const alias = makeAlias(variable)
+  try {
+    node[field] = paints.map((paint, i) => {
+      if (i !== index) return paint
+      return {
+        ...(paint as Record<string, unknown>),
+        gradientStops: stops.map((s, j) =>
+          j === stop
+            ? {
+                ...s,
+                boundVariables: {
+                  ...((s.boundVariables as
+                    | Record<string, unknown>
+                    | undefined) ?? {}),
+                  color: alias,
+                },
+              }
+            : s,
+        ),
+      }
+    })
+  } catch (e) {
+    warnings.push(
+      'binding ' + where + ' failed: ' + String(e),
+    )
+    return
+  }
+  // T7 — the verify. A runtime that drops the field accepts the assignment and
+  // says nothing, so the reply would report a token the file does not hold.
+  const landed = stopsOf(
+    (node[field] as unknown[] | undefined)?.[index],
+  )?.[stop]
+  const bound = (
+    landed?.boundVariables as
+      | { color?: unknown }
+      | undefined
+  )?.color
+  if (bound === undefined || bound === null) {
+    warnings.push(
+      where +
+        ' did not keep its variable binding — this Figma version does not bind ' +
+        'gradient stops; the literal colour is applied',
+    )
+  }
+}
+
+/**
+ * Bind a variable to `fills` / `strokes`.
+ *
+ * `index` names ONE paint (an inline `var()` sits on the paint it wraps);
+ * omitting it binds every SOLID paint in the array — the shape the
+ * `bind_variable` tool has always had.
+ */
+export const bindPaintField = (
+  node: BindTargetNode,
+  field: 'fills' | 'strokes',
+  variable: unknown,
+  deps: PaintBindDeps,
+  warnings: string[],
+  index?: number,
+  /** The gradient stop to bind instead of the paint's own colour (I59). */
+  stop?: number,
+): void => {
+  if (!(field in node)) {
+    warnings.push(
+      'field "' +
+        field +
+        '" is not bindable on ' +
+        node.type,
+    )
+    return
+  }
+  const current = node[field]
+  if (current === deps.mixed || !Array.isArray(current)) {
+    warnings.push(
+      field +
+        ' has no bindable paints on ' +
+        node.type +
+        '; paint binding skipped',
+    )
+    return
+  }
+  const paints = current as unknown[]
+  if (stop !== undefined) {
+    // A stop names one paint by construction — `linear(...)` stop 0 is
+    // meaningless without saying which fill it is a stop of.
+    if (index === undefined) {
+      warnings.push(
+        field +
+          ' stop ' +
+          stop +
+          ' names no paint; stop binding skipped',
+      )
+      return
+    }
+    bindGradientStop(
+      node,
+      field,
+      paints,
+      index,
+      stop,
+      variable,
+      deps,
+      warnings,
+    )
+    return
+  }
+  // Checked HERE rather than at the top: a stop binds through the ColorStop and
+  // never touches this setter, so it must not be refused for the absence of a
+  // member it does not use.
+  const setForPaint = deps.setBoundVariableForPaint
+  if (typeof setForPaint !== 'function') {
+    warnings.push(
+      'setBoundVariableForPaint unavailable in this Figma version; paint binding skipped',
+    )
+    return
+  }
+  if (
+    index !== undefined &&
+    !isSolid(paints[index] ?? null)
+  ) {
+    // The slot the wrapper named is gone or is not a solid paint — say so
+    // rather than binding nothing and reporting success.
+    warnings.push(
+      field +
+        '[' +
+        index +
+        '] has no bindable paint on ' +
+        node.type +
+        '; paint binding skipped',
+    )
+    return
+  }
+  try {
+    const statedOps = paints.map(
+      p => (p as { opacity?: unknown } | null)?.opacity,
+    )
+    node[field] = paints.map((paint, i) =>
+      (index === undefined || i === index) && isSolid(paint)
+        ? setForPaint(paint, 'color', variable)
+        : paint,
+    )
+    restoreStatedOpacity(node, field, statedOps, index)
+  } catch (e) {
+    warnings.push(
+      'binding ' +
+        field +
+        ' on ' +
+        node.type +
+        ' failed: ' +
+        String(e),
+    )
+  }
+}
+
+/** Bind a variable to a scalar node field (the VariableBindableNodeField route). */
+/**
+ * REMOVE the variable binding on a scalar node field, leaving the literal value
+ * where it is (B58).
+ *
+ * Writing a literal over a bound field does not unbind it — a token-bound gap
+ * given `{gap: 16}` keeps reading `var(space/16)16` — so there has to be a way
+ * to say "no token here" that is not a write of a value. Figma spells it
+ * `setBoundVariable(field, null)`; this is the only caller of that spelling, and
+ * it degrades like every other binding route (T7) rather than throwing.
+ *
+ * Scalar fields only. `fills`/`strokes` bind per PAINT and are refused by the
+ * caller, which can say something more useful about them.
+ */
+export const clearNodeField = (
+  node: BindTargetNode,
+  field: string,
+  warnings: string[],
+): void => {
+  const bindable = node as {
+    setBoundVariable?: (f: string, v: unknown) => void
+  }
+  if (typeof bindable.setBoundVariable !== 'function') {
+    warnings.push(
+      'setBoundVariable unavailable in this Figma version; binding not cleared',
+    )
+    return
+  }
+  try {
+    bindable.setBoundVariable(field, null)
+  } catch (e) {
+    warnings.push(
+      'could not clear the variable binding on "' +
+        field +
+        '": ' +
+        String(e),
+    )
+  }
+}
+
+export const bindNodeField = (
+  node: BindTargetNode,
+  field: string,
+  variable: unknown,
+  warnings: string[],
+): void => {
+  const bindable = node as {
+    setBoundVariable?: (f: string, v: unknown) => void
+  }
+  // Feature-detect/warn (T7): degrade, never throw.
+  if (typeof bindable.setBoundVariable !== 'function') {
+    warnings.push(
+      'setBoundVariable unavailable in this Figma version; binding skipped',
+    )
+    return
+  }
+  try {
+    bindable.setBoundVariable(field, variable)
+  } catch (e) {
+    warnings.push(
+      'field "' +
+        field +
+        '" is not bindable on ' +
+        node.type +
+        ': ' +
+        String(e),
+    )
+  }
+}
+
+/** Apply a style id to a node field through the matching async setter. */
+export const applyStyleField = async (
+  node: BindTargetNode,
+  field: StyleField,
+  styleId: string,
+  warnings: string[],
+): Promise<void> => {
+  const setterName = STYLE_SETTERS[field]
+  const styled = node as unknown as Record<
+    string,
+    (id: string) => Promise<void>
+  >
+  if (typeof styled[setterName] !== 'function') {
+    warnings.push(
+      setterName +
+        ' unavailable on ' +
+        node.type +
+        '; style not applied',
+    )
+    return
+  }
+  try {
+    await styled[setterName](styleId)
+  } catch (e) {
+    warnings.push(
+      field +
+        ' style not applicable on ' +
+        node.type +
+        ': ' +
+        String(e),
+    )
+  }
+}
+
+export type WrapperBindDeps = PaintBindDeps & {
+  /** Resolve a variable by NAME (never by id — ids are not accepted inline). */
+  variableByName: (
+    name: string,
+  ) => Promise<{ id: string } | null>
+  /**
+   * The OTHER collections holding this name, for the B66 report.
+   *
+   * Optional, and absent means "no shadow to name": the mismatch is still
+   * reported, without an explanation it cannot substantiate.
+   */
+  variableShadows?: (name: string) => Promise<string[]>
+  /** Resolve a LOCAL style by name within one category. */
+  styleByName: (
+    name: string,
+    category: StyleCategory,
+  ) => Promise<{ id: string } | null>
+}
+
+/**
+ * The literal this write already put on the field the binding is about to take
+ * over (B66).
+ *
+ * Read from the NODE rather than carried on the wire, and read HERE rather than
+ * in the binding cores, because that is what scopes the check to the inline
+ * route. `var(brand/primary)#22D3EE` states a literal and a token in one atom;
+ * `bind_variable` states only a token, and comparing a node's current value
+ * against a variable there would accuse every binding that legitimately changes
+ * it. The two share `bindPaintField` / `bindNodeField`; only this caller has an
+ * atom behind it.
+ */
+const statedLiteral = (
+  node: BindTargetNode,
+  binding: WrapperBinding,
+): StatedValue | undefined => {
+  try {
+    if (PAINT_FIELDS.has(binding.field)) {
+      // A stop binding names a colour nested inside a gradient, which is not
+      // the paint's own value — nothing here to compare.
+      if (
+        binding.index === undefined ||
+        binding.stop !== undefined
+      ) {
+        return undefined
+      }
+      const paints = node[binding.field]
+      return Array.isArray(paints)
+        ? statedFromPaint(paints[binding.index])
+        : undefined
+    }
+    return statedFromScalar(node[binding.field])
+  } catch {
+    // A field that refuses to be read gives no evidence, which is not the
+    // same as evidence of a mismatch.
+    return undefined
+  }
+}
+
+/**
+ * Report a token whose value contradicts the literal written beside it (B66).
+ *
+ * A warning, never a refusal (T7): the binding lands either way, and the caller
+ * is told what the node will actually render.
+ */
+const warnOnValueMismatch = async (
+  node: BindTargetNode,
+  binding: WrapperBinding,
+  variable: unknown,
+  deps: WrapperBindDeps,
+  warnings: string[],
+): Promise<void> => {
+  const stated = statedLiteral(node, binding)
+  if (stated === undefined) return
+  if (
+    holdsValue(variable as VariableLike, stated) !==
+    'differs'
+  ) {
+    return
+  }
+  let shadows: string[] = []
+  try {
+    shadows =
+      (await deps.variableShadows?.(binding.name)) ?? []
+  } catch {
+    // The explanation is optional; the mismatch is not.
+  }
+  warnings.push(bindMismatchWarning(binding.name, shadows))
+}
+
+/**
+ * Apply every binding a converted payload carries, in order.
+ *
+ * Called from both write paths — `buildSingleNode` (create_node / create_tree)
+ * and the `update_node` handler — AFTER the literal properties are applied, so
+ * the binding always lands on a node that already looks right.
+ */
+export const applyWrapperBindings = async (
+  node: BindTargetNode,
+  bindings: unknown,
+  deps: WrapperBindDeps,
+  warnings: string[],
+): Promise<void> => {
+  if (!Array.isArray(bindings)) {
+    return
+  }
+  for (const binding of bindings as WrapperBinding[]) {
+    if (binding?.kind === 'var') {
+      await applyVarBinding(node, binding, deps, warnings)
+    } else if (binding?.kind === 'style') {
+      await applyStyleBinding(node, binding, deps, warnings)
+    }
+  }
+}
+
+/**
+ * Run one core and attribute whatever it degraded to the WRAPPER that asked.
+ *
+ * The cores are shared with `bind_variable` / `apply_style`, where the caller
+ * already knows which field it asked about; inline, a node can carry several
+ * wrappers, so a bare "field \"fills\" is not bindable on SLICE" would leave
+ * the agent guessing which token it lost. The prefix is added here, at the call
+ * site, rather than teaching the cores a second wording.
+ */
+const attributed = async (
+  label: string,
+  warnings: string[],
+  run: (sink: string[]) => void | Promise<void>,
+): Promise<void> => {
+  const sink: string[] = []
+  await run(sink)
+  for (const message of sink) {
+    warnings.push(label + ': ' + message)
+  }
+}
+
+const applyVarBinding = async (
+  node: BindTargetNode,
+  binding: WrapperBinding,
+  deps: WrapperBindDeps,
+  warnings: string[],
+): Promise<void> => {
+  const label = 'var(' + binding.name + ')'
+  let variable: { id: string } | null = null
+  try {
+    variable = await deps.variableByName(binding.name)
+  } catch (e) {
+    warnings.push(
+      label +
+        ': variable lookup failed: ' +
+        String(e) +
+        ' — literal applied unbound',
+    )
+    return
+  }
+  if (variable === null || variable === undefined) {
+    warnings.push(
+      label +
+        ': no variable with that name — literal applied unbound',
+    )
+    return
+  }
+  const resolved = variable
+  // BEFORE the bind: the field still holds the literal this same write applied,
+  // and after the bind it holds whatever the token resolves to (B66).
+  await warnOnValueMismatch(
+    node,
+    binding,
+    resolved,
+    deps,
+    warnings,
+  )
+  if (PAINT_FIELDS.has(binding.field)) {
+    await attributed(label, warnings, sink =>
+      bindPaintField(
+        node,
+        binding.field as 'fills' | 'strokes',
+        resolved,
+        deps,
+        sink,
+        binding.index,
+        binding.stop,
+      ),
+    )
+    return
+  }
+  await attributed(label, warnings, sink =>
+    bindNodeField(node, binding.field, resolved, sink),
+  )
+}
+
+const applyStyleBinding = async (
+  node: BindTargetNode,
+  binding: WrapperBinding,
+  deps: WrapperBindDeps,
+  warnings: string[],
+): Promise<void> => {
+  const field = binding.field as StyleField
+  const label = 'style(' + binding.name + ')'
+  const category = STYLE_CATEGORIES[field]
+  if (category === undefined) {
+    warnings.push(
+      label +
+        ': "' +
+        binding.field +
+        '" is not a style field — literal applied unbound',
+    )
+    return
+  }
+  let style: { id: string } | null = null
+  try {
+    style = await deps.styleByName(binding.name, category)
+  } catch (e) {
+    warnings.push(
+      label +
+        ': style lookup failed: ' +
+        String(e) +
+        ' — literal applied unbound',
+    )
+    return
+  }
+  if (style === null || style === undefined) {
+    warnings.push(
+      label +
+        ': no ' +
+        category +
+        ' style with that name — literal applied unbound',
+    )
+    return
+  }
+  const styleId = style.id
+  await attributed(label, warnings, sink =>
+    applyStyleField(node, field, styleId, sink),
+  )
+}
+
+// ─── name lookups ─────────────────────────────────────────────────────────────
+
+type Named = { id: string; name: string }
+
+/** A variable carries the two extra fields shadowing has to see (B66). */
+type NamedVariable = Named & VariableLike
+
+export type BindingLookupLoaders = {
+  /** figma.variables.getLocalVariablesAsync (absent ⇒ unavailable). */
+  listVariables?: () => Promise<NamedVariable[]>
+  /**
+   * figma.variables.getLocalVariableCollectionsAsync — turns the collection id
+   * on a variable into a name a caller recognises (B66).
+   *
+   * Optional: without it a shadow is named by its collection ID, which is
+   * poorer and still true. The report never depends on it.
+   */
+  listCollections?: () => Promise<Named[]>
+  /** figma.getLocalPaintStylesAsync & friends, by category. */
+  listStyles?: Partial<
+    Record<StyleCategory, () => Promise<Named[]>>
+  >
+}
+
+/**
+ * Name → variable / style lookups for one command dispatch.
+ *
+ * A binding names a token, and only an enumeration turns a name into the
+ * object Figma binds — so the enumeration is cached: a 100-node create_tree
+ * that reuses eight tokens (the house style, T9) pays for one scan, not one
+ * per node.
+ *
+ * One scan per dispatch is also all that is CORRECT to do: `reset()` runs at
+ * the top of every command dispatch (a batch re-dispatches per op), and nothing
+ * inside a single dispatch creates variables or styles — so the table cannot
+ * change under a scan, and a miss is a miss. Re-reading on one would cost a
+ * document-wide scan per bogus name; the miss is remembered instead.
+ */
+export const createBindingLookups = (
+  loaders: BindingLookupLoaders,
+) => {
+  let variables: Map<string, NamedVariable> | null = null
+  // Every local variable, in enumeration order — the raw list the first-wins
+  // map is built from, kept so a shadow can be named (B66).
+  let allVariables: NamedVariable[] = []
+  let collectionNames: Record<string, string> | null = null
+  const styles = new Map<
+    StyleCategory,
+    Map<string, Named>
+  >()
+
+  const loadVariables = async (): Promise<
+    Map<string, NamedVariable>
+  > => {
+    const list = loaders.listVariables
+    if (typeof list !== 'function') {
+      throw new Error(
+        'getLocalVariablesAsync unavailable in this Figma version',
+      )
+    }
+    const byName = new Map<string, NamedVariable>()
+    allVariables = await list()
+    for (const v of allVariables) {
+      // First wins: two variables can share a name across collections, and a
+      // later one must not silently replace the one already answered.
+      if (!byName.has(v.name)) {
+        byName.set(v.name, v)
+      }
+    }
+    return byName
+  }
+
+  const variableByName = async (
+    name: string,
+  ): Promise<NamedVariable | null> => {
+    if (variables === null) {
+      variables = await loadVariables()
+    }
+    return variables.get(name) ?? null
+  }
+
+  /**
+   * The OTHER collections holding `name` (B66).
+   *
+   * Cheap by construction: the variable scan is already cached, and the
+   * collection names are loaded once, on the first shadow report — a clean
+   * write never asks for them.
+   */
+  const variableShadows = async (
+    name: string,
+  ): Promise<string[]> => {
+    const chosen = await variableByName(name)
+    if (chosen === null) return []
+    if (collectionNames === null) {
+      collectionNames = {}
+      const list = loaders.listCollections
+      if (typeof list === 'function') {
+        try {
+          for (const c of await list()) {
+            collectionNames[c.id] = c.name
+          }
+        } catch {
+          // T7 — a collection this runtime will not enumerate is named by id.
+        }
+      }
+    }
+    return otherCollectionsHolding(
+      name,
+      allVariables,
+      collectionNames,
+      typeof chosen.variableCollectionId === 'string'
+        ? chosen.variableCollectionId
+        : undefined,
+    )
+  }
+
+  const loadStyles = async (
+    category: StyleCategory,
+  ): Promise<Map<string, Named>> => {
+    const list = loaders.listStyles?.[category]
+    if (typeof list !== 'function') {
+      throw new Error(
+        'local ' +
+          category +
+          ' styles unavailable in this Figma version',
+      )
+    }
+    const byName = new Map<string, Named>()
+    for (const s of await list()) {
+      if (!byName.has(s.name)) {
+        byName.set(s.name, s)
+      }
+    }
+    return byName
+  }
+
+  const styleByName = async (
+    name: string,
+    category: StyleCategory,
+  ): Promise<Named | null> => {
+    let byName = styles.get(category)
+    if (byName === undefined) {
+      byName = await loadStyles(category)
+      styles.set(category, byName)
+    }
+    return byName.get(name) ?? null
+  }
+
+  const reset = (): void => {
+    variables = null
+    allVariables = []
+    collectionNames = null
+    styles.clear()
+  }
+
+  return {
+    variableByName,
+    variableShadows,
+    styleByName,
+    reset,
+  }
+}

@@ -1,0 +1,64 @@
+// font-cache.ts — load each font once, not once per node.
+//
+// `figma.loadFontAsync` is documented as idempotent, and on a cached font it
+// usually returns in under a millisecond. Usually. Measured live: calling it
+// per text node while freshly-created nodes are still pending in the document
+// makes ONE of those calls block for ~11 seconds — five in a row cost 1-2ms
+// each and the sixth costs 11,004ms. It is not the font (already cached) and
+// not the await (a bare `Promise.resolve()` in the same loop costs nothing).
+//
+// The effect is that `create_tree` — which loaded a font per text child —
+// exceeded its 30s timeout at around seven text nodes, while the identical
+// nodes built one-per-command took 82ms. With the font loaded once up front,
+// twenty-five text nodes take 68ms.
+//
+// So the rule is simply: ask Figma for a font once per session and remember
+// that we did. A font stays loaded for the life of the plugin, so the memo
+// cannot go stale in a way that matters — and a failed load is deliberately
+// NOT remembered, so a genuine "font unavailable" still throws on every
+// attempt rather than being swallowed after the first.
+
+export type FontKey = { family: string; style: string }
+
+const keyOf = (f: FontKey): string =>
+  // NUL separator: a family or style containing the separator cannot forge a
+  // collision with a different pair.
+  f.family + '\u0000' + f.style
+
+/**
+ * Wraps a font loader so each distinct font is requested at most once.
+ *
+ * The loader is injected rather than reaching for `figma` directly, so the
+ * memo's behaviour — including that a rejection is not cached — is testable
+ * without a Figma runtime.
+ */
+export const createFontLoader = (
+  load: (font: FontKey) => Promise<void>,
+) => {
+  // The IN-FLIGHT promise is memoized, not the completion. Remembering only
+  // finished loads leaves a hole: callers that ask concurrently all miss the
+  // set before any of them resolves, and every one issues its own load — the
+  // exact pile-up this module exists to prevent, reappearing precisely when
+  // the caller is fastest. Handing back the pending promise closes it.
+  const inflight = new Map<string, Promise<void>>()
+  return {
+    ensure: (font: FontKey): Promise<void> => {
+      const key = keyOf(font)
+      const existing = inflight.get(key)
+      if (existing !== undefined) {
+        return existing
+      }
+      // A rejection is evicted, so a genuine "font unavailable" throws on
+      // every attempt rather than being swallowed after the first. Caching a
+      // failure would turn one transient miss into a permanent silent one.
+      const pending = load(font).catch((err: unknown) => {
+        inflight.delete(key)
+        throw err
+      })
+      inflight.set(key, pending)
+      return pending
+    },
+    /** Test/diagnostic only: how many distinct fonts were actually requested. */
+    size: (): number => inflight.size,
+  }
+}

@@ -1,9 +1,19 @@
 {
   "name": "@figma-agent-bridge/relay",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./relay": "./src/relay.ts"
+  },
+  "types": "src/index.ts",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "@figma-agent-bridge/shared": "workspace:*"
   }

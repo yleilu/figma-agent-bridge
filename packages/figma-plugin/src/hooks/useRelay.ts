@@ -1,0 +1,736 @@
+import {
+  useState,
+  useCallback,
+  useMemo,
+  useRef,
+  useEffect,
+} from 'react'
+import type {
+  Meta,
+  StatusRecord,
+} from '@figma-agent-bridge/shared'
+import {
+  APP_VERSION,
+  BUILD_ID,
+  COMMANDS,
+  genId,
+  genToken,
+} from '@figma-agent-bridge/shared'
+import { deriveChannel } from '../file-channel'
+import {
+  DERIVED_SWEEP_MS,
+  mergeStatus,
+  sweepDerived,
+  upsertDerived,
+} from '../derived-presence'
+import type { StatusMap } from '../derived-presence'
+
+type RelayState = {
+  status: 'disconnected' | 'connecting' | 'connected'
+  channel: string | null
+  error: string | null
+}
+
+export const useRelay = () => {
+  const [state, setState] = useState<RelayState>({
+    status: 'disconnected',
+    channel: null,
+    error: null,
+  })
+  const wsRef = useRef<WebSocket | null>(null)
+  const channelRef = useRef<string | null>(null)
+  const errorRef = useRef<string | null>(null)
+  const fileNameRef = useRef<string | null>(null)
+  const fileKeyRef = useRef<string | null>(null)
+  // I62 — the CODE bundle's build id, mirrored from its identity push. The
+  // code bundle is the half that answers every command, so its stamp is the
+  // one the register frame publishes; this UI's own BUILD_ID is the fallback
+  // for a code bundle that predates the stamp.
+  const buildRef = useRef<string>(BUILD_ID)
+  // Presence (Plugin Presence): current page name + selection count, mirrored
+  // from code.ts's identity/presence pushes. Written in BOTH the persistent
+  // identity listener and requestIdentity's one-shot handler — the latter is
+  // load-bearing because the register frame (sent from the ws 'system'
+  // branch) reads these refs before the persistent listener would otherwise
+  // have populated them. State is lifted only in the persistent listener —
+  // the one-shot handler sees the same event, and the refs are what the
+  // register frame needs synchronously.
+  const currentPageRef = useRef<string | null>(null)
+  const selectedRef = useRef<number | null>(null)
+  // Per-session channel for a never-saved file (no stable fileKey).
+  // Stable across reconnects within this session; a reload starts a new
+  // session. A saved file never uses this — its channel is deterministic.
+  const sessionChannelRef = useRef<string | null>(null)
+
+  // Change Feed (change-feed.md): this connection's nonce and its push-frame
+  // counter. epoch is minted per register/reconnect (request-envelope.md, the
+  // random id family); genId is nanoid-based — crypto.randomUUID is
+  // secure-context-only and THROWS in the plugin iframe.
+  const epochRef = useRef<string | null>(null)
+  const seqRef = useRef(0)
+
+  // Agent status monitor (status-monitor.md): live per-agent rows fed by
+  // the relay's agent-status broadcasts, keyed by StatusRecord.key. These
+  // are the REPORTED rows — the tier an agent (or the server) pushes.
+  const [explicitStatus, setExplicitStatus] =
+    useState<StatusMap>({})
+  const upsertStatus = useCallback((r: StatusRecord) => {
+    setExplicitStatus(prev => ({ ...prev, [r.key]: r }))
+  }, [])
+  const removeStatus = useCallback(
+    (sessionId: string, agentId?: string, key?: string) => {
+      setExplicitStatus(prev => {
+        const next: StatusMap = {}
+        for (const [k, r] of Object.entries(prev)) {
+          // key-scoped remove (TTL sweep) is row-precise; otherwise match
+          // by session/agent
+          const match =
+            key !== undefined
+              ? k === key
+              : r.sessionId === sessionId &&
+                (agentId === undefined ||
+                  r.agentId === agentId)
+          if (!match) next[k] = r
+        }
+        return next
+      })
+    },
+    [],
+  )
+
+  // Derived presence (status-monitor.md § Derived presence): the roster's
+  // lower tier — rows synthesized from the command frames this panel already
+  // carries, so it never claims "No agent active" while an agent works. Kept
+  // in their OWN map because an `agent-status-sync` replaces the reported map
+  // wholesale, and a replay of the reported rows must not wipe the derived
+  // ones.
+  const [derivedStatus, setDerivedStatus] =
+    useState<StatusMap>({})
+  const noteCommandTraffic = useCallback(
+    (command: string, sessionId?: string) => {
+      setDerivedStatus(prev =>
+        upsertDerived(prev, command, sessionId, Date.now()),
+      )
+    },
+    [],
+  )
+
+  // The derived TTL needs its own clock: nothing outside this iframe knows a
+  // derived row exists, so no `agent-status-remove` will ever come for one.
+  // A tick that finds every row live returns the same map — React bails out,
+  // and the panel doesn't re-render (which would restart the dot's pulse).
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setDerivedStatus(prev =>
+        sweepDerived(prev, Date.now()),
+      )
+    }, DERIVED_SWEEP_MS)
+    return () => clearInterval(timer)
+  }, [])
+
+  // What the panel renders: the reported rows plus every live, un-pre-empted
+  // derived row.
+  const agentStatus = useMemo(
+    () =>
+      mergeStatus(
+        explicitStatus,
+        derivedStatus,
+        Date.now(),
+      ),
+    [explicitStatus, derivedStatus],
+  )
+
+  // Version handshake (version-handshake.md): the SERVER owns the major.minor
+  // compare and PUSHES a `version-mismatch` frame on skew. Mirror it into a
+  // state that PRE-EMPTS the roster. Reset on every (re)connect, so a
+  // compatible reconnect self-clears (no frame arrives => stays null).
+  const [mismatch, setMismatch] = useState<{
+    plugin: string
+    server: string
+  } | null>(null)
+
+  // Selection bar (status-monitor.md): the panel-local view of the
+  // user's current page + selection, lifted out of the presence refs
+  // so it can be rendered.
+  const [selection, setSelection] = useState<{
+    currentPage: string | null
+    count: number
+    kind: string | null
+  }>({ currentPage: null, count: 0, kind: null })
+
+  // Selection pushes are high-frequency and user-driven. Bail out when
+  // nothing rendered actually changed, so clicking between two frames
+  // doesn't re-render App and restart the busy dot's pulse loop.
+  const setSelectionIfChanged = useCallback(
+    (next: {
+      currentPage: string | null
+      count: number
+      kind: string | null
+    }) => {
+      setSelection(prev =>
+        prev.currentPage === next.currentPage &&
+        prev.count === next.count &&
+        prev.kind === next.kind
+          ? prev
+          : next,
+      )
+    },
+    [],
+  )
+
+  // Plugin Presence (Task 8): best-effort clean-close signal. Sends a
+  // `leave` frame so the relay drops the channel immediately instead of
+  // waiting for the ~60s heartbeat timeout. Fired from the `leave` push
+  // (code.ts's figma.on('close') listener, forwarded via window message
+  // below) and from disconnect().
+  const sendLeave = useCallback(() => {
+    const ws = wsRef.current
+    if (
+      ws?.readyState === WebSocket.OPEN &&
+      channelRef.current
+    ) {
+      ws.send(
+        JSON.stringify({
+          type: 'leave',
+          channel: channelRef.current,
+        }),
+      )
+    }
+  }, [])
+
+  // The `document_changed` push frame is built HERE, in the UI realm, because
+  // only the UI knows the channel — and an unsaved file's ADDRESSABLE identity
+  // IS its channel (the synthKey, overview.md). The sandbox never needs a
+  // channel or a connection nonce. Identity rides in `meta`, never in `params`
+  // (change-feed.md, "The push frame").
+  const sendFeedFrame = useCallback(
+    (params: Record<string, unknown>) => {
+      const ws = wsRef.current
+      const channel = channelRef.current
+      const epoch = epochRef.current
+      if (!ws || !channel || epoch === null) return
+      const seq = seqRef.current
+      seqRef.current += 1
+      ws.send(
+        JSON.stringify({
+          type: 'message',
+          channel,
+          message: {
+            command: COMMANDS.DOCUMENT_CHANGED,
+            params,
+            meta: {
+              fileKey: fileKeyRef.current ?? channel,
+              epoch,
+              seq,
+            },
+          },
+        }),
+      )
+    },
+    [],
+  )
+
+  // Listen for command results and file name from plugin code
+  useEffect(() => {
+    const handler = (event: MessageEvent) => {
+      const msg = event.data && event.data.pluginMessage
+      if (!msg) return
+
+      if (msg.type === 'identity') {
+        fileKeyRef.current = msg.fileKey ?? null
+        fileNameRef.current = msg.fileName ?? null
+        // I62 — the sandbox's own build, not this bundle's.
+        if (typeof msg.build === 'string') {
+          buildRef.current = msg.build
+        }
+        currentPageRef.current = msg.currentPage ?? null
+        selectedRef.current =
+          typeof msg.selected === 'number'
+            ? msg.selected
+            : null
+        setSelectionIfChanged({
+          currentPage: msg.currentPage ?? null,
+          count:
+            typeof msg.selected === 'number'
+              ? msg.selected
+              : 0,
+          kind: msg.selectedKind ?? null,
+        })
+        return
+      }
+
+      // Presence push (Plugin Presence): code.ts sends this (debounced) on
+      // currentpagechange/selectionchange. Mirror the refs so a later
+      // register/reconnect carries fresh values, and forward a presence
+      // frame to the relay so the channel registry can enrich discovery.
+      // MUST sit above the `command-result` gate below (same placement as
+      // feed-flush) since this isn't a command-result frame.
+      if (msg.type === 'presence') {
+        currentPageRef.current = msg.currentPage ?? null
+        selectedRef.current =
+          typeof msg.selected === 'number'
+            ? msg.selected
+            : null
+        // State mirror for the selection bar. Above the ws guard: the
+        // bar must track the selection even while the socket is down.
+        setSelectionIfChanged({
+          currentPage: msg.currentPage ?? null,
+          count:
+            typeof msg.selected === 'number'
+              ? msg.selected
+              : 0,
+          kind: msg.selectedKind ?? null,
+        })
+        const presenceWs = wsRef.current
+        const presenceChannel = channelRef.current
+        if (
+          presenceWs?.readyState === WebSocket.OPEN &&
+          presenceChannel
+        ) {
+          presenceWs.send(
+            JSON.stringify({
+              type: 'presence',
+              channel: presenceChannel,
+              currentPage: msg.currentPage,
+              selected: msg.selected,
+            }),
+          )
+        }
+        return
+      }
+
+      // Clean-close signal (Plugin Presence, Task 8): code.ts's
+      // figma.on('close') listener pushes this so the UI can tell the
+      // relay to drop the channel immediately rather than waiting for the
+      // heartbeat. MUST sit above the `command-result` gate below (same
+      // placement as presence/feed-flush) since this isn't a
+      // command-result frame.
+      if (msg.type === 'leave') {
+        sendLeave()
+        return
+      }
+
+      // Change Feed: the sandbox's flush, stamped with this connection's
+      // identity and forwarded whole. It is a PUSH, not a request — it carries
+      // a command the server handles (document_changed) but NO requestId, so
+      // the server dispatches it by command + meta and sends back no reply (a
+      // reply would fan a stray frame to every joined channel). No id/target
+      // guard needed (plugin→server, unsolicited). MUST sit above the
+      // `command-result` gate below.
+      if (msg.type === 'feed-flush') {
+        sendFeedFrame({
+          changes: msg.changes,
+          // ATTRIBUTION RIDES `params`, never `meta`. `meta` answers "who is
+          // speaking and about which connection" — one value per frame — and
+          // attribution is PER RECORD: one frame carries the work of every
+          // session that wrote inside the flush window, so there is no single
+          // sender identity to put in a header. `meta` is also an enumerated
+          // allow-list the relay enforces, so an addition there would be a
+          // relay change and a stripped field an invisible failure; `params`
+          // is forwarded whole.
+          ...(msg.writers !== undefined
+            ? { writers: msg.writers }
+            : {}),
+          indexStale: msg.indexStale === true,
+          ...(msg.overflow === true
+            ? { overflow: true }
+            : {}),
+          at: msg.at,
+        })
+        return
+      }
+
+      if (msg.type !== 'command-result') {
+        return
+      }
+
+      const ws = wsRef.current
+      const channel = channelRef.current
+      // This is the last hop a reply takes, and it used to be the quietest:
+      // no socket, no channel, an unserializable result or a closing socket
+      // all ended the same way — nothing sent, nothing logged. The command
+      // had already run, so the document changed and the caller learned
+      // nothing. Every one of those now leaves a record.
+      if (!ws || !channel) {
+        console.error(
+          `[bridge] reply for ${msg.id} dropped: no ${ws ? 'channel' : 'socket'} — the command ran, but its result cannot be delivered`,
+        )
+        return
+      }
+      let frame: string
+      try {
+        frame = JSON.stringify({
+          type: 'message',
+          channel,
+          message: {
+            // Echo the command's requestId in meta so the server correlates
+            // this reply to its pending command. msg.id here is the internal
+            // command-result id, which was seeded from meta.requestId when the
+            // inbound command was forwarded to the sandbox below.
+            meta: { requestId: msg.id },
+            result: msg.result,
+          },
+        })
+      } catch (err) {
+        // A result that survived postMessage can still refuse to serialize
+        // here — a circular reference, a BigInt. Answer with the failure so
+        // the caller gets a named error rather than a timeout.
+        frame = JSON.stringify({
+          type: 'message',
+          channel,
+          message: {
+            meta: { requestId: msg.id },
+            error: `result could not be delivered: ${String(err)}`,
+          },
+        })
+      }
+      try {
+        ws.send(frame)
+      } catch (err) {
+        console.error(
+          `[bridge] reply for ${msg.id} could not be sent:`,
+          String(err),
+        )
+      }
+    }
+
+    window.addEventListener('message', handler)
+
+    return () => {
+      window.removeEventListener('message', handler)
+    }
+  }, [sendLeave, sendFeedFrame])
+
+  // Ask code.ts for the file identity and resolve when it replies (or
+  // after a short timeout, so connect never blocks forever). This is the
+  // race-free path: the reply arrives AFTER this listener is attached.
+  const requestIdentity = useCallback(
+    (): Promise<void> =>
+      new Promise<void>(resolve => {
+        let settled = false
+        const handler = (event: MessageEvent) => {
+          const m = event.data?.pluginMessage
+          if (m?.type === 'identity') {
+            fileKeyRef.current = m.fileKey ?? null
+            fileNameRef.current = m.fileName ?? null
+            // I62 — load-bearing here too: the register frame reads this ref
+            // synchronously, before the persistent listener would have run.
+            if (typeof m.build === 'string') {
+              buildRef.current = m.build
+            }
+            currentPageRef.current = m.currentPage ?? null
+            selectedRef.current =
+              typeof m.selected === 'number'
+                ? m.selected
+                : null
+            finish()
+          }
+        }
+        const finish = () => {
+          if (settled) return
+          settled = true
+          window.removeEventListener('message', handler)
+          resolve()
+        }
+        window.addEventListener('message', handler)
+        parent.postMessage(
+          { pluginMessage: { type: 'get-identity' } },
+          '*',
+        )
+        setTimeout(finish, 500)
+      }),
+    [],
+  )
+
+  const connect = useCallback(
+    (port: number) => {
+      setState({
+        status: 'connecting',
+        channel: null,
+        error: null,
+      })
+      setMismatch(null)
+
+      void requestIdentity().then(() => {
+        // Deterministic channel for a saved file; stable per-session
+        // channel for a never-saved one. No clientStorage — a reload of
+        // a saved file re-derives the SAME channel from its fileKey.
+        const fk = fileKeyRef.current
+        let channel: string
+        if (fk !== null) {
+          channel = deriveChannel(fk)
+        } else {
+          if (sessionChannelRef.current === null) {
+            sessionChannelRef.current = genToken(8)
+          }
+          channel = sessionChannelRef.current
+        }
+        channelRef.current = channel
+
+        const ws = new WebSocket(`ws://localhost:${port}`)
+        wsRef.current = ws
+
+        ws.onopen = () => {
+          ws.send(JSON.stringify({ type: 'join', channel }))
+        }
+
+        ws.onmessage = (event: MessageEvent) => {
+          let data: Record<string, unknown>
+
+          try {
+            data = JSON.parse(event.data as string)
+          } catch {
+            return
+          }
+
+          if (data.type === 'system') {
+            // A fresh nonce per register/reconnect; seq restarts at 0 with
+            // it, so a seq reset alongside a NEW epoch is a reconnect, not a
+            // gap (change-feed.md). Minted BEFORE the register frame, which
+            // publishes it to the channel registry for late joiners.
+            epochRef.current = genId('epoch')
+            seqRef.current = 0
+
+            // Register with the file identity. fileKey lets the server
+            // address commands to exactly THIS file (B3).
+            ws.send(
+              JSON.stringify({
+                type: 'register',
+                channel,
+                fileKey: fileKeyRef.current,
+                fileName: fileNameRef.current,
+                version: APP_VERSION,
+                // I62 — which BUILD the SANDBOX bundle is. Every dev build
+                // stamps the same `version`, so this is the only field that
+                // can tell a fresh install from a weeks-old one.
+                build: buildRef.current,
+                currentPage:
+                  currentPageRef.current ?? undefined,
+                selected: selectedRef.current ?? undefined,
+                epoch: epochRef.current,
+              }),
+            )
+
+            setState({
+              status: 'connected',
+              channel,
+              error: null,
+            })
+
+            // The opening flush — the ONE deliberately empty frame. It
+            // reaches the members already in the channel, which is exactly
+            // the case the registry path cannot serve: a server already
+            // joined when the plugin died, missed edits, and reconnected
+            // without the user editing again. The reconnect itself becomes
+            // the signal.
+            sendFeedFrame({
+              changes: [],
+              indexStale: false,
+              at: Date.now(),
+            })
+
+            ws.send(
+              JSON.stringify({
+                type: 'status-sync',
+                channel,
+              }),
+            )
+            return
+          }
+
+          if (data.type === 'agent-status' && data.record) {
+            upsertStatus(data.record as StatusRecord)
+            return
+          }
+          if (data.type === 'agent-status-remove') {
+            removeStatus(
+              String(data.sessionId),
+              data.agentId as string | undefined,
+              data.key as string | undefined,
+            )
+            return
+          }
+          if (
+            data.type === 'agent-status-sync' &&
+            Array.isArray(data.records)
+          ) {
+            setExplicitStatus(
+              Object.fromEntries(
+                (data.records as StatusRecord[]).map(r => [
+                  r.key,
+                  r,
+                ]),
+              ),
+            )
+            return
+          }
+
+          if (
+            data.type === 'version-mismatch' &&
+            typeof data.server === 'string'
+          ) {
+            // [Review C2] Show the plugin's OWN version — it always knows
+            // APP_VERSION (imported above) — never the server's `data.plugin`
+            // view, which can be '(none)' for a version-less plugin. The
+            // frame only needs the server's version.
+            setMismatch({
+              plugin: APP_VERSION,
+              server: data.server,
+            })
+            return
+          }
+
+          if (data.type === 'broadcast' && data.message) {
+            const msg = data.message as Record<
+              string,
+              unknown
+            >
+
+            // Liveness ping (connection-liveness.md): answer HERE in the UI
+            // iframe and NEVER forward to the main thread. A "slow" command
+            // means the main thread is busy; only the iframe's event loop
+            // stays free to pong, so a busy-but-alive plugin isn't
+            // false-killed by the watchdog. Must sit above the
+            // command-forward block below.
+            if (msg.command === COMMANDS.PING) {
+              const pingMeta = msg.meta as Meta | undefined
+              const requestId = pingMeta?.requestId
+              const pingWs = wsRef.current
+              const pingChannel = channelRef.current
+              if (requestId && pingWs && pingChannel) {
+                pingWs.send(
+                  JSON.stringify({
+                    type: 'message',
+                    channel: pingChannel,
+                    message: {
+                      meta: { requestId },
+                      result: { ok: true },
+                    },
+                  }),
+                )
+              }
+              return
+            }
+
+            if (msg.command) {
+              // The command's identity rides in meta (request-envelope.md):
+              // requestId correlates the reply, fileKey is the B3 target the
+              // sandbox guards against. Forward both into the internal
+              // execute-command message (whose fields keep their names).
+              const meta = msg.meta as Meta | undefined
+              const requestId = meta?.requestId
+              // The server contract always stamps meta.requestId on a command
+              // frame; a frame without one can't be correlated, so drop it
+              // loudly rather than round-trip a reply the server can't match
+              // (which would hang the caller).
+              if (requestId === undefined) {
+                console.warn(
+                  'Dropping inbound command with no meta.requestId:',
+                  msg.command,
+                )
+                return
+              }
+              // Derived presence (status-monitor.md): this frame is evidence
+              // of a live agent, whether or not the server had the identity
+              // to push a status row for it. Recorded on the frames the
+              // panel actually dispatches — PING already returned above (the
+              // bridge probing itself is not an agent working), and a frame
+              // with no requestId was dropped as unanswerable.
+              noteCommandTraffic(
+                String(msg.command),
+                meta?.sessionId,
+              )
+              parent.postMessage(
+                {
+                  pluginMessage: {
+                    type: 'execute-command',
+                    id: requestId,
+                    command: msg.command,
+                    params:
+                      (msg.params as Record<
+                        string,
+                        unknown
+                      >) ?? {},
+                    targetFileKey: meta?.fileKey ?? null,
+                    // The WRITER of this dispatch (change-feed.md). It already
+                    // rides the wire's meta; forwarding it into the sandbox is
+                    // an internal message field, not a wire addition.
+                    sessionId: meta?.sessionId ?? null,
+                  },
+                },
+                '*',
+              )
+            }
+          }
+        }
+
+        ws.onerror = () => {
+          errorRef.current = 'Connection failed'
+          setState(prev => ({
+            ...prev,
+            status: 'disconnected',
+            error: 'Connection failed',
+          }))
+        }
+
+        ws.onclose = () => {
+          wsRef.current = null
+          channelRef.current = null
+          // A stale nonce must never be stamped on a frame sent over a dead
+          // socket: sendFeedFrame bails on a null epoch.
+          epochRef.current = null
+
+          // A dropped socket means the rows are stale -> fall to the
+          // connection fallback (the invariant "agent shown => connected").
+          // BOTH tiers go: a derived row is evidence of traffic that can no
+          // longer arrive (status-monitor.md, the ghost rule).
+          setExplicitStatus({})
+          setDerivedStatus({})
+          setMismatch(null)
+
+          setState({
+            status: 'disconnected',
+            channel: null,
+            error: errorRef.current,
+          })
+          errorRef.current = null
+        }
+      })
+    },
+    [
+      requestIdentity,
+      upsertStatus,
+      removeStatus,
+      noteCommandTraffic,
+      sendFeedFrame,
+    ],
+  )
+
+  const disconnect = useCallback(() => {
+    const ws = wsRef.current
+    if (ws) {
+      // Best-effort clean-close signal (Plugin Presence, Task 8): let the
+      // relay drop the channel immediately instead of waiting for the
+      // heartbeat. Must fire before ws.close() while the socket is still
+      // open.
+      sendLeave()
+      ws.close()
+      wsRef.current = null
+      channelRef.current = null
+    }
+    setState({
+      status: 'disconnected',
+      channel: null,
+      error: null,
+    })
+  }, [sendLeave])
+
+  return {
+    ...state,
+    connect,
+    disconnect,
+    agentStatus,
+    mismatch,
+    selection,
+  }
+}

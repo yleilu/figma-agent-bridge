@@ -1,0 +1,21 @@
+{
+  "name": "figma-agent-bridge",
+  "description": "Figma Bridge — drive Figma from Claude Code: design, review, and file feedback.",
+  "owner": {
+    "name": "Lei",
+    "email": "l@tristone.io"
+  },
+  "plugins": [
+    {
+      "name": "figma-agent-bridge",
+      "displayName": "Figma Bridge",
+      "description": "Build and review Figma designs with an AI agent.",
+      "source": {
+        "source": "npm",
+        "package": "figma-agent-bridge",
+        "version": "0.3.0"
+      },
+      "version": "0.3.0"
+    }
+  ]
+}

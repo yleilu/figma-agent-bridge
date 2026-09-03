@@ -1,0 +1,75 @@
+@import 'tailwindcss';
+
+@theme inline {
+  --color-figma-bg: var(--figma-color-bg);
+  --color-figma-bg-secondary: var(--figma-color-bg-secondary);
+  --color-figma-bg-brand: var(--figma-color-bg-brand);
+  --color-figma-bg-brand-hover: var(--figma-color-bg-brand-hover);
+  --color-figma-bg-brand-pressed: var(--figma-color-bg-brand-pressed);
+  --color-figma-bg-danger: var(--figma-color-bg-danger);
+  --color-figma-bg-success: var(--figma-color-bg-success);
+  --color-figma-bg-warning: var(--figma-color-bg-warning);
+  --color-figma-bg-tertiary: var(--figma-color-bg-tertiary);
+  --color-figma-bg-hover: var(--figma-color-bg-hover);
+  --color-figma-bg-selected: var(--figma-color-bg-selected);
+  --color-figma-bg-pressed: var(--figma-color-bg-pressed);
+  --color-figma-bg-disabled: var(--figma-color-bg-disabled);
+
+  --color-figma-text: var(--figma-color-text);
+  --color-figma-text-secondary: var(--figma-color-text-secondary);
+  --color-figma-text-tertiary: var(--figma-color-text-tertiary);
+  --color-figma-text-disabled: var(--figma-color-text-disabled);
+  --color-figma-text-brand: var(--figma-color-text-brand);
+  --color-figma-text-danger: var(--figma-color-text-danger);
+  --color-figma-text-success: var(--figma-color-text-success);
+  --color-figma-text-warning: var(--figma-color-text-warning);
+  --color-figma-text-onbrand: var(--figma-color-text-onbrand);
+
+  --color-figma-icon: var(--figma-color-icon);
+  --color-figma-icon-secondary: var(--figma-color-icon-secondary);
+  --color-figma-icon-brand: var(--figma-color-icon-brand);
+  /*
+   * Figma dark-theme token bug: --figma-color-icon-
+   * {danger,success,warning} are injected with the MUTED
+   * text-* value (color ramp-400) instead of the documented
+   * SATURATED icon value (ramp-500 = the bg-* value). Proof:
+   * Figma's own docs light theme defines icon-danger ==
+   * bg-danger (#f24822) and != text-danger, but the dark
+   * injection collapses icon onto text (#fca397). Alias each
+   * to bg-* — correct in BOTH themes (light #f24822 / dark
+   * #e03e1a for danger) — so status dots stay saturated
+   * signals. Neutral/brand/component/selected icons are
+   * INTENTIONALLY muted (icon==text in both themes) — do not
+   * add them here. Delete these three lines once Figma ships
+   * the documented icon values.
+   * https://developers.figma.com/docs/plugins/css-variables/
+   */
+  --color-figma-icon-danger: var(--figma-color-bg-danger);
+  --color-figma-icon-success: var(--figma-color-bg-success);
+  --color-figma-icon-tertiary: var(--figma-color-icon-tertiary);
+  --color-figma-icon-warning: var(--figma-color-bg-warning);
+  --color-figma-icon-disabled: var(--figma-color-icon-disabled);
+
+  --color-figma-border: var(--figma-color-border);
+  --color-figma-border-strong: var(--figma-color-border-strong);
+  --color-figma-border-selected: var(--figma-color-border-selected);
+  --color-figma-border-danger-strong: var(--figma-color-border-danger-strong);
+  --color-figma-border-disabled: var(--figma-color-border-disabled);
+  --color-figma-border-danger: var(--figma-color-border-danger);
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  --text-11: 11px;
+  --text-11--line-height: 16px;
+}
+
+@layer base {
+  body {
+    font-family: var(--font-sans);
+    font-size: 11px;
+    line-height: 16px;
+    font-weight: 400;
+    color: var(--figma-color-text);
+    background-color: var(--figma-color-bg);
+  }
+}

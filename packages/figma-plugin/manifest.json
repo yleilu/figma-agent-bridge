@@ -1,0 +1,13 @@
+{
+  "name": "Agent Bridge",
+  "id": "figma-agent-bridge",
+  "api": "1.0.0",
+  "enablePrivatePluginApi": true,
+  "main": "dist/code.js",
+  "ui": "dist/ui.html",
+  "editorType": ["figma"],
+  "networkAccess": {
+    "allowedDomains": ["*"],
+    "reasoning": "Fetches image URLs for create_image; connects to the local agent relay."
+  }
+}

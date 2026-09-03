@@ -2,5 +2,19 @@ node_modules/
 dist/
 .DS_Store
 *.log
-bun.lock
-docs/plans/
+.claude/
+.obsidian/
+daily-journal/
+docs/scratch/
+verify-output/
+
+# Published-package build outputs (assembled at release, never committed)
+plugin/bin/
+plugin/figma-plugin/
+plugin/LICENSE
+
+# Visual brainstorming companion (not durable)
+.superpowers/
+
+# Local deploy credentials — never commit
+.credentials

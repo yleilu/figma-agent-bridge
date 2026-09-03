@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "figma-agent-bridge": {
+      "command": "bun",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/server.js"]
+    }
+  }
+}

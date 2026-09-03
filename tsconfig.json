@@ -8,11 +8,17 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
-    "outDir": "dist",
-    "types": ["bun-types"]
+
+    "types": ["bun-types"],
+    "paths": {
+      "@figma-agent-bridge/shared/*": ["./packages/shared/src/*"],
+      "@figma-agent-bridge/server/*": ["./packages/server/src/*"],
+      "@figma-agent-bridge/relay/*": ["./packages/relay/src/*"]
+    }
   },
-  "exclude": ["node_modules", "dist", "packages/figma-plugin"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "packages/figma-plugin"
+  ]
 }

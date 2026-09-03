@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Status Monitor — UI reference (figma-bridge)</title>
+<!--
+  Durable design reference for docs/specs/status-monitor.md.
+  Agreed direction: native-Figma "Roster · Tree" agent status monitor.
+  - adaptive grouping (solo agent = flat row; session with >=2 agents = group header + nested)
+  - no connection header (agents shown => connected); connection state only in the fallback
+  - a roster-scoped selection bar may sit above the rows (not depicted here)
+  - progress dot = the loader: amber busy (pulsing) / green ok / red error  (warning goes in the text)
+  - text, or a 3-dot skeleton when a new action started but no narrative has arrived yet
+  - busy row = full-width, no-radius fill (Figma layers-panel style) so adjacent busy rows merge into a band
+  Tokens here are fallbacks approximating Figma's --figma-color-* light/dark values (live plugin gets the real ones).
+-->
+<style>
+  :root{
+    --bg:#fff; --bg2:#f5f5f5; --sel:#e5f4ff;
+    --brand:#0d99ff; --ok:#14ae5c; --warn:#f5a623; --danger:#f24822;
+    --t:rgba(0,0,0,.9); --t2:rgba(0,0,0,.5); --t3:rgba(0,0,0,.3);
+    --bd:#e6e6e6;
+    --page:#eceef0;
+  }
+  :root[data-theme="dark"]{
+    --bg:#2c2c2c; --bg2:#383838; --sel:#4a5878;
+    --brand:#0c8ce9; --ok:#37b26d; --warn:#f3c11b; --danger:#ff6b4a;
+    --t:#fff; --t2:rgba(255,255,255,.7); --t3:rgba(255,255,255,.4);
+    --bd:#444; --page:#1e1e1e;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme]){
+      --bg:#2c2c2c; --bg2:#383838; --sel:#4a5878;
+      --brand:#0c8ce9; --ok:#37b26d; --warn:#f3c11b; --danger:#ff6b4a;
+      --t:#fff; --t2:rgba(255,255,255,.7); --t3:rgba(255,255,255,.4);
+      --bd:#444; --page:#1e1e1e;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--page);color:var(--t);
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    padding:28px;display:flex;flex-wrap:wrap;gap:32px;align-items:flex-start}
+  h1{font-size:15px;font-weight:600;margin:0 0 4px;width:100%}
+  .sub{font-size:12px;color:var(--t2);width:100%;margin:0 0 8px}
+  .col{display:flex;flex-direction:column;gap:14px}
+  .lbl{font-size:11px;color:var(--t2);font-weight:600}
+  .cap{font-size:11px;color:var(--t3);margin-top:2px;max-width:320px}
+  .toggle{position:fixed;top:16px;right:16px;font-size:11px;font-weight:600;border:1px solid var(--bd);
+    background:var(--bg);color:var(--t);border-radius:6px;padding:5px 10px;cursor:pointer}
+
+  .win{width:320px;background:var(--bg);color:var(--t);border:1px solid var(--bd);border-radius:8px;
+    overflow:hidden;box-shadow:0 8px 24px -12px rgba(0,0,0,.35);font-size:11px;line-height:16px}
+  .body{padding:6px 0}
+
+  .row{display:flex;align-items:center;gap:8px;padding:5px 12px}
+  .row.busy{background:var(--bg2)}          /* full-width, no radius -> adjacent busy rows merge */
+  .kid{padding-left:26px}
+  .tconn{color:var(--t3);flex:0 0 auto;margin-left:-14px;width:12px}
+
+  .dot{position:relative;width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+  .dot.busy{background:var(--warn)}
+  .dot.ok{background:var(--ok)}
+  .dot.err{background:var(--danger)}
+  .dot.busy::after{content:"";position:absolute;inset:-3px;border-radius:50%;border:1.5px solid var(--warn);animation:ring 1.4s ease-out infinite}
+  @keyframes ring{0%{transform:scale(.7);opacity:.75}100%{transform:scale(2.2);opacity:0}}
+
+  .name{font-weight:600;color:var(--t);flex:0 0 auto}
+  .meta{color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .time{color:var(--t3);font-size:10px;flex:0 0 auto;margin-left:auto;padding-left:6px}
+
+  .hdr{display:flex;align-items:center;gap:8px;padding:5px 12px;font-weight:600}
+  .chev{color:var(--t3);font-size:9px;flex:0 0 auto}
+
+  .skel{display:inline-flex;gap:4px;align-items:center}
+  .skel i{width:5px;height:5px;border-radius:50%;background:var(--t3);animation:ty 1.2s ease-in-out infinite}
+  .skel i:nth-child(2){animation-delay:.16s}.skel i:nth-child(3){animation-delay:.32s}
+  @keyframes ty{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:.9;transform:translateY(-3px)}}
+
+  .fb{display:flex;flex-direction:column;gap:3px;padding:14px}
+  .fbline{display:flex;align-items:center;gap:8px}
+  .fbdot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+  .fbdot.amber{background:var(--warn);animation:pulse 1.4s ease-in-out infinite}
+  .fbdot.red{background:var(--danger)} .fbdot.grey{background:var(--t3)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .fblabel{font-weight:600;color:var(--t)} .fbsub{color:var(--t2);padding-left:16px}
+</style>
+</head>
+<body>
+  <button class="toggle" onclick="var r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark'">light / dark</button>
+
+  <h1>Agent Status Monitor — UI reference</h1>
+  <p class="sub">Native-Figma Roster · Tree. Progress dot = loader (amber busy · green ok · red error). Busy rows form a full-width band.</p>
+
+  <div class="col">
+    <div class="lbl">Working — adaptive tree</div>
+    <div class="win"><div class="body">
+      <!-- solo agent: flat row -->
+      <div class="row busy"><span class="dot busy"></span><span class="name">figma-designer</span><span class="meta">Placing hero frame</span><span class="time">now</span></div>
+      <!-- session with >=2 agents: group header + nested; two busy kids merge into one band -->
+      <div class="hdr"><span class="chev">▾</span><span class="dot ok"></span><span>session A</span><span class="meta" style="font-weight:400">· Building the nav bar</span><span class="time">3s</span></div>
+      <div class="row busy kid"><span class="tconn">└</span><span class="dot busy"></span><span class="name">Explore</span><span class="meta">Scanning 142 nodes</span><span class="time">now</span></div>
+      <div class="row busy kid"><span class="tconn">└</span><span class="dot busy"></span><span class="name">Reviewer</span><span class="skel"><i></i><i></i><i></i></span><span class="time">now</span></div>
+    </div></div>
+    <div class="cap">Solo agent = flat row. Session A groups its subagents; the two busy kids merge into one continuous band. “Reviewer” shows the 3-dot skeleton (acting, no narrative yet).</div>
+  </div>
+
+  <div class="col">
+    <div class="lbl">Fallback — no live agent</div>
+    <div class="win"><div class="fb"><div class="fbline"><span class="fbdot amber"></span><span class="fblabel">Connecting…</span></div><div class="fbsub">reaching the bridge</div></div></div>
+    <div class="win"><div class="fb"><div class="fbline"><span class="fbdot red"></span><span class="fblabel">Bridge offline</span></div><div class="fbsub">start the MCP / relay to connect</div></div></div>
+    <div class="win"><div class="fb"><div class="fbline"><span class="fbdot grey"></span><span class="fblabel">No agent active</span></div><div class="fbsub">waiting for an agent to start work</div></div></div>
+    <div class="cap">Shown only when nothing is working; dot before the label.</div>
+  </div>
+
+  <div class="col">
+    <div class="lbl">Row states</div>
+    <div class="win"><div class="body">
+      <div class="row busy"><span class="dot busy"></span><span class="name">Explore</span><span class="skel"><i></i><i></i><i></i></span><span class="time">now</span></div>
+      <div class="row busy"><span class="dot busy"></span><span class="name">Explore</span><span class="meta">Scanning 142 nodes</span><span class="time">now</span></div>
+      <div class="row"><span class="dot ok"></span><span class="name">Explore</span><span class="meta">Scanned 142 nodes</span><span class="time">2s</span></div>
+      <div class="row"><span class="dot err"></span><span class="name">main</span><span class="meta">Font load failed</span><span class="time">now</span></div>
+    </div></div>
+    <div class="cap">① skeleton (busy, pending) ② busy + text ③ idle/done (green) ④ error (red).</div>
+  </div>
+
+</body>
+</html>

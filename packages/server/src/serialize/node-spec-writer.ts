@@ -1,0 +1,1073 @@
+// serialize/node-spec-writer.ts — NodeSpec → FigmaWritePayload
+//
+// PURE converter: emits ONLY keys present in `spec`. Omitted ⇒ absent ⇒
+// untouched. No defaults are injected except in the CREATE wrappers
+// (specToFigmaForCreate / slotEntryToFigma): the `name ?? type` fallback and
+// the frame layout default (B29). Creation-only, by construction — the patch
+// face update_node runs on is this pure converter.
+//
+// The emitted payload matches the plugin's apply-contract:
+//   Phase 1  applyCommonProperties  reads the flat keys
+//   Phase 2  applyTextProperties    reads spec.text.font as parsed object
+//   Phase 3  applyPostAppendProperties reads spec.sizing / spec.layoutPositioning
+//
+// ── Plugin consumption (figma-plugin/src/code.ts, as of this phase) ──────────
+// Emitting a key here does NOT guarantee the CURRENT plugin applies it. To keep
+// round-trip claims honest, the breakdown is:
+//
+//   CONSUMED by the current plugin:
+//     applyCommonProperties  — name, size, position, fills, strokes,
+//       strokeWeight, strokeWeights (per-side [t,r,b,l] → strokeTopWeight/…,
+//       applyStrokeWeights), strokeAlign, strokeDash (→ dashPattern),
+//       strokeCap/strokeJoin/strokeMiterLimit (applyStrokeGeometry),
+//       exportSettings (applyExportSettings), grids → layoutGrids
+//       (applyGrids), radius, opacity, blendMode, rotation, visible,
+//       clipsContent, effects, layout,
+//       minWidth/maxWidth/minHeight/maxHeight, constraints,
+//       fillStyleId/strokeStyleId/effectStyleId/textStyleId
+//       — see apply-node-fields.ts for the three most recently landed
+//       (strokeCap/strokeJoin/strokeMiterLimit, exportSettings, grids). Each
+//       is confirmed APPLIED to the live node (verified against the raw
+//       plugin GET_NODE reply, pre-serialization), and all three now ROUND-TRIP
+//       — node-spec-reader.ts projects them back (strokeCap/Join/MiterLimit as
+//       the stroke atom's {…} keys, layoutGrids as `grids`, exportSettings with
+//       its constraint tuple). Each is elided at its Figma default, so a read
+//       emits only what differs (T4).
+//     applyTextProperties    — text.content, text.font, text.align, text.valign,
+//       text.color, text.decoration, text.case, text.paragraphSpacing,
+//       text.lineHeight / text.letterSpacing ({value,unit}), textAutoResize
+//     applyPostAppendProperties — sizing, layoutPositioning
+//     applyWrapperBindings   — bindings (the NAME each inline var()/style()
+//       wrapper carried; applied AFTER the literal, on the create AND the
+//       update path — see serialize/wrapper-bindings.ts)
+//     createSingleNode (INSTANCE case) — component { id | key, properties }
+//       (resolves the main component, createInstance(), then setProperties)
+//
+//   EMITTED but NOT YET consumed (reserved for later phases — do not claim
+//   round-trip for these until the plugin reads them):
+//     overrides (also broken on the read face — a separate, tracked issue)
+//
+//   Read-only by design (writer emits them; the plugin correctly ignores
+//   them on write — NOT gaps):
+//     componentProperties, variantProperties (instance overrides — the
+//       documented read-only override surface)
+//     id (writer emits it; plugin ignores it on create — Figma assigns the id)
+//
+// ── lh/ls (review finding #3, RESOLVED) ──────────────────────────────────────
+// lh/ls are CANONICAL on the font(...) atom (`font(Inter,SemiBold,18){lh=24}`).
+// The writer's text path lifts atomToFont's lineHeight/letterSpacing into the
+// plugin's text.lineHeight / text.letterSpacing ({value,unit}) keys that
+// applyTextProperties reads. There is no redundant top-level text.lh / text.ls.
+
+import type {
+  NodeSpec,
+  NodeSpecPatch,
+  GridCellSpec,
+  LayoutSpec,
+  NumberAtom,
+  SlotEntry,
+} from '@figma-agent-bridge/shared/node-spec'
+import { NODE_SPEC_PATCH_KEYS } from '@figma-agent-bridge/shared/node-spec-schema'
+import {
+  SPACE_BETWEEN,
+  spaceBetweenGapConflict,
+} from '@figma-agent-bridge/shared'
+import {
+  atomToPaint,
+  atomToEffect,
+  atomToFont,
+  atomToStroke,
+  atomToGrid,
+  atomToPath,
+  tokenize,
+} from '../grammar'
+import { ToolError } from '../errors'
+import { collectWrapperBindings } from './wrapper-bindings'
+import { parseTrack } from './grid-track'
+import { readStyledFields } from './styled-fields'
+
+export type FigmaWritePayload = Record<string, unknown>
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Convert a font atom to the plugin's text-font payload.
+ *
+ * lh/ls are CANONICAL on the font(...) atom (`{lh=…,ls=…}`). atomToFont
+ * parses them into the font object's `lineHeight`/`letterSpacing`; the plugin's
+ * applyTextProperties reads them as the SIBLING text keys
+ * `text.lineHeight` / `text.letterSpacing` ({value,unit}). So we LIFT them out
+ * of the font object up to the text payload, leaving the font object as a bare
+ * { family, style, size } that applyTextProperties' loadFontAsync consumes.
+ */
+const convertFontInto = (
+  out: Record<string, unknown>,
+  fontAtom: string,
+): void => {
+  const f = atomToFont(fontAtom)
+  out.font = {
+    family: f.family,
+    style: f.style,
+    size: f.size,
+  }
+  if (f.lineHeight !== undefined) {
+    out.lineHeight = f.lineHeight
+  }
+  if (f.letterSpacing !== undefined) {
+    out.letterSpacing = f.letterSpacing
+  }
+}
+
+/** Parse the `radius` atom (a bare number, or a string/"[tl,tr,br,bl]" tuple). */
+const parseRadius = (
+  s: string | number,
+): number | [number, number, number, number] => {
+  // A bare number is the uniform-radius form (consistent with opacity/rotation
+  // bare literals) — accept it directly rather than crashing on s.trim().
+  if (typeof s === 'number') {
+    return s
+  }
+  // A read emits the binding wrapper — `var(radius/medium)8`, or the
+  // per-corner `var(radius/medium)[8,8,0,0]` — and the spec says a write
+  // resolves each wrapper to its literal. Every other atom strips it inside
+  // parseAtom; radius is the one atom parsed by hand, so it must strip it too,
+  // via the SHARED tokenizer rather than a second matcher that could drift
+  // from it (T8). Without this, Number('var(…)8') is NaN, which crosses the
+  // wire as null. Figma then REJECTS the write ("Property cornerRadius failed
+  // validation: Expected number, received null" — verified live), so a
+  // read-modify-write on any token-bound node fails outright where it used to
+  // round-trip. Loud rather than silent, but still broken.
+  const trimmed = tokenize(s).body.trim()
+  if (trimmed.startsWith('[')) {
+    // "[8,8,0,0]" → [8, 8, 0, 0]
+    const inner = trimmed.slice(1, -1)
+    const parts = inner
+      .split(',')
+      .map(p => Number(p.trim()))
+    return parts as [number, number, number, number]
+  }
+  return Number(trimmed)
+}
+
+/**
+ * A layout spacing scalar as the plugin takes it — a plain number.
+ *
+ * The leaf may arrive wrapped, because that is what a read of a bound field
+ * emits (`gap: "var(space/8)8"`). The wrapper carries the BINDING, which
+ * `collectWrapperBindings` has already collected into `spec.bindings`; what the
+ * layout itself needs is the literal underneath. Stripping goes through the
+ * shared tokenizer, never a second matcher (T8).
+ *
+ * A leaf that states no number is malformed, and a malformed atom has no
+ * literal half to fall back on — INVALID_PARAM before the write leaves the
+ * server, with the canonical spelling in the message (the `atomToStroke`
+ * precedent, B38). Passing NaN on would cross the wire as `null` and die on
+ * Figma's own validator.
+ */
+const layoutNumber = (
+  value: NumberAtom,
+  field: string,
+): number => {
+  if (typeof value === 'number') {
+    return value
+  }
+  let body = ''
+  try {
+    body = tokenize(value).body.trim()
+  } catch {
+    body = ''
+  }
+  const parsed = Number(body)
+  if (body === '' || !Number.isFinite(parsed)) {
+    throw new ToolError(
+      'INVALID_PARAM',
+      `layout.${field} takes a number, not "${value}". ` +
+        `Write ${field}: 8 for a literal, or ${field}: "var(space/8)8" ` +
+        'to bind the variable space/8 to it.',
+    )
+  }
+  return parsed
+}
+
+/** Whether an atom carries a `var(...)` wrapper — i.e. asks for a binding. */
+const isVarBound = (value: NumberAtom): boolean => {
+  if (typeof value !== 'string') {
+    return false
+  }
+  try {
+    return tokenize(value).wrapper?.kind === 'var'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Refuse `align` primary SPACE_BETWEEN paired with a variable-bound `gap`
+ * (B58 — see space-between-guard.ts for the mechanism).
+ *
+ * This sits in `convertLayout` because every write path funnels through it:
+ * create_node, create_tree, update_node, batch's update_node, and the
+ * update_component slot specs all convert their layout here. One choke point,
+ * one rule, no path that can forget it.
+ *
+ * It catches the pair arriving in ONE write. A write that brings only half of
+ * the pair onto a node already holding the other half needs the node's live
+ * state, so the plugin catches that (it has the node in hand and pays no extra
+ * round trip for it).
+ */
+const assertGapCanBind = (
+  layout: LayoutSpec,
+  where?: string,
+): void => {
+  if (
+    layout.align?.[0] === SPACE_BETWEEN &&
+    layout.gap !== undefined &&
+    isVarBound(layout.gap)
+  ) {
+    throw new ToolError(
+      'INVALID_PARAM',
+      spaceBetweenGapConflict({
+        where,
+        arrivingHalf: 'both',
+      }),
+    )
+  }
+}
+
+/** Map a LayoutSpec to the flat layout object the plugin expects. */
+const convertLayout = (
+  layout: LayoutSpec,
+  warnings?: string[],
+  where?: string,
+): Record<string, unknown> => {
+  assertGapCanBind(layout, where)
+  const out: Record<string, unknown> = { mode: layout.mode }
+  if (layout.gap !== undefined) {
+    out.spacing = layoutNumber(layout.gap, 'gap')
+  }
+  if (layout.pad !== undefined) {
+    out.padding = layout.pad.map((side, i) =>
+      layoutNumber(side, `pad[${i}]`),
+    )
+  }
+  if (layout.align !== undefined) {
+    out.align = layout.align
+  }
+  if (layout.wrap !== undefined) {
+    out.wrap = layout.wrap
+  }
+  // GRID-mode keys (M12; track sizes I56). Emit only when present (pure-emit
+  // contract). T7 handler-side validation: warn when grid keys appear on a
+  // non-GRID mode (they are a silent no-op on H/V/NONE).
+  const hasGridKeys =
+    layout.rows !== undefined ||
+    layout.cols !== undefined ||
+    layout.rowGap !== undefined ||
+    layout.colGap !== undefined ||
+    layout.rowSizes !== undefined ||
+    layout.colSizes !== undefined
+  if (hasGridKeys && layout.mode !== 'GRID' && warnings) {
+    warnings.push(
+      `layout: rows/cols/rowGap/colGap/rowSizes/colSizes keys are GRID-only but mode is '${layout.mode}' — keys ignored`,
+    )
+  }
+  if (layout.rows !== undefined) {
+    out.rows = layout.rows
+  }
+  if (layout.cols !== undefined) {
+    out.cols = layout.cols
+  }
+  if (layout.rowGap !== undefined) {
+    out.rowGap = layoutNumber(layout.rowGap, 'rowGap')
+  }
+  if (layout.colGap !== undefined) {
+    out.colGap = layoutNumber(layout.colGap, 'colGap')
+  }
+  // Per-track sizing (I56). Each atom is READ HERE rather than passed to the
+  // plugin as a string: the plugin's applier writes Figma objects, and a
+  // grammar the plugin had to re-parse would be a second parser of one
+  // spelling. A track that cannot be read names its own index.
+  if (layout.rowSizes !== undefined) {
+    out.rowSizes = layout.rowSizes.map((atom, i) =>
+      parseTrack(atom, `rowSizes[${i}]`),
+    )
+  }
+  if (layout.colSizes !== undefined) {
+    out.colSizes = layout.colSizes.map((atom, i) =>
+      parseTrack(atom, `colSizes[${i}]`),
+    )
+  }
+  return out
+}
+
+/**
+ * A grid child's `cell`, emitted member by member (I56).
+ *
+ * Plain pass-through, because every member is already the value Figma takes —
+ * an index and a span are numbers, and an alignment is one of Figma's own four
+ * words. The SHAPE and the bounds are the schema's (`gridCellSchema`); WHERE
+ * the members land is the plugin's (`grid-cell.ts`), because only the plugin
+ * knows whether this node's parent is a grid at all.
+ *
+ * Pure-emit like every other converter: a member the spec did not state is not
+ * a member this writes, so a patch that moves a span leaves the anchor alone.
+ */
+const convertCell = (
+  cell: GridCellSpec,
+): Record<string, unknown> => {
+  const out: Record<string, unknown> = {}
+  if (cell.row !== undefined) {
+    out.row = cell.row
+  }
+  if (cell.col !== undefined) {
+    out.col = cell.col
+  }
+  if (cell.rowSpan !== undefined) {
+    out.rowSpan = cell.rowSpan
+  }
+  if (cell.colSpan !== undefined) {
+    out.colSpan = cell.colSpan
+  }
+  if (cell.align !== undefined) {
+    out.align = cell.align
+  }
+  return out
+}
+
+// ─── specToFigma ─────────────────────────────────────────────────────────────
+
+/**
+ * The keys a patch names that the write face does not know, and what to say
+ * about them (T7).
+ *
+ * zod STRIPS an unknown key by default, so `update_node({patch:{x:10}})` used
+ * to report success with an empty `warnings[]` having changed nothing at all —
+ * the one failure mode a mutation must never have. `partialNodeSpecSchema` is
+ * a passthrough so the key survives to here, where it is REPORTED and still
+ * never written.
+ *
+ * The hints cover the near-misses that produced the bug: the flat CSS-ish
+ * geometry names, which NodeSpec carries as tuples.
+ */
+const PATCH_KEY_HINTS: Record<string, string> = {
+  x: 'position',
+  y: 'position',
+  width: 'size',
+  height: 'size',
+  characters: 'text',
+  fill: 'fills',
+  effect: 'effects',
+  cornerRadius: 'radius',
+}
+
+/**
+ * Read-only node-struct fields a read emits and the write face ignores
+ * (`expression-formats.md` → *Read-only node fields*). They ARE NodeSpec
+ * fields — a read-modify-write echoes them back by design — so telling the
+ * agent they are "not a NodeSpec field" would contradict the grammar it read.
+ * They get their own wording; genuinely unknown keys keep theirs.
+ */
+const READ_ONLY_PATCH_KEYS: ReadonlySet<string> = new Set([
+  'warnings',
+  'readError',
+  'readErrors',
+])
+
+const nameList = (keys: string[]): string =>
+  keys.map(k => `\`${k}\``).join(', ')
+
+export const unknownPatchKeyWarnings = (
+  patch: object,
+  converted: FigmaWritePayload,
+): string[] => {
+  const extra = Object.keys(patch).filter(
+    k => !NODE_SPEC_PATCH_KEYS.has(k),
+  )
+  if (extra.length === 0) {
+    return []
+  }
+  const readOnly = extra.filter(k =>
+    READ_ONLY_PATCH_KEYS.has(k),
+  )
+  const unknown = extra.filter(
+    k => !READ_ONLY_PATCH_KEYS.has(k),
+  )
+  const out: string[] = []
+  if (readOnly.length > 0) {
+    const many = readOnly.length > 1
+    out.push(
+      `${many ? 'keys' : 'key'} ${nameList(readOnly)} ` +
+        `${many ? 'are' : 'is'} read-only and ` +
+        `${many ? 'were' : 'was'} ignored on write`,
+    )
+  }
+  if (unknown.length > 0) {
+    const many = unknown.length > 1
+    const hints = [
+      ...new Set(
+        unknown
+          .map(k => PATCH_KEY_HINTS[k])
+          .filter((h): h is string => h !== undefined),
+      ),
+    ]
+    out.push(
+      `${many ? 'keys' : 'key'} ${nameList(unknown)} ` +
+        `${many ? 'are' : 'is'} not a NodeSpec field and ` +
+        `${many ? 'were' : 'was'} ignored` +
+        (hints.length > 0
+          ? ` — did you mean ${hints.join(' / ')}?`
+          : ''),
+    )
+  }
+  // "nothing was changed" only when the whole patch was inert: a patch that
+  // also carried a real field DID land, and saying otherwise would be a
+  // second dishonesty.
+  if (Object.keys(converted).length === 0) {
+    out[out.length - 1] +=
+      ' (nothing was changed by this call)'
+  }
+  return out
+}
+
+/**
+ * What a patch carrying `children` is told (I67).
+ *
+ * `children` is off `update_node`'s advertised patch shape now, and the schema
+ * is passthrough precisely so a straggler still ARRIVES here rather than being
+ * dropped at the boundary. It cannot ride `unknownPatchKeyWarnings`: that
+ * function tests `NODE_SPEC_PATCH_KEYS`, which is derived from
+ * `partialNodeSpecSchema` — the shape `search`'s field vocabulary also comes
+ * from, and one `search fields:['children']` is legitimate. So the key gets its
+ * own sentence, and that sentence names the tools that DO move structure.
+ */
+export const childrenIgnoredWarnings = (
+  patch: object,
+): string[] =>
+  'children' in patch
+    ? [
+        'key `children` was ignored — update_node patches ONE node and never ' +
+          'its contents. Build children with create_node / create_tree ' +
+          'parented to this node, or move existing ones in with ' +
+          'reparent_node.',
+      ]
+    : []
+
+/** The four auto-layout size clamps, in the order a patch is scanned (B57). */
+const CLAMP_KEYS = [
+  'minWidth',
+  'maxWidth',
+  'minHeight',
+  'maxHeight',
+] as const
+
+/**
+ * What an update that moves a min/max clamp must say (B57).
+ *
+ * Figma's clamp is ONE-WAY, and the plugin's apply is a faithful property set —
+ * this is Figma's own semantics, not a bridge defect. Writing `minWidth: 320`
+ * on a master forced an instance carrying a FIXED width 238 up to 320, which is
+ * expected. Dropping the min back down left the instance at 320: the 238 was
+ * gone, not restored. A HUGGING instance kept the clamped width over 27 of
+ * content, and so did the hugging MASTER — hug does not re-resolve when a floor
+ * moves.
+ *
+ * So the destructive step is invisible from the reply. The surface answered ok
+ * with an empty `warnings[]` while a size the operator had set by hand was
+ * overwritten for good. That is the silent-failure class T7 forbids, and it
+ * bites the S38 doctrine directly ("set family floors before instances diverge;
+ * re-check instance sizes after changing one").
+ *
+ * A CLEAR warns as loudly as a write: `minWidth: null` reads like an undo and
+ * is not one.
+ */
+export const oneWayClampWarnings = (
+  patch: object,
+): string[] => {
+  const out: string[] = []
+  const p = patch as Record<string, unknown>
+  for (const field of CLAMP_KEYS) {
+    if (!(field in p)) {
+      continue
+    }
+    const cleared = p[field] === null
+    out.push(
+      `\`${field}\` is a ONE-WAY clamp. Figma resizes every node past it and ` +
+        `keeps no record of the size it replaced. ` +
+        (cleared
+          ? 'Clearing it restores nothing: '
+          : 'Clearing it or lowering it later restores nothing: ') +
+        `an instance's own size override stays at the clamped value, and a HUG ` +
+        `does not re-resolve. Re-state \`size\` and \`sizing\` on every node this ` +
+        `clamp reaches, master and instances alike.`,
+    )
+  }
+  return out
+}
+
+/**
+ * Convert a (partial) NodeSpec to a FigmaWritePayload.
+ *
+ * PURE — emits ONLY keys present in `spec`. Never injects defaults.
+ *
+ * `warnings` is an OPTIONAL sink: when supplied, a conversion that cannot carry
+ * what the spec asked for (e.g. GRID-only `layout` keys on an H/V mode, or a
+ * `var()` wrapper on a field with no binding route) pushes a human-readable
+ * note onto it. The M3 create/update/component handlers pass
+ * their own warnings array so the agent sees the loss; callers that only need
+ * the payload (and the ~40 `.toEqual()` converter tests) omit it and get the
+ * exact same return value.
+ */
+export const specToFigma = (
+  spec: NodeSpecPatch,
+  warnings?: string[],
+  /** Node id (or other label) named in a refusal — an update knows one, a create does not. */
+  where?: string,
+): FigmaWritePayload => {
+  const out: FigmaWritePayload = {}
+
+  // ── styled fields, FIRST ─────────────────────────────────────────────────
+  // `fills`/`strokes`/`effects`/`grids` are each EITHER a style reference or a
+  // list of literals, and the mixes a slot cannot hold are rejected here —
+  // before any atom is converted, so a rejected write has done nothing at all
+  // (expression-formats.md, "A styled field is a reference, not a list").
+  const styled = readStyledFields(spec)
+
+  // ── identity / pass-through ──────────────────────────────────────────────
+  if (spec.name !== undefined) {
+    out.name = spec.name
+  }
+  if (spec.id !== undefined) {
+    out.id = spec.id
+  }
+
+  // ── geometry pass-through ────────────────────────────────────────────────
+  if (spec.size !== undefined) {
+    out.size = spec.size
+  }
+  if (spec.position !== undefined) {
+    out.position = spec.position
+  }
+
+  // ── layout ───────────────────────────────────────────────────────────────
+  if (spec.layout !== undefined) {
+    out.layout = convertLayout(spec.layout, warnings, where)
+  }
+  if (spec.cell !== undefined) {
+    out.cell = convertCell(spec.cell)
+  }
+  if (spec.sizing !== undefined) {
+    out.sizing = spec.sizing
+  }
+  if (spec.constraints !== undefined) {
+    out.constraints = spec.constraints
+  }
+  if (spec.minWidth !== undefined) {
+    out.minWidth = spec.minWidth
+  }
+  if (spec.maxWidth !== undefined) {
+    out.maxWidth = spec.maxWidth
+  }
+  if (spec.minHeight !== undefined) {
+    out.minHeight = spec.minHeight
+  }
+  if (spec.maxHeight !== undefined) {
+    out.maxHeight = spec.maxHeight
+  }
+  if (spec.layoutPositioning !== undefined) {
+    out.layoutPositioning = spec.layoutPositioning
+  }
+
+  // ── visual atoms ─────────────────────────────────────────────────────────
+  // A REFERENCE emits no literals at all: the style is the field's whole
+  // content, the resolved list riding with it is not a second instruction, and
+  // assigning the field directly is what DETACHES the style. Only the
+  // `bindings[]` entry below carries it.
+  if (styled.fills?.kind === 'literals') {
+    out.fills = styled.fills.atoms.map(atomToPaint)
+  }
+  if (styled.strokes?.kind === 'literals') {
+    out.strokes = styled.strokes.atoms.map(atomToPaint)
+  }
+  if (spec.stroke !== undefined) {
+    const geom = atomToStroke(spec.stroke)
+    if (geom.weight !== undefined) {
+      out.strokeWeight = geom.weight
+    }
+    if (geom.weights !== undefined) {
+      // Per-side weights [t,r,b,l] (B27). The four sides ride the payload as
+      // `strokeWeights` and the plugin assigns strokeTopWeight/… — Figma
+      // carries them on frame-like and RECTANGLE nodes (IndividualStrokesMixin).
+      //
+      // This used to collapse to the TOP side with a warning, which made
+      // `stroke([0,0,1,0])` — a bottom rule, the commonest divider in table and
+      // list design — weight 0, i.e. INVISIBLE, against a grammar that has
+      // promised per-side since expression-formats.md:192.
+      //
+      // The writer does not warn about the sides it cannot apply, because it
+      // does not know the target's node type: the feature detection and its
+      // collapse warning belong where the node is (T7, figma-plugin's
+      // applyStrokeWeights).
+      //
+      // EQUAL sides are emitted as the plain uniform weight instead. That is
+      // the canonical form on the read face too, and it keeps ONE owner of the
+      // value in the payload — nothing can re-collapse a tuple after the fact.
+      //
+      // A list that is not four sides degrades WHOLE. The parser reports the
+      // positional list as written, so `stroke([1,2,3,4,5])` used to lose its
+      // fifth entry to a destructure and land as a well-formed four-sided
+      // stroke — a silent misread of what the caller asked for. The stroke's
+      // weight is left untouched instead, and the sink is told why (matching
+      // applyStrokeWeights' own malformed-tuple degrade).
+      //
+      // ARITY is all this judges. Every entry is already a number: a side that
+      // is not one is refused by `atomToStroke`, on the same terms as a
+      // uniform `stroke(fat)`, so the write never gets here. What is left is
+      // the one question this face can answer — the field holds four sides,
+      // and the caller named some other number of them.
+      const sides = geom.weights
+      if (sides.length !== 4) {
+        warnings?.push(
+          `stroke([…]) takes four weights [top,right,bottom,left]; got ` +
+            `${sides.length} (${sides.join(', ')}) — the per-side weights ` +
+            `were ignored and the stroke weight is unchanged.`,
+        )
+      } else {
+        const [top, right, bottom, left] = sides
+        if (
+          right === top &&
+          bottom === top &&
+          left === top
+        ) {
+          out.strokeWeight = top
+        } else {
+          out.strokeWeights = [top, right, bottom, left]
+        }
+      }
+    }
+    if (geom.align !== undefined) {
+      out.strokeAlign = geom.align
+    }
+    if (geom.dash !== undefined) {
+      out.strokeDash = geom.dash
+    }
+    if (geom.cap !== undefined) {
+      out.strokeCap = geom.cap
+    }
+    if (geom.join !== undefined) {
+      out.strokeJoin = geom.join
+    }
+    if (geom.miter !== undefined) {
+      out.strokeMiterLimit = geom.miter
+    }
+  }
+  if (styled.effects?.kind === 'literals') {
+    out.effects = styled.effects.atoms.map(atomToEffect)
+  }
+  if (spec.radius !== undefined) {
+    out.radius = parseRadius(spec.radius)
+  }
+  if (spec.opacity !== undefined) {
+    out.opacity = spec.opacity
+  }
+  if (spec.rotation !== undefined) {
+    out.rotation = spec.rotation
+  }
+  if (spec.blend !== undefined) {
+    out.blendMode = spec.blend
+  }
+  if (spec.visible !== undefined) {
+    out.visible = spec.visible
+  }
+  if (spec.clipsContent !== undefined) {
+    out.clipsContent = spec.clipsContent
+  }
+  if (styled.grids?.kind === 'literals') {
+    out.grids = styled.grids.atoms.map(atomToGrid)
+  }
+  if (spec.vectorPaths !== undefined) {
+    out.vectorPaths = spec.vectorPaths.map(atomToPath)
+  }
+
+  // node-type-specific shape fields — plain pass-through (no grammar atom)
+  if (spec.pointCount !== undefined) {
+    out.pointCount = spec.pointCount
+  }
+  if (spec.innerRadius !== undefined) {
+    out.innerRadius = spec.innerRadius
+  }
+  if (spec.sectionContentsHidden !== undefined) {
+    out.sectionContentsHidden = spec.sectionContentsHidden
+  }
+  if (spec.isMask !== undefined) {
+    out.isMask = spec.isMask
+  }
+  if (spec.maskType !== undefined) {
+    out.maskType = spec.maskType
+  }
+
+  // ── text ─────────────────────────────────────────────────────────────────
+  if (spec.text !== undefined) {
+    const t = spec.text
+    const textOut: Record<string, unknown> = {}
+    // EVERY member is guarded, `content` and `font` included: a patch may
+    // supply any subset of the struct and omitted means untouched. `font` was
+    // converted unconditionally, so `{text:{content}}` — the plainest patch
+    // there is — died in the atom tokenizer instead of rewriting the copy.
+    if (t.content !== undefined) {
+      textOut.content = t.content
+    }
+    // lh/ls ride on the font atom and are lifted into
+    // text.lineHeight / text.letterSpacing for the plugin.
+    if (t.font !== undefined) {
+      convertFontInto(textOut, t.font)
+    }
+    if (t.color !== undefined) {
+      textOut.color = atomToPaint(t.color)
+    }
+    if (t.align !== undefined) {
+      textOut.align = t.align
+    }
+    if (t.valign !== undefined) {
+      textOut.valign = t.valign
+    }
+    if (t.decoration !== undefined) {
+      textOut.decoration = t.decoration
+    }
+    if (t.case !== undefined) {
+      textOut.case = t.case
+    }
+    if (t.paragraphSpacing !== undefined) {
+      textOut.paragraphSpacing = t.paragraphSpacing
+    }
+    if (t.runs !== undefined) {
+      textOut.runs = t.runs.map(run => {
+        const r: Record<string, unknown> = { at: run.at }
+        if (run.font !== undefined) {
+          convertFontInto(r, run.font)
+        }
+        if (run.color !== undefined) {
+          r.color = atomToPaint(run.color)
+        }
+        return r
+      })
+    }
+    out.text = textOut
+  }
+
+  // ── export / component meta (pass-through) ───────────────────────────────
+  if (spec.exportSettings !== undefined) {
+    out.exportSettings = spec.exportSettings
+  }
+  // component (INSTANCE main-component ref): passed through so the plugin's
+  // createSingleNode INSTANCE case can resolve it by `id` (local component
+  // node) or `key` (importComponentByKeyAsync), then createInstance() and
+  // apply `properties`. See packages/figma-plugin/src/code.ts.
+  if (spec.component !== undefined) {
+    out.component = spec.component
+  }
+  if (spec.componentProperties !== undefined) {
+    out.componentProperties = spec.componentProperties
+  }
+  if (spec.variantProperties !== undefined) {
+    out.variantProperties = spec.variantProperties
+  }
+  if (spec.overrides !== undefined) {
+    out.overrides = spec.overrides
+  }
+  if (spec.context !== undefined) {
+    out.context = spec.context
+  }
+
+  // ── binding intent (I39) ─────────────────────────────────────────────────
+  // Every converter above resolves its atom to the LITERAL and drops the
+  // wrapper — which is right, the literal is what Figma sets. The wrapper's
+  // NAME is the other half: a write of `var(surface/2)#141B2E` applies the
+  // paint AND re-establishes the binding (expression-formats.md). `bindings`
+  // carries that name to the plugin, which binds it once the literal has
+  // landed. Emitted only when a wrapper was actually present — the pure-emit
+  // contract holds for this key like every other.
+  const bindings = collectWrapperBindings(spec, warnings)
+  if (bindings.length > 0) {
+    out.bindings = bindings
+  }
+
+  return out
+}
+
+// ─── a dropped struct drops its bindings (B36) ───────────────────────────────
+
+/**
+ * The node types that can carry a `text` struct.
+ *
+ * It is applied by the plugin's `applyTextProperties`, which runs for a TEXT
+ * node and nowhere else — so the struct is a no-op on every other type. This
+ * is the ONLY capability this file judges, because a create knows only the
+ * type it DECLARED: the plugin sees the real node and owns every other drop
+ * (`capabilityWarnings`). Among the types `create_node` can build, TEXT is the
+ * only one with `characters`, so this cannot warn about a struct that would
+ * have landed.
+ */
+const TEXT_CARRYING_TYPES: ReadonlySet<string> = new Set([
+  'TEXT',
+])
+
+/**
+ * Drop a struct the DECLARED type cannot carry — and the bindings it carried
+ * with it — naming the loss once.
+ *
+ * Two failures, one cause. A `text` struct on a RECTANGLE is dropped by the
+ * plugin (its text applier runs only for a TEXT node), and the create path
+ * never said so: `capabilityWarnings` runs on `update_node` and the slot loop,
+ * where the target is arbitrary, but not inside the create switch, where the
+ * spec was assumed to have chosen its own type. A spec CAN state a struct its
+ * own type cannot hold, and then the silence is wrong.
+ *
+ * Worse, the struct's binding outlived it. `text.color` binds through the
+ * `fills` route (a TEXT node's colour IS its first fill), so
+ * `text:{color:"var(probe/cyan)#22D3EE"}` on a RECTANGLE dropped the colour
+ * and REBOUND `fills[0]` — the grey the same spec stated was replaced by a
+ * variable the agent never asked to put there, silently (B36).
+ *
+ * Dropping the struct BEFORE the conversion is what makes the two halves one
+ * fix: the bindings are collected from the spec, so a struct that is not there
+ * contributes none. No marker has to survive into the payload for something
+ * downstream to honour.
+ */
+const dropUnsupportedStructs = (
+  type: string,
+  spec: NodeSpecPatch,
+  warnings?: string[],
+): NodeSpecPatch => {
+  if (
+    spec.text === undefined ||
+    TEXT_CARRYING_TYPES.has(type)
+  ) {
+    return spec
+  }
+  // The bindings this struct would have asked for, in the spec's own spelling
+  // and deduped (one wrapper can reach two routes). Collected with no sink: a
+  // struct that is going away has no route problems worth reporting.
+  const orphaned = [
+    ...new Set(
+      collectWrapperBindings({ text: spec.text }).map(
+        b => `${b.kind}(${b.name})`,
+      ),
+    ),
+  ]
+  const many = orphaned.length > 1
+  const lost =
+    orphaned.length === 0
+      ? ''
+      : ` (the ${orphaned.join(' and ')} binding${many ? 's' : ''} it carried ` +
+        `${many ? 'were' : 'was'} dropped with it)`
+  // The sentence the plugin's own capabilityWarnings emits, to the word: one
+  // drop reads the same however the write learned about it.
+  warnings?.push(
+    `text ignored — not supported on a ${type} node${lost}`,
+  )
+  const out = { ...spec }
+  delete out.text
+  return out
+}
+
+// ─── creation defaults ───────────────────────────────────────────────────────
+
+/**
+ * The node types a created frame's layout default applies to (B29).
+ *
+ * A FRAME is born absolutely-positioned and a SLOT is born without auto-layout,
+ * so under Figma's own defaults the MODERN arrangement — a stack — is the one
+ * that had to be asked for, and the child that asks for `FILL` inside a fresh
+ * slot is refused until someone remembers to set the layout. The default is
+ * inverted here: a create that says nothing about layout stacks vertically.
+ *
+ * `SLOT` is listed because create_node accepts the type (the plugin builds a
+ * FRAME placeholder for it); real slots are minted by update_component and go
+ * through slotEntryToFigma below.
+ *
+ * `COMPONENT` joined when the create faces learned to mint a master (I69). A
+ * master is the container this default was written for — a component that is
+ * not an auto-layout frame is the one every design-system pillar tells the
+ * agent not to build — and the type was simply not creatable before, so nothing
+ * that already ships lands differently.
+ */
+const LAYOUT_DEFAULT_TYPES: ReadonlySet<string> = new Set([
+  'FRAME',
+  'COMPONENT',
+  'SLOT',
+])
+
+/**
+ * The layout a create gets when it states none. A FRESH object per call — one
+ * shared literal would put the same mutable reference in every payload.
+ */
+const defaultCreateLayout = (): Record<
+  string,
+  unknown
+> => ({ mode: 'V' })
+
+/**
+ * Apply the creation default to a create payload, in place.
+ *
+ * TWO halves, and the second is what keeps the first honest. Figma's
+ * auto-layout HUGS by default, so injecting a layout into a spec that stated a
+ * `size` would throw that size away: live, a FRAME created at `[300,200]` with
+ * one child read back `[300,30]`, `sizing:["FIXED","HUG"]`. An empty frame
+ * keeps its size, which is why a simple probe looks fine and the child case is
+ * the one that bites. So when the default is injected AND the spec states a
+ * `size` but no `sizing`, the size is pinned `['FIXED','FIXED']` — which is
+ * precisely the behaviour the old absolute default gave: a stated size is
+ * honored. The default may add an arrangement; it may not silently discard a
+ * field the caller stated.
+ *
+ * Both halves are conditional on INJECTION. A stated layout (`NONE` included)
+ * means the caller is arranging the node themselves and owns its sizing with
+ * it; a spec that states no size is asking for nothing in particular, and hug
+ * is the right answer for a container that named no height.
+ */
+const applyCreationDefaults = (
+  spec: NodeSpecPatch,
+  out: FigmaWritePayload,
+): void => {
+  if (spec.layout !== undefined) {
+    return
+  }
+  out.layout = defaultCreateLayout()
+  if (
+    spec.size !== undefined &&
+    spec.sizing === undefined
+  ) {
+    out.sizing = ['FIXED', 'FIXED']
+  }
+}
+
+// ─── specToFigmaForCreate ─────────────────────────────────────────────────────
+
+/**
+ * CREATE wrapper. Carries the discriminator `type` through (the plugin's
+ * createSingleNode switches on it to pick the Figma node kind — specToFigma
+ * itself never emits `type`, being a property-patch converter), adds the
+ * `name ?? type` fallback, and applies the creation defaults (B29 — the frame
+ * layout, and the `sizing` pin that keeps it from hugging a stated size away).
+ *
+ * Defaulting stays minimal and CREATION-ONLY: `specToFigma` — the patch face
+ * `update_node` runs on — injects nothing, so an omitted `layout` on a patch
+ * still means *left untouched* and an existing absolute frame is never
+ * converted behind the agent's back. Here the default fills a SILENCE only:
+ * a stated `layout` (`{mode:'NONE'}` included, the documented opt-out) is
+ * carried through exactly as `convertLayout` emitted it.
+ */
+export const specToFigmaForCreate = (
+  spec: NodeSpec,
+  warnings?: string[],
+): FigmaWritePayload => {
+  // A struct the DECLARED type cannot carry goes before the conversion, so the
+  // bindings it carried are never collected (B36).
+  const carried = dropUnsupportedStructs(
+    spec.type,
+    spec,
+    warnings,
+  )
+  const out: FigmaWritePayload = {
+    ...specToFigma(carried, warnings),
+    type: spec.type,
+    name: spec.name ?? spec.type,
+  }
+  if (LAYOUT_DEFAULT_TYPES.has(spec.type)) {
+    applyCreationDefaults(spec, out)
+  }
+  return out
+}
+
+// ─── slot entries ─────────────────────────────────────────────────────────────
+
+/**
+ * Patch keys the write face KNOWS and the slot path cannot honour (B37).
+ *
+ * Neither is an unknown key, so `unknownPatchKeyWarnings` passes both: they are
+ * real `partialNodeSpecSchema` fields, accepted by the parameter schema the
+ * slot entry inherits. And neither reaches the converter, which emits no
+ * `children` and no `type` at all. Between the two, `slots:[{name:'Extra',
+ * type:'FRAME', children:[…]}]` reported `slotsCreated:['Extra']` with
+ * `warnings: []` — a clean success for a slot that got neither the type nor the
+ * contents it was asked for.
+ *
+ * The spec is explicit that this is the slot path's own job: a field the slot
+ * cannot take warns and continues, attributed to the slot by name
+ * (tool-surface.md, `update_component`).
+ */
+const SLOT_INERT_KEYS: Record<string, string> = {
+  children:
+    'children ignored — a new slot is created empty. Build its contents with create_node or create_tree, parented to the slot.',
+  type: 'type ignored — an update_component slot entry always creates a SLOT node.',
+}
+
+/**
+ * Convert one `update_component` slot entry (B30).
+ *
+ * The object form goes through the SAME `specToFigma` write face as
+ * `create_node`/`update_node`, which is the whole point: atoms are parsed here
+ * once, and an inline `var()`/`style()` wrapper rides along in `bindings[]`
+ * with no parallel path to maintain.
+ *
+ * A bare string is a name and nothing else — but the spec defines it as exactly
+ * `{name}`, so it is CONVERTED like one rather than forwarded verbatim. That
+ * matters for the layout default (B29): a slot created from a bare name is the
+ * cheapest thing the surface offers and the one live builds reach for, so
+ * leaving it absolutely-positioned while `{name}` stacks would make the default
+ * depend on which of two spellings of the same entry was used. The plugin reads
+ * both shapes either way (`readSlotEntry`).
+ *
+ * Every warning raised while converting is ATTRIBUTED to the slot by name —
+ * one call can carry several slots, and an unattributed "layout: …" note would
+ * leave the agent guessing which one it belongs to.
+ */
+export const slotEntryToFigma = (
+  entry: SlotEntry,
+  warnings?: string[],
+): FigmaWritePayload => {
+  if (typeof entry === 'string') {
+    return { name: entry, layout: defaultCreateLayout() }
+  }
+  // `parentId` is an INSTRUCTION to the slot loop, not a field of the slot
+  // (I60), so it is taken off before the spec is converted — leaving it in
+  // `rest` would send it through the write face as an unknown patch key and
+  // warn about the very thing the caller asked for.
+  const { name, parentId, ...rest } = entry
+  const local: string[] = []
+  // Every entry creates a SLOT, whatever it says — so the struct a SLOT cannot
+  // carry is dropped here on the same terms as a create, with the bindings it
+  // carried (B36). The plugin's own capabilityWarnings would name the drop,
+  // but only after applying the binding the struct left behind.
+  const carried = dropUnsupportedStructs(
+    'SLOT',
+    rest as NodeSpecPatch,
+    local,
+  )
+  const converted = specToFigma(carried, local)
+  const payload: FigmaWritePayload = {
+    ...converted,
+    name,
+    ...(typeof parentId === 'string' ? { parentId } : {}),
+  }
+  // The created slot takes the same creation defaults a created FRAME takes,
+  // and on the same terms: only when the entry states no layout of its own,
+  // and the size it stated is pinned so the layout cannot hug it away.
+  applyCreationDefaults(rest as NodeSpecPatch, payload)
+  // A known key this path cannot honour, before the unknown-key note: the two
+  // read as one list of what the entry asked for and did not get.
+  for (const [key, note] of Object.entries(
+    SLOT_INERT_KEYS,
+  )) {
+    if (
+      (rest as Record<string, unknown>)[key] !== undefined
+    ) {
+      local.push(note)
+    }
+  }
+  // `payload` (not `converted`) so the "nothing was changed" tail never fires:
+  // the name always lands, whatever else the entry got wrong.
+  local.push(...unknownPatchKeyWarnings(rest, payload))
+  warnings?.push(...local.map(w => `slot "${name}": ${w}`))
+  return payload
+}

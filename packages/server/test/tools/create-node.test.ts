@@ -1,0 +1,498 @@
+// create-node.test.ts — the rebuilt create_node (single NodeSpec write).
+//
+// create_node sends COMMANDS.CREATE_NODE with { spec, parentId? } where `spec`
+// is the NodeSpec converted on the grammar WRITE FACE via specToFigmaForCreate
+// (atom leaves parsed; name ?? type fallback). It reports through
+// formatMutationResult so a plugin {error} surfaces as an error and warnings
+// ride along. Children are OUT OF SCOPE for M2 (single-node) — a spec carrying
+// `children` returns a warning pointing at create_tree (M3); the handler does
+// NOT recurse.
+
+import { describe, expect, it } from 'bun:test'
+import { handleCreateNode } from '@figma-agent-bridge/server/tools/create-node'
+import { COMMANDS } from '@figma-agent-bridge/shared'
+import type { ScopedFigmaClient } from '@figma-agent-bridge/server/figma-client'
+
+type Sent = {
+  command: string
+  params?: Record<string, unknown>
+}
+
+const stubClient = (opts: {
+  reply?: unknown
+  sent?: Sent[]
+}): ScopedFigmaClient => ({
+  fileKey: 'fk-test',
+  sendCommand: async (
+    command: string,
+    params?: Record<string, unknown>,
+  ) => {
+    opts.sent?.push({ command, params })
+    return (
+      opts.reply ?? {
+        id: 'created:1',
+        name: 'Card',
+        type: 'FRAME',
+        warnings: [],
+      }
+    )
+  },
+})
+
+describe('handleCreateNode (rebuilt — single NodeSpec)', () => {
+  it('sends COMMANDS.CREATE_NODE with {spec, parentId}', async () => {
+    const sent: Sent[] = []
+    await handleCreateNode(
+      {
+        spec: { type: 'FRAME', name: 'Card' },
+        parentId: '1:2',
+      },
+      stubClient({ sent }),
+    )
+    expect(sent).toHaveLength(1)
+    expect(sent[0].command).toBe(COMMANDS.CREATE_NODE)
+    expect(sent[0].params?.parentId).toBe('1:2')
+    expect(sent[0].params?.spec).toBeDefined()
+  })
+
+  it('converts atom leaves on the write face (#FF0000 → SOLID paint)', async () => {
+    const sent: Sent[] = []
+    await handleCreateNode(
+      {
+        spec: {
+          type: 'RECTANGLE',
+          size: [10, 10],
+          fills: ['#FF0000'],
+        },
+      },
+      stubClient({ sent }),
+    )
+    const spec = sent[0].params?.spec as {
+      fills: unknown[]
+    }
+    expect(spec.fills[0]).toEqual({
+      type: 'SOLID',
+      color: { r: 1, g: 0, b: 0 },
+    })
+  })
+
+  it('applies the name ?? type create fallback', async () => {
+    const sent: Sent[] = []
+    await handleCreateNode(
+      { spec: { type: 'ELLIPSE' } },
+      stubClient({ sent }),
+    )
+    const spec = sent[0].params?.spec as { name: string }
+    expect(spec.name).toBe('ELLIPSE')
+  })
+
+  it('forwards an INSTANCE component ref by LOCAL id (by-id create path)', async () => {
+    const sent: Sent[] = []
+    await handleCreateNode(
+      {
+        spec: {
+          type: 'INSTANCE',
+          component: {
+            id: '2:10',
+            properties: { Label: 'Save' },
+          },
+        },
+      },
+      stubClient({ sent }),
+    )
+    const spec = sent[0].params?.spec as {
+      type: string
+      component: unknown
+    }
+    expect(spec.type).toBe('INSTANCE')
+    // The writer passes `component` through verbatim so the plugin can resolve
+    // the local main component via getNodeByIdAsync and createInstance().
+    expect(spec.component).toEqual({
+      id: '2:10',
+      properties: { Label: 'Save' },
+    })
+  })
+
+  it('forwards an INSTANCE component ref by published KEY (by-key create path)', async () => {
+    const sent: Sent[] = []
+    await handleCreateNode(
+      {
+        spec: {
+          type: 'INSTANCE',
+          component: { key: 'btn-key-123' },
+        },
+      },
+      stubClient({ sent }),
+    )
+    const spec = sent[0].params?.spec as {
+      component: unknown
+    }
+    // The plugin imports the published component via importComponentByKeyAsync.
+    expect(spec.component).toEqual({ key: 'btn-key-123' })
+  })
+
+  it('warns (M2 single-node) and does NOT recurse when spec.children is present', async () => {
+    const sent: Sent[] = []
+    const result = await handleCreateNode(
+      {
+        spec: {
+          type: 'FRAME',
+          children: [{ type: 'RECTANGLE' }],
+        },
+      },
+      stubClient({ sent }),
+    )
+    // Server still creates the single parent node…
+    expect(sent[0].command).toBe(COMMANDS.CREATE_NODE)
+    // …but never forwards children (no recursion in M2).
+    const spec = sent[0].params?.spec as Record<
+      string,
+      unknown
+    >
+    expect(spec).not.toHaveProperty('children')
+    // …and surfaces a warning pointing at create_tree (M3).
+    expect(result.content[0].text).toContain('create_tree')
+  })
+
+  // B27: the create path sends the FOUR sides through rather than a collapsed
+  // top weight. `stroke([0,0,1,0])` is a bottom rule — the commonest divider in
+  // table and list design — and collapsing it to the top side made it weight 0,
+  // i.e. invisible.
+  it('sends per-side stroke weights through on create', async () => {
+    const sent: Sent[] = []
+    const result = await handleCreateNode(
+      {
+        spec: {
+          type: 'RECTANGLE',
+          stroke: 'stroke([0,0,1,0])',
+        },
+      },
+      stubClient({ sent }),
+    )
+    expect(result.content[0].text).not.toStartWith('Error')
+    const spec = sent[0].params?.spec as Record<
+      string,
+      unknown
+    >
+    expect(spec.strokeWeights).toEqual([0, 0, 1, 0])
+    expect(spec.strokeWeight).toBeUndefined()
+  })
+
+  it('surfaces a server-side writer warning on success (writer threads it)', async () => {
+    const result = await handleCreateNode(
+      {
+        spec: {
+          type: 'FRAME',
+          layout: { mode: 'V', rows: 2 },
+        },
+      },
+      stubClient({}),
+    )
+    // Success path (not an Error) carrying the writer's warning.
+    expect(result.content[0].text).not.toStartWith('Error')
+    expect(result.content[0].text).toContain('GRID-only')
+  })
+
+  it('surfaces a plugin-side {error} as an error (not success)', async () => {
+    const result = await handleCreateNode(
+      { spec: { type: 'FRAME' } },
+      stubClient({
+        reply: {
+          error:
+            'Parent not found or cannot have children: 1:2',
+        },
+      }),
+    )
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.error).toContain('Parent not found')
+    expect(data.code).toBe('NODE_NOT_FOUND')
+  })
+
+  it('surfaces plugin warnings on success', async () => {
+    const result = await handleCreateNode(
+      { spec: { type: 'FRAME' } },
+      stubClient({
+        reply: {
+          id: 'created:1',
+          name: 'Card',
+          type: 'FRAME',
+          warnings: ['some plugin warning'],
+        },
+      }),
+    )
+    expect(result.content[0].text).toContain(
+      'some plugin warning',
+    )
+  })
+
+  it('maps a thrown plugin error to a tool-formatted message', async () => {
+    const client: ScopedFigmaClient = {
+      fileKey: 'fk-test',
+      sendCommand: () =>
+        Promise.reject(new Error('plugin exploded')),
+    }
+    const result = await handleCreateNode(
+      { spec: { type: 'FRAME' } },
+      client,
+    )
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      error: 'plugin exploded',
+      code: 'PLUGIN_ERROR',
+    })
+  })
+
+  // An unsupported `type` is rejected cleanly at the SERVER boundary with an
+  // {error} that lists valid types — NOT forwarded to the plugin where it would
+  // throw a deep, generic "Unsupported node type" error.
+  it('rejects an unsupported type with a clean validation error before sending', async () => {
+    const sent: Sent[] = []
+    const result = await handleCreateNode(
+      { spec: { type: 'BUTTON' } },
+      stubClient({ sent }),
+    )
+    expect(sent).toHaveLength(0)
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('UNSUPPORTED_NODE_TYPE')
+    expect(data.error).toContain('BUTTON')
+    // The message self-documents the valid surface.
+    expect(data.error).toContain('FRAME')
+  })
+
+  // Issue #3: TEXT_PATH (figma.createTextPath) is real but was never specced/wired
+  // (vectorNodeId/startSegment/startPosition), so it is honest-rejected at the
+  // SERVER boundary just like any unsupported type — never forwarded to the plugin.
+  // Deferred to the spec-completeness phase; see docs/deferred-capabilities.md.
+  it('rejects TEXT_PATH with a clean validation error before sending (deferred)', async () => {
+    const sent: Sent[] = []
+    const result = await handleCreateNode(
+      { spec: { type: 'TEXT_PATH' } },
+      stubClient({ sent }),
+    )
+    expect(sent).toHaveLength(0)
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('UNSUPPORTED_NODE_TYPE')
+    expect(data.error).toContain('TEXT_PATH')
+    // The message self-documents the valid surface.
+    expect(data.error).toContain('FRAME')
+  })
+
+  it('still forwards a supported type', async () => {
+    const sent: Sent[] = []
+    await handleCreateNode(
+      { spec: { type: 'RECTANGLE' } },
+      stubClient({ sent }),
+    )
+    expect(sent).toHaveLength(1)
+  })
+
+  // I69: COMPONENT joins CREATABLE_TYPES, which create_node and create_tree
+  // SHARE — the two create faces have accepted exactly the same node types
+  // since issue #2, and one type they disagreed about would be the first.
+  // create_node's COMPONENT is an EMPTY master (children are create_tree's, as
+  // they are for every other type); the master with a body is create_tree's.
+  it('accepts COMPONENT and forwards it (an empty master)', async () => {
+    const sent: Sent[] = []
+    await handleCreateNode(
+      { spec: { type: 'COMPONENT', name: 'Button' } },
+      stubClient({ sent }),
+    )
+    expect(sent).toHaveLength(1)
+    const spec = sent[0].params?.spec as Record<
+      string,
+      unknown
+    >
+    expect(spec.type).toBe('COMPONENT')
+    // The stack default reaches a master as it reaches a frame.
+    expect(spec.layout).toEqual({ mode: 'V' })
+  })
+
+  // B36 (live, node 298:7544): a RECTANGLE with `fills:["#888888"]` and a
+  // `text` struct whose colour carried `var(probe/cyan)`. The struct was
+  // dropped silently and its binding — which routes through `fills` — landed
+  // on fills[0], so the node read back the cyan variable and the stated grey
+  // was gone.
+  it('drops a text struct on a non-TEXT create, with its binding, and says so', async () => {
+    const sent: Sent[] = []
+    const result = await handleCreateNode(
+      {
+        spec: {
+          type: 'RECTANGLE',
+          name: 'Probe',
+          size: [40, 40],
+          fills: ['#888888'],
+          text: {
+            content: 'Hello',
+            font: 'font(Inter,Regular,16)',
+            color: 'var(probe/cyan)#22D3EE',
+          },
+        },
+      },
+      stubClient({ sent }),
+    )
+    const spec = sent[0].params?.spec as Record<
+      string,
+      unknown
+    >
+    expect(spec.text).toBeUndefined()
+    // Nothing rebinds fills[0]: the binding died with the struct that asked
+    // for it.
+    expect(spec.bindings).toBeUndefined()
+    // The fills the spec stated are the fills that land.
+    expect(spec.fills).toEqual([
+      {
+        type: 'SOLID',
+        color: { r: 0.533, g: 0.533, b: 0.533 },
+      },
+    ])
+    expect(result.content[0].text).toContain(
+      'text ignored — not supported on a RECTANGLE node',
+    )
+    expect(result.content[0].text).toContain(
+      'var(probe/cyan)',
+    )
+  })
+
+  // B38 (live): `stroke:"stroke(fat){align=INSIDE}"` converted to
+  // `{"strokeWeight":null}` with zero warnings, and the create then failed on
+  // Figma's raw engine message. The parameter is the agent's, so the server
+  // names it as one — before the plugin is contacted.
+  it('rejects a non-numeric stroke weight before the plugin is contacted', async () => {
+    const sent: Sent[] = []
+    const result = await handleCreateNode(
+      {
+        spec: {
+          type: 'RECTANGLE',
+          stroke: 'stroke(fat){align=INSIDE}',
+        },
+      },
+      stubClient({ sent }),
+    )
+    expect(sent).toHaveLength(0)
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INVALID_PARAM')
+    expect(data.error).toContain('stroke(1)')
+  })
+
+  // B45 (live): `vectorPaths:["path(M 12 0 L 24 24 L 0 24 Z)"]` was ACCEPTED —
+  // warnings:[], and the created node read back `vectorPaths: []`. An atom
+  // that does not parse is INVALID_PARAM, raised before the plugin is
+  // contacted (expression-formats.md).
+  it('rejects a fill-rule-less path atom before the plugin is contacted', async () => {
+    const sent: Sent[] = []
+    const result = await handleCreateNode(
+      {
+        spec: {
+          type: 'VECTOR',
+          vectorPaths: ['path(M 12 0 L 24 24 L 0 24 Z)'],
+        },
+      },
+      stubClient({ sent }),
+    )
+    expect(sent).toHaveLength(0)
+    const data = JSON.parse(result.content[0].text) as {
+      error: string
+      code: string
+    }
+    expect(data.code).toBe('INVALID_PARAM')
+    expect(data.error).toContain(
+      'path(NONZERO,"M 0 0 L 24 24")',
+    )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// B61 (live-gate follow-up) — a create_node degrade has to be READABLE
+// ---------------------------------------------------------------------------
+//
+// create_node answered the same kind of news in two channels: the plugin's own
+// degrades rode in the JSON body (formatMutationResult stringifies the whole
+// reply), while the server's conversion notes were appended as loose `Warning:`
+// prose after it. So half the list was data and half was text, and which half
+// a caller got depended on where the loss happened.
+//
+// The sibling defect on create_tree is what B61's live gate hit: the plugin
+// reported a stated size hugged away and the structured reply said nothing.
+// Both faces now answer as update_node always has — one list, in `warnings[]`.
+describe('create_node degrades reach the caller (B61)', () => {
+  const bodyOf = (text: string): Record<string, unknown> =>
+    JSON.parse(text) as Record<string, unknown>
+
+  const HUGGED =
+    'size not applied — asked [400, 60], "b61x" reads [136, 60].' +
+    ' Auto-layout owns the width (layoutSizingHorizontal: HUG).'
+
+  it('puts the plugin’s warning in the structured reply', async () => {
+    const result = await handleCreateNode(
+      { spec: { type: 'FRAME', name: 'b61x' } },
+      stubClient({
+        reply: {
+          id: 'created:1',
+          name: 'b61x',
+          type: 'FRAME',
+          warnings: [HUGGED],
+        },
+      }),
+    )
+    expect(bodyOf(result.content[0].text).warnings).toEqual(
+      [HUGGED],
+    )
+  })
+
+  it('merges the server’s own notes into the SAME list, never into prose', async () => {
+    const result = await handleCreateNode(
+      {
+        spec: {
+          type: 'FRAME',
+          name: 'b61x',
+          // A var() on a per-corner radius has no binding route — the write
+          // face warns and applies the literal.
+          radius: 'var(radius/md)[8,8,0,0]',
+        },
+      },
+      stubClient({
+        reply: {
+          id: 'created:1',
+          name: 'b61x',
+          type: 'FRAME',
+          warnings: [HUGGED],
+        },
+      }),
+    )
+    const { text } = result.content[0]
+    const warnings = bodyOf(text).warnings as string[]
+    expect(warnings).toHaveLength(2)
+    expect(warnings[0]).toBe(HUGGED)
+    expect(warnings[1]).toContain('per-corner radius')
+    // One channel: no trailing prose, and nothing said twice.
+    expect(text).not.toContain('Warning: ')
+    expect(text.split('per-corner radius')).toHaveLength(2)
+  })
+
+  it('stays clean when nothing degraded', async () => {
+    const result = await handleCreateNode(
+      { spec: { type: 'FRAME', name: 'plain' } },
+      stubClient({
+        reply: {
+          id: 'created:1',
+          name: 'plain',
+          type: 'FRAME',
+        },
+      }),
+    )
+    const { text } = result.content[0]
+    expect(text).not.toContain('Warning')
+    expect('warnings' in bodyOf(text)).toBe(false)
+  })
+})
