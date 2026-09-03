@@ -59,6 +59,30 @@ const read = async () =>
     await readFile(join(dir, 'fk', 'sid.json'), 'utf8'),
   )
 
+// The mirror's write is fire-and-forget, so a fixed sleep races it under
+// load (the full suite on a CI runner) and reads the PREVIOUS count. Poll
+// the file until it shows what the test expects, capped well under the
+// 5 s debounce so only an IMMEDIATE write can satisfy it. When nothing
+// arrives the assertion that follows still names the mismatch.
+const settled = async (
+  want: (j: Record<string, unknown>) => boolean,
+) => {
+  const deadline = Date.now() + 2000
+  for (;;) {
+    try {
+      if (want(await read())) {
+        return
+      }
+    } catch {
+      // not written yet
+    }
+    if (Date.now() > deadline) {
+      return
+    }
+    await Bun.sleep(5)
+  }
+}
+
 const wire = (writer = 'sid'): ChangeFeed => {
   const mirror = createCountMirror({
     writer: 'srv-w',
@@ -94,7 +118,10 @@ describe('feed → count mirror wiring', () => {
   it('mirrors the baseline state alongside the count, never the count alone', async () => {
     const feed = wire()
     feed.openBaseline('fk', 'e1')
-    await Bun.sleep(10)
+    await settled(
+      j =>
+        j.pendingCount === 0 && j.state === 'no_baseline',
+    )
     // A broken baseline that mirrored `0` with no state would read as
     // "safe to act" in the presence block — the defect this field exists for.
     expect(await read()).toMatchObject({
@@ -103,7 +130,9 @@ describe('feed → count mirror wiring', () => {
     })
 
     feed.markGap('fk')
-    await Bun.sleep(10)
+    await settled(
+      j => j.pendingCount === 0 && j.state === 'gap',
+    )
     expect(await read()).toMatchObject({
       pendingCount: 0,
       state: 'gap',
@@ -125,7 +154,7 @@ describe('feed → count mirror wiring', () => {
       },
       { epoch: 'e1', seq: 1 },
     )
-    await Bun.sleep(10)
+    await settled(j => j.pendingCount === 0)
     expect((await read()).pendingCount).toBe(0)
 
     feed.ingest(
@@ -141,7 +170,7 @@ describe('feed → count mirror wiring', () => {
       },
       { epoch: 'e1', seq: 2 },
     )
-    await Bun.sleep(10)
+    await settled(j => j.pendingCount === 2)
     // Two distinct things (one node collapsed from two records, one style).
     expect((await read()).pendingCount).toBe(2)
   })
@@ -167,7 +196,9 @@ describe('feed → count mirror wiring', () => {
       },
       { epoch: 'e1', seq: 1 },
     )
-    await Bun.sleep(10)
+    await settled(
+      j => j.pendingCount === 2 && j.state === 'gap',
+    )
     expect(await read()).toMatchObject({
       pendingCount: 2,
       state: 'gap',
@@ -185,7 +216,7 @@ describe('feed → count mirror wiring', () => {
       { epoch: 'e1', seq: 2 },
     )
     feed.markAllGap()
-    await Bun.sleep(10)
+    await settled(j => j.pendingCount === 3)
     expect((await read()).pendingCount).toBe(3)
   })
 
@@ -204,7 +235,7 @@ describe('feed → count mirror wiring', () => {
       },
       { epoch: 'e1', seq: 1 },
     )
-    await Bun.sleep(10)
+    await settled(j => j.pendingCount === 2)
     expect((await read()).pendingCount).toBe(2)
 
     // positive → positive with the state unchanged: only the `drain` REASON
@@ -212,11 +243,13 @@ describe('feed → count mirror wiring', () => {
     // otherwise read a stale-high count next turn.
     const first = feed.drain('fk', 1)
     expect(first?.truncated).toBe(true)
-    await Bun.sleep(10)
+    await settled(j => j.pendingCount === 1)
     expect((await read()).pendingCount).toBe(1)
 
     feed.drain('fk', 100)
-    await Bun.sleep(10)
+    await settled(
+      j => j.pendingCount === 0 && j.state === 'ok',
+    )
     expect(await read()).toMatchObject({
       pendingCount: 0,
       state: 'ok',
@@ -239,7 +272,10 @@ describe('feed → count mirror wiring', () => {
       } as never,
       { epoch: 'e1', seq: 1 },
     )
-    await Bun.sleep(10)
+    await settled(
+      j =>
+        j.pendingCount === 0 && j.state === 'no_baseline',
+    )
     // The session's own build is not a pending edit TO IT.
     expect(await read()).toMatchObject({
       pendingCount: 0,
@@ -258,12 +294,14 @@ describe('feed → count mirror wiring', () => {
       } as never,
       { epoch: 'e1', seq: 2 },
     )
-    await Bun.sleep(10)
+    await settled(j => j.pendingCount === 1)
     expect((await read()).pendingCount).toBe(1)
 
     // The drain leaves the shadows behind, and they hold nothing open.
     feed.drain('fk', 100)
-    await Bun.sleep(10)
+    await settled(
+      j => j.pendingCount === 0 && j.state === 'ok',
+    )
     expect(await read()).toMatchObject({
       pendingCount: 0,
       state: 'ok',
